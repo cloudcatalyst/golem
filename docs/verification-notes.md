@@ -230,6 +230,45 @@ additions; none contradict the spec.
   for `golem status`), so files from newer versions load and `writeSetting`
   round-trips preserve foreign keys. Type/range errors on known keys are hard
   failures naming the file (or env var) and the `section.key`.
+## 19. @modelcontextprotocol/sdk 1.29.0 — actual API surface (2026-07-03, WS-B B1)
+
+Verified against the installed package's shipped types/source (`node_modules/
+@modelcontextprotocol/sdk/dist/esm/`), not docs-from-memory:
+
+- **Registration API:** `McpServer.registerTool(name, {title, description,
+  inputSchema, outputSchema, annotations}, cb)` and `registerPrompt(name,
+  {title, description, argsSchema}, cb)` are current; the positional
+  `.tool()`/`.prompt()` overloads are `@deprecated`. `inputSchema`/`argsSchema`
+  accept plain zod raw shapes (zod dependency `^3.25 || ^4`; a project pin of
+  `^3.24` dedupes below the SDK's floor — Golem bumped to `^3.25.0`).
+- **Tool-call error mapping (matters for tests):** the SDK validates zod
+  `inputSchema` itself, but its `tools/call` handler catches ALL errors —
+  including its own `McpError(InvalidParams)` from validation — and returns
+  them as a `CallToolResult` with `isError: true` whose text embeds the code
+  (e.g. `MCP error -32602: Input validation error: Invalid arguments for tool
+  ...`). Only `UrlElicitationRequired` is re-thrown as a protocol error.
+  **Prompt argument validation DOES surface as a JSON-RPC -32602 protocol
+  error** (`prompts/get` rejects). Unknown tool name → `isError` result too.
+- **Tools with `outputSchema` must return `structuredContent`** (SDK enforces
+  on every non-error call and validates it against the schema).
+- **Transports:** `StdioServerTransport` (`server/stdio.js`);
+  `StreamableHTTPServerTransport` (`server/streamableHttp.js`) is now a thin
+  Node wrapper over `WebStandardStreamableHTTPServerTransport` via
+  `@hono/node-server`; stateful mode = `sessionIdGenerator` +
+  `onsessioninitialized` (session id in `mcp-session-id` header), stateless =
+  `sessionIdGenerator: undefined`. `isInitializeRequest` is exported from
+  `types.js` for the open-a-session-only-on-initialize gate.
+  `InMemoryTransport.createLinkedPair()` (`inMemory.js`) is the in-process
+  test harness; `Client` lives in `client/index.js`,
+  `StreamableHTTPClientTransport` in `client/streamableHttp.js`.
+- ⚠ **`exactOptionalPropertyTypes` friction:** the SDK's transport classes
+  declare optional callbacks/fields as `T | undefined` while the `Transport`
+  interface declares them as `prop?:`, so `server.connect(transport)` fails
+  TS2379 under Golem's tsconfig for `StreamableHTTPServerTransport` and
+  `StreamableHTTPClientTransport` (StdioServerTransport is fine). Workaround:
+  `connect(transport as Transport)` at the call site (`src/mcp/serve.ts`).
+- SDK runtime deps are pure-JS (hono, express, jose, ajv, eventsource, zod…) —
+  no native modules; compatible with the no-heavyweight-native-deps rule.
 
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
