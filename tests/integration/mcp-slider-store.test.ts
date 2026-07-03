@@ -1,9 +1,10 @@
 /**
  * WS-B task B1 — JsonFileSliderStore persistence tests.
  *
- * The slider level persists as the snake_case `slider_level` key in a JSON
- * settings file (CLAUDE.md conventions), preserving unrelated keys so WS-E's
- * config loader (task E1) can take ownership of the same file later.
+ * The slider level persists at the NESTED `slider.level` path (the exact key
+ * the E1 config schema validates — reconciled in WS-E task E3), preserving
+ * unrelated keys so `golem slider`, `/mcp__golem__slider`, and the config
+ * loader all see one value (verification-notes §20).
  */
 
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -13,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_SLIDER_LEVEL,
   JsonFileSliderStore,
-  SLIDER_LEVEL_SETTINGS_KEY,
+  LEGACY_SLIDER_LEVEL_KEY,
 } from "../../src/mcp/slider-store.js";
 
 describe("JsonFileSliderStore", () => {
@@ -34,7 +35,7 @@ describe("JsonFileSliderStore", () => {
     await expect(store.get()).resolves.toBe(DEFAULT_SLIDER_LEVEL);
   });
 
-  it("persists a level (creating parent directories) and reads it back", async () => {
+  it("persists a level at slider.level (creating parent dirs) and reads it back", async () => {
     const nested = join(dir, "deep", "er", "settings.json");
     const store = new JsonFileSliderStore(nested);
     await store.set(4);
@@ -42,14 +43,15 @@ describe("JsonFileSliderStore", () => {
     // A fresh instance reads the same persisted value.
     await expect(new JsonFileSliderStore(nested).get()).resolves.toBe(4);
 
+    // Written at the nested slider.level path the E1 config schema validates.
     const raw = JSON.parse(await readFile(nested, "utf8")) as Record<string, unknown>;
-    expect(raw).toStrictEqual({ [SLIDER_LEVEL_SETTINGS_KEY]: 4 });
+    expect(raw).toStrictEqual({ slider: { level: 4 } });
   });
 
-  it("preserves unrelated snake_case settings keys on write", async () => {
+  it("preserves unrelated sections and slider keys on write", async () => {
     await writeFile(
       settingsPath,
-      JSON.stringify({ proxy_port: 8787, telemetry_enabled: false }),
+      JSON.stringify({ proxy: { port: 8787 }, slider: { local_only_opt_in: true } }),
       "utf8",
     );
     const store = new JsonFileSliderStore(settingsPath);
@@ -57,17 +59,28 @@ describe("JsonFileSliderStore", () => {
 
     const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
     expect(raw).toStrictEqual({
-      proxy_port: 8787,
-      telemetry_enabled: false,
-      [SLIDER_LEVEL_SETTINGS_KEY]: 2,
+      proxy: { port: 8787 },
+      slider: { local_only_opt_in: true, level: 2 },
     });
+  });
+
+  it("reads a legacy flat slider_level key and migrates it away on write", async () => {
+    await writeFile(settingsPath, JSON.stringify({ [LEGACY_SLIDER_LEVEL_KEY]: 3 }), "utf8");
+    const store = new JsonFileSliderStore(settingsPath);
+    // Legacy value is still readable before any write.
+    await expect(store.get()).resolves.toBe(3);
+
+    await store.set(5);
+    const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
+    expect(raw).toStrictEqual({ slider: { level: 5 } });
+    expect(LEGACY_SLIDER_LEVEL_KEY in raw).toBe(false);
   });
 
   it("falls back to the default level on corrupt or invalid content", async () => {
     await writeFile(settingsPath, "{not json", "utf8");
     await expect(new JsonFileSliderStore(settingsPath).get()).resolves.toBe(DEFAULT_SLIDER_LEVEL);
 
-    await writeFile(settingsPath, JSON.stringify({ [SLIDER_LEVEL_SETTINGS_KEY]: 9 }), "utf8");
+    await writeFile(settingsPath, JSON.stringify({ slider: { level: 9 } }), "utf8");
     await expect(new JsonFileSliderStore(settingsPath).get()).resolves.toBe(DEFAULT_SLIDER_LEVEL);
   });
 });

@@ -270,6 +270,60 @@ Verified against the installed package's shipped types/source (`node_modules/
 - SDK runtime deps are pure-JS (hono, express, jose, ajv, eventsource, zod…) —
   no native modules; compatible with the no-heavyweight-native-deps rule.
 
+## 20. Slider-key reconciliation: MCP store ↔ config loader (2026-07-04, WS-E E3)
+
+B1's `JsonFileSliderStore` originally persisted a FLAT root-level `slider_level`
+key in `~/.golem/settings.json`, while the E1 config schema
+(`src/config/schema.ts`) validates the NESTED `slider.level` leaf. Left as-is,
+`/mcp__golem__slider` (golem_set_slider) and `loadConfig()`/`golem slider` would
+read/write two different keys and disagree.
+
+Reconciliation (sanctioned cross-workstream fix; the `SliderStore` interface is
+unchanged):
+
+- `JsonFileSliderStore` now reads and writes `slider.level` (nested), matching
+  the config schema exactly. `get()` still falls back to the legacy flat
+  `slider_level` (`LEGACY_SLIDER_LEVEL_KEY`) if present, and `set()` deletes
+  that flat key so the file migrates to the nested shape on first write.
+  Reads/writes merge with — and preserve — all other keys (including other
+  `slider.*` keys like `local_only_opt_in`) via read-merge-write + temp-file
+  rename, so it round-trips cleanly with `writeSetting` and the loader.
+- The CLI wires the MCP store to the PROJECT settings file
+  (`<project>/.golem/settings.json`) via `settingsFilePaths({ projectDir }).project`
+  — the same file `golem slider` writes with `writeSetting("project", …)` and
+  the loader's project layer reads. Standalone/default construction still uses
+  the user-scope file (`~/.golem/settings.json`).
+- `golem slider [level]` reads through `loadConfig` (so it can report WHICH
+  layer set the effective level and warn when a higher-precedence layer — e.g.
+  a `GOLEM_SLIDER_LEVEL` env var — overrides the value just written).
+
+Net result: `golem slider`, `/mcp__golem__slider`, and `loadConfig` all observe
+one value in one file/key. Covered by `tests/integration/cli-slider.test.ts`
+and the updated `tests/integration/mcp-slider-store.test.ts`.
+
+## 21. `golem status`/`stats` and dashboard v0 (2026-07-04, WS-E E3)
+
+- **`golem status`** composes the E1 loader's provenance (per `section.key`
+  layer + source), the init.ts file checks (reused via a new read-only
+  `golemInitStatus` that never throws on malformed files), a short loopback
+  HTTP probe of the configured proxy port (any HTTP answer = reachable; refused/
+  timeout = not running), and the effective slider level. `--json` emits the
+  full snake_case report.
+- **`golem stats`** reads savings through a thin `StatsSource` seam
+  (`{ kind, note, stats(projectId?) }`) so A4's telemetry store can be plugged
+  in later without touching command code. For now `liveStatsSource(projectDir)`
+  wraps the A2 `NativeLosslessCompression` (accurate per-stage attribution but
+  in-memory per process); every report carries a `note` that durable history
+  starts when telemetry (A4) lands. Do NOT import from `src/telemetry/` yet.
+- **`golem dashboard`** (v0) serves, loopback-only (`127.0.0.1`), one
+  self-contained inline-styled HTML page plus a JSON API — zero new runtime
+  deps (`node:http` only). Endpoints: `GET /` (page), `GET /api/stats`
+  (snapshot JSON the page polls every 2s), everything else → 404. Default port
+  is `telemetry.dashboard_port` (4654). Covered by
+  `tests/integration/dashboard.test.ts` (starts on port 0).
+- **`golem index` / `golem devices`** are explicit not-implemented stubs that
+  print a pointer to WS-C / WS-D and exit non-zero.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
