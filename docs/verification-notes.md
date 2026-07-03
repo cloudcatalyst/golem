@@ -199,6 +199,38 @@ finalized Decision 18.
   `golem-run` org to reserve `@golem-run/*` for future satellite packages
   (ML add-on, sidecar bridge, dashboard).
 
+## 18. E1 config loader — decisions where the spec is silent (2026-07-03, WS-E)
+
+Recorded by agent-ux while implementing `src/config/` (task E1). Proposed spec
+additions; none contradict the spec.
+
+- **User config dir is the literal `~/.golem`** (via `os.homedir()`), NOT
+  env-paths platform config dirs (`%APPDATA%` etc.). Spec §5.1/Decision 19 pin
+  the path as `~/.golem/settings.json`, mirroring Claude Code's `~/.claude/`.
+  env-paths stays in deps for cache/data/log dirs in later WS-E tasks.
+- **Default ports:** proxy `4653`, dashboard `4654` ("GOLE" on a phone keypad;
+  spec is silent). Both overridable (`proxy.port`, `telemetry.dashboard_port`).
+- **Default slider level: 1** (lossless-only — byte-faithful with real
+  savings, matching the P0 DoD emphasis).
+- **Key set** (all snake_case, flat `section.key`): `slider.level`,
+  `slider.local_only_opt_in`, `proxy.port`, `proxy.upstream_base_url`
+  (default `https://api.anthropic.com`), `proxy.request_timeout_ms` (600000),
+  `proxy.connect_timeout_ms` (10000), `inference.ollama_base_url`
+  (`http://localhost:11434`), `knowledge.enabled` (true),
+  `knowledge.vector_db_url` (unset = embedded store),
+  `knowledge.watch_paths` ([]), `telemetry.enabled` (true),
+  `telemetry.dashboard_port`.
+- **Env mapping** (full rules in `src/config/env.ts`): names matched
+  case-insensitively (Windows semantics everywhere); split at the first `_`
+  after `GOLEM_` → section names never contain underscores; coercion is
+  target-type-driven (bool tokens, finite numbers, JSON-or-CSV arrays,
+  verbatim strings); empty value = unset; case-colliding names with different
+  values are a hard error.
+- **Unknown sections/keys warn, never fail** (collected on the loaded config
+  for `golem status`), so files from newer versions load and `writeSetting`
+  round-trips preserve foreign keys. Type/range errors on known keys are hard
+  failures naming the file (or env var) and the `section.key`.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

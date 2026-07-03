@@ -1,0 +1,140 @@
+/** E1: layer precedence, defaults, provenance, freezing. */
+
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEFAULT_SETTINGS, loadConfig, policyFromSettings } from "../../src/config/index.js";
+
+let base: string;
+let userDir: string;
+let projectDir: string;
+
+async function writeJson(file: string, value: unknown): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+const userFile = (): string => path.join(userDir, "settings.json");
+const projectFile = (): string => path.join(projectDir, ".golem", "settings.json");
+const localFile = (): string => path.join(projectDir, ".golem", "settings.local.json");
+
+beforeEach(async () => {
+  base = await mkdtemp(path.join(os.tmpdir(), "golem-config-test-"));
+  userDir = path.join(base, "user-golem");
+  projectDir = path.join(base, "project");
+  await mkdir(projectDir, { recursive: true });
+});
+
+afterEach(async () => {
+  await rm(base, { recursive: true, force: true });
+});
+
+describe("loadConfig precedence", () => {
+  it("returns pure defaults when no files, env, or overrides exist", async () => {
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings).toEqual(DEFAULT_SETTINGS);
+    expect(config.warnings).toEqual([]);
+    for (const entry of Object.values(config.provenance)) {
+      expect(entry.layer).toBe("default");
+    }
+    expect(config.files.user).toBe(userFile());
+    expect(config.files.project).toBe(projectFile());
+    expect(config.files.local).toBe(localFile());
+  });
+
+  it("user settings override defaults", async () => {
+    await writeJson(userFile(), { slider: { level: 2 } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.slider.level).toBe(2);
+    expect(config.provenance["slider.level"]).toEqual({
+      layer: "user",
+      source: userFile(),
+    });
+    // Untouched sibling key keeps its default + provenance.
+    expect(config.settings.slider.local_only_opt_in).toBe(false);
+    expect(config.provenance["slider.local_only_opt_in"]).toEqual({ layer: "default" });
+  });
+
+  it("project overrides user, local overrides project", async () => {
+    await writeJson(userFile(), { slider: { level: 2 }, proxy: { port: 5000 } });
+    await writeJson(projectFile(), { slider: { level: 3 } });
+    await writeJson(localFile(), { slider: { level: 4 } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.slider.level).toBe(4);
+    expect(config.provenance["slider.level"]).toEqual({
+      layer: "local",
+      source: localFile(),
+    });
+    // proxy.port from the user layer survives untouched by higher layers.
+    expect(config.settings.proxy.port).toBe(5000);
+    expect(config.provenance["proxy.port"]).toEqual({
+      layer: "user",
+      source: userFile(),
+    });
+  });
+
+  it("env overrides local; per-request overrides beat env", async () => {
+    await writeJson(localFile(), { slider: { level: 4 } });
+    const env = { GOLEM_SLIDER_LEVEL: "5", GOLEM_TELEMETRY_ENABLED: "false" };
+
+    const envOnly = await loadConfig({ projectDir, userDir, env });
+    expect(envOnly.settings.slider.level).toBe(5);
+    expect(envOnly.settings.telemetry.enabled).toBe(false);
+    expect(envOnly.provenance["slider.level"]).toEqual({
+      layer: "env",
+      source: "GOLEM_SLIDER_LEVEL",
+    });
+
+    const withOverrides = await loadConfig({
+      projectDir,
+      userDir,
+      env,
+      overrides: { slider: { level: 0 } },
+    });
+    expect(withOverrides.settings.slider.level).toBe(0);
+    expect(withOverrides.provenance["slider.level"]).toEqual({ layer: "override" });
+    // env value not shadowed by overrides still wins over defaults.
+    expect(withOverrides.settings.telemetry.enabled).toBe(false);
+  });
+
+  it("merges per leaf across layers (arrays replace wholesale)", async () => {
+    await writeJson(userFile(), {
+      inference: { ollama_base_url: "http://lab:11434" },
+      knowledge: { watch_paths: ["a", "b"] },
+    });
+    await writeJson(projectFile(), { knowledge: { watch_paths: ["c"] } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.inference.ollama_base_url).toBe("http://lab:11434");
+    expect(config.settings.knowledge.watch_paths).toEqual(["c"]);
+  });
+
+  it("returns a deeply frozen settings object", async () => {
+    await writeJson(projectFile(), { knowledge: { watch_paths: ["x"] } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(Object.isFrozen(config.settings)).toBe(true);
+    expect(Object.isFrozen(config.settings.proxy)).toBe(true);
+    expect(Object.isFrozen(config.settings.knowledge.watch_paths)).toBe(true);
+    expect(Object.isFrozen(config.provenance)).toBe(true);
+    expect(() => {
+      (config.settings.slider as { level: number }).level = 5;
+    }).toThrow(TypeError);
+  });
+
+  it("treats empty and BOM-prefixed files gracefully", async () => {
+    await mkdir(path.dirname(projectFile()), { recursive: true });
+    await writeFile(projectFile(), "   \n", "utf8");
+    await writeFile(localFile(), `﻿{"slider":{"level":3}}`, "utf8");
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.slider.level).toBe(3);
+  });
+
+  it("policyFromSettings maps slider settings onto the frozen contract", async () => {
+    await writeJson(projectFile(), { slider: { level: 5, local_only_opt_in: true } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    const policy = policyFromSettings(config.settings);
+    expect(policy.level).toBe(5);
+    expect(policy.localOnlyOptIn).toBe(true);
+    expect(policy.stages.localOnlyAnswers).toBe(true);
+  });
+});
