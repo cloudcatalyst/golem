@@ -24,6 +24,7 @@ import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import path from "node:path";
 import { writeSetting } from "../config/index.js";
+import { addPostToolUseHook, removePostToolUseHook, writeGuidanceSection } from "../hooks/index.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** External-state checks, injectable for tests. */
@@ -333,6 +334,10 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
   }
 
+  // 5. PostToolUse hook + CLAUDE.md guidance (WS-B B2).
+  actions.push(await addPostToolUseHook({ projectDir, dryRun }));
+  actions.push(await writeGuidanceSection({ projectDir, dryRun }));
+
   return { dryRun, actions };
 }
 
@@ -402,9 +407,14 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     // not installed
   }
 
+  // 4. Remove the PostToolUse hook entry (guidance prose is left in place —
+  // it is user-editable; removePostToolUseHook is the reversible half).
+  actions.push(await removePostToolUseHook({ projectDir, dryRun }));
+
   // .golem/ (settings, CCR store) is user data — deliberately kept.
-  if (actions.length === 0) {
-    actions.push({ kind: "skip", path: ".", detail: "nothing to remove" });
+  const substantive = actions.filter((a) => a.kind !== "skip");
+  if (substantive.length === 0) {
+    return { dryRun, actions: [{ kind: "skip", path: ".", detail: "nothing to remove" }] };
   }
   return { dryRun, actions };
 }

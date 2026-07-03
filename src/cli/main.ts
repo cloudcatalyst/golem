@@ -13,6 +13,7 @@ import { Command, InvalidArgumentError } from "commander";
 import { NativeLosslessCompression } from "../compression/index.js";
 import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
+import { buildHookCommand } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
@@ -285,6 +286,8 @@ program
     );
     process.exitCode = 1;
   });
+
+program.addCommand(buildHookCommand());
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
