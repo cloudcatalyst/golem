@@ -1,7 +1,7 @@
 # Project Spec: Golem — edge offload for Claude
 
-**Status:** **v1.3 — approved for implementation kickoff** (see IMPLEMENTATION_PLAN.md, CLAUDE.md, KICKOFF_PROMPT.md)
-**Date:** 2026-07-03
+**Status:** **v1.4 — P0 in progress; roadmap expanded** (see IMPLEMENTATION_PLAN.md, CLAUDE.md, KICKOFF_PROMPT.md)
+**Date:** 2026-07-04 (v1.4 adds Decision 20 roadmap features; v1.3 2026-07-03)
 
 > **RENAMED (v1.3, Decision 19): the project is "Golem"** (domain **golem.run**; npm `golem-run`; CLI `golem`). Every "EOL" in this document reads as "Golem"; concrete renamed identifiers are listed in Decision 19. The working title "Edge Offload Layer" survives only in this file's name and historical notes.
 
@@ -241,9 +241,11 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
 ## 7. Phased Roadmap
 - **P0 — Foundation:** `eol init` installs the EOL service (proxy owning the request path, Headroom as embedded library) for Claude Code + registers the unified MCP server and `/eol:*` commands; redaction pre-stage, slider levels 0–2, savings dashboard, 3-OS CI. *Mostly integration work, not compression R&D.*
 - **P1 — RAG (first big differentiator):** Qdrant indexing (tree-sitter code chunks + docs), GPU embeddings, reranking, MCP tools `index_path` / `search_local` / `get_chunk`, file watchers; teach Claude via CLAUDE.md guidance that `eol init` installs ("prefer search_local over bulk file reads").
-- **P2 — Local LLM delegation:** Ollama detection + tiered model catalog; summarizer/extractor/classifier tools; semantic compression; slider levels 3–4; local test/lint execution → failure digests.
-- **P3 — Assistant depth:** git-aware context tools, Whisper/OCR preprocessing, speculative prefetch, session memory beyond Headroom's, level 5 (per-project opt-in).
-- **P4 — Fleet (optional module):** device registry, scheduler, LAN workers for devs with a spare GPU box; canary quality evals.
+- **P2 — Local LLM delegation:** Ollama detection + tiered model catalog; summarizer/extractor/classifier tools; semantic compression; slider levels 3–4; local test/lint execution → failure digests. **Adds:** durable task queue & auto-resume (Decision 20a), task/question queue + local conversation multiplexing (20b), idea/note capture into the KB (20f, foundation).
+- **P3 — Assistant depth:** git-aware context tools, Whisper/OCR preprocessing, speculative prefetch, session memory beyond Headroom's, level 5 (per-project opt-in). **Adds:** cruise-control autonomy modes (Decision 20d), writing-style adaptation & prompt translation (20g), remote session access foundations (20c).
+- **P4 — Fleet (optional module):** device registry, scheduler, LAN workers for devs with a spare GPU box; canary quality evals. **Adds:** self-hosted remote session relay (Decision 20c), hosted workspace/org shared standards & knowledge tier (20e) — the leading paid-feature candidate on golem.run.
+
+> **Cross-cutting (Decision 20e):** tiered user/workspace/org shared standards & knowledge begins in **P1** at local (user) scope alongside the knowledge base; workspace/org sync is the P4+ hosted tier.
 
 ## 8. Risks & Mitigations
 | Risk | Mitigation |
@@ -254,6 +256,10 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
 | Prompt-cache interference (edits break prefix stability) | Cache-alignment stage explicitly optimizes for prefix stability |
 | Semantic cache serves stale/wrong answers | Strict thresholds, TTL, slider-gated, never for tool-use requests |
 | LAN security (prompts traverse network) | mTLS between hub/workers; redaction before transit; localhost-only default |
+| Remote session access widens attack surface (Decision 20c) | Localhost-first; exposure is opt-in and token-authenticated; mTLS on LAN; documented threat model + rate limiting before any relay ships; no golem.run rendezvous without user consent |
+| Cruise-control autonomy takes an irreversible action (Decision 20d) | Mandatory approval gates for deploys/pushes/deletes/outward-facing calls; autonomy level is explicit and per-task; dry-run default for destructive steps; full action log |
+| Resumed durable task double-applies a side effect (Decision 20a) | Tasks checkpoint idempotency keys; side-effecting steps re-verify state before re-applying; resume replays plan, not blind re-exec |
+| Prompt translation distorts user intent (Decision 20g) | Translated prompt is always shown and editable; scoring is user-inspectable; feature is opt-in and fully disableable; never auto-send a rewrite the user hasn't seen |
 
 ## 9. Decisions Log & Remaining Items
 
@@ -287,6 +293,14 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - Config: `~/.golem/settings.json` → `<project>/.golem/settings.json` → `<project>/.golem/settings.local.json`; env prefix `GOLEM_<SECTION>_<KEY>`.
     - Per-request escape hatch header: `x-golem-bypass`.
     - CLI verbs unchanged in shape: `golem status|slider|stats|index|devices|init|uninit`.
+20. **Roadmap expansion — agentic workflow & knowledge features (v1.4, 2026-07-04, USER DECISION).** Seven accepted product directions captured for post-P0 design. None change P0 scope or the frozen interfaces; each gets a design memo + workstream before build. Several were motivated directly by dogftooding Golem's own development (notably 20a, prompted by repeatedly losing in-flight agent work to session/credit limits). Business-model questions (which scopes are hosted/paid) are deferred to a separate pricing decision.
+    - **20a. Durable task queue & auto-resume.** Golem persists in-flight tasks — prompt, chosen agent, and git-worktree state — to `<project>/.golem/tasks/` and **re-launches them automatically when capacity returns** (token/credit/session-limit recovery, or a scheduled window). A task is a checkpointed unit: interrupted → re-queued, not lost. Builds on the device/job scheduler (§2.2). *Phase P2.* Open: how to detect "capacity restored" without a paid status API (poll-with-backoff on a cheap request vs. user-set reset time); idempotency of resumed side-effecting tasks (see 20d guardrails).
+    - **20b. Task/question queue + concurrent-conversation multiplexing.** User can enqueue prompts/questions without blocking; when local inference (Ollama tier, WS-D) is available Golem services **overlapping conversations locally** — triage, drafts, retrieval — so a single serialized Claude session isn't the bottleneck. Escalates to Claude only where cloud quality is needed. *Phase P2/P3.* Ties to `InferenceService` role routing and the slider.
+    - **20c. Self-hosted remote session access (no org account).** Securely attach to a *running local Golem session* from another device — phone, laptop — over Golem's **own auth and relay/tunnel**, requiring no Anthropic organisation account. Localhost-first; opt-in exposure via a token-authenticated tunnel with mTLS on the LAN path (extends Decision 12). Positioned as a differentiator vs. Claude's org-gated Remote Control. *Phase P3/P4.* Open: relay architecture (self-hosted vs. optional golem.run rendezvous), NAT traversal, threat model (adds a Risk row).
+    - **20d. Cruise-control autonomy modes (task-level, not just command-level).** A directive layer above individual commands: the user states an *outcome* ("draft a plan", "edit files to do X", "deploy the change") and Golem drives the agent loop at a chosen **autonomy level**, with mandatory approval gates for irreversible/outward-facing steps (deploys, pushes, deletes). More flexible than a binary auto/manual toggle. *Phase P3.* Ties to the MCP tool surface and the guidance-file writer; safety guardrails are a hard requirement (Risk row).
+    - **20e. Tiered shared standards & knowledge (user / workspace / organisation).** Coding standards and curated knowledge federate across three scopes, mirroring the config hierarchy (Decision 11) and `KnowledgeBase` federation (§3.1). User scope is local; **workspace/org scope is the leading candidate for a paid hosted feature on golem.run** (sync, access control, team-shared embeddings). *Phase P1 foundation (local scopes), hosted tier P4+.* Open: pricing/hosting model; conflict resolution across scopes; privacy of shared embeddings.
+    - **20f. Idea & note capture that shapes project context.** Lightweight capture of notes/ideas as the user has them (CLI verb + MCP tool + optional hook), ingested into the project knowledge base and **surfaced to shape later conversations** ("you noted X about this module last week"). *Phase P2/P3.* Ties to `KnowledgeBase.ingest` and Headroom-memory federation (Decision 13, behind the ML sidecar).
+    - **20g. Writing-style adaptation & prompt translation.** Golem learns (i) the user's natural writing style and (ii) the phrasing that is empirically most effective with Claude, then **translates user input into high-yield prompts**, using scored interaction outcomes (telemetry) to improve the mapping over time. Local-LLM-powered translation (WS-D) so raw notes never require the user to "prompt well." *Phase P3.* Open: how interactions are scored (explicit thumbs vs. inferred from retries/edits/acceptance); must be fully user-inspectable and disableable; never silently alter intent — show the translated prompt.
 
 ### To verify against live docs before P0 — ✅ RESOLVED 2026-07-03 (task T0.1)
 All four items verified; dated findings with URLs live in `verification-notes.md`. Summary:
