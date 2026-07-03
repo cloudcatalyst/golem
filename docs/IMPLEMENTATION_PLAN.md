@@ -178,3 +178,18 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 - Embedded vector store choice (LanceDB vs sqlite-vec) — owner WS-C C1.
 - tree-sitter WASM vs native prebuilds — owner WS-C C2.
 - Headroom sidecar version handshake (npm 0.22.4 ↔ PyPI 0.28/0.29) — owner WS-A, P2.
+
+## 7. Future workstreams (post-P1 — spec Decision 20, not yet scheduled)
+Each needs a design memo before build; none touch frozen interfaces or P0 scope.
+
+| ID (tentative) | Feature (spec ref) | Phase | Depends on |
+|---|---|---|---|
+| WS-F1 | Durable task queue & auto-resume (20a) | P2 | device/job scheduler §2.2, worktree state capture |
+| WS-F2 | Task/question queue + local conversation multiplexing (20b) | P2/P3 | WS-D InferenceService, slider |
+| WS-F3 | Self-hosted remote session access, no org account (20c) | P3/P4 | auth + relay/tunnel, Decision 12 LAN, threat model |
+| WS-F4 | Cruise-control autonomy modes (20d) | P3 | MCP tool surface, approval-gate guardrails |
+| WS-F5 | Tiered user/workspace/org shared standards & knowledge (20e) | P1 local → P4+ hosted | WS-C KnowledgeBase federation, config hierarchy |
+| WS-F6 | Idea/note capture shaping project context (20f) | P2/P3 | WS-C ingest, Headroom-memory (ML sidecar) |
+| WS-F7 | Writing-style adaptation & prompt translation (20g) | P3 | telemetry scoring, WS-D local LLM, memory |
+
+Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier.
