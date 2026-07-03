@@ -10,6 +10,9 @@ coverage/
 # EOL local state
 .eol/settings.local.json
 
+# Claude Code personal settings
+.claude/settings.local.json
+
 # OS
 .DS_Store
 Thumbs.db
