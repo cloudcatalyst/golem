@@ -12,6 +12,7 @@ coverage/
 
 # Claude Code personal settings
 .claude/settings.local.json
+.claude/worktrees/
 
 # OS
 .DS_Store
