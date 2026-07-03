@@ -25,7 +25,7 @@ graceful degradation.
   Model catalog per tier (~4B-class P_MIN, ~8B-class P_MID, ~14B-class P_MAX,
   Q4–Q5; bge-m3-class embeddings; re-verify current best at build time).
   Pull-on-demand UX: detect Ollama, offer install, pull tier-appropriate models on
-  first use — never at `eol init` time.
+  first use — never at `golem init` time.
 - **D3 — Role routing.** `Role` → concrete model via catalog + detected tier;
   fallback chain: one tier down → Claude Haiku via API (only if user allows in
   settings) → `CapabilityUnavailableError`. Embeddings CPU fallback path for P_CPU
@@ -45,7 +45,7 @@ graceful degradation.
 
 ## Dependencies
 D1/D2 can start now (interfaces frozen; no other workstream blocks you). Your
-consumers: WS-C (embed/rerank), WS-B (`eol_delegate`, `eol_devices`), WS-A
+consumers: WS-C (embed/rerank), WS-B (`golem_delegate`, `golem_devices`), WS-A
 (semantic compression at slider ≥3, P2).
 
 ## Definition-of-done slice (P1/P2)
@@ -54,4 +54,4 @@ consumers: WS-C (embed/rerank), WS-B (`eol_delegate`, `eol_devices`), WS-A
 2. Tier detection correct on the 3-OS matrix (CI asserts P_CPU on runners; real
    GPU detection verified manually and recorded).
 3. Graceful degradation proven: missing Ollama/GPU never crashes a caller.
-4. `eol_devices` data source ready for WS-B/WS-E consumption.
+4. `golem_devices` data source ready for WS-B/WS-E consumption.

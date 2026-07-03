@@ -1,7 +1,7 @@
 /**
  * CompressionService — FROZEN CONTRACT (IMPLEMENTATION_PLAN §2.1).
  *
- * Implemented by `src/compression/` (WS-A task A2): the EOL-native TS lossless
+ * Implemented by `src/compression/` (WS-A task A2): the Golem-native TS lossless
  * stage for P0, with the optional Headroom Python sidecar behind the SAME
  * interface at slider >= 3 (spec Decision 18). Any Headroom client imports live
  * ONLY in `src/compression/headroom-adapter.ts`.

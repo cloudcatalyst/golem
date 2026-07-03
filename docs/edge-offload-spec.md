@@ -1,7 +1,9 @@
-# Project Spec: Edge Offload Layer for Claude ("EOL")
+# Project Spec: Golem — edge offload for Claude
 
-**Status:** **v1.0 — approved for implementation kickoff** (see IMPLEMENTATION_PLAN.md, CLAUDE.md, KICKOFF_PROMPT.md)
+**Status:** **v1.3 — approved for implementation kickoff** (see IMPLEMENTATION_PLAN.md, CLAUDE.md, KICKOFF_PROMPT.md)
 **Date:** 2026-07-03
+
+> **RENAMED (v1.3, Decision 19): the project is "Golem"** (domain **golem.run**; npm `golem-run`; CLI `golem`). Every "EOL" in this document reads as "Golem"; concrete renamed identifiers are listed in Decision 19. The working title "Edge Offload Layer" survives only in this file's name and historical notes.
 
 ---
 
@@ -278,6 +280,13 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - **P2+: optional Headroom Python sidecar** for ML-heavy semantic compression (SmartCrusher heuristics, Kompress-class models) at slider ≥3: EOL detects/installs `headroom-ai[proxy]` (pinned; Python 0.28.0 at verification time) and spawns/manages `headroom proxy` as a child worker behind the same adapter; the pinned `headroom-ai` npm client (0.22.4) becomes the typed transport. Graceful degradation: no Python → slider ≥3 semantic stages fall back to EOL's tiered local LLM (Ollama) or stay off.
     - Headroom conversational memory (Decision 13) is likewise Python-only → MEMORY-scope federation moves behind the optional sidecar; `search_local` degrades to KNOWLEDGE-only without it.
     - Consequence for Decision 1: "build on headroom-ai" narrows to "adopt Headroom's *architecture* (CCR, cache alignment, content-aware routing) and interoperate with its sidecar for ML stages"; upstream generic improvements where possible.
+19. **Project name: Golem (v1.3, 2026-07-03, USER DECISION).** Renamed from "EOL / Edge Offload Layer"; the domain **golem.run** is registered for onboarding new users and documentation. Concrete renamed surfaces (all previously "eol"-prefixed forms are dead — nothing has shipped, so no aliases or migration shims):
+    - npm package **`golem-run`** (bare `golem` is npm-squatted since 2022; `golem-run` matches the domain), CLI binary **`golem`**, onboarding command **`npx golem-run init`**.
+    - MCP: server registered as `golem`; frozen tool names `golem_search`, `golem_get_chunk`, `golem_index_path`, `golem_expand`, `golem_stats`, `golem_set_slider`, `golem_delegate`, `golem_devices`; prompts surface as `/mcp__golem__<prompt>`.
+    - Skills: `.claude/skills/golem/<cmd>/SKILL.md` → `/golem/<cmd>` (per Decision 14 naming rules).
+    - Config: `~/.golem/settings.json` → `<project>/.golem/settings.json` → `<project>/.golem/settings.local.json`; env prefix `GOLEM_<SECTION>_<KEY>`.
+    - Per-request escape hatch header: `x-golem-bypass`.
+    - CLI verbs unchanged in shape: `golem status|slider|stats|index|devices|init|uninit`.
 
 ### To verify against live docs before P0 — ✅ RESOLVED 2026-07-03 (task T0.1)
 All four items verified; dated findings with URLs live in `verification-notes.md`. Summary:

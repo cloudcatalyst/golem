@@ -7,8 +7,8 @@ npm-debug.log*
 # Coverage
 coverage/
 
-# EOL local state
-.eol/settings.local.json
+# Golem local state
+.golem/settings.local.json
 
 # Claude Code personal settings
 .claude/settings.local.json

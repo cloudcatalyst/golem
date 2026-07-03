@@ -1,15 +1,16 @@
 {
-  "name": "eol",
+  "name": "golem-run",
   "version": "0.1.0",
-  "description": "Edge Offload Layer for Claude — local-first proxy + unified MCP server that cuts token spend and gives Claude local tools",
+  "description": "Golem (golem.run) — local-first proxy + unified MCP server that cuts Claude token spend and gives Claude local tools",
   "license": "Apache-2.0",
   "author": "Golem <paul@golem.run>",
+  "homepage": "https://golem.run",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "bin": {
-    "eol": "./dist/cli/main.js"
+    "golem": "./dist/cli/main.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

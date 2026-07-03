@@ -1,4 +1,6 @@
-# EOL Implementation Plan (P0 → P1)
+# Golem Implementation Plan (P0 → P1)
+
+> **Project renamed to Golem** (2026-07-03, spec Decision 19): npm `golem-run`, CLI `golem`, domain golem.run.
 
 Companion to `edge-offload-spec.md`. Structured for **multi-agent Claude Code development**: workstreams are parallelizable, interfaces are frozen contracts, and every workstream lists its dependencies so agents don't collide.
 
@@ -18,9 +20,9 @@ Companion to `edge-offload-spec.md`. Structured for **multi-agent Claude Code de
 ## 1. Repository layout
 
 ```
-eol/
+golem/
 ├── CLAUDE.md                    # agent guidance (provided)
-├── package.json                 # npm; bin: eol; ESM; Node >= 22
+├── package.json                 # npm "golem-run"; bin: golem; ESM; Node >= 22
 ├── tsconfig.json                # strict + exactOptionalPropertyTypes + noUncheckedIndexedAccess
 ├── biome.json                   # lint + format (single tool)
 ├── vitest.config.ts
@@ -43,14 +45,14 @@ eol/
 │   ├── mcp/                     # WS-B: unified MCP server (tools + prompts, @modelcontextprotocol/sdk)
 │   ├── knowledge/               # WS-C: vector KB — ingestion, chunking, embed, rerank, watch
 │   ├── inference/               # WS-D: Ollama client, capability detection, model catalog
-│   ├── cli/                     # WS-E: eol init/status/index/slider/... (commander)
+│   ├── cli/                     # WS-E: golem init/status/index/slider/... (commander)
 │   ├── dashboard/               # WS-E: local web UI (telemetry)
 │   ├── config/                  # WS-E: settings hierarchy loader
 │   └── telemetry/               # shared: savings attribution, SQLite event log
 └── tests/
     ├── contract/                # interface contract tests (incl. headroom pin tests)
     ├── integration/             # proxy round-trip vs recorded Anthropic API shapes
-    └── e2e/                     # eol init → Claude Code smoke (3 OS)
+    └── e2e/                     # golem init → Claude Code smoke (3 OS)
 ```
 
 ## 2. Frozen interface contracts (build these first)
@@ -107,7 +109,7 @@ Level 0–5 → per-stage config. Initial mapping (tune against Headroom's real 
 | 5 | ✅ | ✅ | ✅ | aggressive | loose | ✅ | per-project opt-in |
 
 ### 2.5 MCP surface (WS-B owns; names frozen)
-Tools: `eol_search`, `eol_get_chunk`, `eol_index_path`, `eol_expand` (CCR retrieve), `eol_stats`, `eol_set_slider`, `eol_delegate`, `eol_devices`.
+Tools: `golem_search`, `golem_get_chunk`, `golem_index_path`, `golem_expand` (CCR retrieve), `golem_stats`, `golem_set_slider`, `golem_delegate`, `golem_devices`.
 Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`, `delegate`.
 
 ## 3. Workstreams & task breakdown
@@ -119,14 +121,14 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 
 ### WS-A — Proxy, pipeline & compression (P0 core)
 - A1: Anthropic-compatible proxy (TS) — transparent passthrough incl. **SSE streaming and tool-use blocks untouched**; recorded-shape integration tests. *(after T0.2)*
-- A2: **EOL-native lossless CompressionService** (dedup, compaction, cache alignment, CCR store) per spec Decision 18; contract tests via `describeCompressionServiceContract`. Optional Headroom sidecar adapter is P2. *(after T0.1, T0.3)*
-- A3: Pipeline: redaction stage (secret/PII patterns + entropy heuristics) → compression → forward; `x-eol-bypass` header; slider levels 0–2.
+- A2: **Golem-native lossless CompressionService** (dedup, compaction, cache alignment, CCR store) per spec Decision 18; contract tests via `describeCompressionServiceContract`. Optional Headroom sidecar adapter is P2. *(after T0.1, T0.3)*
+- A3: Pipeline: redaction stage (secret/PII patterns + entropy heuristics) → compression → forward; `x-golem-bypass` header; slider levels 0–2.
 - A4: Telemetry events per stage → SQLite.
 
 ### WS-B — MCP server & Claude Code integration (P0)
-- B1: Unified MCP server (stdio + HTTP): P0 tools `eol_expand`, `eol_stats`, `eol_set_slider`; prompt-based slash commands. *(after T0.1, T0.3)*
+- B1: Unified MCP server (stdio + HTTP): P0 tools `golem_expand`, `golem_stats`, `golem_set_slider`; prompt-based slash commands. *(after T0.1, T0.3)*
 - B2: Claude Code wiring: hook (per T0.1 findings) swapping oversized tool outputs for CCR refs; guidance-file writer (CLAUDE.md section, coordinated with headroom learn).
-- B3: P1 tools: `eol_search`, `eol_index_path`, `eol_get_chunk`, `eol_delegate`, `eol_devices` (thin wrappers over WS-C/D).
+- B3: P1 tools: `golem_search`, `golem_index_path`, `golem_get_chunk`, `golem_delegate`, `golem_devices` (thin wrappers over WS-C/D).
 
 ### WS-C — Knowledge base (P1 headline)
 - C1: Embedded vector store setup (spec Decision 17: LanceDB candidate, spike + decision memo required; Qdrant server mode via URL config); per-project collections; schema/migrations.
@@ -141,12 +143,12 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 
 ### WS-E — CLI, config, dashboard (P0)
 - E1: Config loader: user → project → local → env → per-request. `env-paths`, zod-validated.
-- E2: `eol init`: detect Claude Code; set base URL; register MCP; install commands + hooks; idempotent + `eol uninit`. *(after T0.1)*
-- E3: `eol status|slider|stats|index|devices`; dashboard v0 (savings, cache hits, stage attribution).
+- E2: `golem init`: detect Claude Code; set base URL; register MCP; install commands + hooks; idempotent + `golem uninit`. *(after T0.1)*
+- E3: `golem status|slider|stats|index|devices`; dashboard v0 (savings, cache hits, stage attribution).
 
 ### T-C — Cross-cutting (continuous)
 - T-C1: Contract tests green on 3 OS per PR.
-- T-C2: E2E smoke: `eol init` → Claude Code round-trip with savings > 0 at level 1.
+- T-C2: E2E smoke: `golem init` → Claude Code round-trip with savings > 0 at level 1.
 - T-C3: Security review of redaction stage before first release.
 - T-C4: Headroom upgrade playbook — applies to the pinned npm client and the P2 sidecar's PyPI pin (bump pin → contract tests → changelog diff; pins live in `src/compression/index.ts`).
 
@@ -162,16 +164,16 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 | agent-ux | WS-E | T0.2 (E2 after T0.1) |
 
 ## 5. P0 definition of done
-1. `npx eol init` on Win/macOS/Linux configures Claude Code (base URL + MCP + skills + hook) idempotently.
+1. `npx golem-run init` on Win/macOS/Linux configures Claude Code (base URL + MCP + skills + hook) idempotently.
 2. Proxy passes recorded-shape tests incl. streaming + tool use; zero semantic change at level ≤1.
-3. Level 1 shows measurable savings in `eol stats` on a real Claude Code session.
-4. `/eol/slider`, `/eol/stats`, `/eol/expand`, `/eol/bypass` (+ `/mcp__eol__*` prompt twins) work in-session.
+3. Level 1 shows measurable savings in `golem stats` on a real Claude Code session.
+4. `/golem/slider`, `/golem/stats`, `/golem/expand`, `/golem/bypass` (+ `/mcp__golem__*` prompt twins) work in-session.
 5. Redaction verified against a secrets corpus; CI matrix green.
 
 ## 6. Known unknowns (updated post-T0.1 — full table in verification-notes.md)
 - ~~Exact Headroom config keys for per-stage control~~ ✅ resolved (notes §3).
-- ~~`headroom wrap claude` conflict~~ ✅ confirmed conflicting; `eol init` must detect and refuse (notes §5; owner WS-E E2).
-- ~~MCP prompt→slash-command surfacing~~ ✅ resolved: `/mcp__eol__<prompt>` + directory-namespaced skills (notes §10–11).
+- ~~`headroom wrap claude` conflict~~ ✅ confirmed conflicting; `golem init` must detect and refuse (notes §5; owner WS-E E2).
+- ~~MCP prompt→slash-command surfacing~~ ✅ resolved: `/mcp__golem__<prompt>` + directory-namespaced skills (notes §10–11).
 - Windows GPU detection reliability (WMI vs nvidia-smi) — owner WS-D D1.
 - Embedded vector store choice (LanceDB vs sqlite-vec) — owner WS-C C1.
 - tree-sitter WASM vs native prebuilds — owner WS-C C2.

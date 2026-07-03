@@ -1,7 +1,7 @@
 /**
  * WS-A: compression stage implementing interfaces/compression (owned by agent-proxy).
  *
- * P0: EOL-native TS lossless stage (dedup, compaction, cache alignment, CCR).
+ * P0: Golem-native TS lossless stage (dedup, compaction, cache alignment, CCR).
  * P2+: optional Headroom Python sidecar behind the same adapter (spec Decision 18).
  * Any Headroom client imports live ONLY in `headroom-adapter.ts` in this
  * directory (CLAUDE.md hard rule).
