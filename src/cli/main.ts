@@ -10,9 +10,10 @@
 
 import { Command } from "commander";
 import { NativeLosslessCompression } from "../compression/index.js";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, policyFromSettings } from "../config/index.js";
 import { VERSION } from "../index.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
+import { createGolemPipeline } from "../pipeline/index.js";
 import { GolemProxy } from "../proxy/index.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 
@@ -89,15 +90,24 @@ program
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new InitError(`invalid port "${opts.port}"`);
       }
+      // Redaction → compression pipeline (A3), reading the slider level from
+      // settings resolved at startup. (Live slider changes need a restart for
+      // now — acceptable for P0; a hot-reload can come with A4/E3.)
+      const pipeline = createGolemPipeline({
+        compression: NativeLosslessCompression.forProjectDir(opts.dir),
+        policy: () => policyFromSettings(settings),
+        projectId: opts.dir,
+      });
       const proxy = new GolemProxy({
         upstreamBaseUrl: settings.proxy.upstream_base_url,
         connectTimeoutMs: settings.proxy.connect_timeout_ms,
         headersTimeoutMs: settings.proxy.request_timeout_ms,
         bodyTimeoutMs: settings.proxy.request_timeout_ms,
+        pipeline,
       });
       const addr = await proxy.listen(port);
       process.stdout.write(
-        `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url}\n`,
+        `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
       );
       const shutdown = (): void => {
         void proxy.close().finally(() => process.exit(0));
