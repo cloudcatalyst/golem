@@ -20,3 +20,18 @@ export const HEADROOM_SIDECAR_PYPI_PIN = "0.28.0";
  * default dependency; pinned here for when the P2 sidecar work adds it.
  */
 export const HEADROOM_CLIENT_NPM_PIN = "0.22.4";
+
+export type { CcrEnvelope } from "./ccr-store.js";
+export { CcrStore } from "./ccr-store.js";
+export { COMPACTION_VERSION, compactText } from "./compaction.js";
+export { LocalDirBlobStore } from "./local-blob-store.js";
+export type { NativeLosslessOptions } from "./native-lossless.js";
+export {
+  CCR_MARKER_RE,
+  ccrMarker,
+  DEFAULT_MIN_DEDUP_CHARS,
+  NativeLosslessCompression,
+  STAGE_COMPACTION,
+  STAGE_DEDUP,
+} from "./native-lossless.js";
+export { estimateTokens } from "./tokens.js";
