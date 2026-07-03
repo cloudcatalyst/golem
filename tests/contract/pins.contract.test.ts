@@ -2,7 +2,7 @@
  * T-C4 guard: Headroom pins are exact and consistent everywhere.
  *
  * Spec Decision 18: the DEFAULT install has NO Headroom dependency (the
- * lossless stage is EOL-native TS). When the P2 sidecar work adds the npm
+ * lossless stage is Golem-native TS). When the P2 sidecar work adds the npm
  * client, it must be pinned exactly to HEADROOM_CLIENT_NPM_PIN. Bumping either
  * pin is only allowed via the T-C4 upgrade playbook.
  */

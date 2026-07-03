@@ -15,7 +15,7 @@ const PROJECT = "contract-test-project";
 const KNOWLEDGE_ONLY: ReadonlySet<"knowledge"> = new Set(["knowledge"] as const);
 
 async function makeCorpus(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "eol-kb-contract-"));
+  const dir = await mkdtemp(join(tmpdir(), "golem-kb-contract-"));
   await writeFile(
     join(dir, "guide.md"),
     "# Deploy guide\n\nAlways run migrations before deploying.\n",

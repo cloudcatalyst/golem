@@ -5,8 +5,8 @@ Live-doc facts you must honor: `docs/verification-notes.md` §12, §14, §15, §
 Work on branch `ws-a` (own worktree); claim tasks by ID in PR titles (e.g. "A1: ...").
 
 ## Mission
-The EOL proxy (TypeScript, Node ≥22): Claude Code sets `ANTHROPIC_BASE_URL` at us; we run
-`redaction → compress (EOL-native lossless stage) → forward to api.anthropic.com`
+The Golem proxy (TypeScript, Node ≥22): Claude Code sets `ANTHROPIC_BASE_URL` at us; we run
+`redaction → compress (Golem-native lossless stage) → forward to api.anthropic.com`
 and stream the response back untouched. This is the only component that sees every
 request — byte fidelity is the product.
 
@@ -40,7 +40,7 @@ Python sidecar for ML-heavy stages is P2 — not your P0 scope.
 - **A3 — Pipeline.** `src/pipeline/`: redaction stage (secret/PII regex corpus +
   entropy heuristics) → compression → forward. Redaction runs FIRST at every slider
   level and is never reordered/weakened (CLAUDE.md hard rule; T-C3 security review
-  before release). Honor `x-eol-bypass: true`. Implement slider levels 0–2 via
+  before release). Honor `x-golem-bypass: true`. Implement slider levels 0–2 via
   `sliderPolicyForLevel` (level 0 = redaction-only passthrough). Keep CPU-heavy
   compression off the request path's critical latency (worker_threads if profiling
   says so).

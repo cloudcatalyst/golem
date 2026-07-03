@@ -6,7 +6,7 @@ contradiction C1 (no Headroom Qdrant backend).
 Work on branch `ws-c`; claim tasks by ID in PR titles (e.g. "C1: ...").
 
 ## Mission
-The EOL document knowledge base: ingest what the developer chooses (codebases,
+The Golem document knowledge base: ingest what the developer chooses (codebases,
 guides, wikis, ADRs) into an embedded vector store, and give Claude ONE federated
 retrieval call across knowledge + (when available) Headroom's conversational memory.
 

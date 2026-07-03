@@ -181,6 +181,19 @@ finalized Decision 18.
   (Apache-2.0, per-platform napi prebuilds via optionalDependencies — native dep,
   weigh against the heavyweight-deps rule in the C1 decision memo).
 
+## 17. Project renamed EOL → Golem (2026-07-03, user decision — spec Decision 19)
+
+- All entries above predate the rename: read "EOL" as "Golem". Renamed surfaces
+  are enumerated in spec Decision 19 (`golem_*` tools, `/golem/<cmd>`,
+  `/mcp__golem__<cmd>`, `GOLEM_*` env, `~/.golem/`, `x-golem-bypass`).
+- Domain **golem.run** registered for onboarding/docs.
+- npm naming (checked https://registry.npmjs.org, 2026-07-03): `golem` is TAKEN
+  (unrelated package, last published 2022) and `golem-cli` is TAKEN (2026-03).
+  **`golem-run` and `@golem-run/*` were available**; package published as
+  `golem-run` with bin `golem` → onboarding is `npx golem-run init`. If the
+  stale `golem` name is ever obtained via npm's dispute process, add it as an
+  alias package — do not rename `golem-run`.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
