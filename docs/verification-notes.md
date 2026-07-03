@@ -193,6 +193,11 @@ finalized Decision 18.
   `golem-run` with bin `golem` → onboarding is `npx golem-run init`. If the
   stale `golem` name is ever obtained via npm's dispute process, add it as an
   alias package — do not rename `golem-run`.
+- The npm **org name `golem` is NOT available** (checked by the user via
+  npmjs.com org creation, 2026-07-03), so `@golem/run` is off the table —
+  `golem-run` stands as the canonical package name. Recommended: register the
+  `golem-run` org to reserve `@golem-run/*` for future satellite packages
+  (ML add-on, sidecar bridge, dashboard).
 
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
