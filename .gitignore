@@ -1,0 +1,15 @@
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+npm-debug.log*
+
+# Coverage
+coverage/
+
+# EOL local state
+.eol/settings.local.json
+
+# OS
+.DS_Store
+Thumbs.db
