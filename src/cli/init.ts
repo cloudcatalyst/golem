@@ -150,6 +150,76 @@ function golemMcpEntry(): JsonObject {
   return { type: "stdio", command: "golem", args: ["mcp", "serve"] };
 }
 
+/** Per-artifact result of the "is this project wired to Golem?" checks (E3). */
+export interface InitStatus {
+  /** `.claude/settings.json` env.ANTHROPIC_BASE_URL points at the Golem proxy. */
+  readonly claudeSettingsWired: boolean;
+  /** `.mcp.json` registers the golem MCP server with init's stdio entry. */
+  readonly mcpRegistered: boolean;
+  /** Every P0 skill file exists under `.claude/skills/golem/`. */
+  readonly skillsInstalled: boolean;
+  /** `<project>/.golem/settings.json` exists (created by init when absent). */
+  readonly golemSettingsPresent: boolean;
+  /** All of the above. */
+  readonly initialized: boolean;
+}
+
+/**
+ * Read-only status probe reusing init's own file checks — never throws on
+ * malformed files (a broken JSON file simply reads as "not wired").
+ */
+export async function golemInitStatus(
+  projectDir: string,
+  proxyPort: number = DEFAULT_PROXY_PORT,
+): Promise<InitStatus> {
+  const baseUrl = proxyBaseUrl(proxyPort);
+
+  const readSafe = async (file: string): Promise<JsonObject | null> => {
+    try {
+      return await readJsonObject(file);
+    } catch {
+      return null;
+    }
+  };
+
+  const settings = await readSafe(path.join(projectDir, ".claude", "settings.json"));
+  const env = settings?.["env"];
+  const claudeSettingsWired =
+    typeof env === "object" &&
+    env !== null &&
+    !Array.isArray(env) &&
+    (env as JsonObject)[ENV_BASE_URL] === baseUrl;
+
+  const mcp = await readSafe(path.join(projectDir, ".mcp.json"));
+  const servers = mcp?.["mcpServers"];
+  const mcpRegistered =
+    typeof servers === "object" &&
+    servers !== null &&
+    !Array.isArray(servers) &&
+    JSON.stringify((servers as JsonObject)[MCP_SERVER_KEY]) === JSON.stringify(golemMcpEntry());
+
+  let skillsInstalled = true;
+  for (const name of Object.keys(P0_SKILLS)) {
+    try {
+      await access(path.join(projectDir, ".claude", "skills", "golem", name, "SKILL.md"));
+    } catch {
+      skillsInstalled = false;
+      break;
+    }
+  }
+
+  const golemSettingsPresent =
+    (await readSafe(path.join(projectDir, ".golem", "settings.json"))) !== null;
+
+  return {
+    claudeSettingsWired,
+    mcpRegistered,
+    skillsInstalled,
+    golemSettingsPresent,
+    initialized: claudeSettingsWired && mcpRegistered && skillsInstalled && golemSettingsPresent,
+  };
+}
+
 export async function golemInit(options: InitOptions): Promise<InitReport> {
   const { projectDir } = options;
   const dryRun = options.dryRun ?? false;

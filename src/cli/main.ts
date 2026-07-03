@@ -2,20 +2,26 @@
 /**
  * Entry point for the `golem` command (WS-E).
  *
- * E2: init / uninit, plus the two runtime commands they wire Claude Code to:
- *   - `golem proxy`      — the A1 passthrough proxy (ANTHROPIC_BASE_URL target)
+ * E2: init / uninit, plus the runtime commands they wire Claude Code to:
+ *   - `golem proxy`      — the A1 proxy running the A3 redaction→compression
+ *                          pipeline (Claude Code's ANTHROPIC_BASE_URL target)
  *   - `golem mcp serve`  — the B1 unified MCP server on stdio (.mcp.json entry)
- * E3 adds status/slider/stats/index/devices and the dashboard.
+ * E3: status / slider / stats / dashboard (+ index/devices stubs for WS-C/D).
  */
 
-import { Command } from "commander";
+import { Command, InvalidArgumentError } from "commander";
 import { NativeLosslessCompression } from "../compression/index.js";
-import { loadConfig, policyFromSettings } from "../config/index.js";
+import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/index.js";
+import { startDashboard } from "../dashboard/index.js";
 import { VERSION } from "../index.js";
+import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import { GolemProxy } from "../proxy/index.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
+import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
+import { collectStats, liveStatsSource, renderStats } from "./stats.js";
+import { collectStatus, renderStatus } from "./status.js";
 
 const program = new Command();
 
@@ -92,7 +98,7 @@ program
       }
       // Redaction → compression pipeline (A3), reading the slider level from
       // settings resolved at startup. (Live slider changes need a restart for
-      // now — acceptable for P0; a hot-reload can come with A4/E3.)
+      // now — acceptable for P0; a hot-reload can come with A4.)
       const pipeline = createGolemPipeline({
         compression: NativeLosslessCompression.forProjectDir(opts.dir),
         policy: () => policyFromSettings(settings),
@@ -128,7 +134,9 @@ mcp
     try {
       await serveStdio({
         compression: NativeLosslessCompression.forProjectDir(opts.dir),
-        sliderStore: new JsonFileSliderStore(),
+        // Project-scope settings file — the same file (and nested slider.level
+        // key) the E1 loader and `golem slider` use (verification-notes §20).
+        sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
       });
     } catch (err) {
       fail(err);
@@ -137,9 +145,145 @@ mcp
 
 program
   .command("status")
-  .description("Show Golem service status (stub — implemented in WS-E task E3)")
+  .description("Show Golem status: config + provenance, proxy reachability, project wiring, slider")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await collectStatus({ projectDir: opts.dir, version: VERSION });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStatus(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+function parseSliderLevel(raw: string): SliderLevel {
+  const level = Number(raw);
+  if (!Number.isInteger(level) || level < 0 || level > 5) {
+    throw new InvalidArgumentError("level must be an integer from 0 to 5");
+  }
+  return level as SliderLevel;
+}
+
+program
+  .command("slider")
+  .description("Show the Golem savings slider, or set it (0 passthrough … 5 max savings)")
+  .argument("[level]", "new slider level 0–5; omit to show the current level", parseSliderLevel)
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (level: SliderLevel | undefined, opts: { dir: string; json: boolean }) => {
+    try {
+      if (level === undefined) {
+        const info = await getSliderInfo({ projectDir: opts.dir });
+        process.stdout.write(
+          opts.json
+            ? `${JSON.stringify(info, null, 2)}\n`
+            : `slider level ${info.level} (${info.name}) — set by ${info.layer}` +
+                `${info.source !== undefined ? ` (${info.source})` : ""}\n`,
+        );
+        return;
+      }
+      const result = await setSliderLevel(level, { projectDir: opts.dir });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(
+        `slider level set to ${level} (${SLIDER_LEVEL_NAMES[level]}) in ${result.file}\n`,
+      );
+      if (result.overriddenBy !== undefined) {
+        const o = result.overriddenBy;
+        process.stdout.write(
+          `note: a higher-precedence layer overrides it — effective level is ` +
+            `${o.level} (${o.name}) from ${o.layer}` +
+            `${o.source !== undefined ? ` (${o.source})` : ""}\n`,
+        );
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command("stats")
+  .description("Show Golem token-savings statistics (per-stage breakdown, CCR activity)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--project <id>", "limit stats to this project id")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; project?: string; json: boolean }) => {
+    try {
+      const report = await collectStats(liveStatsSource(opts.dir), opts.project);
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command("dashboard")
+  .description("Serve the local savings dashboard (loopback only)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--port <port>", "listen port (overrides config telemetry.dashboard_port)")
+  .action(async (opts: { dir: string; port?: string }) => {
+    try {
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const port = opts.port === undefined ? settings.telemetry.dashboard_port : Number(opts.port);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) {
+        throw new InitError(`invalid port "${opts.port}"`);
+      }
+      const source = liveStatsSource(opts.dir);
+      const handle = await startDashboard({
+        port,
+        snapshot: async () => {
+          // Re-read the slider each poll so external changes show up live.
+          const [slider, stats] = await Promise.all([
+            getSliderInfo({ projectDir: opts.dir }),
+            collectStats(source),
+          ]);
+          return {
+            project_dir: opts.dir,
+            slider: { level: slider.level, name: slider.name },
+            stats,
+            generated_at: new Date().toISOString(),
+          };
+        },
+      });
+      process.stdout.write(`golem dashboard on ${handle.url} (Ctrl+C to stop)\n`);
+      const shutdown = (): void => {
+        void handle.close().finally(() => process.exit(0));
+      };
+      process.on("SIGINT", shutdown);
+      process.on("SIGTERM", shutdown);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command("index")
+  .description("Index files into the Golem knowledge base (not implemented yet — ships with WS-C)")
+  .allowExcessArguments(true)
   .action(() => {
-    process.stdout.write("golem: status not yet implemented (WS-E task E3)\n");
+    process.stderr.write(
+      "golem index is not implemented yet: the vector knowledge base ships with " +
+        "workstream WS-C (golem_index_path / golem_search; docs/IMPLEMENTATION_PLAN.md §3).\n",
+    );
+    process.exitCode = 1;
+  });
+
+program
+  .command("devices")
+  .description("Show detected local hardware and models (not implemented yet — ships with WS-D)")
+  .action(() => {
+    process.stderr.write(
+      "golem devices is not implemented yet: hardware detection and tiered local " +
+        "inference ship with workstream WS-D (golem_devices; docs/IMPLEMENTATION_PLAN.md §3).\n",
+    );
+    process.exitCode = 1;
   });
 
 program.parseAsync(process.argv).catch((err: unknown) => {

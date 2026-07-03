@@ -26,6 +26,7 @@ export {
   defaultGolemSettingsPath,
   InMemorySliderStore,
   JsonFileSliderStore,
+  LEGACY_SLIDER_LEVEL_KEY,
   SLIDER_LEVEL_SETTINGS_KEY,
 } from "./slider-store.js";
 export type { InMemoryCompressionServiceOptions } from "./stub-compression.js";
