@@ -30,6 +30,7 @@
   "dependencies": {
     "commander": "^14.0.0",
     "env-paths": "^3.0.0",
+    "undici": "^7.28.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
