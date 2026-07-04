@@ -376,6 +376,43 @@ not yet decided):
 Ties to the fail-open work (proxy already degrades safely on pipeline error) and
 to Decision 20d/20c ergonomics. T-C3 is therefore parked until a clean session.
 
+## 24. T-C3 redaction security review — outcome (2026-07-04, done in a clean session)
+
+Adversarial audit added as `tests/unit/pipeline/redaction-audit.test.ts` (the
+attacker's-view corpus; complements the per-rule smoke in `redaction.test.ts`).
+Invariant checked: no raw secret survives verbatim, at any nesting depth.
+
+**Bug found & FIXED (would have leaked a live secret):** the group-redaction
+path used `match.replace(target, placeholder)`, which replaces the FIRST
+occurrence of the captured value inside the match. For a connection string like
+`postgres://ab:ab@localhost/app` (password == username) it redacted the
+USERNAME and left the real password in the clear. Rewrote `applyRule`
+(`src/pipeline/redaction.ts`) to redact the EXACT captured span using match
+indices (`d` flag + `matchAll`), so the password span is redacted and the rest
+of the match (username, host) is preserved. Regression tests cover the
+password-equals-username case, the dotless-host (`localhost`) case where the
+email rule cannot mask the leak, and the username-less `redis://:pw@` form.
+
+**Verified strengths:** deterministic + idempotent (re-redacting is a no-op →
+prompt-cache prefix stability holds); depth-recursive over the JSON body; the
+entropy backstop catches uncontexted 32+ char mixed secrets while NOT flagging
+git SHAs / UUIDs (false-positive guard tested).
+
+**Residual coverage gaps (documented, NOT fixed — low risk, entropy net is the
+backstop; add rules as needed):**
+- No dedicated rule for Google API keys (`AIza…`), Stripe keys (`sk_live_…` —
+  underscore, so the `sk-` OpenAI rule does not match), GCP `ya29.` tokens, or
+  Azure connection strings. High-entropy instances are caught by the entropy
+  sweep; low-entropy or short ones may pass. Adding provider rules is a
+  mechanical follow-up (append to `REDACTION_RULES` + a corpus case).
+- Redaction operates on JSON string values only; a secret split across a
+  concatenation the client never assembles is out of scope (so is anything the
+  client sends already base64-wrapped without a provider prefix — entropy net
+  applies).
+
+No ReDoS: every pattern uses bounded or disjoint quantifiers (private-key uses a
+lazy body between fixed anchors; jwt uses dot-separated disjoint classes).
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

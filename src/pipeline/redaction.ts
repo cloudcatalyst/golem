@@ -66,25 +66,45 @@ class PlaceholderTable {
 }
 
 function applyRule(text: string, rule: RedactionRule, table: PlaceholderTable): [string, number] {
+  // Redact by the EXACT matched span (whole match, or the captured group at its
+  // real index) — never by first-substring replace, which can hit the wrong
+  // occurrence and leak the actual secret (T-C3, verification-notes §24). The
+  // `d` flag gives per-group start/end indices so a group rule redacts precisely
+  // the captured range and leaves the rest of the match (e.g. the host in a
+  // connection string) untouched.
+  const flags = rule.pattern.flags.includes("d") ? rule.pattern.flags : `${rule.pattern.flags}d`;
+  const re = new RegExp(rule.pattern.source, flags);
+
   let count = 0;
-  // Rule patterns carry the `g` flag; replace walks matches left-to-right.
-  const out = text.replace(rule.pattern, (match, ...args): string => {
-    // Trailing replace() args are: ...groups, offset, whole, [namedGroups].
-    // With group set, the captured substring is args[group-1].
-    const target =
-      rule.group === undefined ? match : ((args[rule.group - 1] as string | undefined) ?? "");
-    if (target === "") {
-      return match;
+  let result = "";
+  let cursor = 0;
+  for (const m of text.matchAll(re)) {
+    const whole = m[0];
+    const matchStart = m.index ?? 0;
+    let redactStart = matchStart;
+    let redactEnd = matchStart + whole.length;
+    let target = whole;
+
+    if (rule.group !== undefined) {
+      const span = m.indices?.[rule.group];
+      const value = m[rule.group];
+      if (span === undefined || value === undefined || value === "") {
+        continue; // no captured group → leave this match as-is
+      }
+      [redactStart, redactEnd] = span;
+      target = value;
     }
     if (rule.validate !== undefined && !rule.validate(target)) {
-      return match;
+      continue; // failed the extra check (e.g. Luhn) → not a secret, leave it
     }
+
+    result += text.slice(cursor, redactStart);
+    result += table.placeholderFor(rule.id, target);
+    cursor = redactEnd;
     count += 1;
-    const placeholder = table.placeholderFor(rule.id, target);
-    // Group rules replace only the captured target inside the match.
-    return rule.group === undefined ? placeholder : match.replace(target, placeholder);
-  });
-  return [out, count];
+  }
+  result += text.slice(cursor);
+  return [result, count];
 }
 
 function applyEntropy(text: string, table: PlaceholderTable): [string, number] {
