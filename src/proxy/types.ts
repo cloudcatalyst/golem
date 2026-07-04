@@ -76,6 +76,12 @@ export interface ProxyServerOptions {
   readonly bodyTimeoutMs?: number;
   /** Request pipeline hook. Default: {@link identityPipeline}. */
   readonly pipeline?: RequestPipeline;
+  /**
+   * Called when the pipeline throws and the proxy falls open to byte-faithful
+   * passthrough (the request is forwarded UNCHANGED). Observability only —
+   * it must not rethrow. Default: none.
+   */
+  readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -85,6 +91,7 @@ export interface ProxyConfig {
   readonly headersTimeoutMs: number;
   readonly bodyTimeoutMs: number;
   readonly pipeline: RequestPipeline;
+  readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -94,5 +101,6 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     headersTimeoutMs: options.headersTimeoutMs ?? 300_000,
     bodyTimeoutMs: options.bodyTimeoutMs ?? 300_000,
     pipeline: options.pipeline ?? identityPipeline,
+    ...(options.onPipelineError !== undefined ? { onPipelineError: options.onPipelineError } : {}),
   };
 }

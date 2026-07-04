@@ -111,6 +111,15 @@ program
         headersTimeoutMs: settings.proxy.request_timeout_ms,
         bodyTimeoutMs: settings.proxy.request_timeout_ms,
         pipeline,
+        // Fail-open is silent to the client by design; surface it on the proxy's
+        // own stderr so a persistent pipeline problem is visible to the operator.
+        onPipelineError: (err) => {
+          process.stderr.write(
+            `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
+              err instanceof Error ? err.message : String(err)
+            }\n`,
+          );
+        },
       });
       const addr = await proxy.listen(port);
       process.stdout.write(
