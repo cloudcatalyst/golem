@@ -163,4 +163,42 @@ describe("pipeline through the proxy", () => {
       await upstream.close();
     }
   });
+
+  it("FAIL-OPEN: a throwing pipeline forwards the original request byte-faithfully (never breaks the session)", async () => {
+    const up = recordingUpstream();
+    const upstream = await startUpstream(up.handler);
+    const errors: unknown[] = [];
+    // A pipeline that always blows up — simulates any bug in redaction/compression.
+    const explodingPipeline = {
+      name: "exploding",
+      process(): Promise<never> {
+        return Promise.reject(new Error("boom"));
+      },
+    };
+    const proxy = await startProxy({
+      upstreamBaseUrl: upstream.origin,
+      pipeline: explodingPipeline,
+      onPipelineError: (err) => errors.push(err),
+    });
+    try {
+      const body = JSON.stringify({
+        model: "claude-x",
+        messages: [{ role: "user", content: "keep me intact" }],
+      });
+      const res = await rawRequest(proxy.origin, "/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      // Client still gets the real upstream 200 — no 5xx from the proxy.
+      expect(res.status).toBe(200);
+      // Upstream received the ORIGINAL bytes, unmodified.
+      expect(up.received.body).toBe(body);
+      // The fail-open was observed, not silent.
+      expect(errors).toHaveLength(1);
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
 });

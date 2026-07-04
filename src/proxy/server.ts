@@ -107,20 +107,28 @@ export class GolemProxy {
     let forward: ProxyRequest;
     try {
       const body = await readBody(req);
-      const bypass = isBypassRequest(req.headers);
       forward = {
         method: req.method ?? "GET",
         url: req.url ?? "/",
         headers: forwardableRequestHeaders(req.headers),
         body,
       };
-      if (!bypass) {
-        // A3 seam: redaction -> compression. Identity at A1.
-        forward = await this.config.pipeline.process(forward);
-      }
     } catch (err) {
-      this.respondProxyError(res, 500, `golem proxy: request pipeline failed (${String(err)})`);
+      // We could not even read the client request — nothing to forward.
+      this.respondProxyError(res, 400, `golem proxy: could not read request (${String(err)})`);
       return;
+    }
+
+    // A3 seam: redaction -> compression. FAIL-OPEN — a pipeline error must
+    // never break the session: fall back to forwarding the ORIGINAL request
+    // byte-faithfully (CLAUDE.md proxy-fidelity rule). Bypass skips it too.
+    if (!isBypassRequest(req.headers)) {
+      try {
+        forward = await this.config.pipeline.process(forward);
+      } catch (err) {
+        this.config.onPipelineError?.(err, forward);
+        // `forward` is still the original request — leave it unchanged.
+      }
     }
 
     let upstream: Dispatcher.ResponseData;

@@ -1,7 +1,9 @@
 /**
  * WS-A A1 — upstream failure mapping: connection errors -> 502,
- * timeouts -> 504, pipeline failures -> 500. Proxy-generated errors carry
- * the x-golem-error marker and an Anthropic-shaped JSON body.
+ * timeouts -> 504. Proxy-generated errors carry the x-golem-error marker and
+ * an Anthropic-shaped JSON body. Pipeline failures do NOT error: the proxy
+ * fails open and forwards the original request unchanged (see the fail-open
+ * test below and CLAUDE.md's proxy-fidelity rule).
  */
 
 import { createServer } from "node:http";
@@ -82,27 +84,36 @@ describe("proxy upstream error mapping", () => {
     });
   });
 
-  it("maps a pipeline failure to 500 without contacting the upstream", async () => {
-    let upstreamHit = false;
-    const upstream = await startUpstream((_req, res) => {
-      upstreamHit = true;
-      res.writeHead(200).end("{}");
+  it("FAILS OPEN on a pipeline failure: forwards the original request to the upstream instead of erroring", async () => {
+    let upstreamBody: string | null = null;
+    const upstream = await startUpstream((_req, res, body) => {
+      upstreamBody = body.toString("utf8");
+      res.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
     });
     const failing: RequestPipeline = {
       name: "failing",
       process: () => Promise.reject(new Error("redaction stage exploded")),
     };
-    const proxy = await startProxy({ upstreamBaseUrl: upstream.origin, pipeline: failing });
+    const errors: unknown[] = [];
+    const proxy = await startProxy({
+      upstreamBaseUrl: upstream.origin,
+      pipeline: failing,
+      onPipelineError: (err) => errors.push(err),
+    });
     try {
+      const sent = '{"model":"claude-x","messages":[]}';
       const response = await rawRequest(proxy.origin, "/v1/messages", {
         method: "POST",
-        body: "{}",
+        headers: { "content-type": "application/json" },
+        body: sent,
       });
-      expect(response.status).toBe(500);
-      expect(response.headers["x-golem-error"]).toBe("true");
-      const body = JSON.parse(response.body.toString("utf8"));
-      expect(body.error.message).toContain("request pipeline failed");
-      expect(upstreamHit).toBe(false);
+      // Fail-open: the client gets the real upstream 200, NOT a proxy 500.
+      expect(response.status).toBe(200);
+      expect(response.headers["x-golem-error"]).toBeUndefined();
+      // The upstream saw the ORIGINAL request, byte-for-byte.
+      expect(upstreamBody).toBe(sent);
+      // The fallback was observable, not silent.
+      expect(errors).toHaveLength(1);
     } finally {
       await proxy.close();
       await upstream.close();
