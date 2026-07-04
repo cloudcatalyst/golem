@@ -324,6 +324,58 @@ and the updated `tests/integration/mcp-slider-store.test.ts`.
 - **`golem index` / `golem devices`** are explicit not-implemented stubs that
   print a pointer to WS-C / WS-D and exit non-zero.
 
+## 22. WS-D hardware capability detection — cross-OS strategy & limits (2026-07-04, WS-D D1)
+
+CLI-probe-only detection (no native GPU/ML deps, per CLAUDE.md). All probes
+spawn with argument arrays (`shell:false`), enforce a 3s timeout, and resolve
+to `{ ok:false }` on ENOENT/non-zero/timeout — `detectCapability` therefore
+**cannot throw and always yields a tier**, defaulting to P_CPU.
+
+- **NVIDIA (Windows + Linux):** `nvidia-smi --query-gpu=memory.total,name
+  --format=csv,noheader,nounits`; pick the largest-VRAM GPU. Tier by usable
+  memory: <8 GiB → P_MIN, 8–16 GiB → P_MID, >16 GiB → P_MAX.
+- **Apple Silicon (macOS):** `uname -m` == `arm64`, then `sysctl -n hw.memsize`;
+  ~70% of unified memory is treated as usable (conservative; the real GPU-wire
+  ceiling varies by OS version).
+- **Known limits / TODOs (deferred, not P0-blocking):** no AMD ROCm / Intel Arc
+  detection yet (both fall to P_CPU — safe degrade); Windows non-NVIDIA GPUs are
+  not probed (WMI/DXGI path is the §6 "Windows GPU detection reliability"
+  unknown — left open deliberately, CPU fallback is correct meanwhile); the
+  Apple 70% factor is a heuristic, not measured. All of these degrade *down*, so
+  the failure mode is "smaller model / CPU," never a crash.
+- **Model catalog (D2)** is advisory (spec Decision 6): Qwen2.5 / Llama3.x /
+  bge-m3 / nomic-embed-text at Q4-class quant, as a plain data table in
+  `catalog.ts` — re-verify current-best models at build time.
+- **Fallback ladder (D3):** tier model → step down one tier on
+  `ModelNotAvailableError` → `HaikuFallbackRequired` (if opted in; the service
+  does NOT make the cloud call, it signals the credentialed caller) → else
+  `CapabilityUnavailableError`. A reachable-but-broken endpoint
+  (`InferenceEndpointError`) stops the local ladder rather than hammering it.
+
+## 23. Redaction breaks agent observability when the dev session is routed through Golem (2026-07-04, product finding)
+
+Observed while dogfooding: with `ANTHROPIC_BASE_URL` pointed at the Golem proxy,
+the redaction stage rewrites the developing agent's OWN request content, so
+secret-shaped strings (and even innocuous high-entropy path segments in some
+cases) come back as `[REDACTED:...]`. Consequence: an agent working *inside* the
+redacting loop cannot see ground-truth content, which makes secret-handling
+work (notably **T-C3**, which is entirely secret patterns) unreliable to do from
+that session — it cannot distinguish "redacted in my view" from "on disk."
+
+Redaction acting on the request path is CORRECT (that is the whole point;
+byte-faithful local file writes are unaffected). The finding is about developer
+ergonomics / observability, not a redaction bug. Options to consider (design,
+not yet decided):
+- a Golem-aware bypass when the client is Golem's own dev session (e.g. honor a
+  well-known header/env so the developing agent sees ground truth);
+- a louder, structured signal in responses that content was redacted (count +
+  kinds) so the agent knows its view is filtered rather than guessing;
+- guidance: do secret-pattern work (T-C3) from a session NOT routed through the
+  proxy (the escape hatch: remove `ANTHROPIC_BASE_URL`, restart).
+
+Ties to the fail-open work (proxy already degrades safely on pipeline error) and
+to Decision 20d/20c ergonomics. T-C3 is therefore parked until a clean session.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
