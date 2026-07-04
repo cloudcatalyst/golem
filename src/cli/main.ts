@@ -19,9 +19,14 @@ import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import { GolemProxy } from "../proxy/index.js";
+import {
+  openTelemetryStore,
+  recordPipelineEvent,
+  telemetryStatsSource,
+} from "../telemetry/index.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
-import { collectStats, liveStatsSource, renderStats } from "./stats.js";
+import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 
 const program = new Command();
@@ -40,6 +45,23 @@ function printReport(report: InitReport): void {
 function fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(err instanceof InitError ? 2 : 1);
+}
+
+/**
+ * Pick the stats source for read commands: durable telemetry (A4) once it has
+ * recorded at least one request, else the in-memory live source (E3). This lets
+ * `golem stats` show cross-session history when the proxy has run, and still
+ * work before any telemetry exists.
+ */
+async function statsSourceForCli(projectDir: string): Promise<StatsSource> {
+  const store = openTelemetryStore(projectDir);
+  try {
+    const agg = await store.aggregate();
+    if (agg.requests > 0) return telemetryStatsSource(store);
+  } catch {
+    // fall through to live
+  }
+  return liveStatsSource(projectDir);
 }
 
 program
@@ -99,11 +121,17 @@ program
       }
       // Redaction → compression pipeline (A3), reading the slider level from
       // settings resolved at startup. (Live slider changes need a restart for
-      // now — acceptable for P0; a hot-reload can come with A4.)
+      // now — acceptable for P0.) Per-request savings are recorded to the
+      // durable telemetry store (A4), fire-and-forget so it never blocks or
+      // breaks the request path.
+      const telemetry = openTelemetryStore(opts.dir);
       const pipeline = createGolemPipeline({
         compression: NativeLosslessCompression.forProjectDir(opts.dir),
         policy: () => policyFromSettings(settings),
         projectId: opts.dir,
+        onEvent: (event) => {
+          void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
+        },
       });
       const proxy = new GolemProxy({
         upstreamBaseUrl: settings.proxy.upstream_base_url,
@@ -126,7 +154,8 @@ program
         `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
       );
       const shutdown = (): void => {
-        void proxy.close().finally(() => process.exit(0));
+        // Drain pending telemetry appends before exiting.
+        void Promise.allSettled([proxy.close(), telemetry.close()]).finally(() => process.exit(0));
       };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
@@ -224,7 +253,7 @@ program
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; project?: string; json: boolean }) => {
     try {
-      const report = await collectStats(liveStatsSource(opts.dir), opts.project);
+      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
       );
@@ -245,7 +274,7 @@ program
       if (!Number.isInteger(port) || port < 0 || port > 65535) {
         throw new InitError(`invalid port "${opts.port}"`);
       }
-      const source = liveStatsSource(opts.dir);
+      const source = await statsSourceForCli(opts.dir);
       const handle = await startDashboard({
         port,
         snapshot: async () => {
