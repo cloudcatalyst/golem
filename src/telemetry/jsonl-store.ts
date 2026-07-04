@@ -1,0 +1,164 @@
+/**
+ * WS-A A4 — append-only JSONL telemetry store (P0 default backend).
+ *
+ * One JSON object per line under `<project>/.golem/telemetry/events.jsonl`.
+ * Appends are serialized through an internal promise chain so concurrent
+ * record() calls cannot interleave partial lines, and each append is a single
+ * `appendFile` of `<json>\n` (atomic enough for line-oriented readers). A
+ * corrupt/partial trailing line is skipped on read rather than throwing, so a
+ * crash mid-write never poisons future aggregates.
+ *
+ * Aggregation reads the whole file and folds events into CompressionStats.
+ * That is O(events) per query — fine at P0 volumes; a future node:sqlite
+ * backend (same TelemetryStore interface) can index if this ever gets hot.
+ */
+
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import type { CompressionStats, TokenDelta } from "../interfaces/compression.js";
+import type { TelemetryEvent, TelemetryStore } from "./types.js";
+
+/** Telemetry file location for a project. */
+export function telemetryFilePath(projectDir: string): string {
+  return path.join(projectDir, ".golem", "telemetry", "events.jsonl");
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isTokenDelta(v: unknown): v is TokenDelta {
+  return isRecord(v) && typeof v.tokensBefore === "number" && typeof v.tokensAfter === "number";
+}
+
+/** Parse one JSONL line into a TelemetryEvent, or null if malformed. */
+function parseEvent(line: string): TelemetryEvent | null {
+  const trimmed = line.trim();
+  if (trimmed === "") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null; // partial/corrupt trailing line — skip, don't throw
+  }
+  if (!isRecord(parsed)) return null;
+  if (typeof parsed.projectId !== "string" || typeof parsed.ts !== "string") return null;
+  const stageSavings: Record<string, TokenDelta> = {};
+  if (isRecord(parsed.stageSavings)) {
+    for (const [k, v] of Object.entries(parsed.stageSavings)) {
+      if (isTokenDelta(v))
+        stageSavings[k] = { tokensBefore: v.tokensBefore, tokensAfter: v.tokensAfter };
+    }
+  }
+  return {
+    ts: parsed.ts,
+    projectId: parsed.projectId,
+    level: typeof parsed.level === "number" ? parsed.level : 0,
+    stageSavings,
+    ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
+  };
+}
+
+export class JsonlTelemetryStore implements TelemetryStore {
+  readonly #file: string;
+  /** Serializes appends so concurrent record() calls never interleave lines. */
+  #writeChain: Promise<void> = Promise.resolve();
+  #dirEnsured = false;
+
+  constructor(projectDir: string) {
+    this.#file = telemetryFilePath(projectDir);
+  }
+
+  async #ensureDir(): Promise<void> {
+    if (this.#dirEnsured) return;
+    await mkdir(path.dirname(this.#file), { recursive: true });
+    this.#dirEnsured = true;
+  }
+
+  record(event: TelemetryEvent): Promise<void> {
+    const line = `${JSON.stringify(event)}\n`;
+    // Chain the append after any in-flight write; swallow errors into the chain
+    // so telemetry never throws into the request path (fire-and-forget).
+    const next = this.#writeChain.then(async () => {
+      await this.#ensureDir();
+      await appendFile(this.#file, line, "utf8");
+    });
+    // Keep the chain alive even if this write rejects.
+    this.#writeChain = next.catch(() => {});
+    return next;
+  }
+
+  async aggregate(projectId?: string): Promise<CompressionStats> {
+    let raw: string;
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return emptyStats(projectId ?? null);
+      }
+      throw err;
+    }
+
+    let requests = 0;
+    let tokensBefore = 0;
+    let tokensAfter = 0;
+    let ccrRefsStored = 0;
+    const perStage: Record<string, TokenDelta> = {};
+
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null) continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+
+      requests += 1;
+      ccrRefsStored += ev.ccrRefsStored;
+
+      // A request's before = first stage's before; after = last stage's after,
+      // because stages run in series (each stage's output feeds the next).
+      const stageEntries = Object.entries(ev.stageSavings);
+      if (stageEntries.length > 0) {
+        const firstBefore = stageEntries[0]?.[1].tokensBefore ?? 0;
+        const lastAfter = stageEntries[stageEntries.length - 1]?.[1].tokensAfter ?? firstBefore;
+        tokensBefore += firstBefore;
+        tokensAfter += lastAfter;
+      }
+
+      for (const [stage, delta] of stageEntries) {
+        const acc = perStage[stage] ?? { tokensBefore: 0, tokensAfter: 0 };
+        perStage[stage] = {
+          tokensBefore: acc.tokensBefore + delta.tokensBefore,
+          tokensAfter: acc.tokensAfter + delta.tokensAfter,
+        };
+      }
+    }
+
+    return {
+      projectId: projectId ?? null,
+      requests,
+      tokensBefore,
+      tokensAfter,
+      perStage,
+      ccrRefsStored,
+      // CCR retrievals are recorded by golem_expand, not the pipeline; the
+      // JSONL event stream does not carry them yet (0 until wired — see §25).
+      ccrRefsRetrieved: 0,
+    };
+  }
+
+  async close(): Promise<void> {
+    // Drain any pending appends.
+    await this.#writeChain;
+  }
+}
+
+function emptyStats(projectId: string | null): CompressionStats {
+  return {
+    projectId,
+    requests: 0,
+    tokensBefore: 0,
+    tokensAfter: 0,
+    perStage: {},
+    ccrRefsStored: 0,
+    ccrRefsRetrieved: 0,
+  };
+}

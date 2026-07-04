@@ -413,6 +413,39 @@ backstop; add rules as needed):**
 No ReDoS: every pattern uses bounded or disjoint quantifiers (private-key uses a
 lazy body between fixed anchors; jwt uses dot-separated disjoint classes).
 
+## 25. A4 telemetry — durable per-stage savings (2026-07-04, WS-A A4)
+
+Backend choice: **append-only JSONL**, not `node:sqlite`. `node:sqlite` is
+present on Node 22–24 but flagged EXPERIMENTAL and emits a runtime
+`ExperimentalWarning` on import — unacceptable noise for a CLI/daemon at P0. The
+plan explicitly sanctioned the JSONL fallback. It sits behind a narrow
+`TelemetryStore` interface (`record`/`aggregate`/`close`) so a future
+`node:sqlite` backend can drop in unchanged once the API stabilizes.
+
+- File: `<project>/.golem/telemetry/events.jsonl`, one JSON event per line.
+  Appends serialized via an internal promise chain (no interleaved lines under
+  concurrency — tested with 25 concurrent records). Corrupt/partial trailing
+  line is skipped on read, never throws (crash-mid-write safe).
+- Wiring: the `golem proxy` pipeline `onEvent` records each run
+  fire-and-forget (`.catch(()=>{})` — telemetry never blocks or breaks the
+  request path); `shutdown` drains the write chain via `telemetry.close()`.
+  `golem stats` / `golem dashboard` prefer the durable telemetry source once it
+  has ≥1 request, else fall back to E3's in-memory live source
+  (`statsSourceForCli`). Verified live: a real proxied request with a duplicated
+  tool_result persisted an event and `golem stats` reported `source:telemetry`,
+  444 tokens saved (dedup 400→53).
+- **Known limitation (indicative, not exact):** the request-level
+  `tokensBefore`/`After` rollup uses first-stage-before / last-stage-after, but
+  stages report on different content slices (redaction sees the whole JSON body;
+  dedup/compaction see the messages array), so the summed request total is an
+  approximation. **Per-stage deltas are exact.** A precise request total would
+  need the pipeline to emit an explicit whole-request before/after pair — a
+  small A3 follow-up, noted here rather than silently shipping a wrong headline
+  number.
+- `ccrRefsRetrieved` is 0 in telemetry: retrievals happen via the `golem_expand`
+  MCP tool, not the pipeline, so they are not in this event stream yet. Wiring
+  expand→telemetry is a follow-up.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
