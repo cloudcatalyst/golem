@@ -24,7 +24,17 @@ import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import path from "node:path";
 import { writeSetting } from "../config/index.js";
-import { addPostToolUseHook, removePostToolUseHook, writeGuidanceSection } from "../hooks/index.js";
+import {
+  addEventHook,
+  addPostToolUseHook,
+  NOTIFICATION_COMMAND,
+  PROMPT_SUBMIT_COMMAND,
+  removeEventHook,
+  removePostToolUseHook,
+  removeStatusLine,
+  writeGuidanceSection,
+  writeStatusLine,
+} from "../hooks/index.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** External-state checks, injectable for tests. */
@@ -338,6 +348,13 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   actions.push(await addPostToolUseHook({ projectDir, dryRun }));
   actions.push(await writeGuidanceSection({ projectDir, dryRun }));
 
+  // 6. Status line (21c) + blocked-state event hooks (21b).
+  actions.push(await writeStatusLine({ projectDir, dryRun }));
+  actions.push(await addEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
+  actions.push(
+    await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
+  );
+
   return { dryRun, actions };
 }
 
@@ -410,6 +427,13 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   // 4. Remove the PostToolUse hook entry (guidance prose is left in place —
   // it is user-editable; removePostToolUseHook is the reversible half).
   actions.push(await removePostToolUseHook({ projectDir, dryRun }));
+
+  // 5. Remove the status line + blocked-state event hooks.
+  actions.push(await removeStatusLine({ projectDir, dryRun }));
+  actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
+  actions.push(
+    await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
+  );
 
   // .golem/ (settings, CCR store) is user data — deliberately kept.
   const substantive = actions.filter((a) => a.kind !== "skip");

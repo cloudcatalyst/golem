@@ -66,6 +66,26 @@ describe("golem init", () => {
 
     const golemSettings = await readJson(".golem/settings.json");
     expect(golemSettings).toStrictEqual({ slider: { level: 1 } });
+
+    // Status line (21c) + blocked-state event hooks (21b) are installed.
+    const cs = await readJson(".claude/settings.json");
+    expect(cs.statusLine).toStrictEqual({ type: "command", command: "golem statusline" });
+    const hooks = cs.hooks as Record<string, unknown>;
+    const cmds = (event: string) =>
+      ((hooks[event] as { hooks: { command: string }[] }[]) ?? []).flatMap((e) =>
+        e.hooks.map((h) => h.command),
+      );
+    expect(cmds("Notification")).toContain("golem hook notification");
+    expect(cmds("UserPromptSubmit")).toContain("golem hook prompt-submit");
+  });
+
+  it("uninit removes the status line and blocked-state hooks", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    await golemUninit({ projectDir });
+    const cs = await readJson(".claude/settings.json");
+    expect(cs.statusLine).toBeUndefined();
+    // hooks object is gone entirely once all Golem hooks are removed.
+    expect(cs.hooks).toBeUndefined();
   });
 
   it("respects a configured proxy port", async () => {
