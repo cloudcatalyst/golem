@@ -934,6 +934,36 @@ Audited init against the full feature set; closed the gaps a fresh
   `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
   touches the real `~/.vscode/extensions`.
 
+## §43 — Incremental KB freshness (edits tracked, not full-rebuilt) (2026-07-05)
+
+§41 auto-indexed on first run / embedder change but skipped otherwise, so files
+edited after the initial index went stale until a manual `golem index`. Now the
+manifest also stores a per-file state map (`sourcePath → {mtime,size}`), and
+`ensureProjectIndexed` does an **incremental sync** when the signature matches:
+re-index only changed/new files and drop deleted files' chunks. No-op when
+nothing changed; full rebuild still on first run / embedder change.
+
+Design (frozen interfaces intact):
+- Chunk ids are content-based, so an edited file yields NEW ids — the old chunks
+  must be DELETED, not left as orphans. The frozen `VectorDriver` has no delete,
+  so deletion is an **optional capability** `DeletableVectorDriver.deleteBySourcePath`
+  (both InMemory + File drivers implement it; `isDeletable` structural check).
+- `sourcePath` is relative to the ingest root's baseDir, so single-file re-ingest
+  uses `chunkFilesRelativeTo(files, baseDir)` to match the original paths.
+- KB exposes `IncrementalIngest` (`incrementalReady`, `reindexFiles`,
+  `removeSourcePaths`) only when driver is deletable + embedder present;
+  `supportsIncremental` gates it. Incremental requires a single directory root;
+  multi-root or non-deletable driver falls back to a full rebuild — still correct.
+- Change signal = mtime **or** size delta (size catches coarse-mtime filesystems).
+- Verified e2e with the real hashing KB + FileVectorDriver: new file synced,
+  edited file's stale chunk deleted (no orphan), deleted file's chunks dropped,
+  no-op when unchanged, embedder change → full rebuild. Driver `deleteBySourcePath`
+  unit-tested (removes only that file, persists across reload).
+
+Still a follow-up: intra-session live watch (fs.watch) — today freshness is
+per-`mcp serve`-startup (each Claude Code session re-syncs), which is the sweet
+spot without a long-running watcher.
+
 ## §41 — Auto-index on serve + semantic-upgrade "just works" (2026-07-05)
 
 Two tied features via one mechanism — an index `manifest.json` beside each

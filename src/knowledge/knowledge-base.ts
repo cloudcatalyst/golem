@@ -21,11 +21,36 @@ import {
   type Scope,
   UnknownChunkError,
 } from "../interfaces/knowledge.js";
-import type { StoredChunk, VectorDriver } from "./driver.js";
-import { chunkIdFor, type PreparedChunk, planIngest } from "./ingest.js";
+import { isDeletable, type StoredChunk, type VectorDriver } from "./driver.js";
+import { chunkFilesRelativeTo, chunkIdFor, type PreparedChunk, planIngest } from "./ingest.js";
 
 /** Turns text into embedding vectors. Supplied by WS-D InferenceService (C3). */
 export type EmbedFn = (texts: readonly string[], kind: "text" | "code") => Promise<number[][]>;
+
+/**
+ * Optional capability (beyond the frozen KnowledgeBase): incremental re-index of
+ * specific files, for the auto-index freshness sync. A KB exposes it only when
+ * its driver supports deletion; callers check {@link supportsIncremental} and
+ * fall back to a full re-index otherwise.
+ */
+export interface IncrementalIngest {
+  /** True only when the backing driver + embedder can actually do incremental re-index. */
+  readonly incrementalReady: boolean;
+  /** Re-index the given files relative to `baseDir` (delete old chunks first). Returns chunks written. */
+  reindexFiles(baseDir: string, projectId: string, absFiles: readonly string[]): Promise<number>;
+  /** Drop all chunks for the given source paths (deleted files). Returns chunks removed. */
+  removeSourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number>;
+}
+
+/** Structural check: can this KB do incremental re-index right now? */
+export function supportsIncremental(kb: KnowledgeBase): kb is KnowledgeBase & IncrementalIngest {
+  const c = kb as Partial<IncrementalIngest>;
+  return (
+    c.incrementalReady === true &&
+    typeof c.reindexFiles === "function" &&
+    typeof c.removeSourcePaths === "function"
+  );
+}
 
 /** Thrown by surfaces not implemented until a later WS-C task. */
 export class NotImplementedYetError extends Error {
@@ -43,7 +68,7 @@ export interface KnowledgeBaseOptions {
   readonly embed?: EmbedFn;
 }
 
-export class GolemKnowledgeBase implements KnowledgeBase {
+export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
   readonly #driver: VectorDriver;
   readonly #embed: EmbedFn | undefined;
 
@@ -97,17 +122,63 @@ export class GolemKnowledgeBase implements KnowledgeBase {
 
     const plan = await planIngest(pathArg);
     await this.#driver.openCollection(projectId);
+    const chunksIndexed = await this.#embedAndStore(projectId, plan.chunks);
 
-    // Embed in batches per kind (text vs code use different models), preserving
-    // order so vectors line up with their chunks.
+    return {
+      path: pathArg,
+      projectId,
+      filesSeen: plan.filesSeen,
+      chunksIndexed,
+      filesSkipped: plan.filesSkipped,
+      watching: false,
+    };
+  }
+
+  /** True only when the driver supports deletion AND an embedder is present. */
+  get incrementalReady(): boolean {
+    return this.#embed !== undefined && isDeletable(this.#driver);
+  }
+
+  /** {@link IncrementalIngest.reindexFiles} — replace each file's chunks in place. */
+  async reindexFiles(
+    baseDir: string,
+    projectId: string,
+    absFiles: readonly string[],
+  ): Promise<number> {
+    if (this.#embed === undefined || !isDeletable(this.#driver)) {
+      throw new NotImplementedYetError("incremental re-index", "driver");
+    }
+    await this.#driver.openCollection(projectId);
+    const chunks = await chunkFilesRelativeTo(absFiles, baseDir);
+    // Clear each touched file's old chunks first (content-based ids would orphan).
+    const sourcePaths = new Set(chunks.map((c) => c.sourcePath));
+    for (const sp of sourcePaths) await this.#driver.deleteBySourcePath(projectId, sp);
+    return this.#embedAndStore(projectId, chunks);
+  }
+
+  /** {@link IncrementalIngest.removeSourcePaths} — drop deleted files' chunks. */
+  async removeSourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number> {
+    if (!isDeletable(this.#driver)) {
+      throw new NotImplementedYetError("incremental delete", "driver");
+    }
+    await this.#driver.openCollection(projectId);
+    let removed = 0;
+    for (const sp of sourcePaths) removed += await this.#driver.deleteBySourcePath(projectId, sp);
+    return removed;
+  }
+
+  /** Embed prepared chunks (batched per kind) and upsert them; returns count stored. */
+  async #embedAndStore(projectId: string, prepared: readonly PreparedChunk[]): Promise<number> {
+    const embed = this.#embed;
+    if (embed === undefined) throw new NotImplementedYetError("ingest (chunk embedding)", "C3");
     const byKind: Record<"text" | "code", PreparedChunk[]> = { text: [], code: [] };
-    for (const c of plan.chunks) byKind[c.kind].push(c);
+    for (const c of prepared) byKind[c.kind].push(c);
 
     const stored: StoredChunk[] = [];
     for (const kind of ["text", "code"] as const) {
       const group = byKind[kind];
       if (group.length === 0) continue;
-      const vectors = await this.#embed(
+      const vectors = await embed(
         group.map((c) => c.text),
         kind,
       );
@@ -115,28 +186,22 @@ export class GolemKnowledgeBase implements KnowledgeBase {
         const c = group[i];
         const vector = vectors[i];
         if (c === undefined || vector === undefined) continue;
-        const chunk: Chunk = {
-          chunkId: chunkIdFor(projectId, c),
-          projectId,
-          text: c.text,
-          sourcePath: c.sourcePath,
-          startLine: c.startLine,
-          endLine: c.endLine,
-          metadata: c.metadata,
-        };
-        stored.push({ chunk, vector });
+        stored.push({
+          chunk: {
+            chunkId: chunkIdFor(projectId, c),
+            projectId,
+            text: c.text,
+            sourcePath: c.sourcePath,
+            startLine: c.startLine,
+            endLine: c.endLine,
+            metadata: c.metadata,
+          },
+          vector,
+        });
       }
     }
     if (stored.length > 0) await this.#driver.upsert(projectId, stored);
-
-    return {
-      path: pathArg,
-      projectId,
-      filesSeen: plan.filesSeen,
-      chunksIndexed: stored.length,
-      filesSkipped: plan.filesSkipped,
-      watching: false,
-    };
+    return stored.length;
   }
 }
 

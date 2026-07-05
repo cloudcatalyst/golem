@@ -36,10 +36,21 @@ export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from
 export { inferenceEmbedFn } from "./embedder.js";
 export { collectionDir, FileVectorDriver } from "./file-driver.js";
 export { DEFAULT_HASH_DIM, hashEmbed, hashingEmbedFn, tokenize } from "./hashing-embedder.js";
-export type { IngestPlan, PreparedChunk } from "./ingest.js";
-export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
-export type { EmbedFn, KnowledgeBaseOptions } from "./knowledge-base.js";
-export { asFederatedSearch, GolemKnowledgeBase, NotImplementedYetError } from "./knowledge-base.js";
+export type { FileState, IngestPlan, PreparedChunk } from "./ingest.js";
+export {
+  chunkFilesRelativeTo,
+  chunkIdFor,
+  MAX_FILE_BYTES,
+  planIngest,
+  scanFiles,
+} from "./ingest.js";
+export type { EmbedFn, IncrementalIngest, KnowledgeBaseOptions } from "./knowledge-base.js";
+export {
+  asFederatedSearch,
+  GolemKnowledgeBase,
+  NotImplementedYetError,
+  supportsIncremental,
+} from "./knowledge-base.js";
 
 /** Where a project's embedded vector store lives on disk. */
 export function knowledgeDir(projectDir: string): string {

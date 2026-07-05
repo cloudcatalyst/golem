@@ -27,9 +27,9 @@ import path from "node:path";
 import type { Chunk } from "../interfaces/knowledge.js";
 import {
   cosineSimilarity,
+  type DeletableVectorDriver,
   KNOWLEDGE_SCHEMA_VERSION,
   type StoredChunk,
-  type VectorDriver,
   type VectorMatch,
 } from "./driver.js";
 
@@ -56,7 +56,7 @@ interface PersistedMeta {
   readonly count: number;
 }
 
-export class FileVectorDriver implements VectorDriver {
+export class FileVectorDriver implements DeletableVectorDriver {
   readonly schemaVersion = KNOWLEDGE_SCHEMA_VERSION;
   readonly #baseDir: string;
   /** projectId -> loaded collection. */
@@ -163,6 +163,23 @@ export class FileVectorDriver implements VectorDriver {
     const projectId = this.#chunkIndex.get(chunkId);
     if (projectId === undefined) return null;
     return this.#collections.get(projectId)?.records.get(chunkId)?.chunk ?? null;
+  }
+
+  /** Remove all of one source file's chunks (for incremental re-index). Flushes if any changed. */
+  async deleteBySourcePath(projectId: string, sourcePath: string): Promise<number> {
+    await this.openCollection(projectId);
+    const col = this.#collections.get(projectId);
+    if (col === undefined) return 0;
+    let removed = 0;
+    for (const [id, rec] of col.records) {
+      if (rec.chunk.sourcePath === sourcePath) {
+        col.records.delete(id);
+        this.#chunkIndex.delete(id);
+        removed += 1;
+      }
+    }
+    if (removed > 0) await this.#flush(col);
+    return removed;
   }
 
   async close(): Promise<void> {
