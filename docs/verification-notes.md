@@ -800,6 +800,49 @@ headroom-ai`), heuristic-only in the default install with `[ml]` as a further
 opt-in. Ship it **behind an explicit opt-in and a live cache-aware A/B** before
 any savings number reaches golem.run copy.
 
+## §35 — ML ceiling MEASURED: Kompress ≈ irrelevant on code traffic (2026-07-05)
+
+Followed the "measure ML ceiling first" decision. Installed `headroom-ai[ml]`
+(torch 2.12.1+cpu; ONNX Kompress model `chopratejas/kompress-v2-base`, ~60 s
+preload) and measured on the real transcript.
+
+**How ML enables.** `KompressCompressor(KompressConfig(...)).compress(text)` works
+directly (`is_kompress_available()` = True via ONNX). But the pipeline
+`compress()` did **not** route to Kompress in any config combo tried
+(`kompress_model=…`, `compress_user_messages=True`, `target_ratio=0.2–0.5`,
+`savings_profile=agent-90`) — transforms stayed `read_lifecycle` + `router`, ~0.7 s,
+flat 5.3%. The routing gate to Kompress is undocumented/unclear; the direct
+compressor is the reliable handle. There is also a **hard ~20 s per-call CPU
+deadline** (not the `HEADROOM_COMPRESSION_TIMEOUT_SECONDS` env) after which Kompress
+keeps the remainder verbatim.
+
+**The killer number — prose is a rounding error in code traffic.** Direct Kompress
+on the FULL prose corpus (every `text` block ≥200 chars): **40,617 → 38,336 tok**
+(deadline-limited; on the portions it processes it achieves ~16.6%). But that
+prose is **only 40,617 of 815,658 total tokens = ~5.0% of the request.** The other
+~95% is code/tool-data (Edit/Write bodies, file contents, tool JSON). Kompress
+(LLMLingua-style) compresses **natural-language prose only**, so even compressing
+*all* prose by ~16% ≈ **0.8% of the total request**. Negligible.
+
+**Conclusion (overrides the "prioritize ML" instinct for THIS workload):**
+- **The ML tier does not pay for Claude Code / code-editing traffic.** Its target
+  (prose) is ~5% of the tokens; the ~90% "agent-90" headline is for
+  prose/chat-heavy agent workloads, not code editing. Measured ML upside here:
+  **<1% of total**, bought with a torch dependency, CPU latency (no CUDA on the
+  Windows wheel; ~437 words/s, 20 s/call deadline), and lossy prose.
+- **The only meaningful, safe lever on this traffic is `read_lifecycle`** (drop
+  stale copies of re-read files) — **heuristic, ~5.3%, no torch.** SmartCrusher/
+  router (structural JSON) is folded into that number.
+- **Compressing the code buckets** (the 95%) is where the volume is, but that is
+  the model's *active edit material* — lossy code = broken edits — so it is not a
+  safe lever; `read_lifecycle` (dropping *superseded* reads) is the safe subset.
+
+**Revised recommendation:** build the **heuristic Headroom stage (no torch)** as the
+slider ≥3 compressor — it delivers the real ~5.3% (read_lifecycle + structural) and
+is the honest lever for code traffic. **Do NOT prioritize the `[ml]` tier for this
+workload**; keep it a far opt-in for prose/chat-heavy users. The Decision-23
+net-cache A/B gate (§34.3) still applies before any published number.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
