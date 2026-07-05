@@ -908,6 +908,32 @@ same class of bug as §31 (integrity hashes) — redaction must strip *secrets*,
 **Consequence for the savings story:** the honest Foundry number after this fix is
 compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
 
+## §42 — `golem init` completeness audit + fixes (2026-07-05)
+
+Audited init against the full feature set; closed the gaps a fresh
+`npx golem-run init` hit:
+
+- **VS Code extension shipped + installed.** `package.json` `files` now includes
+  the extension's runtime files (was `["dist"]` only — the extension didn't ship
+  at all). init installs it by COPYING into VS Code's global extensions dir
+  (`~/.vscode/extensions/<id>`, dependency-free, `deploy:local` style) when VS Code
+  is detected via the (optional) `InitProbe.vscodeExtensionsDir`; idempotent skip
+  when already installed; `uninit` removes it. The old message pointing users at a
+  non-existent `vscode-extension/` dir is gone.
+- **Foundry / generic gateway (Decision 22).** `init --foundry <resource-url>`
+  wires Claude Code's Foundry env (`CLAUDE_CODE_USE_FOUNDRY` +
+  `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`, NOT `ANTHROPIC_BASE_URL`) and
+  sets the proxy `upstream_base_url` in `.golem/settings.local.json`.
+  `init --upstream <url>` fronts a generic Anthropic-compatible gateway
+  (Claude Code keeps `ANTHROPIC_BASE_URL=<proxy>`). Previously Foundry users wired
+  everything by hand.
+- **`init --start-proxy`** brings the detached daemon up right after wiring.
+- **Capability hints:** the summary detects `uv` (→ enable semantic compression)
+  and Ollama+embed-model (→ semantic KB, else the lexical default + a pull hint).
+- **Secrets stay manual:** init never writes API keys (Foundry users add theirs to
+  `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
+  touches the real `~/.vscode/extensions`.
+
 ## §41 — Auto-index on serve + semantic-upgrade "just works" (2026-07-05)
 
 Two tied features via one mechanism — an index `manifest.json` beside each

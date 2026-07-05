@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+
 /**
  * Entry point for the `golem` command (WS-E).
  *
@@ -9,6 +10,7 @@
  * E3: status / slider / stats / dashboard (+ index/devices stubs for WS-C/D).
  */
 
+import { spawn } from "node:child_process";
 import { Command, InvalidArgumentError } from "commander";
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
@@ -16,7 +18,12 @@ import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/ind
 import { startDashboard } from "../dashboard/index.js";
 import { buildHookCommand } from "../hooks/index.js";
 import { VERSION } from "../index.js";
-import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
+import {
+  createProbeRunner,
+  detectCapability,
+  embedModelFor,
+  modelsForTier,
+} from "../inference/index.js";
 import type { HardwareTier } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
@@ -85,26 +92,104 @@ program
   .description("Wire this project's Claude Code to Golem (proxy, MCP server, /golem/* skills)")
   .option("--dir <path>", "project directory", process.cwd())
   .option("--dry-run", "show what would change without writing", false)
-  .action(async (opts: { dir: string; dryRun: boolean }) => {
-    try {
-      const { settings } = await loadConfig({ projectDir: opts.dir });
-      const report = await golemInit({
-        projectDir: opts.dir,
-        dryRun: opts.dryRun,
-        proxyPort: settings.proxy.port,
-      });
-      printReport(report);
-      if (!report.dryRun) {
-        process.stdout.write(
-          "\nDone. Start the proxy with `golem proxy`, then restart Claude Code in this project.\n" +
-            "The Golem status line is now in your terminal; for a VS Code panel, install the\n" +
-            "extension in vscode-extension/ (see its README) and reload the window.\n",
-        );
+  .option("--foundry <url>", "front an Azure AI Foundry resource base URL")
+  .option("--upstream <url>", "front a generic Anthropic-compatible gateway (e.g. OpenRouter)")
+  .option("--start-proxy", "start the proxy daemon after wiring", false)
+  .action(
+    async (opts: {
+      dir: string;
+      dryRun: boolean;
+      foundry?: string;
+      upstream?: string;
+      startProxy: boolean;
+    }) => {
+      try {
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const report = await golemInit({
+          projectDir: opts.dir,
+          dryRun: opts.dryRun,
+          proxyPort: settings.proxy.port,
+          ...(opts.foundry !== undefined ? { foundry: opts.foundry } : {}),
+          ...(opts.upstream !== undefined ? { upstream: opts.upstream } : {}),
+        });
+        printReport(report);
+        if (report.dryRun) return;
+
+        // Optionally bring the proxy up now (detached daemon).
+        if (opts.startProxy) {
+          const pid = await startDetached(opts.dir, settings.proxy.port, process.argv[1] ?? "");
+          process.stdout.write(
+            pid === null
+              ? "golem proxy: failed to start — run `golem proxy start --detach` manually\n"
+              : `golem proxy: started (pid ${pid}) on port ${settings.proxy.port}\n`,
+          );
+        }
+
+        process.stdout.write(await initSummary(opts.dir, opts.startProxy));
+      } catch (err) {
+        fail(err);
       }
-    } catch (err) {
-      fail(err);
-    }
+    },
+  );
+
+/** Post-init next-steps + capability hints (uv → semantic compression, Ollama → semantic KB). */
+async function initSummary(dir: string, proxyStarted: boolean): Promise<string> {
+  const lines: string[] = ["\nDone."];
+  lines.push(
+    proxyStarted
+      ? "Proxy is running. Restart Claude Code in this project to pick up the wiring."
+      : "Start the proxy with `golem proxy start --detach`, then restart Claude Code here.",
+  );
+  lines.push(
+    "The status line is in your terminal; a VS Code panel installs automatically when VS Code",
+    "is present — reload the window (Developer: Reload Window) to activate it.",
+  );
+  // Optional-enhancement discovery.
+  const [hasUv, hasEmbedModel] = await Promise.all([commandExists("uv"), ollamaEmbedReady(dir)]);
+  const hints: string[] = [];
+  if (hasUv) {
+    hints.push(
+      "• `uv` detected — enable semantic compression: set compression.headroom_sidecar=true and slider ≥3.",
+    );
+  }
+  if (hasEmbedModel) {
+    hints.push(
+      "• Ollama + embedding model detected — knowledge search will use semantic embeddings.",
+    );
+  } else {
+    hints.push(
+      "• Knowledge search works now (built-in lexical); `ollama pull bge-m3` + run Ollama to upgrade to semantic.",
+    );
+  }
+  if (hints.length > 0) lines.push("", "Enhancements:", ...hints);
+  return `${lines.join("\n")}\n`;
+}
+
+/** Is a command resolvable on PATH? (spawns `<cmd> --version`, resolves false on failure.) */
+function commandExists(cmd: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, ["--version"], { stdio: "ignore", shell: true, windowsHide: true });
+    child.on("error", () => resolve(false));
+    child.on("exit", (code) => resolve(code === 0));
   });
+}
+
+/** Is Ollama up with the tier's text embed model pulled? (mirrors build-knowledge's probe.) */
+async function ollamaEmbedReady(dir: string): Promise<boolean> {
+  try {
+    const { settings } = await loadConfig({ projectDir: dir });
+    const facts = await detectCapability(createProbeRunner());
+    const model = embedModelFor(facts.tier, "text");
+    const res = await fetch(new URL("/api/tags", settings.inference.ollama_base_url), {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { models?: Array<{ name?: unknown }> };
+    return (body.models ?? []).some((m) => typeof m.name === "string" && m.name.startsWith(model));
+  } catch {
+    return false;
+  }
+}
 
 program
   .command("uninit")
