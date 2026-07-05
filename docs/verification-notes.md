@@ -908,6 +908,30 @@ same class of bug as §31 (integrity hashes) — redaction must strip *secrets*,
 **Consequence for the savings story:** the honest Foundry number after this fix is
 compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
 
+## §40 — Zero-setup KB: pure-TS hashing embedder default (2026-07-05)
+
+After §39 the KB persisted but was still **dormant** — embeddings needed Ollama +
+a pulled `bge-m3` (heavy onboarding; a fresh `npx golem-run` couldn't search at
+all). Added a pure-TS **signed feature-hashing** embedder (`hashing-embedder.ts`)
+as the DEFAULT `EmbedFn`: code-aware tokenization (splits camelCase/snake_case),
+FNV-1a hashing to a fixed 512-dim L2-normalized vector, deterministic across
+processes. Cosine over it = lexical/identifier overlap — genuinely useful for
+*code* search (you look up a symbol name). No dep, no model, no network.
+
+- `openKnowledgeBase` default embedder: explicit `embed` → `inference` (bge-m3
+  SEMANTIC) → **hashing (LEXICAL)**. `build-knowledge.ts` probes Ollama `/api/tags`
+  once and picks semantic ONLY if the tier's embed model is actually pulled, else
+  lexical — so the index is never built with mixed embedders. `embedMode` is
+  surfaced in `golem index` output and the `mcp serve` startup log.
+- bge-m3 stays the OPTIONAL semantic upgrade (mirrors FileVectorDriver-vs-LanceDB).
+  Switching embedders means re-indexing; a dim mismatch returns no hits (cosine
+  0), never a crash.
+- **Verified live (zero Ollama):** indexed this repo's `src/pipeline` (34 chunks)
+  and searched — `"shannon entropy high-entropy token"` → `redaction-rules.ts:226`
+  (exactly where `shannonEntropy`/`isHighEntropyToken` live), `"redact secrets
+  before compression"` → `redaction.ts`. The knowledge pillar now works out of the
+  box. Headroom: still N/A (no embedder service).
+
 ## §39 — Durable vector store: pure-TS default (§26 refinement, 2026-07-05)
 
 §26 chose LanceDB, but correctly noted both LanceDB and sqlite-vec are NATIVE

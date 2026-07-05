@@ -42,6 +42,28 @@ const embed: EmbedFn = (texts) =>
     }),
   );
 
+describe("knowledge base zero-setup (e2e)", () => {
+  it("indexes and searches with NO embed/inference configured (hashing default)", async () => {
+    await mkdir(path.join(projectDir, "src"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, "src", "auth.ts"),
+      "export function verifyPassword(user, secret) { return checkArgon2(user, secret); }\n",
+    );
+    await writeFile(
+      path.join(projectDir, "src", "chart.ts"),
+      "export function renderLegend(colors) { return colors.map(paintSwatch); }\n",
+    );
+
+    // No `embed`, no `inference` — must fall back to the built-in hashing embedder.
+    const kb = openKnowledgeBase({ projectDir });
+    await kb.ingest(path.join(projectDir, "src"), projectDir);
+
+    const hits = await kb.search("verify password argon2", projectDir, 3);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0]?.chunk.sourcePath).toContain("auth.ts"); // lexical match beats chart.ts
+  });
+});
+
 describe("knowledge base durability (e2e)", () => {
   it("finds indexed content from a fresh KB instance after a restart", async () => {
     const projectId = projectDir;

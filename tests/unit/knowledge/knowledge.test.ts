@@ -112,16 +112,11 @@ describe("GolemKnowledgeBase read path", () => {
     expect(await kb.search("q", "proj", 4, new Set(["memory"]))).toStrictEqual([]);
   });
 
-  it("without an embedder, text search throws NotImplementedYet (wired in C3)", async () => {
+  it("with no explicit embedder, falls back to the built-in hashing default (no throw)", async () => {
+    // Previously this threw NotImplementedYet; now the KB works out of the box
+    // (pure-TS hashing embedder). Empty index → empty results, never an error.
     const kb = openKnowledgeBase({ projectDir: "/tmp/x", driver: new InMemoryVectorDriver() });
-    await expect(kb.search("q", "proj", 4, new Set(["knowledge"]))).rejects.toBeInstanceOf(
-      NotImplementedYetError,
-    );
-  });
-
-  it("ingest is deferred to C2/C3", async () => {
-    const kb = openKnowledgeBase({ projectDir: "/tmp/x", driver: new InMemoryVectorDriver() });
-    await expect(kb.ingest("/some/path", "proj")).rejects.toBeInstanceOf(NotImplementedYetError);
+    await expect(kb.search("q", "proj", 4, new Set(["knowledge"]))).resolves.toStrictEqual([]);
   });
 
   it("a configured vector_db_url selects the (stubbed) Qdrant driver", () => {
