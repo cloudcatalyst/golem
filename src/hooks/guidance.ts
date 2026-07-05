@@ -33,6 +33,16 @@ export function golemGuidanceSection(): string {
     "Expand only when needed — the full original re-enters context and costs",
     "the tokens the swap saved. Prefer re-running a narrower command (grep the",
     "file, limit the range) when you only need a small part.",
+    "",
+    "## Golem: knowledge base — search before you fetch",
+    "",
+    "This project's local docs (`.md` files) and every page you fetch with",
+    "WebFetch are kept in Golem's local vector knowledge base. **Before using",
+    "WebFetch or reaching for external docs, search the knowledge base first** —",
+    "call the `golem_search` MCP tool (or `/golem/search`) with your query; use",
+    "`golem_get_chunk` for a hit's full text. A previously-fetched URL is served",
+    "from the cache automatically (the fetch is skipped and the cached content is",
+    "returned), so re-fetching the same page is free and offline.",
     GUIDANCE_END_MARKER,
   ].join("\n");
 }

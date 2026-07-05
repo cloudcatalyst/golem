@@ -29,12 +29,17 @@ import { fileURLToPath } from "node:url";
 import { writeSetting } from "../config/index.js";
 import {
   addEventHook,
+  addMatcherHook,
   addPostToolUseHook,
   NOTIFICATION_COMMAND,
   PROMPT_SUBMIT_COMMAND,
   removeEventHook,
+  removeMatcherHook,
   removePostToolUseHook,
   removeStatusLine,
+  WEB_FETCH_MATCHER,
+  WEB_FETCH_POST_COMMAND,
+  WEB_FETCH_PRE_COMMAND,
   writeGuidanceSection,
   writeStatusLine,
 } from "../hooks/index.js";
@@ -465,6 +470,33 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
   );
 
+  // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
+  // capture every fetch into the KB (non-blocking post-capture) — §44.
+  actions.push(
+    await addMatcherHook(
+      { projectDir, dryRun },
+      {
+        event: "PreToolUse",
+        matcher: WEB_FETCH_MATCHER,
+        command: WEB_FETCH_PRE_COMMAND,
+        async: false,
+        timeoutSeconds: 15,
+      },
+    ),
+  );
+  actions.push(
+    await addMatcherHook(
+      { projectDir, dryRun },
+      {
+        event: "PostToolUse",
+        matcher: WEB_FETCH_MATCHER,
+        command: WEB_FETCH_POST_COMMAND,
+        async: true,
+        timeoutSeconds: 60,
+      },
+    ),
+  );
+
   // 7. Install the VS Code panel/status-bar extension (only if VS Code is present).
   const vscodeAction = await installVscodeExtension(options, dryRun);
   if (vscodeAction !== null) actions.push(vscodeAction);
@@ -616,6 +648,14 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
   actions.push(
     await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
+  );
+
+  // 5b. Remove the WebFetch KB-cache hooks.
+  actions.push(
+    await removeMatcherHook({ projectDir, dryRun }, "PreToolUse", WEB_FETCH_PRE_COMMAND),
+  );
+  actions.push(
+    await removeMatcherHook({ projectDir, dryRun }, "PostToolUse", WEB_FETCH_POST_COMMAND),
   );
 
   // 6. Remove the installed VS Code extension (global; only if present).

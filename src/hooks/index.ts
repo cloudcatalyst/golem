@@ -29,7 +29,7 @@
  *    prose; removePostToolUseHook is the reversible half.)
  */
 
-export { buildHookCommand } from "./command.js";
+export { buildHookCommand, type HookCommandOptions } from "./command.js";
 export type { GuidanceWriteOptions } from "./guidance.js";
 export {
   GUIDANCE_BEGIN_MARKER,
@@ -72,12 +72,23 @@ export {
   STATUS_LINE_COMMAND,
   writeStatusLine,
 } from "./settings-extras.js";
-export type { HookSettingsOptions } from "./settings-writer.js";
+export type { HookSettingsOptions, MatcherHookSpec } from "./settings-writer.js";
 export {
+  addMatcherHook,
   addPostToolUseHook,
   golemPostToolUseEntry,
   POST_TOOL_USE_COMMAND,
   POST_TOOL_USE_MATCHER,
   POST_TOOL_USE_TIMEOUT_SECONDS,
+  removeMatcherHook,
   removePostToolUseHook,
+  WEB_FETCH_MATCHER,
+  WEB_FETCH_POST_COMMAND,
+  WEB_FETCH_PRE_COMMAND,
 } from "./settings-writer.js";
+export type { WebFetchHookOptions } from "./web-fetch.js";
+export {
+  DEFAULT_WEB_CACHE_TTL_HOURS,
+  runWebFetchPost,
+  runWebFetchPre,
+} from "./web-fetch.js";

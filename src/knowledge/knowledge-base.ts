@@ -21,6 +21,7 @@ import {
   type Scope,
   UnknownChunkError,
 } from "../interfaces/knowledge.js";
+import { chunkMarkdown } from "./chunker.js";
 import { isDeletable, type StoredChunk, type VectorDriver } from "./driver.js";
 import { chunkFilesRelativeTo, chunkIdFor, type PreparedChunk, planIngest } from "./ingest.js";
 
@@ -40,6 +41,17 @@ export interface IncrementalIngest {
   reindexFiles(baseDir: string, projectId: string, absFiles: readonly string[]): Promise<number>;
   /** Drop all chunks for the given source paths (deleted files). Returns chunks removed. */
   removeSourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number>;
+  /**
+   * Ingest a named document's text (e.g. a fetched web page) under `sourcePath`,
+   * replacing any prior chunks for it so re-fetches stay in sync. `metadata` is
+   * merged onto every chunk (e.g. `{url, fetchedAt}`). Returns chunks written.
+   */
+  ingestText(
+    projectId: string,
+    sourcePath: string,
+    text: string,
+    metadata?: Readonly<Record<string, string>>,
+  ): Promise<number>;
 }
 
 /** Structural check: can this KB do incremental re-index right now? */
@@ -165,6 +177,27 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
     let removed = 0;
     for (const sp of sourcePaths) removed += await this.#driver.deleteBySourcePath(projectId, sp);
     return removed;
+  }
+
+  /** {@link IncrementalIngest.ingestText} — chunk + (re)store a named document. */
+  async ingestText(
+    projectId: string,
+    sourcePath: string,
+    text: string,
+    metadata: Readonly<Record<string, string>> = {},
+  ): Promise<number> {
+    if (this.#embed === undefined || !isDeletable(this.#driver)) {
+      throw new NotImplementedYetError("document ingest", "driver");
+    }
+    await this.#driver.openCollection(projectId);
+    await this.#driver.deleteBySourcePath(projectId, sourcePath); // keep in sync on re-fetch
+    // Web/docs are markdown-ish; heading-aware chunking gives sensible sections.
+    const prepared: PreparedChunk[] = chunkMarkdown(text).map((raw) => ({
+      ...raw,
+      sourcePath,
+      metadata: { ...raw.metadata, ...metadata },
+    }));
+    return this.#embedAndStore(projectId, prepared);
   }
 
   /** Embed prepared chunks (batched per kind) and upsert them; returns count stored. */

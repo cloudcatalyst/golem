@@ -51,6 +51,8 @@ export {
   NotImplementedYetError,
   supportsIncremental,
 } from "./knowledge-base.js";
+export type { WebCacheEntry } from "./web-cache.js";
+export { isFresh, WebCache, webCacheDir, webCacheKey } from "./web-cache.js";
 
 /** Where a project's embedded vector store lives on disk. */
 export function knowledgeDir(projectDir: string): string {
