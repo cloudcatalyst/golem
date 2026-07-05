@@ -65,11 +65,23 @@ function buildModel(stats, status) {
   };
 }
 
-/** Status-bar text — the at-a-glance glance. */
+/** Title-case a slider name for display: "balanced" -> "Balanced". */
+function titleCase(s) {
+  const str = String(s || "");
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : "";
+}
+
+/**
+ * Status-bar text — the at-a-glance glance. Leads with the level NAME and a
+ * filled/hollow hexagon that signals whether the proxy is actually running
+ * (mirrors the terminal status line). Example: "⬢ Golem: Balanced · saved 8%".
+ */
 function statusBarText(model) {
-  const dot = model.proxyReachable ? "$(pass-filled)" : "$(warning)";
-  const saved = model.savedPct > 0 ? ` saved ${model.savedPct}%` : "";
-  return `⬢${saved} · L${model.slider} ${dot}`;
+  const glyph = model.proxyReachable ? "⬢" : "⬡";
+  const name = model.sliderName ? titleCase(model.sliderName) : `L${model.slider}`;
+  const saved = model.savedPct > 0 ? ` · saved ${model.savedPct}%` : "";
+  const off = model.proxyReachable ? "" : " · proxy off";
+  return `${glyph} Golem: ${name}${saved}${off}`;
 }
 
 function esc(s) {
