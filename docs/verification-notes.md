@@ -879,6 +879,35 @@ needs the same skepticism as §31:
 Status: mechanism shipped and safe (opt-in, fail-open); the honest *net* savings
 number is still gated on the live cache-aware A/B.
 
+## §37 — Live traffic exposed unbounded entropy over-redaction (2026-07-05)
+
+First real Foundry traffic through the fixed pipeline (path fix §36 + Headroom on,
+L3): 10 requests, **29% whole-request savings**. But the per-stage breakdown was a
+red flag — `redaction` alone claimed **~21%** (496k tokens), the exact §31 smell.
+
+**Root cause.** `ENTROPY_CANDIDATE_RE = /[A-Za-z0-9+/=_-]{32,}/g` had **no upper
+bound**. On real traffic it matched **222 "tokens" averaging 3,544 chars, max
+22,524 chars** — i.e. base64 images, minified/encoded blobs, inline attachments.
+Shannon entropy on such blobs is high, so the sweep **wholesale-redacted them**.
+This is lossy over-redaction: it strips content Claude needs (a real quality
+risk), and silently inflated "savings" (the redaction stage was doing ~35% of the
+reduction on the reconstructed transcript, all of it non-secret data).
+
+**Fix (§37).** Cap entropy candidates to a credential-plausible length with
+lookarounds so the WHOLE unbroken run must be 32–128 chars:
+`/(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{32,128}(?![A-Za-z0-9+/=_-])/g`. A longer
+run (a blob) has a candidate char just past 128 → lookahead fails → not matched at
+all (never a 128-char slice out of a 20 KB image). Every provider secret fits well
+under 128 (Anthropic/AWS/GitHub/Slack/JWT have their own bounded rules; PEM bodies
+too). Post-fix the same transcript redacts **35.66% → 0.03%** — only genuine
+secrets (emails, keys, JWTs, 23 real credential-length high-entropy tokens). Two
+guard tests added (big blob survives; 48-char secret still caught). This is the
+same class of bug as §31 (integrity hashes) — redaction must strip *secrets*, not
+*data*.
+
+**Consequence for the savings story:** the honest Foundry number after this fix is
+compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

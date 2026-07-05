@@ -107,6 +107,27 @@ describe("T-C3: entropy backstop for uncontexted secrets", () => {
     expect(out).toContain(integrity);
     expect(out).not.toContain("[REDACTED:high-entropy");
   });
+
+  it("does NOT redact large data blobs — entropy sweep is length-bounded (§37)", () => {
+    // A base64 image / minified blob is DATA, not a credential. The unbounded
+    // entropy candidate regex used to wholesale-redact runs of thousands of
+    // chars (avg 3.5k, max 22k on real traffic), silently inflating savings and
+    // stripping content Claude needs. Candidates are now capped at 128 chars, so
+    // a long blob is left completely intact (not sliced).
+    const blob = "A1b2C3d4".repeat(600); // 4,800 chars of base64-ish data
+    const out = redact(`data:image/png;base64,${blob}`);
+    expect(out).toContain(blob);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
+
+  it("still redacts a genuine credential-length high-entropy token (no under-redaction)", () => {
+    // The ceiling must not let real secrets through: a 44-char random token
+    // (mixed case + digits, not hex) is well within 32–128 and must be redacted.
+    const secret = "aB3xZ9qWmK7pLr2T".repeat(3); // 48 chars, high-entropy, not hex
+    const out = redact(`token=${secret}`);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED:high-entropy");
+  });
 });
 
 describe("T-C3: depth and idempotence", () => {
