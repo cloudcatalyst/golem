@@ -2,27 +2,30 @@
  * WS-E E2 — `golem init` / `golem uninit` engine.
  *
  * Wires an existing Claude Code project to Golem, idempotently:
- *   1. `.claude/settings.json`  — env.ANTHROPIC_BASE_URL -> local proxy, plus
- *      ENABLE_TOOL_SEARCH=true (verification-notes §12: tool search is
- *      disabled by default behind a non-first-party base URL).
- *   2. `.mcp.json`              — project-scope stdio registration of the
- *      unified MCP server (`golem mcp serve`; verification-notes §9).
- *   3. `.claude/skills/golem/<cmd>/SKILL.md` — directory-namespaced skills
- *      (`/golem/slider` etc.; verification-notes §11). MCP prompt twins
- *      (`/mcp__golem__*`) come from the server itself and need no files.
+ *   1. `.claude/settings.json`  — Claude Code → local proxy + ENABLE_TOOL_SEARCH.
+ *      Direct Anthropic uses `ANTHROPIC_BASE_URL`; `foundry` uses the Foundry env
+ *      (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`).
+ *   1b. `.golem/settings.local.json` — proxy `upstream_base_url` when fronting a
+ *      Foundry/generic gateway (Decision 22).
+ *   2. `.mcp.json`              — stdio registration of `golem mcp serve` (§9).
+ *   3. `.claude/skills/golem/<cmd>/SKILL.md` — namespaced `/golem/*` skills (§11).
  *   4. `.golem/settings.json`   — created with defaults when absent.
+ *   5. PostToolUse CCR hook + CLAUDE.md guidance; status line + blocked-state hooks.
+ *   6. The VS Code panel/status-bar extension — copied into VS Code's global
+ *      extensions dir when VS Code is present (dependency-free; `deploy:local` style).
  *
- * `golem uninit` removes exactly what init added and nothing else. The
- * `.golem/` directory (settings + CCR store) is user data and is kept.
+ * `golem uninit` removes exactly what init added (including the Foundry env keys
+ * and the installed VS Code extension). The `.golem/` directory (settings + CCR
+ * store) is user data and is kept.
  *
- * Everything filesystem-external (is Claude Code installed? is a
- * `headroom wrap` proxy active?) sits behind {@link InitProbe} so tests
- * inject fakes; the real probe uses file markers only — no child processes.
+ * Everything filesystem-external (Claude Code installed? `headroom wrap` active?
+ * VS Code extensions dir?) sits behind {@link InitProbe} so tests inject fakes.
  */
 
-import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { writeSetting } from "../config/index.js";
 import {
   addEventHook,
@@ -43,6 +46,12 @@ export interface InitProbe {
   claudeCodeInstalled(): Promise<boolean>;
   /** Is a `headroom wrap` proxy configured (mutually exclusive with Golem)? */
   headroomWrapActive(): Promise<boolean>;
+  /**
+   * The VS Code global extensions dir (`~/.vscode/extensions`) if VS Code is
+   * present, else null. Optional so tests that don't exercise the extension
+   * install can omit it (init then skips that step, touching no home dir).
+   */
+  vscodeExtensionsDir?(): Promise<string | null>;
 }
 
 /** File-marker probe: `~/.claude`(.json) for Claude Code, `~/.headroom` for wrap state. */
@@ -74,6 +83,10 @@ export function defaultProbe(home: string = homedir()): InitProbe {
         return false;
       }
     },
+    async vscodeExtensionsDir() {
+      const dir = path.join(home, ".vscode", "extensions");
+      return (await exists(dir)) ? dir : null;
+    },
   };
 }
 
@@ -84,6 +97,21 @@ export interface InitOptions {
   readonly dryRun?: boolean;
   /** Proxy port the base URL should point at (from Golem config; default 4653). */
   readonly proxyPort?: number;
+  /**
+   * Front an Azure AI Foundry resource: wires Claude Code's Foundry env
+   * (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`)
+   * instead of `ANTHROPIC_BASE_URL`, and points the proxy upstream at this
+   * resource base URL (e.g. `https://<resource>.services.ai.azure.com`).
+   */
+  readonly foundry?: string;
+  /**
+   * Front a generic Anthropic-compatible gateway (e.g. OpenRouter): Claude Code
+   * still uses `ANTHROPIC_BASE_URL=<proxy>`, and the proxy upstream is set to
+   * this URL. Ignored when `foundry` is set.
+   */
+  readonly upstream?: string;
+  /** Override the VS Code extension source dir (tests). Default: the bundled one. */
+  readonly vscodeSourceDir?: string;
   /** External-state probe; tests inject a fake. */
   readonly probe?: InitProbe;
 }
@@ -108,10 +136,30 @@ export class InitError extends Error {}
 const DEFAULT_PROXY_PORT = 4653;
 const ENV_BASE_URL = "ANTHROPIC_BASE_URL";
 const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
+const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
+const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 const MCP_SERVER_KEY = "golem";
+
+/** Runtime files copied into the installed VS Code extension (no tests/tooling). */
+const VSCODE_EXTENSION_FILES = ["extension.js", "render.js", "package.json", "README.md", "media"];
 
 function proxyBaseUrl(port: number): string {
   return `http://localhost:${port}`;
+}
+
+/** Where this package's bundled VS Code extension lives (dist/cli/init.js -> ../../vscode-extension). */
+function defaultVscodeSourceDir(): string {
+  return fileURLToPath(new URL("../../vscode-extension", import.meta.url));
+}
+
+/** Does a path exist? (module-level; the probe has its own scoped copy.) */
+async function pathExists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function rel(projectDir: string, abs: string): string {
@@ -154,6 +202,24 @@ function objectEntry(obj: JsonObject, key: string): JsonObject {
   const fresh: JsonObject = {};
   obj[key] = fresh;
   return fresh;
+}
+
+/** Push a create/modify/skip action for the .claude/settings.json env block. */
+function pushEnvAction(
+  actions: InitAction[],
+  changed: boolean,
+  fileExisted: boolean,
+  relPath: string,
+  wrote: Readonly<Record<string, string>>,
+): void {
+  if (!changed) {
+    actions.push({ kind: "skip", path: relPath, detail: "already configured" });
+    return;
+  }
+  const detail = Object.entries(wrote)
+    .map(([k, v]) => `env.${k}=${v}`)
+    .join(", ");
+  actions.push({ kind: fileExisted ? "modify" : "create", path: relPath, detail });
 }
 
 /** The `.mcp.json` entry init installs (verification-notes §9 schema). */
@@ -253,36 +319,80 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     );
   }
 
-  // 1. .claude/settings.json — env block.
+  // Upstream mode: Foundry (Claude Code Foundry env), a generic Anthropic-compatible
+  // gateway, or direct Anthropic. `proxyUpstream` (if set) is written to the proxy
+  // config so the proxy forwards there; Claude Code always points at the LOCAL proxy.
+  const useFoundry = options.foundry !== undefined;
+  const proxyUpstream = options.foundry ?? options.upstream;
+
+  // 1. .claude/settings.json — env block (mode-aware).
   const settingsPath = path.join(projectDir, ".claude", "settings.json");
   const settingsExisting = await readJsonObject(settingsPath);
   const settings = settingsExisting ?? {};
   const settingsExisted = settingsExisting !== null;
   const env = objectEntry(settings, "env");
-  const currentBaseUrl = env[ENV_BASE_URL];
-  if (typeof currentBaseUrl === "string" && currentBaseUrl !== baseUrl) {
-    throw new InitError(
-      `${rel(projectDir, settingsPath)} already sets ${ENV_BASE_URL}=${currentBaseUrl}. ` +
-        "Another proxy or gateway owns this project's Claude Code traffic — remove that " +
-        "setting (or `headroom unwrap`) before running golem init.",
-    );
-  }
-  const envChanged = currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
-  env[ENV_BASE_URL] = baseUrl;
-  env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
-  if (envChanged) {
-    actions.push({
-      kind: settingsExisted ? "modify" : "create",
-      path: rel(projectDir, settingsPath),
-      detail: `env.${ENV_BASE_URL}=${baseUrl}, env.${ENV_TOOL_SEARCH}=true`,
+
+  if (useFoundry) {
+    // Foundry appends the request path to the Foundry base URL; the proxy exposes
+    // Anthropic's `/v1/messages` under `/anthropic` (the fix in §36).
+    const foundryBaseUrl = `${baseUrl}/anthropic`;
+    const currentFoundry = env[ENV_FOUNDRY_BASE_URL];
+    if (typeof currentFoundry === "string" && currentFoundry !== foundryBaseUrl) {
+      throw new InitError(
+        `${rel(projectDir, settingsPath)} already sets ${ENV_FOUNDRY_BASE_URL}=${currentFoundry}. ` +
+          "Remove it before pointing Foundry at the Golem proxy.",
+      );
+    }
+    const changed =
+      env[ENV_USE_FOUNDRY] !== "true" ||
+      currentFoundry !== foundryBaseUrl ||
+      env[ENV_TOOL_SEARCH] !== "true" ||
+      env[ENV_BASE_URL] === baseUrl;
+    env[ENV_USE_FOUNDRY] = "true";
+    env[ENV_FOUNDRY_BASE_URL] = foundryBaseUrl;
+    env[ENV_TOOL_SEARCH] = "true";
+    // Switching from a prior direct-mode init: drop the now-conflicting base URL.
+    if (env[ENV_BASE_URL] === baseUrl) delete env[ENV_BASE_URL];
+    pushEnvAction(actions, changed, settingsExisted, rel(projectDir, settingsPath), {
+      [ENV_USE_FOUNDRY]: "true",
+      [ENV_FOUNDRY_BASE_URL]: foundryBaseUrl,
     });
-    if (!dryRun) await writeJsonObject(settingsPath, settings);
+    if (changed && !dryRun) await writeJsonObject(settingsPath, settings);
   } else {
-    actions.push({
-      kind: "skip",
-      path: rel(projectDir, settingsPath),
-      detail: "already configured",
+    const currentBaseUrl = env[ENV_BASE_URL];
+    if (typeof currentBaseUrl === "string" && currentBaseUrl !== baseUrl) {
+      throw new InitError(
+        `${rel(projectDir, settingsPath)} already sets ${ENV_BASE_URL}=${currentBaseUrl}. ` +
+          "Another proxy or gateway owns this project's Claude Code traffic — remove that " +
+          "setting (or `headroom unwrap`) before running golem init.",
+      );
+    }
+    const envChanged = currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
+    env[ENV_BASE_URL] = baseUrl;
+    env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
+    pushEnvAction(actions, envChanged, settingsExisted, rel(projectDir, settingsPath), {
+      [ENV_BASE_URL]: baseUrl,
     });
+    if (envChanged && !dryRun) await writeJsonObject(settingsPath, settings);
+  }
+
+  // 1b. Proxy upstream (front Foundry / a generic gateway) — .golem/settings.local.json.
+  if (proxyUpstream !== undefined) {
+    const localPath = path.join(projectDir, ".golem", "settings.local.json");
+    const localExisting = await readJsonObject(localPath).catch(() => null);
+    const currentUpstream = (localExisting?.proxy as JsonObject | undefined)?.upstream_base_url;
+    if (currentUpstream === proxyUpstream) {
+      actions.push({ kind: "skip", path: rel(projectDir, localPath), detail: "upstream set" });
+    } else {
+      actions.push({
+        kind: localExisting === null ? "create" : "modify",
+        path: rel(projectDir, localPath),
+        detail: `proxy.upstream_base_url=${proxyUpstream}`,
+      });
+      if (!dryRun) {
+        await writeSetting("local", "proxy.upstream_base_url", proxyUpstream, { projectDir });
+      }
+    }
   }
 
   // 2. .mcp.json — project-scope MCP registration.
@@ -355,13 +465,80 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
   );
 
+  // 7. Install the VS Code panel/status-bar extension (only if VS Code is present).
+  const vscodeAction = await installVscodeExtension(options, dryRun);
+  if (vscodeAction !== null) actions.push(vscodeAction);
+
   return { dryRun, actions };
+}
+
+/**
+ * Install the bundled VS Code extension by copying it into VS Code's global
+ * extensions dir (dependency-free, the same mechanism as `deploy:local`). Returns
+ * null when VS Code isn't detected (the probe returns no dir) so init stays a
+ * no-op on machines without it. Idempotent: an already-installed same-version
+ * copy is a skip.
+ */
+async function installVscodeExtension(
+  options: InitOptions,
+  dryRun: boolean,
+): Promise<InitAction | null> {
+  const probe = options.probe ?? defaultProbe();
+  const extensionsDir = (await probe.vscodeExtensionsDir?.()) ?? null;
+  if (extensionsDir === null) return null;
+
+  const sourceDir = options.vscodeSourceDir ?? defaultVscodeSourceDir();
+  const manifest = await readJsonObject(path.join(sourceDir, "package.json")).catch(() => null);
+  if (manifest === null) return null; // source not shipped/available — skip quietly
+  const id = `${String(manifest.publisher)}.${String(manifest.name)}-${String(manifest.version)}`;
+  const target = path.join(extensionsDir, id);
+
+  if (await pathExists(target)) {
+    return { kind: "skip", path: `~/.vscode/extensions/${id}`, detail: "already installed" };
+  }
+  if (!dryRun) {
+    await mkdir(target, { recursive: true });
+    for (const name of VSCODE_EXTENSION_FILES) {
+      const src = path.join(sourceDir, name);
+      if (await pathExists(src)) await cp(src, path.join(target, name), { recursive: true });
+    }
+  }
+  return {
+    kind: "create",
+    path: `~/.vscode/extensions/${id}`,
+    detail: "VS Code panel + status bar (reload the window to activate)",
+  };
+}
+
+/** Remove any installed Golem VS Code extension(s) — matches `golem-run.golem-vscode-*`. */
+async function removeVscodeExtensions(
+  options: UninitOptions,
+  dryRun: boolean,
+): Promise<InitAction[]> {
+  const probe = options.probe ?? defaultProbe();
+  const extensionsDir = (await probe.vscodeExtensionsDir?.()) ?? null;
+  if (extensionsDir === null) return [];
+  let entries: string[];
+  try {
+    entries = await readdir(extensionsDir);
+  } catch {
+    return [];
+  }
+  const mine = entries.filter((e) => e.startsWith("golem-run.golem-vscode-"));
+  const out: InitAction[] = [];
+  for (const id of mine) {
+    out.push({ kind: "remove", path: `~/.vscode/extensions/${id}`, detail: "VS Code extension" });
+    if (!dryRun) await rm(path.join(extensionsDir, id), { recursive: true, force: true });
+  }
+  return out;
 }
 
 export interface UninitOptions {
   readonly projectDir: string;
   readonly dryRun?: boolean;
   readonly proxyPort?: number;
+  /** External-state probe; tests inject a fake (VS Code extensions dir). */
+  readonly probe?: InitProbe;
 }
 
 export async function golemUninit(options: UninitOptions): Promise<InitReport> {
@@ -379,6 +556,12 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     let changed = false;
     if (envObj[ENV_BASE_URL] === baseUrl) {
       delete envObj[ENV_BASE_URL];
+      changed = true;
+    }
+    // Foundry env (only if it points at our proxy).
+    if (envObj[ENV_FOUNDRY_BASE_URL] === `${baseUrl}/anthropic`) {
+      delete envObj[ENV_FOUNDRY_BASE_URL];
+      if (envObj[ENV_USE_FOUNDRY] === "true") delete envObj[ENV_USE_FOUNDRY];
       changed = true;
     }
     if (ENV_TOOL_SEARCH in envObj && envObj[ENV_TOOL_SEARCH] === "true") {
@@ -434,6 +617,9 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   actions.push(
     await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
   );
+
+  // 6. Remove the installed VS Code extension (global; only if present).
+  actions.push(...(await removeVscodeExtensions(options, dryRun)));
 
   // .golem/ (settings, CCR store) is user data — deliberately kept.
   const substantive = actions.filter((a) => a.kind !== "skip");

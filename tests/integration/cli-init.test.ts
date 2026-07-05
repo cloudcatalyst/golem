@@ -81,7 +81,7 @@ describe("golem init", () => {
 
   it("uninit removes the status line and blocked-state hooks", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    await golemUninit({ projectDir });
+    await golemUninit({ projectDir, probe: okProbe });
     const cs = await readJson(".claude/settings.json");
     expect(cs.statusLine).toBeUndefined();
     // hooks object is gone entirely once all Golem hooks are removed.
@@ -172,6 +172,74 @@ describe("golem init", () => {
     await writeFile(path.join(projectDir, ".claude", "settings.json"), "{not json", "utf8");
     await expect(golemInit({ projectDir, probe: okProbe })).rejects.toThrow(/not valid JSON/);
   });
+
+  it("--foundry wires Foundry env + proxy upstream (not ANTHROPIC_BASE_URL)", async () => {
+    const resource = "https://my-res.services.ai.azure.com";
+    await golemInit({ projectDir, probe: okProbe, foundry: resource });
+
+    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
+    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe("http://localhost:4653/anthropic");
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    const local = await readJson(".golem/settings.local.json");
+    expect((local.proxy as Record<string, unknown>).upstream_base_url).toBe(resource);
+  });
+
+  it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {
+    await golemInit({ projectDir, probe: okProbe, upstream: "https://openrouter.ai/api" });
+    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(env.ANTHROPIC_BASE_URL).toBe("http://localhost:4653");
+    const local = await readJson(".golem/settings.local.json");
+    expect((local.proxy as Record<string, unknown>).upstream_base_url).toBe(
+      "https://openrouter.ai/api",
+    );
+  });
+});
+
+describe("golem init — VS Code extension install", () => {
+  let extDir: string;
+  let sourceDir: string;
+  let vscodeProbe: InitProbe;
+
+  beforeEach(async () => {
+    extDir = await mkdtemp(path.join(tmpdir(), "golem-vsx-ext-"));
+    sourceDir = await mkdtemp(path.join(tmpdir(), "golem-vsx-src-"));
+    vscodeProbe = { ...okProbe, vscodeExtensionsDir: () => Promise.resolve(extDir) };
+    await writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({ publisher: "golem-run", name: "golem-vscode", version: "9.9.9" }),
+      "utf8",
+    );
+    await writeFile(path.join(sourceDir, "extension.js"), "// ext", "utf8");
+  });
+  afterEach(async () => {
+    await rm(extDir, { recursive: true, force: true });
+    await rm(sourceDir, { recursive: true, force: true });
+  });
+
+  it("installs the extension by copying into the VS Code dir, idempotently", async () => {
+    const id = "golem-run.golem-vscode-9.9.9";
+    const r1 = await golemInit({ projectDir, probe: vscodeProbe, vscodeSourceDir: sourceDir });
+    expect(r1.actions.some((a) => a.kind === "create" && a.path.includes(id))).toBe(true);
+    expect(await readFile(path.join(extDir, id, "extension.js"), "utf8")).toBe("// ext");
+
+    const projectDir2 = await mkdtemp(path.join(tmpdir(), "golem-init2-"));
+    const r2 = await golemInit({
+      projectDir: projectDir2,
+      probe: vscodeProbe,
+      vscodeSourceDir: sourceDir,
+    });
+    expect(r2.actions.some((a) => a.kind === "skip" && a.path.includes(id))).toBe(true);
+    await rm(projectDir2, { recursive: true, force: true });
+  });
+
+  it("uninit removes the installed extension", async () => {
+    await golemInit({ projectDir, probe: vscodeProbe, vscodeSourceDir: sourceDir });
+    expect(await readdir(extDir)).toContain("golem-run.golem-vscode-9.9.9");
+    await golemUninit({ projectDir, probe: vscodeProbe });
+    expect(await readdir(extDir)).not.toContain("golem-run.golem-vscode-9.9.9");
+  });
 });
 
 describe("golem uninit", () => {
@@ -189,7 +257,7 @@ describe("golem uninit", () => {
     );
     await golemInit({ projectDir, probe: okProbe });
 
-    await golemUninit({ projectDir });
+    await golemUninit({ projectDir, probe: okProbe });
 
     const settings = await readJson(".claude/settings.json");
     expect(settings.env).toStrictEqual({ FOO: "bar" });
@@ -208,7 +276,7 @@ describe("golem uninit", () => {
     (settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL = "http://localhost:7777";
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf8");
 
-    await golemUninit({ projectDir });
+    await golemUninit({ projectDir, probe: okProbe });
     const after = await readJson(".claude/settings.json");
     expect((after.env as Record<string, unknown>).ANTHROPIC_BASE_URL).toBe("http://localhost:7777");
   });
@@ -216,13 +284,13 @@ describe("golem uninit", () => {
   it("dry-run removes nothing", async () => {
     await golemInit({ projectDir, probe: okProbe });
     const before = await snapshot(projectDir);
-    const report = await golemUninit({ projectDir, dryRun: true });
+    const report = await golemUninit({ projectDir, dryRun: true, probe: okProbe });
     expect(report.dryRun).toBe(true);
     expect(await snapshot(projectDir)).toStrictEqual(before);
   });
 
   it("is a no-op on an unconfigured project", async () => {
-    const report = await golemUninit({ projectDir });
+    const report = await golemUninit({ projectDir, probe: okProbe });
     expect(report.actions).toStrictEqual([
       { kind: "skip", path: ".", detail: "nothing to remove" },
     ]);

@@ -15,7 +15,12 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "vscode-extension/extension.js",
+    "vscode-extension/render.js",
+    "vscode-extension/package.json",
+    "vscode-extension/README.md",
+    "vscode-extension/media"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
