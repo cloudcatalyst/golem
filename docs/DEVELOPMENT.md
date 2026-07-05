@@ -21,18 +21,23 @@ cannot affect it.
 
 ## Running stable persistently
 
-Background processes an agent starts die when its session is torn down (we hit
-this repeatedly). For a stable proxy that survives, **run it yourself** in a
-dedicated terminal:
+The proxy has a daemon lifecycle, so it survives on its own — no dedicated
+terminal needed. A `--detach`'d proxy outlives the shell that started it (that
+was the old failure mode: an agent-started background job dying with its
+session).
 
 ```sh
-golem proxy            # frozen global build, binds 4653
-# optionally, in another terminal:
-golem dashboard        # savings UI on 4654
+golem proxy start --detach     # binds 4653, backgrounded, survives this shell
+golem proxy status             # running? which pid/port/upstream?
+golem proxy restart            # reliable: stop, wait for the port, start detached
+golem proxy stop               # stop it
+golem dashboard                # savings UI on 4654 (still foreground)
 ```
 
-Leave that terminal open. Your editor sessions can come and go; the proxy stays
-up. To confirm it's alive: `golem status` (shows "Proxy: … reachable").
+`golem proxy` with no subcommand runs in the FOREGROUND (for a terminal you keep
+open). `start --detach` / `restart` are the persistent, agent-safe path — the
+pid file at `<project>/.golem/proxy.pid` makes them idempotent and stoppable
+from any shell.
 
 ## Testing dev changes (agent workflow)
 
@@ -40,8 +45,8 @@ Never rebuild onto 4653. Test the working tree on 4655:
 
 ```sh
 npm run build
-node dist/cli/main.js proxy --port 4655 --dir /tmp/somewhere   # transient
-# drive traffic at 4655, verify, then stop it
+node dist/cli/main.js proxy start --port 4655 --dir /tmp/somewhere   # transient
+# drive traffic at 4655, verify, then Ctrl+C (or: golem proxy stop --dir /tmp/somewhere)
 ```
 
 Unit/integration tests (`npx vitest run`) don't touch either running proxy —
