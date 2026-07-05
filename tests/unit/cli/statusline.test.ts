@@ -50,14 +50,19 @@ describe("upstreamLabel", () => {
 });
 
 describe("renderStatusLine", () => {
-  it("renders the core line without color", () => {
+  it("renders the core line without color, leading with the level name", () => {
     const line = renderStatusLine(
       { contextUsedPct: 8, costUsd: 0.0123, fiveHourPct: 23 },
-      { sliderLevel: 1, upstreamLabel: "foundry", tokensBefore: 12300, tokensAfter: 8100 },
+      {
+        sliderLevel: 3,
+        upstreamLabel: "foundry",
+        tokensBefore: 12300,
+        tokensAfter: 8100,
+        proxyRunning: true,
+      },
     );
-    expect(line).toContain("⬢ golem");
+    expect(line).toContain("⬢ Golem: Balanced");
     expect(line).toContain("→foundry");
-    expect(line).toContain("L1");
     expect(line).toContain("saved 34% (12.3k→8.1k)");
     expect(line).toContain("ctx 8%");
     expect(line).toContain("5h 23%");
@@ -66,10 +71,18 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain(String.fromCharCode(27));
   });
 
+  it("shows a hollow icon + 'proxy off' when the proxy is not running", () => {
+    const line = renderStatusLine(
+      {},
+      { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
+    );
+    expect(line).toContain("⬡ Golem: Lossless");
+    expect(line).toContain("proxy off");
+  });
+
   it("omits sections whose data is absent", () => {
     const line = renderStatusLine({}, { sliderLevel: 2, upstreamLabel: "anthropic" });
-    expect(line).toContain("⬢ golem");
-    expect(line).toContain("L2");
+    expect(line).toContain("⬢ Golem: Conservative");
     expect(line).not.toContain("saved");
     expect(line).not.toContain("ctx");
     expect(line).not.toContain("5h");
