@@ -173,6 +173,20 @@ describe("golem init", () => {
     await expect(golemInit({ projectDir, probe: okProbe })).rejects.toThrow(/not valid JSON/);
   });
 
+  it("writes Golem guidance to gitignored CLAUDE.local.md, not committed CLAUDE.md", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const local = await readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8");
+    expect(local).toContain("search before you fetch");
+    // The committed CLAUDE.md must not gain a Golem section.
+    await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // ...and CLAUDE.local.md is gitignored.
+    expect(await readFile(path.join(projectDir, ".gitignore"), "utf8")).toContain(
+      "CLAUDE.local.md",
+    );
+  });
+
   it("--foundry wires Foundry env + proxy upstream (not ANTHROPIC_BASE_URL)", async () => {
     const resource = "https://my-res.services.ai.azure.com";
     await golemInit({ projectDir, probe: okProbe, foundry: resource });
