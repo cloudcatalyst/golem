@@ -500,8 +500,8 @@ program
           );
           if (!report.watching) {
             process.stdout.write(
-              "note: the embedded index is in-process (durable store is WS-C follow-up), " +
-                "so run searches via the same `golem mcp serve` session.\n",
+              "The index is persisted under .golem/knowledge, so `golem_search` " +
+                "finds it in any later session.\n",
             );
           }
         }

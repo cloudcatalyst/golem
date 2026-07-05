@@ -908,6 +908,32 @@ same class of bug as §31 (integrity hashes) — redaction must strip *secrets*,
 **Consequence for the savings story:** the honest Foundry number after this fix is
 compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
 
+## §39 — Durable vector store: pure-TS default (§26 refinement, 2026-07-05)
+
+§26 chose LanceDB, but correctly noted both LanceDB and sqlite-vec are NATIVE
+binaries → OPTIONAL-only (CLAUDE.md). That leaves the **default install with no
+persistence** — the KB fell back to in-memory, so an index died with the
+`mcp serve` session. Not good enough for the durable-driver goal.
+
+**Refinement (implemented): the default durable driver is pure-TS.**
+`FileVectorDriver` persists each project's `{chunk, vector}` records as JSONL +
+`meta.json` under `<project>/.golem/knowledge/<hash(projectId)>/`, loads them into
+memory on open, and runs the SAME brute-force cosine as the in-memory driver. At
+dev-KB scale (one project, ~10³–10⁴ chunks) brute-force is sub-millisecond; LanceDB
+ANN only pays off at ~10⁵⁺ vectors, so **LanceDB stays the OPTIONAL scale upgrade**
+behind the unchanged `VectorDriver` seam. Net: persistence for everyone, still
+zero native deps in `dependencies`.
+
+- Atomic writes (tmp + rename); schema-version + embedding-dim in `meta.json`; a
+  version mismatch or corrupt JSONL line degrades to empty/skip, never crashes.
+- `openKnowledgeBase` now defaults to `FileVectorDriver(knowledgeDir(projectDir))`;
+  `InMemoryVectorDriver` stays for injected/test use. Verified e2e: index in one
+  KB instance, a fresh instance over the same dir finds it (restart-equivalent).
+- **Headroom applicability (user asked "use Headroom where sensible"):** NOT here.
+  Headroom is a compression service with no vector store; its `[memory]`
+  SQLite+HNSW backend serves the conversational **memory** scope, which remains
+  the separate C4 federation target (Decision 13), not the KB store.
+
 ## §38 — Balanced-mode (level 3) safety check for dogfooding (2026-07-05)
 
 User is running level 3 live and asked to flag any oddity caused by it. Ran a

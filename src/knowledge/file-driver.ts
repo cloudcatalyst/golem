@@ -1,0 +1,163 @@
+/**
+ * WS-C — durable, pure-TS vector driver (the default persisted store).
+ *
+ * §26 evaluated LanceDB and sqlite-vec and correctly ruled that BOTH are native
+ * binaries, so either can only ship as an OPTIONAL add-on — which would leave the
+ * default `npx golem-run` install with no persistence at all. This driver fills
+ * that gap: it persists each project's `{chunk, vector}` records to disk as JSONL
+ * and does the same brute-force cosine search as {@link InMemoryVectorDriver} on
+ * an in-memory copy loaded at open. No native dependency (CLAUDE.md hard rule),
+ * cross-platform (node:fs/path only).
+ *
+ * Scale note: brute-force cosine over a few thousand chunks is sub-millisecond;
+ * LanceDB's ANN index only pays off at ~100k+ vectors, so it stays the documented
+ * OPTIONAL scale upgrade behind this same `VectorDriver` seam (§26) — nothing
+ * above the seam changes if a user opts into it.
+ *
+ * Durability: upserts rewrite the collection file atomically (tmp + rename), and
+ * a `meta.json` carries {@link KNOWLEDGE_SCHEMA_VERSION} + the embedding
+ * dimension. A schema/version mismatch on open is treated as empty (re-index)
+ * rather than an error, and corrupt JSONL lines are skipped — the KB degrades,
+ * never crashes.
+ */
+
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { Chunk } from "../interfaces/knowledge.js";
+import {
+  cosineSimilarity,
+  KNOWLEDGE_SCHEMA_VERSION,
+  type StoredChunk,
+  type VectorDriver,
+  type VectorMatch,
+} from "./driver.js";
+
+interface Collection {
+  readonly dir: string;
+  readonly records: Map<string, StoredChunk>;
+  /** Embedding dimension seen so far (0 until the first non-empty vector). */
+  dim: number;
+}
+
+interface PersistedMeta {
+  readonly schemaVersion: number;
+  readonly dim: number;
+  readonly count: number;
+}
+
+export class FileVectorDriver implements VectorDriver {
+  readonly schemaVersion = KNOWLEDGE_SCHEMA_VERSION;
+  readonly #baseDir: string;
+  /** projectId -> loaded collection. */
+  readonly #collections = new Map<string, Collection>();
+  /** chunkId -> projectId, for global getChunk over loaded collections. */
+  readonly #chunkIndex = new Map<string, string>();
+
+  constructor(baseDir: string) {
+    this.#baseDir = baseDir;
+  }
+
+  /** Filesystem-safe per-project subdir (projectId is often an absolute path). */
+  #dirFor(projectId: string): string {
+    const hash = createHash("sha256").update(projectId, "utf8").digest("hex").slice(0, 16);
+    return path.join(this.#baseDir, hash);
+  }
+
+  async openCollection(projectId: string): Promise<void> {
+    if (this.#collections.has(projectId)) return;
+    const dir = this.#dirFor(projectId);
+    const col: Collection = { dir, records: new Map(), dim: 0 };
+    try {
+      const metaRaw = await readFile(path.join(dir, "meta.json"), "utf8");
+      const meta = JSON.parse(metaRaw) as Partial<PersistedMeta>;
+      if (meta.schemaVersion === KNOWLEDGE_SCHEMA_VERSION) {
+        col.dim = typeof meta.dim === "number" ? meta.dim : 0;
+        await this.#loadChunks(dir, projectId, col);
+      }
+      // Version mismatch → leave the collection empty; the next upsert overwrites
+      // the old files (re-index), so stale-schema data is never served.
+    } catch {
+      // No existing collection on disk — start empty.
+    }
+    this.#collections.set(projectId, col);
+  }
+
+  async #loadChunks(dir: string, projectId: string, col: Collection): Promise<void> {
+    let raw: string;
+    try {
+      raw = await readFile(path.join(dir, "chunks.jsonl"), "utf8");
+    } catch {
+      return; // meta without chunks — treat as empty
+    }
+    for (const line of raw.split("\n")) {
+      if (line.trim() === "") continue;
+      try {
+        const rec = JSON.parse(line) as StoredChunk;
+        if (rec.chunk?.chunkId !== undefined && Array.isArray(rec.vector)) {
+          col.records.set(rec.chunk.chunkId, rec);
+          this.#chunkIndex.set(rec.chunk.chunkId, projectId);
+        }
+      } catch {
+        // Skip a corrupt line (e.g. a torn final write); the rest still loads.
+      }
+    }
+  }
+
+  async upsert(projectId: string, records: readonly StoredChunk[]): Promise<void> {
+    await this.openCollection(projectId);
+    const col = this.#collections.get(projectId);
+    if (col === undefined) return; // unreachable: openCollection just set it
+    for (const rec of records) {
+      col.records.set(rec.chunk.chunkId, rec);
+      this.#chunkIndex.set(rec.chunk.chunkId, projectId);
+      if (col.dim === 0 && rec.vector.length > 0) col.dim = rec.vector.length;
+    }
+    await this.#flush(col);
+  }
+
+  async #flush(col: Collection): Promise<void> {
+    await mkdir(col.dir, { recursive: true });
+    const lines: string[] = [];
+    for (const rec of col.records.values()) lines.push(JSON.stringify(rec));
+    const body = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+    // Atomic replace: write a temp file then rename over the live one so a crash
+    // mid-write never leaves a half-truncated collection.
+    const tmp = path.join(col.dir, "chunks.jsonl.tmp");
+    const dest = path.join(col.dir, "chunks.jsonl");
+    await writeFile(tmp, body, "utf8");
+    await rename(tmp, dest);
+    const meta: PersistedMeta = {
+      schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
+      dim: col.dim,
+      count: col.records.size,
+    };
+    await writeFile(path.join(col.dir, "meta.json"), `${JSON.stringify(meta)}\n`, "utf8");
+  }
+
+  async search(
+    projectId: string,
+    queryVector: readonly number[],
+    k: number,
+  ): Promise<VectorMatch[]> {
+    await this.openCollection(projectId);
+    const col = this.#collections.get(projectId);
+    if (col === undefined || k <= 0) return [];
+    const scored: VectorMatch[] = [];
+    for (const rec of col.records.values()) {
+      scored.push({ chunkId: rec.chunk.chunkId, score: cosineSimilarity(queryVector, rec.vector) });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, k);
+  }
+
+  async getChunk(chunkId: string): Promise<Chunk | null> {
+    const projectId = this.#chunkIndex.get(chunkId);
+    if (projectId === undefined) return null;
+    return this.#collections.get(projectId)?.records.get(chunkId)?.chunk ?? null;
+  }
+
+  async close(): Promise<void> {
+    // Every upsert flushes synchronously to disk, so there is nothing buffered.
+  }
+}

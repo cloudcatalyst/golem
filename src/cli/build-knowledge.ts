@@ -4,12 +4,12 @@
  * `golem devices` share one construction path.
  *
  * The embedder is WS-D's Ollama-backed InferenceService (C3): capability is
- * detected once (cheap, degrades to CPU tier), and the embedded in-memory vector
- * driver is used by default (durable native driver is verification-notes §26 —
- * so an index built in one process is not yet reloaded by the next). Building
- * this NEVER contacts Ollama; only an actual search/ingest embeds, so failures
- * (endpoint down, model not pulled) surface at call time as actionable tool
- * errors, not at startup.
+ * detected once (cheap, degrades to CPU tier), and the durable pure-TS
+ * FileVectorDriver persists the index under `<project>/.golem/knowledge`, so an
+ * index built in one session is found by the next (§26 refinement; LanceDB stays
+ * the optional scale upgrade). Building this NEVER contacts Ollama; only an
+ * actual search/ingest embeds, so failures (endpoint down, model not pulled)
+ * surface at call time as actionable tool errors, not at startup.
  */
 
 import { loadConfig } from "../config/index.js";
