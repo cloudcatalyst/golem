@@ -622,6 +622,38 @@ tokens over 6 requests):**
   tuning: raise the entropy threshold / min length, require a secret-context
   cue, or make the entropy sweep slider-gated. Not changed yet — flagged.
 
+## §31 — Redaction over-match resolved: the "12%" was integrity hashes (2026-07-05)
+
+Ran the current redaction stage against representative repo content to quantify
+the §30 concern deterministically (not waiting on live traffic):
+
+| Content | Before→After | Redacted | High-entropy matches |
+|---|---|---|---|
+| `src/pipeline/redaction-rules.ts` | 2102→2108 | 0% | 0 (1 pattern match) |
+| `src/pipeline/redaction.ts` | 1948→1948 | 0% | 0 (1 pattern match) |
+| `src/compression/native-lossless.ts` | 3727→3727 | 0% | 0 |
+| **`package-lock.json`** | **27742→24196** | **13%** | **207** |
+
+So the entropy sweep does **not** over-match normal source code (good). The
+entire "savings" came from **one source: npm `integrity` values** (`sha512-<b64>`
+SRI hashes) in lockfiles — 207 of them in package-lock.json alone. These are
+**content hashes, not secrets**: redacting them isn't compression, mislabels
+non-secrets as `[REDACTED:high-entropy]`, and would hide a hash Claude might need.
+
+**Fix (this commit):** `isHighEntropyToken` now excludes SRI/integrity-prefixed
+tokens (`sha1|sha224|sha256|sha384|sha512|md5-…`) before the entropy check. A
+real API key never carries an SRI algo prefix, so secret coverage is unaffected;
+the T-C3 corpus gains a guard case. Post-fix package-lock.json redacts 0%.
+
+**Honest consequence:** with the integrity-hash false positive gone, redaction
+touches ~nothing on typical dev traffic (only genuine secrets, which are rare),
+and dedup/compaction already contribute ~0% on single requests. **Golem's real
+token savings on normal Claude Code traffic is therefore ≈0% today.** That is the
+honest baseline. Where the value must come from next: cross-request CCR store
+reuse (repeated file/context spans across a session), not per-request lossless
+compression. This reframes the compression roadmap — flagged for the slider/CCR
+work, not a bug.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
