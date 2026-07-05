@@ -908,6 +908,28 @@ same class of bug as §31 (integrity hashes) — redaction must strip *secrets*,
 **Consequence for the savings story:** the honest Foundry number after this fix is
 compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
 
+## §41 — Auto-index on serve + semantic-upgrade "just works" (2026-07-05)
+
+Two tied features via one mechanism — an index `manifest.json` beside each
+collection recording the **embedder signature** it was built with.
+
+- **Auto-index (`mcp serve`):** on startup, if no manifest (first run) the project
+  is indexed in the BACKGROUND (never blocks startup) so `golem_search` is
+  populated without a manual `golem index`. Paths = configured `knowledge.watch_paths`,
+  else the project root (ingest already skips node_modules/.git/dist/dotfiles +
+  oversized files, so root is safe). No-op when the signature already matches — no
+  wasteful re-embedding each session.
+- **Semantic upgrade:** the signature encodes the embedder (`lexical:hash-v1-512`
+  vs `semantic:bge-m3`). When the user pulls bge-m3 + runs Ollama, `build-knowledge`
+  flips to semantic → signature mismatch → auto-index **clears the stale-dimension
+  vectors and rebuilds** with bge-m3. Pulling the model is all that's needed.
+- `golem index` also writes the manifest so a manual index is respected (rebuilt
+  only on embedder change). `golem index`/`mcp serve` report the embed mode.
+- **Verified live:** fresh project → first serve indexed (search found the file
+  immediately); second serve skipped; forcing semantic → re-indexed. Unit tests
+  cover signature/first-run/skip/reindex. Follow-up: incremental refresh on file
+  edits (watch) — today re-index is per-embedder, not per-edit.
+
 ## §40 — Zero-setup KB: pure-TS hashing embedder default (2026-07-05)
 
 After §39 the KB persisted but was still **dormant** — embeddings needed Ollama +

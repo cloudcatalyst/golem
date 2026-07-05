@@ -34,7 +34,7 @@ export {
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
-export { FileVectorDriver } from "./file-driver.js";
+export { collectionDir, FileVectorDriver } from "./file-driver.js";
 export { DEFAULT_HASH_DIM, hashEmbed, hashingEmbedFn, tokenize } from "./hashing-embedder.js";
 export type { IngestPlan, PreparedChunk } from "./ingest.js";
 export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
