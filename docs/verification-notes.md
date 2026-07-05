@@ -729,6 +729,77 @@ local-inference embedder.
 - **Not lossy/quality risk:** search is additive context retrieval; it does not
   touch the redaction→compression proxy path or the frozen interfaces.
 
+## §34 — Headroom spike: live-verified surface + MEASURED savings (2026-07-05)
+
+The Decision-23 bet ("real savings come from Headroom's lossy/semantic stages")
+spiked against live docs + a real install + the real transcript.
+
+**Current versions (re-verify vs pins).** PyPI `headroom-ai` is now **0.30.0**
+(pin was 0.28.0; 0.29/0.30 released since). npm `headroom-ai` is still **0.22.4**
+(latest) — a thin HTTP client to the proxy. Python **3.10+**; this box has Python
+3.13 + `uv`/`uvx` 0.11.26. `uvx --from "headroom-ai[proxy]==0.30.0" headroom
+proxy` installs (86 pkgs, ~8 s cached) and runs. **No PyTorch present → the ML
+compression stage (LLMLingua/Kompress) is unavailable; heuristic pipeline only.**
+Pin update (0.28.0→0.30.0) is a T-C4 action — noted, not yet applied.
+
+**The integration seam (verified by introspection).** `headroom.compress(messages,
+model="…", model_limit=200000, config=CompressConfig(...))` — *"No proxy, no
+config needed. Just pass messages and get compressed messages back."* Runs the
+full pipeline **in-process, no LLM call, no cost**, and returns `CompressResult`
+with **`.messages`** (compressed, same format), `tokens_before/after/saved`,
+`compression_ratio`, and **`transforms_applied`**. This is BOTH the integration
+path and the offline measurement path. `CompressConfig` knobs:
+`compress_user_messages`(False), `compress_system_messages`(True),
+`protect_recent`(4), `target_ratio`, `min_tokens_to_compress`(250),
+`kompress_model`, `savings_profile` ∈ {general, balanced, coding, agent-90}.
+
+**`headroom proxy` is a full forwarding Anthropic proxy** (endpoints:
+`/v1/messages`→upstream, `/livez /readyz /health /stats /stats-history
+/metrics`; **no standalone `/compress` route**). It conflicts with Golem's proxy
+(both own `/v1/messages`) — confirms §5. So we do **not** chain proxies; we call
+`compress()` in-process via a Python sidecar worker, and Golem keeps the forward
+(redaction-first, byte-faithful, telemetry all preserved). The npm 0.22.4 client
+is **not** used — avoids the 0.22.4↔0.30.0 handshake risk entirely.
+
+**MEASURED on the real 6.5 MB session** (2008-message final-request history;
+Headroom's tokenizer counts 787,169 input tokens): the heuristic pipeline saves
+**43,217 tokens = 5.48%**, and — importantly — that number is **FLAT across every
+`savings_profile`, `target_ratio`, and `compress_user_messages` setting** (those
+knobs drive the absent ML stage). The 5.48% decomposes into two transforms:
+- **`read_lifecycle` (53 elisions)** — detects the *same file re-read multiple
+  times* and drops the **stale/superseded** earlier copies, keeping the latest.
+  This is the §32 pattern (files re-read while changing) turned into *safe*
+  savings — semantic, not byte-dedup. It is the reason Headroom beats our native
+  ~0%.
+- **`router` (~338)** — SmartCrusher-class structural/JSON compression of content
+  blocks.
+
+**Conclusions:**
+1. **Heuristic-only Headroom delivers a real, measured ~5.5% on our traffic** —
+   modest but non-zero, and strictly better than the native lossless stage (§32's
+   ~0%). The win is semantic (stale-read elision + structural), which is exactly
+   what byte-dedup cannot do.
+2. **The advertised big numbers (agent-90 ≈ 90%) need the `[ml]` extra** (PyTorch
+   + LLMLingua/Kompress) — a heavyweight GPU/ML dep that CLAUDE.md mandates be
+   **opt-in, never in the default install**. Its ceiling is **unmeasured** (no
+   torch here) and must be measured on a torch-enabled box before any claim.
+3. **NET-savings caveat (Decision-23 gate, §31/§32 lesson — UNRESOLVED).** The
+   5.48% is a **gross input-token** reduction. Headroom *rewrites* content
+   (`router`) and *drops mid-history reads* (`read_lifecycle`), which changes
+   prefix bytes → risks breaking Anthropic prompt-cache (0.1×→1.0× on the whole
+   suffix). Headroom ships `CacheAligner`/`AnthropicCacheOptimizer` to mitigate,
+   but the **net** effect on *cached* traffic is unmeasured and could flip the
+   gross gain to net-negative — the same trap as the §31 artifact. **No net
+   savings may be claimed until this is measured live** (compare real billed
+   cache_read vs uncached tokens with/without Headroom).
+
+**Recommendation:** integrate `headroom.compress()` behind the `CompressionService`
+adapter as the **slider ≥3** stage via a **persistent Python sidecar worker**
+(spawn/health/restart like the proxy daemon; opt-in `pip/uvx install
+headroom-ai`), heuristic-only in the default install with `[ml]` as a further
+opt-in. Ship it **behind an explicit opt-in and a live cache-aware A/B** before
+any savings number reaches golem.run copy.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
