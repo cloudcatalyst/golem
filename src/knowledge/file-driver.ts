@@ -33,6 +33,16 @@ import {
   type VectorMatch,
 } from "./driver.js";
 
+/**
+ * Filesystem-safe per-project collection directory under `baseDir`. Exported so
+ * the auto-index manifest lives alongside a collection's data with ONE hashing
+ * impl (projectId is often an absolute path).
+ */
+export function collectionDir(baseDir: string, projectId: string): string {
+  const hash = createHash("sha256").update(projectId, "utf8").digest("hex").slice(0, 16);
+  return path.join(baseDir, hash);
+}
+
 interface Collection {
   readonly dir: string;
   readonly records: Map<string, StoredChunk>;
@@ -58,10 +68,8 @@ export class FileVectorDriver implements VectorDriver {
     this.#baseDir = baseDir;
   }
 
-  /** Filesystem-safe per-project subdir (projectId is often an absolute path). */
   #dirFor(projectId: string): string {
-    const hash = createHash("sha256").update(projectId, "utf8").digest("hex").slice(0, 16);
-    return path.join(this.#baseDir, hash);
+    return collectionDir(this.#baseDir, projectId);
   }
 
   async openCollection(projectId: string): Promise<void> {

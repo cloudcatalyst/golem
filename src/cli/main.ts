@@ -28,6 +28,7 @@ import {
   recordPipelineEvent,
   telemetryStatsSource,
 } from "../telemetry/index.js";
+import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
@@ -311,6 +312,23 @@ mcp
               stack.embedMode === "lexical" ? "; pull bge-m3 + run Ollama for semantic" : ""
             })\n`,
           );
+          // Populate/refresh the index in the BACKGROUND so search works without a
+          // manual `golem index`, and re-index automatically if the embedder
+          // changed (e.g. bge-m3 got pulled). Never blocks server startup.
+          void ensureProjectIndexed({
+            projectDir: opts.dir,
+            projectId: opts.dir,
+            knowledge: stack.knowledge,
+            embedMode: stack.embedMode,
+            tier: stack.facts.tier,
+            watchPaths: settings.knowledge.watch_paths,
+            now: new Date().toISOString(),
+            log: (m) => process.stderr.write(`golem kb: ${m}\n`),
+          }).catch((e) =>
+            process.stderr.write(
+              `golem kb: auto-index failed (${e instanceof Error ? e.message : String(e)})\n`,
+            ),
+          );
         } catch (err) {
           process.stderr.write(
             `golem: knowledge base unavailable, serving without it (${
@@ -493,9 +511,18 @@ program
   .action(
     async (pathArg: string | undefined, opts: { dir: string; watch: boolean; json: boolean }) => {
       try {
-        const { knowledge, embedMode } = await buildKnowledgeStack({ projectDir: opts.dir });
+        const { knowledge, embedMode, facts } = await buildKnowledgeStack({ projectDir: opts.dir });
         const target = pathArg ?? opts.dir;
         const report = await knowledge.ingest(target, opts.dir, opts.watch);
+        // Record the embedder signature so `mcp serve` respects this index (and
+        // rebuilds only when the embedder changes).
+        await writeManifest(
+          opts.dir,
+          opts.dir,
+          embedderSignature(embedMode, facts.tier),
+          [target],
+          new Date().toISOString(),
+        );
         if (opts.json) {
           process.stdout.write(`${JSON.stringify({ ...report, embedMode }, null, 2)}\n`);
         } else {
