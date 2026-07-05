@@ -2,12 +2,13 @@
  * WS-C C1 — GolemKnowledgeBase: the store-agnostic KnowledgeBase over a
  * VectorDriver.
  *
- * Scope of C1: the READ path (text `search` via an injected embed function +
- * `getChunk`) is real; per-project isolation and KNOWLEDGE-only degradation are
- * implemented. `ingest` needs heading/code chunking (C2) and embedding (C3), so
- * it is a clearly-signalled TODO here. MEMORY-scope federation needs the
- * Headroom Python sidecar (spec Decisions 13/18) — absent it, search silently
- * degrades to KNOWLEDGE only, which is the documented P0 behavior.
+ * Read path (C1): text `search` via an injected embed function + `getChunk`;
+ * per-project isolation; KNOWLEDGE-only degradation. Write path (C2): `ingest`
+ * traverses + chunks a file/dir (chunker.ts), embeds each chunk via the
+ * injected embedder, and upserts vectors. The embedder itself is wired to WS-D
+ * in C3 — without one, `ingest`/`search` raise NotImplementedYetError. MEMORY
+ * federation needs the Headroom Python sidecar (Decisions 13/18); absent it,
+ * search degrades to KNOWLEDGE only (documented P0 behavior).
  */
 
 import {
@@ -20,7 +21,8 @@ import {
   type Scope,
   UnknownChunkError,
 } from "../interfaces/knowledge.js";
-import type { VectorDriver } from "./driver.js";
+import type { StoredChunk, VectorDriver } from "./driver.js";
+import { chunkIdFor, type PreparedChunk, planIngest } from "./ingest.js";
 
 /** Turns text into embedding vectors. Supplied by WS-D InferenceService (C3). */
 export type EmbedFn = (texts: readonly string[], kind: "text" | "code") => Promise<number[][]>;
@@ -81,11 +83,60 @@ export class GolemKnowledgeBase implements KnowledgeBase {
     return chunk;
   }
 
-  ingest(_path: string, _projectId: string, _watch?: boolean): Promise<IngestReport> {
-    // Chunking (heading-aware md/html, code via tree-sitter) is C2; embedding is
-    // C3. Until both land, ingest is intentionally unavailable rather than
-    // silently indexing nothing.
-    return Promise.reject(new NotImplementedYetError("ingest (chunking + embedding)", "C2/C3"));
+  async ingest(pathArg: string, projectId: string, watch?: boolean): Promise<IngestReport> {
+    if (watch === true) {
+      // File watching (fs.watch/chokidar decision, verification-notes §27) is a
+      // C2 follow-up; refuse rather than silently not-watching.
+      throw new NotImplementedYetError("file watching", "C2-followup");
+    }
+    if (this.#embed === undefined) {
+      // Chunking works without an embedder, but storing vectors needs one
+      // (wired to WS-D in C3).
+      throw new NotImplementedYetError("ingest (chunk embedding)", "C3");
+    }
+
+    const plan = await planIngest(pathArg);
+    await this.#driver.openCollection(projectId);
+
+    // Embed in batches per kind (text vs code use different models), preserving
+    // order so vectors line up with their chunks.
+    const byKind: Record<"text" | "code", PreparedChunk[]> = { text: [], code: [] };
+    for (const c of plan.chunks) byKind[c.kind].push(c);
+
+    const stored: StoredChunk[] = [];
+    for (const kind of ["text", "code"] as const) {
+      const group = byKind[kind];
+      if (group.length === 0) continue;
+      const vectors = await this.#embed(
+        group.map((c) => c.text),
+        kind,
+      );
+      for (let i = 0; i < group.length; i += 1) {
+        const c = group[i];
+        const vector = vectors[i];
+        if (c === undefined || vector === undefined) continue;
+        const chunk: Chunk = {
+          chunkId: chunkIdFor(projectId, c),
+          projectId,
+          text: c.text,
+          sourcePath: c.sourcePath,
+          startLine: c.startLine,
+          endLine: c.endLine,
+          metadata: c.metadata,
+        };
+        stored.push({ chunk, vector });
+      }
+    }
+    if (stored.length > 0) await this.#driver.upsert(projectId, stored);
+
+    return {
+      path: pathArg,
+      projectId,
+      filesSeen: plan.filesSeen,
+      chunksIndexed: stored.length,
+      filesSkipped: plan.filesSkipped,
+      watching: false,
+    };
   }
 }
 
