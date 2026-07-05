@@ -34,6 +34,7 @@ export function recordPipelineEvent(
     ts: nowIso,
     projectId: event.projectId,
     level: event.level,
+    requestTokens: event.requestTokens,
     stageSavings: event.stageSavings,
     ccrRefsStored: event.ccrRefsStored,
   };
