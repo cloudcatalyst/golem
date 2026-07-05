@@ -97,6 +97,17 @@ describe("T-C3: entropy backstop for uncontexted secrets", () => {
     expect(redact(`commit ${sha}`)).toContain(sha);
     expect(redact(`id ${uuid}`)).toContain(uuid);
   });
+
+  it("does NOT redact npm integrity / SRI content hashes (§31 lockfile false-positive)", () => {
+    // `sha512-<base64>` integrity values saturate package-lock.json; the entropy
+    // sweep was eating every one — content hashes, not secrets. Redacting them
+    // inflated the savings metric and mislabeled non-secrets as REDACTED.
+    const integrity =
+      "sha512-Ap0AB3vJt6JsBJj0K8t9YtY6Rf0oQ3m6QN0m7l2K1jZ8qWn5rXcVvBnM3pLdG4hT7";
+    const out = redact(`"integrity": "${integrity}"`);
+    expect(out).toContain(integrity);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
 });
 
 describe("T-C3: depth and idempotence", () => {

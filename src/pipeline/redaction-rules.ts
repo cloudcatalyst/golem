@@ -188,9 +188,20 @@ export function shannonEntropy(text: string): number {
 }
 
 /**
+ * Subresource-integrity / content-hash prefixes (`sha512-<base64>` etc.). These
+ * saturate lockfiles (npm `integrity`) and are content hashes, NOT secrets —
+ * redacting them is incidental, mislabels non-secrets, and inflates "savings"
+ * (verification-notes §31). A real API key never carries an SRI algo prefix.
+ */
+const INTEGRITY_HASH_RE = /^(sha1|sha224|sha256|sha384|sha512|md5)-/i;
+
+/**
  * Whether a candidate token is high-entropy secret material.
  *
  * Deliberate exclusions (audit rationale):
+ * - integrity hashes (`sha512-…` SRI / npm lockfile `integrity`): content
+ *   hashes, not secrets; they dominate lockfiles and their redaction is what
+ *   made the savings metric look large (§31).
  * - pure hex (dashes/underscores ignored): git SHAs, sha256 content hashes,
  *   UUIDs, and Golem's own CCR `hash=<sha256>` markers saturate developer
  *   traffic and are not secrets. Hex-shaped provider secrets are covered by
@@ -200,6 +211,9 @@ export function shannonEntropy(text: string): number {
  *   real random secrets essentially never do at 32+ chars.
  */
 export function isHighEntropyToken(token: string): boolean {
+  if (INTEGRITY_HASH_RE.test(token)) {
+    return false;
+  }
   const dehyphenated = token.replace(/[-_]/g, "");
   if (/^[0-9a-fA-F]*$/.test(dehyphenated)) {
     return false;
