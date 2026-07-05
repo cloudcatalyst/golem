@@ -28,6 +28,7 @@ import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
+import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 
 const program = new Command();
 
@@ -205,6 +206,31 @@ function parseSliderLevel(raw: string): SliderLevel {
   }
   return level as SliderLevel;
 }
+
+program
+  .command("statusline")
+  .description("Render the Golem status line (for Claude Code's statusLine setting)")
+  .option("--color", "force ANSI colors (default: on when stdout is a TTY and NO_COLOR unset)")
+  .action(async (opts: { color?: boolean }) => {
+    // Must never throw or hang: a broken status line disrupts the editor.
+    try {
+      const raw = process.stdin.isTTY
+        ? ""
+        : await new Promise<string>((resolve) => {
+            const chunks: Buffer[] = [];
+            process.stdin.on("data", (c: Buffer) => chunks.push(c));
+            process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+            process.stdin.on("error", () => resolve(""));
+          });
+      const session = parseSessionInput(raw);
+      const dir = session.cwd ?? process.cwd();
+      const golem = await collectGolemState(dir);
+      const color = opts.color ?? (process.stdout.isTTY === true && !process.env.NO_COLOR);
+      process.stdout.write(`${renderStatusLine(session, golem, { color })}\n`);
+    } catch {
+      process.stdout.write("⬢ golem\n");
+    }
+  });
 
 program
   .command("slider")
