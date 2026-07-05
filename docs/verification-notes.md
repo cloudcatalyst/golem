@@ -908,6 +908,32 @@ same class of bug as §31 (integrity hashes) — redaction must strip *secrets*,
 **Consequence for the savings story:** the honest Foundry number after this fix is
 compression (dedup/compaction/semantic), NOT redaction. Re-baseline telemetry.
 
+## §38 — Balanced-mode (level 3) safety check for dogfooding (2026-07-05)
+
+User is running level 3 live and asked to flag any oddity caused by it. Ran a
+realistic slice (repeated file read + tool_use/tool_result pairs + assistant/user
+text) through `headroom.compress(protect_recent=4)` (pin 0.30.0) and diffed.
+
+**Findings — safe on tool-heavy traffic:**
+- Headroom's **router excludes tool content** (`router:excluded:tool`): both
+  `tool_result` file reads passed through at full length; **tool_use ↔ tool_result
+  pairing preserved** on both sides. No malformed request risk.
+- User text untouched at level 3 (`compress_user_messages=False`). Only
+  system-side/assistant prose beyond the last 4 turns is a compression candidate;
+  short conversations compress to **0** (nothing beyond the protected window).
+- The live ~8% savings therefore come from **older non-tool prose**, not from
+  touching code/tool context.
+
+**Caveat to watch (the one real risk):** if Headroom *does* elide something into
+its own CCR, `golem_expand` cannot retrieve it — Golem's expand is wired to the
+TS CCR store, not Headroom's (verification-notes §32 open item). On tool-heavy
+traffic this rarely triggers (tool content is excluded), but on very long
+prose-heavy sessions a compressed earlier turn is not recoverable from the model
+side. Symptoms to attribute to balanced mode if seen: (a) referencing a stale file
+version, (b) "forgetting" mid-conversation detail from >4 turns back, (c) any
+Foundry 4xx that disappears at level ≤2. Mitigation if it bites: `golem slider 1`
+(same redaction, no semantic stage).
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
