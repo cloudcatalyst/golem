@@ -2,9 +2,10 @@
  * Unified Golem MCP server (WS-B task B1).
  *
  * Frozen names (IMPLEMENTATION_PLAN §2.5 — do not rename):
- * - P0 tools: `golem_expand`, `golem_stats`, `golem_set_slider`
- *   (P1 tools golem_search/golem_get_chunk/golem_index_path/golem_delegate/
- *   golem_devices arrive with task B3.)
+ * - P0 tools: `golem_expand`, `golem_stats`, `golem_set_slider`.
+ * - P1 knowledge tools (task B3): `golem_search`, `golem_get_chunk`,
+ *   `golem_index_path` — registered only when a KnowledgeBase is injected
+ *   (`deps.knowledge`). `golem_delegate` / `golem_devices` are still to come.
  * - Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`,
  *   `devices`, `delegate` — surfaced by Claude Code as `/mcp__golem__<name>`
  *   (verification-notes.md §10).
@@ -23,8 +24,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CompressionService, SliderLevel } from "../interfaces/index.js";
-import { UnknownRefError } from "../interfaces/index.js";
+import type { CompressionService, Hit, KnowledgeBase, SliderLevel } from "../interfaces/index.js";
+import { UnknownChunkError, UnknownRefError } from "../interfaces/index.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -36,6 +37,14 @@ export const GOLEM_MCP_SERVER_VERSION = "0.1.0";
 export interface GolemMcpServerDeps {
   readonly compression: CompressionService;
   readonly sliderStore: SliderStore;
+  /**
+   * WS-C knowledge base (task B3). When present, the P1 knowledge tools
+   * (`golem_search`, `golem_get_chunk`, `golem_index_path`) are registered.
+   * Omitted for the P0 stubs and for runs where the KB is disabled.
+   */
+  readonly knowledge?: KnowledgeBase;
+  /** projectId used by knowledge tools when a call omits `project_id`. */
+  readonly defaultProjectId?: string;
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -246,6 +255,244 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
           slider_level_name: LEVEL_NAMES[sliderLevel],
         },
       };
+    },
+  );
+
+  if (deps.knowledge !== undefined) {
+    registerKnowledgeTools(server, deps.knowledge, deps.defaultProjectId ?? "default");
+  }
+}
+
+/** Longest chunk preview echoed in a search result's text/summary. */
+const CHUNK_PREVIEW_CHARS = 240;
+
+/**
+ * Map a knowledge-backend failure to a user-facing message, or null to rethrow.
+ * The KB embed path can fail when local inference is down or a model is not
+ * pulled — surface that as an actionable `isError` result, not a crash. Matched
+ * by error `name` so this file stays decoupled from WS-C/WS-D concrete classes.
+ */
+function backendUnavailableMessage(err: unknown): string | null {
+  if (!(err instanceof Error)) return null;
+  switch (err.name) {
+    case "InferenceEndpointError":
+      return (
+        "Golem's local inference endpoint (Ollama) is unreachable, so the " +
+        "knowledge base cannot embed. Start Ollama and ensure the embedding model " +
+        "is pulled (see `golem devices`), then retry."
+      );
+    case "ModelNotAvailableError":
+      return `A local model the knowledge base needs is not installed: ${err.message}`;
+    case "NotImplementedYetError":
+      return (
+        "Golem's knowledge base has no embedding backend available in this run " +
+        "(local inference required). Check `golem devices` and that Ollama is running."
+      );
+    default:
+      return null;
+  }
+}
+
+/** One structured search hit (optional geometry omitted when absent). */
+function toStructuredHit(hit: Hit): Record<string, unknown> {
+  const c = hit.chunk;
+  const preview =
+    c.text.length > CHUNK_PREVIEW_CHARS ? `${c.text.slice(0, CHUNK_PREVIEW_CHARS)}…` : c.text;
+  return {
+    chunk_id: c.chunkId,
+    score: hit.score,
+    scope: hit.scope,
+    text_preview: preview,
+    ...(c.sourcePath !== undefined ? { source_path: c.sourcePath } : {}),
+    ...(c.startLine !== undefined ? { start_line: c.startLine } : {}),
+    ...(c.endLine !== undefined ? { end_line: c.endLine } : {}),
+  };
+}
+
+/** Register the P1 knowledge tools (task B3) against an injected KnowledgeBase. */
+function registerKnowledgeTools(
+  server: McpServer,
+  knowledge: KnowledgeBase,
+  defaultProjectId: string,
+): void {
+  server.registerTool(
+    "golem_search",
+    {
+      title: "Search the Golem knowledge base",
+      description:
+        "Semantic search over Golem's local vector knowledge base (indexed code, " +
+        "docs, and notes). Returns the most relevant chunks with a preview and a " +
+        "`chunk_id`; call golem_get_chunk for a chunk's full text. Runs entirely " +
+        "on local embeddings — nothing leaves the machine.",
+      inputSchema: {
+        query: z.string().min(1).describe("What to search for"),
+        k: z.number().int().min(1).max(50).optional().describe("Max hits to return (default 8)"),
+        project_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project to search; omit to use this session's project"),
+      },
+      outputSchema: {
+        project_id: z.string(),
+        query: z.string(),
+        count: z.number().int().nonnegative(),
+        hits: z.array(
+          z.object({
+            chunk_id: z.string(),
+            score: z.number(),
+            scope: z.string(),
+            text_preview: z.string(),
+            source_path: z.string().optional(),
+            start_line: z.number().int().optional(),
+            end_line: z.number().int().optional(),
+          }),
+        ),
+      },
+    },
+    async ({ query, k, project_id }) => {
+      const projectId = project_id ?? defaultProjectId;
+      try {
+        const hits = await knowledge.search(query, projectId, k ?? 8);
+        const structuredHits = hits.map(toStructuredHit);
+        const summary =
+          hits.length === 0
+            ? `No knowledge-base hits for "${query}" in project ${projectId}.`
+            : `${hits.length} hit(s) for "${query}":\n` +
+              hits
+                .map((h, i) => {
+                  const loc = h.chunk.sourcePath
+                    ? `${h.chunk.sourcePath}${h.chunk.startLine ? `:${h.chunk.startLine}` : ""}`
+                    : h.chunk.chunkId;
+                  return `${i + 1}. [${h.score.toFixed(3)}] ${loc} (chunk ${h.chunk.chunkId})`;
+                })
+                .join("\n");
+        return {
+          content: [{ type: "text", text: summary }],
+          structuredContent: {
+            project_id: projectId,
+            query,
+            count: hits.length,
+            hits: structuredHits,
+          },
+        };
+      } catch (err) {
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "golem_get_chunk",
+    {
+      title: "Get a Golem knowledge chunk",
+      description:
+        "Retrieve the full text (and source location) of a single knowledge-base " +
+        "chunk by its `chunk_id`, as returned by golem_search.",
+      inputSchema: {
+        chunk_id: z.string().min(1).describe("The chunk id from a golem_search hit"),
+      },
+      outputSchema: {
+        chunk_id: z.string(),
+        project_id: z.string(),
+        text: z.string(),
+        source_path: z.string().optional(),
+        start_line: z.number().int().optional(),
+        end_line: z.number().int().optional(),
+      },
+    },
+    async ({ chunk_id }) => {
+      try {
+        const chunk = await knowledge.getChunk(chunk_id);
+        return {
+          content: [{ type: "text", text: chunk.text }],
+          structuredContent: {
+            chunk_id: chunk.chunkId,
+            project_id: chunk.projectId,
+            text: chunk.text,
+            ...(chunk.sourcePath !== undefined ? { source_path: chunk.sourcePath } : {}),
+            ...(chunk.startLine !== undefined ? { start_line: chunk.startLine } : {}),
+            ...(chunk.endLine !== undefined ? { end_line: chunk.endLine } : {}),
+          },
+        };
+      } catch (err) {
+        if (err instanceof UnknownChunkError) {
+          return errorResult(
+            `Unknown chunk "${chunk_id}". It may have been re-indexed or evicted; ` +
+              "re-run golem_search to get current chunk ids.",
+          );
+        }
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "golem_index_path",
+    {
+      title: "Index a path into the Golem knowledge base",
+      description:
+        "Ingest a file or directory tree into Golem's local vector knowledge base " +
+        "so golem_search can find it. Chunks code and docs and embeds them locally. " +
+        "Optionally keep watching the path for changes.",
+      inputSchema: {
+        path: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("File or directory to ingest (default: this session's project root)"),
+        project_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project to index into; omit to use this session's project"),
+        watch: z
+          .boolean()
+          .optional()
+          .describe("Keep a file watcher on the path for incremental re-index (default false)"),
+      },
+      outputSchema: {
+        path: z.string(),
+        project_id: z.string(),
+        files_seen: z.number().int().nonnegative(),
+        chunks_indexed: z.number().int().nonnegative(),
+        files_skipped: z.number().int().nonnegative(),
+        watching: z.boolean(),
+      },
+    },
+    async ({ path, project_id, watch }) => {
+      const projectId = project_id ?? defaultProjectId;
+      const target = path ?? defaultProjectId;
+      try {
+        const report = await knowledge.ingest(target, projectId, watch ?? false);
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                `Indexed ${report.path} into project ${report.projectId}: ` +
+                `${report.chunksIndexed} chunks from ${report.filesSeen} file(s) ` +
+                `(${report.filesSkipped} skipped)${report.watching ? ", watching for changes" : ""}.`,
+            },
+          ],
+          structuredContent: {
+            path: report.path,
+            project_id: report.projectId,
+            files_seen: report.filesSeen,
+            chunks_indexed: report.chunksIndexed,
+            files_skipped: report.filesSkipped,
+            watching: report.watching,
+          },
+        };
+      } catch (err) {
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
     },
   );
 }

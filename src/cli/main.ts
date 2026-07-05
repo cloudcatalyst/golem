@@ -15,6 +15,9 @@ import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/ind
 import { startDashboard } from "../dashboard/index.js";
 import { buildHookCommand } from "../hooks/index.js";
 import { VERSION } from "../index.js";
+import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
+import type { HardwareTier } from "../interfaces/inference.js";
+import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { createGolemPipeline } from "../pipeline/index.js";
@@ -24,6 +27,7 @@ import {
   recordPipelineEvent,
   telemetryStatsSource,
 } from "../telemetry/index.js";
+import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
   portInUse,
@@ -282,11 +286,28 @@ mcp
   .option("--dir <path>", "project directory (for the CCR store)", process.cwd())
   .action(async (opts: { dir: string }) => {
     try {
+      // stdio owns stdout (MCP JSON-RPC) — NEVER write there here; warnings go to
+      // stderr. Build the KB before connecting so a KB failure degrades to
+      // "serve without knowledge tools" rather than crashing the server.
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      let knowledge: KnowledgeBase | undefined;
+      if (settings.knowledge.enabled) {
+        try {
+          ({ knowledge } = await buildKnowledgeStack({ projectDir: opts.dir }));
+        } catch (err) {
+          process.stderr.write(
+            `golem: knowledge base unavailable, serving without it (${
+              err instanceof Error ? err.message : String(err)
+            })\n`,
+          );
+        }
+      }
       await serveStdio({
         compression: NativeLosslessCompression.forProjectDir(opts.dir),
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
+        ...(knowledge !== undefined ? { knowledge, defaultProjectId: opts.dir } : {}),
       });
     } catch (err) {
       fail(err);
@@ -438,27 +459,69 @@ program
     }
   });
 
+const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
+  0: "P_CPU",
+  1: "P_MIN",
+  2: "P_MID",
+  3: "P_MAX",
+};
+
 program
   .command("index")
-  .description("Index files into the Golem knowledge base (not implemented yet — ships with WS-C)")
-  .allowExcessArguments(true)
-  .action(() => {
-    process.stderr.write(
-      "golem index is not implemented yet: the vector knowledge base ships with " +
-        "workstream WS-C (golem_index_path / golem_search; docs/IMPLEMENTATION_PLAN.md §3).\n",
-    );
-    process.exitCode = 1;
-  });
+  .description("Index a file or directory into the Golem knowledge base (local embeddings)")
+  .argument("[path]", "file or directory to ingest (default: project root)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--watch", "keep watching the path for changes (stays running)", false)
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (pathArg: string | undefined, opts: { dir: string; watch: boolean; json: boolean }) => {
+      try {
+        const { knowledge } = await buildKnowledgeStack({ projectDir: opts.dir });
+        const target = pathArg ?? opts.dir;
+        const report = await knowledge.ingest(target, opts.dir, opts.watch);
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+        } else {
+          process.stdout.write(
+            `Indexed ${report.path}: ${report.chunksIndexed} chunks from ` +
+              `${report.filesSeen} file(s) (${report.filesSkipped} skipped)` +
+              `${report.watching ? ", watching for changes" : ""}.\n`,
+          );
+          if (!report.watching) {
+            process.stdout.write(
+              "note: the embedded index is in-process (durable store is WS-C follow-up), " +
+                "so run searches via the same `golem mcp serve` session.\n",
+            );
+          }
+        }
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 program
   .command("devices")
-  .description("Show detected local hardware and models (not implemented yet — ships with WS-D)")
-  .action(() => {
-    process.stderr.write(
-      "golem devices is not implemented yet: hardware detection and tiered local " +
-        "inference ship with workstream WS-D (golem_devices; docs/IMPLEMENTATION_PLAN.md §3).\n",
-    );
-    process.exitCode = 1;
+  .description("Show detected local hardware tier and the models Golem would use")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { json: boolean }) => {
+    try {
+      const facts = await detectCapability(createProbeRunner());
+      const models = modelsForTier(facts.tier);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ ...facts, models }, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(
+        `Hardware tier: ${facts.tier} (${TIER_NAMES[facts.tier]}) — via ${facts.source}\n`,
+      );
+      if (facts.device !== undefined) process.stdout.write(`  device: ${facts.device}\n`);
+      if (facts.memoryMiB !== undefined) process.stdout.write(`  memory: ${facts.memoryMiB} MiB\n`);
+      process.stdout.write(`  ${facts.detail}\n`);
+      process.stdout.write(`  models for this tier: ${models.join(", ")}\n`);
+    } catch (err) {
+      fail(err);
+    }
   });
 
 program.addCommand(buildHookCommand());

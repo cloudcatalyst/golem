@@ -4,6 +4,9 @@ dist/
 *.tsbuildinfo
 npm-debug.log*
 
+# npm pack artifacts (produced by the dev→stable promotion step)
+*.tgz
+
 # Coverage
 coverage/
 

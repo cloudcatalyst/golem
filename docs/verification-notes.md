@@ -701,6 +701,34 @@ honest observability** — not per-request token compression. CCR store stays (i
 backs `golem_expand` and lossy-level reversibility), but "cut token spend via
 compression" as the lead claim does not survive contact with real cached traffic.
 
+## §33 — B3: knowledge base wired to Claude (2026-07-05)
+
+Realized the "local tools" pillar (the durable value from Decision 23): the
+unified MCP server now exposes the three P1 knowledge tools, backed by a real
+local-inference embedder.
+
+- **Tools:** `golem_search` (semantic search → hits with `chunk_id` + preview),
+  `golem_get_chunk` (full chunk by id), `golem_index_path` (ingest a file/dir).
+  Registered only when a `KnowledgeBase` is injected (`deps.knowledge`), so the
+  P0 stub server is unchanged. Backend failures (Ollama down / model not pulled /
+  no embedder) come back as actionable `isError` results, never crashes.
+- **Embedder:** WS-C `openKnowledgeBase` + WS-D `OllamaInferenceService`, assembled
+  in `src/cli/build-knowledge.ts`. Capability is detected once at startup; on this
+  box `golem devices` reports **P_MID** (RTX 3070 Laptop, 8192 MiB) → embed model
+  `bge-m3`. Building the stack does NOT contact Ollama — only a real search/ingest
+  embeds, so an offline endpoint degrades at call time.
+- **CLI:** `golem devices` (real tier + tier models) and `golem index` (real
+  ingest) replace the WS-C/WS-D stubs. `golem mcp serve` builds the KB when
+  `knowledge.enabled` (default true) and registers the tools; verified live over
+  stdio — `tools/list` returns all six tool names, no stderr.
+- **Known limit (§26 follow-up):** the default vector driver is the in-memory
+  `InMemoryVectorDriver`, so an index built in one process is not reloaded by the
+  next. Search must run in the same long-lived `golem mcp serve` session that
+  indexed. The durable native driver (LanceDB/sqlite-vec) is the next KB task;
+  `knowledge.vector_db_url` (Qdrant server) still raises NotImplementedYet.
+- **Not lossy/quality risk:** search is additive context retrieval; it does not
+  touch the redaction→compression proxy path or the frozen interfaces.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
