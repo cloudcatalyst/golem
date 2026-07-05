@@ -48,6 +48,23 @@ export interface VectorDriver {
   close(): Promise<void>;
 }
 
+/**
+ * Optional capability (NOT part of the frozen {@link VectorDriver}): remove all
+ * of a source file's chunks, so an edited/deleted file can be re-indexed cleanly
+ * (chunk ids are content-based, so a changed file yields NEW ids and its old
+ * chunks would otherwise orphan). Drivers that can't do this simply don't
+ * implement it, and callers fall back to a full re-index.
+ */
+export interface DeletableVectorDriver extends VectorDriver {
+  /** Remove every chunk in `projectId` whose `sourcePath` equals `sourcePath`; returns the count removed. */
+  deleteBySourcePath(projectId: string, sourcePath: string): Promise<number>;
+}
+
+/** Structural check for {@link DeletableVectorDriver}. */
+export function isDeletable(driver: VectorDriver): driver is DeletableVectorDriver {
+  return typeof (driver as Partial<DeletableVectorDriver>).deleteBySourcePath === "function";
+}
+
 /** Cosine similarity; 0 when either vector is zero or dimensions mismatch. */
 export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
   if (a.length === 0 || a.length !== b.length) return 0;
@@ -70,7 +87,7 @@ export function cosineSimilarity(a: readonly number[], b: readonly number[]): nu
  * but NOT durable — it exists so C1 has a working, dependency-free default and
  * a test double. Swap for a persisted driver (LanceDB) without touching callers.
  */
-export class InMemoryVectorDriver implements VectorDriver {
+export class InMemoryVectorDriver implements DeletableVectorDriver {
   readonly schemaVersion = KNOWLEDGE_SCHEMA_VERSION;
   /** projectId -> (chunkId -> stored). */
   readonly #byProject = new Map<string, Map<string, StoredChunk>>();
@@ -116,6 +133,20 @@ export class InMemoryVectorDriver implements VectorDriver {
     if (projectId === undefined) return Promise.resolve(null);
     const rec = this.#byProject.get(projectId)?.get(chunkId);
     return Promise.resolve(rec?.chunk ?? null);
+  }
+
+  deleteBySourcePath(projectId: string, sourcePath: string): Promise<number> {
+    const c = this.#byProject.get(projectId);
+    if (c === undefined) return Promise.resolve(0);
+    let removed = 0;
+    for (const [id, rec] of c) {
+      if (rec.chunk.sourcePath === sourcePath) {
+        c.delete(id);
+        this.#chunkIndex.delete(id);
+        removed += 1;
+      }
+    }
+    return Promise.resolve(removed);
   }
 
   close(): Promise<void> {

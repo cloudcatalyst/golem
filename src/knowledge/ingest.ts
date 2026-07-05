@@ -128,3 +128,64 @@ export function chunkIdFor(projectId: string, chunk: PreparedChunk): string {
     .digest("hex")
     .slice(0, 20);
 }
+
+/** One indexable file's identity for incremental change detection. */
+export interface FileState {
+  /** Absolute path. */
+  readonly abs: string;
+  /** Path relative to the scan root (POSIX) — matches chunk `sourcePath`. */
+  readonly sourcePath: string;
+  /** Last-modified epoch ms + byte size — the change signal. */
+  readonly mtimeMs: number;
+  readonly size: number;
+}
+
+/**
+ * List the indexable files under `root` with their mtime/size — the same
+ * traversal `planIngest` uses, but returning file identity instead of chunks, so
+ * the auto-index can detect what changed since last time.
+ */
+export async function scanFiles(root: string): Promise<FileState[]> {
+  const absRoot = path.resolve(root);
+  const { seen } = await collectFiles(absRoot);
+  const rootIsFile = (await stat(absRoot)).isFile();
+  const baseDir = rootIsFile ? path.dirname(absRoot) : absRoot;
+  const out: FileState[] = [];
+  for (const abs of seen) {
+    try {
+      const st = await stat(abs);
+      out.push({
+        abs,
+        sourcePath: toPosix(path.relative(baseDir, abs)),
+        mtimeMs: st.mtimeMs,
+        size: st.size,
+      });
+    } catch {
+      // vanished between walk and stat — ignore
+    }
+  }
+  return out;
+}
+
+/**
+ * Chunk specific files with `sourcePath` relative to `baseDir` (NOT each file's
+ * own dir), so incremental re-ingest of one file produces the same source paths
+ * as the original full index of the project root.
+ */
+export async function chunkFilesRelativeTo(
+  files: readonly string[],
+  baseDir: string,
+): Promise<PreparedChunk[]> {
+  const chunks: PreparedChunk[] = [];
+  for (const file of files) {
+    let content: string;
+    try {
+      content = await readFile(file, "utf8");
+    } catch {
+      continue;
+    }
+    const sourcePath = toPosix(path.relative(baseDir, file));
+    for (const raw of chunkFile(file, content)) chunks.push({ ...raw, sourcePath });
+  }
+  return chunks;
+}
