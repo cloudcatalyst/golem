@@ -572,6 +572,27 @@ Claude Code prompt in the terminal.
   render the terminal wrapper. `golem init` installs the `statusLine` config
   (same pattern as the PostToolUse hook).
 
+## 29. WS-C C3 — real embeddings wired; rerank deferred (2026-07-04)
+
+`InferenceService.embed(texts, kind)` (WS-D) matches the KB's `EmbedFn` exactly,
+so C3 is a thin adapter (`inferenceEmbedFn`) plus an `inference?` option on
+`openKnowledgeBase` (explicit `embed` wins for tests; else derived from
+`inference`; else ingest/search raise NotImplementedYetError). The lexical
+stand-in from C2 is now test-only. Verified with a fake InferenceService driving
+ingest→search end to end.
+
+- **Degradation:** if local inference is unavailable (no Ollama), `embed`
+  rejects with the service's own error, which ingest/search surface — rather
+  than silently indexing nothing. Documented, intentional.
+- **Rerank deferred (rationale):** the FROZEN `InferenceService` exposes only
+  `chat`/`embed`/`capabilities` — no `rerank`. Cross-encoder reranking therefore
+  can't ride the existing contract; it's a follow-up (either a new optional
+  reranker surface, or a chat-judge rerank at slider ≥3). Search stays
+  cosine-ranked meanwhile — correct, just not reranked.
+- **Real embedder construction** (detect tier → Ollama client → service) is the
+  caller's job; B3's `golem_search`/`golem_index_path` MCP tools will build it.
+  The KB does not auto-spawn inference (no surprise network calls at construction).
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
