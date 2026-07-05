@@ -654,6 +654,53 @@ reuse (repeated file/context spans across a session), not per-request lossless
 compression. This reframes the compression roadmap — flagged for the slider/CCR
 work, not a bug.
 
+## §32 — Spike: cross-request CCR reuse is NOT worth building (2026-07-05)
+
+Followed §31 by spiking the "cross-request CCR reuse" thesis empirically against a
+real 6.5 MB Claude Code session transcript (this project's own, 1731 messages in
+the final-request history view). Measured what dedup could actually save.
+
+**Key structural fact:** Claude Code resends the **entire conversation history**
+on every request. So "cross-request reuse" is not a separate case — prior
+requests' content is already present in the current request's messages array, and
+the existing within-request dedup already sees it. There is no extra content to
+catch across requests.
+
+**Measured on real traffic (final-request history = 344,494 content tokens):**
+
+| Signal | Value |
+|---|---|
+| Exact-dup of large (≥256-char) user-side spans (what dedup elides today) | **0.2%** (2 redundant of 280 spans) |
+| Repeated reads of the *same path* (≥256 chars) | ~15,456 tok (~10% of span vol) **but near-dups of *changed/re-sliced* files** — eliding = stale content to the model |
+| **Unsafe upper bound:** exact-dup across ALL blocks incl. assistant `tool_use` inputs | **2.5%** of total (8,486 tok) |
+| Token distribution | tool_use inputs **44%**, tool_result 32%, user text 12%, assistant text 10% |
+
+**Conclusions:**
+1. **Exact dedup is structurally near-useless here (0.2%; 2.5% even unsafely).** A
+   coding session has almost no verbatim-repeated large spans.
+2. The ~10% "repeated reads" are files that **changed between reads** (e.g.
+   `verification-notes.md` read 11× while being appended to) or different slices —
+   exact dedup correctly skips them; fuzzy elision would feed the model **stale
+   content**. Not a safe lever.
+3. The dominant sink (44%) is **assistant `tool_use` inputs** (Edit/Write bodies),
+   which the fidelity rule deliberately never touches — and dedup of them is still
+   only the 2.5% ceiling.
+4. **Anthropic prompt caching already amortizes the stable prefix to ~0.1×.** Any
+   Golem elision that changes prefix bytes would *break* the cache — turning a
+   0.1× hit into a 1.0× miss for the whole suffix. So compression here doesn't
+   just fail to help; naive cross-request dedup is net-*negative*.
+
+**Recommendation (needs a spec Decision — flagged, not applied):** do **not**
+build cross-request CCR dedup. Reposition compression from a headline pillar to a
+**situational** feature that only pays on **non-caching upstreams** (some
+OpenRouter models / Foundry deployments without prompt caching), where the resent
+history is re-billed at full price. On Anthropic-with-caching the honest savings
+is ~0%. Golem's durable value is **redaction (secrets never leave the machine),
+local tools (KB / tiered Ollama / expand), routing (front Foundry/OpenRouter), and
+honest observability** — not per-request token compression. CCR store stays (it
+backs `golem_expand` and lossy-level reversibility), but "cut token spend via
+compression" as the lead claim does not survive contact with real cached traffic.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
