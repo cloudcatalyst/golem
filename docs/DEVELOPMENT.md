@@ -66,6 +66,35 @@ npm install -g ./golem-run-*.tgz
 That is the *only* moment your live proxy changes — deliberately, not as a side
 effect of development.
 
+## Headroom semantic sidecar (opt-in, slider ≥3)
+
+At slider level ≥3 Golem can route the losslessly-compressed request through the
+**Headroom** compression pipeline (spec Decision 23). It is **off by default** —
+it adds a Python dependency — and **fails open** (if it can't start, the request
+is forwarded with just the lossless stages).
+
+Enable it and provide the runtime:
+
+```sh
+# 1) Make `uv` available (https://docs.astral.sh/uv) — the adapter launches the
+#    pinned package with `uv run --with headroom-ai==<pin>` (no global install).
+# 2) Turn it on in <project>/.golem/settings.json:
+#    { "compression": { "headroom_sidecar": true } }   (or GOLEM_COMPRESSION_HEADROOM_SIDECAR=1)
+# 3) Set the slider to 3+ and restart the proxy:
+golem slider 3
+golem proxy restart
+```
+
+Heuristic-only by design: the sidecar uses **bare `headroom-ai`** (no torch /
+`[ml]`), so `read_lifecycle` (dropping stale re-reads) + structural compression do
+the work. The ML/Kompress tier adds <1% on code traffic and is deliberately not
+wired (verification-notes §35). The stage is **lossy** (superseded file copies are
+elided) and its *net* savings against Anthropic's prompt cache are still being
+validated (§34/§36) — treat published savings numbers as provisional until then.
+
+The Python worker is `src/compression/headroom-worker.py`; the only TS file that
+knows Headroom is `src/compression/headroom-adapter.ts` (CLAUDE.md rule).
+
 ## Escape hatch
 
 If stable ever misbehaves: remove `ANTHROPIC_BASE_URL` from

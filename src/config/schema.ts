@@ -56,6 +56,15 @@ export const SETTINGS_LEAVES = {
     /** OpenAI-compatible local inference endpoint (Ollama default). */
     ollama_base_url: z.string().url(),
   },
+  compression: {
+    /**
+     * OPT-IN: run the Headroom semantic-compression sidecar at slider ≥3
+     * (spec Decision 23). Requires `uv` + `headroom-ai` on the machine; off by
+     * default because it adds a Python dependency (CLAUDE.md: no heavy deps by
+     * default). Fails open if the sidecar can't start.
+     */
+    headroom_sidecar: z.boolean(),
+  },
   knowledge: {
     /** Master toggle for the vector knowledge base. */
     enabled: z.boolean(),
@@ -113,6 +122,10 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
 }
 
+export interface CompressionSettings {
+  readonly headroom_sidecar: boolean;
+}
+
 export interface KnowledgeSettings {
   readonly enabled: boolean;
   readonly vector_db_url?: string;
@@ -128,6 +141,7 @@ export interface GolemSettings {
   readonly slider: SliderSettings;
   readonly proxy: ProxySettings;
   readonly inference: InferenceSettings;
+  readonly compression: CompressionSettings;
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
 }
@@ -152,6 +166,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   inference: {
     ollama_base_url: "http://localhost:11434",
+  },
+  compression: {
+    headroom_sidecar: false,
   },
   knowledge: {
     enabled: true,

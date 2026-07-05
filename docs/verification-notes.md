@@ -843,6 +843,42 @@ is the honest lever for code traffic. **Do NOT prioritize the `[ml]` tier for th
 workload**; keep it a far opt-in for prose/chat-heavy users. The Decision-23
 net-cache A/B gate (§34.3) still applies before any published number.
 
+## §36 — Headroom sidecar integration LANDED (heuristic, opt-in) (2026-07-05)
+
+Built the heuristic Headroom stage end-to-end:
+- **`src/compression/headroom-worker.py`** — a stdlib-only HTTP worker that keeps
+  `headroom.compress()` warm and returns compressed messages + token deltas.
+- **`src/compression/headroom-adapter.ts`** — `HeadroomSidecar` (the ONLY file
+  that knows Headroom, per CLAUDE.md): spawns the worker via `uv run --with
+  headroom-ai==<pin>`, health-checks, and implements the neutral
+  `SemanticCompressor` seam (`src/compression/semantic.ts`). **Fail-open**: any
+  spawn/health/request failure → `compress()` resolves `null`.
+- **Pipeline** runs it as stage 3 only when `semanticCompression !== "off"`
+  (slider ≥3) and a compressor is injected; levels ≤2 are byte-identical
+  (unit-tested). **Opt-in** via `compression.headroom_sidecar` (default false).
+- Pin bumped **0.28.0 → 0.30.0** in `src/compression/index.ts` (T-C4 note: the
+  npm client 0.22.4 is unused — we call `compress()` in-process).
+- Tests: adapter lifecycle + fail-open against a fake Node worker (no
+  uv/python/CI dep); pipeline stage-3 behavior with a fake compressor. 318 green.
+
+**Live end-to-end** (real sidecar, first 1000 msgs of the transcript, level 3,
+Golem's honest whole-request estimateTokens): **351,227 → 228,082 tokens
+(~35%)**, all four stages firing, 3.3 s. **Do not headline this number yet** — it
+needs the same skepticism as §31:
+- It is Golem's **char-based** estimate, not Headroom's tokenizer (which reported
+  only ~5.3% on the full transcript). The gap is `read_lifecycle` dropping whole
+  **stale file-read** bodies — a big *char* reduction Headroom's own
+  `tokens_saved` under-counts. So the gross forwarded body really is much smaller,
+  but the two numbers measure different things.
+- It is **gross forwarded tokens**, NOT net cost. Dropping mid-history reads
+  changes prefix bytes → prompt-cache miss risk (§34.3). **The net-of-cache A/B
+  is still required before any published claim.**
+- It is **lossy** (the model loses superseded file copies) — acceptable at the
+  opt-in ≥3 level, but a quality watch item.
+
+Status: mechanism shipped and safe (opt-in, fail-open); the honest *net* savings
+number is still gated on the live cache-aware A/B.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
