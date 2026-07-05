@@ -496,6 +496,53 @@ wiring to WS-D (C3), the real `LanceVectorDriver` + optionalDependency, the
 Qdrant-server driver (stub throws), and wiring `describeKnowledgeBaseContract`
 (needs C2+C3 — the harness drives ingest + text search end to end).
 
+## 27. WS-C C2 — ingestion, chunking & watcher decisions (2026-07-04)
+
+**Code-chunking decision (resolves §6 "tree-sitter WASM vs native prebuilds" +
+the Decision-2 "evaluate Headroom `--code-graph` first" item):**
+- **P1 default: a dependency-free heuristic chunker** (`chunker.ts` `chunkCode`)
+  — splits at column-0 top-level declaration boundaries, falls back to
+  overlapping line windows for oversized constructs. Zero deps, cross-platform,
+  good-enough recall for RAG; keeps the default `npx golem-run` install pure-TS
+  (CLAUDE.md).
+- **tree-sitter (WASM) is the opt-in upgrade**, not the default: `web-tree-sitter`
+  + per-language grammars give true syntax-aware chunks but add WASM payload and
+  per-language setup. Ship it behind the same "KB add-on" opt-in as the LanceDB
+  driver (§26) when precise code chunking is wanted. Native prebuilt
+  tree-sitter bindings are rejected for the default (native-dep rule).
+- **Headroom `--code-graph`** (evaluated per Decision 2): it wires in a
+  Python-only knowledge-graph MCP (codebase-memory-mcp; verification-notes §6),
+  so it belongs behind the **P2 sidecar**, not the P0/P1 pure-TS path. Not used
+  for C2's default chunker; revisit for the call-graph/impact-analysis use case
+  under the sidecar.
+
+**Chunkers delivered (all pure TS):** heading-aware markdown (`chunkMarkdown` —
+section per heading, oversized sections windowed, heading captured in metadata),
+heuristic code (`chunkCode`), and windowed text (`chunkText`), dispatched by
+extension in `chunkFile`. Every chunk carries 1-based `[startLine,endLine]` and
+a `kind` ("text"|"code") so ingestion embeds with the right model. `.html`/`.rst`
+currently route through the text chunker (a real HTML/PDF-text extractor is a
+follow-up).
+
+**Ingestion (`ingest.ts`):** `planIngest(root)` walks a file or directory,
+skips vendored/build/VCS/dot dirs and >1 MB files, chunks each chunkable file,
+and returns prepared chunks with POSIX-relative `sourcePath`. `GolemKnowledgeBase.ingest`
+traverses → chunks → embeds (per-kind batches via the injected `EmbedFn`) →
+upserts vectors, returning an `IngestReport`. Deterministic `chunkId` =
+sha256(project∥source∥startLine∥text)[:20]. **This closes the frozen
+`describeKnowledgeBaseContract`** (ingest+search+getChunk end to end), using a
+deterministic lexical embedder as the WS-D stand-in until C3 wires real
+embeddings.
+
+**File-watcher decision (deferred impl):** `node:fs.watch({recursive:true})` is
+the zero-dep default candidate (recursive works on Windows + macOS natively, and
+on Linux since Node 20) — but it is famously flaky (duplicate/missing events,
+rename semantics), so a debounce + re-stat layer is required, and **chokidar**
+remains the robust opt-in if fs.watch proves unreliable in practice. `ingest(…,
+watch:true)` currently throws `NotImplementedYetError("file watching",
+"C2-followup")` rather than silently not-watching; the watcher lands as a small
+follow-up behind the existing `watch` flag.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

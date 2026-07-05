@@ -19,8 +19,19 @@ import {
   NotImplementedYetError,
 } from "./knowledge-base.js";
 
+export type { RawChunk } from "./chunker.js";
+export {
+  chunkCode,
+  chunkFile,
+  chunkMarkdown,
+  chunkText,
+  isChunkableExtension,
+  MAX_CHUNK_CHARS,
+} from "./chunker.js";
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
+export type { IngestPlan, PreparedChunk } from "./ingest.js";
+export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
 export type { EmbedFn, KnowledgeBaseOptions } from "./knowledge-base.js";
 export { asFederatedSearch, GolemKnowledgeBase, NotImplementedYetError } from "./knowledge-base.js";
 
