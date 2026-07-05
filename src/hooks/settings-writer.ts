@@ -98,7 +98,7 @@ export function golemPostToolUseEntry(): JsonObject {
 
 /** Is this hook object ours? Identified by its command string. */
 function isGolemHook(hook: unknown): boolean {
-  return isRecord(hook) && hook["command"] === POST_TOOL_USE_COMMAND;
+  return isRecord(hook) && hook.command === POST_TOOL_USE_COMMAND;
 }
 
 /**
@@ -110,11 +110,11 @@ function stripGolemHooks(list: readonly unknown[]): unknown[] | null {
   let changed = false;
   const out: unknown[] = [];
   for (const entry of list) {
-    if (!isRecord(entry) || !Array.isArray(entry["hooks"])) {
+    if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
       out.push(entry); // not the documented shape — foreign, keep untouched
       continue;
     }
-    const hooks = entry["hooks"];
+    const hooks = entry.hooks;
     const kept = hooks.filter((hook) => !isGolemHook(hook));
     if (kept.length === hooks.length) {
       out.push(entry);
@@ -145,14 +145,14 @@ export async function addPostToolUseHook(options: HookSettingsOptions): Promise<
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
 
-  const hooksValue = settings["hooks"];
+  const hooksValue = settings.hooks;
   if (hooksValue !== undefined && !isRecord(hooksValue)) {
     throw new InitError(`${file}: "hooks" must be a JSON object`);
   }
   const hooks: JsonObject = isRecord(hooksValue) ? hooksValue : {};
-  settings["hooks"] = hooks;
+  settings.hooks = hooks;
 
-  const listValue = hooks["PostToolUse"];
+  const listValue = hooks.PostToolUse;
   if (listValue !== undefined && !Array.isArray(listValue)) {
     throw new InitError(`${file}: "hooks.PostToolUse" must be a JSON array`);
   }
@@ -167,7 +167,7 @@ export async function addPostToolUseHook(options: HookSettingsOptions): Promise<
   // Replace any stale Golem hook (identified by command), then append fresh.
   const next = stripGolemHooks(list) ?? [...list];
   next.push(desired);
-  hooks["PostToolUse"] = next;
+  hooks.PostToolUse = next;
 
   if (options.dryRun !== true) await writeJsonObject(file, settings);
   return {
@@ -187,8 +187,8 @@ export async function removePostToolUseHook(options: HookSettingsOptions): Promi
   const file = settingsPath(projectDir);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
-  const hooks = settings?.["hooks"];
-  const list = isRecord(hooks) ? hooks["PostToolUse"] : undefined;
+  const hooks = settings?.hooks;
+  const list = isRecord(hooks) ? hooks.PostToolUse : undefined;
   if (settings === null || !isRecord(hooks) || !Array.isArray(list)) {
     return { kind: "skip", path: relPath, detail: "hook not installed" };
   }
@@ -199,12 +199,12 @@ export async function removePostToolUseHook(options: HookSettingsOptions): Promi
   }
 
   if (stripped.length > 0) {
-    hooks["PostToolUse"] = stripped;
+    hooks.PostToolUse = stripped;
   } else {
-    delete hooks["PostToolUse"];
+    delete hooks.PostToolUse;
   }
   if (Object.keys(hooks).length === 0) {
-    delete settings["hooks"];
+    delete settings.hooks;
   }
 
   if (options.dryRun !== true) await writeJsonObject(file, settings);

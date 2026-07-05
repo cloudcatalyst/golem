@@ -184,9 +184,9 @@ function transformToolResultContent(content: unknown, ctx: CompressContext): unk
   if (Array.isArray(content)) {
     let changed = false;
     const out = content.map((item) => {
-      if (isRecord(item) && item["type"] === "text" && typeof item["text"] === "string") {
-        const text = processText(item["text"], true, ctx);
-        if (text !== item["text"]) {
+      if (isRecord(item) && item.type === "text" && typeof item.text === "string") {
+        const text = processText(item.text, true, ctx);
+        if (text !== item.text) {
           changed = true;
           return { ...item, text };
         }
@@ -202,14 +202,14 @@ function transformUserBlock(block: unknown, ctx: CompressContext): unknown {
   if (!isRecord(block)) {
     return block;
   }
-  if (block["type"] === "tool_result") {
-    const content = transformToolResultContent(block["content"], ctx);
-    return content === block["content"] ? block : { ...block, content };
+  if (block.type === "tool_result") {
+    const content = transformToolResultContent(block.content, ctx);
+    return content === block.content ? block : { ...block, content };
   }
-  if (block["type"] === "text" && typeof block["text"] === "string") {
+  if (block.type === "text" && typeof block.text === "string") {
     // User-pasted text (e.g. file contents): dedup only, never compacted.
-    const text = processText(block["text"], false, ctx);
-    return text === block["text"] ? block : { ...block, text };
+    const text = processText(block.text, false, ctx);
+    return text === block.text ? block : { ...block, text };
   }
   return block;
 }
@@ -219,11 +219,11 @@ function transformUserBlock(block: unknown, ctx: CompressContext): unknown {
  * position), so re-serialization stays byte-stable.
  */
 function transformMessage(message: Message, ctx: CompressContext): Message {
-  if (message["role"] !== "user") {
+  if (message.role !== "user") {
     // Assistant (and any unknown role) passes through byte-faithful.
     return message;
   }
-  const content = message["content"];
+  const content = message.content;
   if (typeof content === "string") {
     const text = processText(content, false, ctx);
     return text === content ? message : { ...message, content: text };

@@ -52,8 +52,8 @@ async function makeService(): Promise<NativeLosslessCompression> {
 }
 
 function contentOfToolResult(message: Message): unknown {
-  const blocks = message["content"] as ReadonlyArray<Record<string, unknown>>;
-  return blocks[0]?.["content"];
+  const blocks = message.content as ReadonlyArray<Record<string, unknown>>;
+  return blocks[0]?.content;
 }
 
 describe("NativeLosslessCompression dedup", () => {

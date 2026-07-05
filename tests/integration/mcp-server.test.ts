@@ -192,10 +192,10 @@ describe("golem MCP server (in-memory transport)", () => {
         ccr_refs_stored: 1,
       });
       const structured = globalStats.structuredContent as Record<string, number>;
-      expect(structured["tokens_saved"]).toBe(
-        (structured["tokens_before"] ?? 0) - (structured["tokens_after"] ?? 0),
+      expect(structured.tokens_saved).toBe(
+        (structured.tokens_before ?? 0) - (structured.tokens_after ?? 0),
       );
-      expect(structured["tokens_saved"]).toBeGreaterThan(0);
+      expect(structured.tokens_saved).toBeGreaterThan(0);
 
       const projectStats = await client.callTool({
         name: "golem_stats",

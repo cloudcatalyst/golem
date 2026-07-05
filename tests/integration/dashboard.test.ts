@@ -67,7 +67,7 @@ describe("dashboard server", () => {
     const json = (await res.json()) as DashboardSnapshot;
     expect(json.stats.tokens_saved).toBe(1800);
     expect(json.slider.level).toBe(2);
-    expect(json.stats.per_stage["dedup"]?.tokens_saved).toBe(1600);
+    expect(json.stats.per_stage.dedup?.tokens_saved).toBe(1600);
   });
 
   it("404s unknown paths", async () => {

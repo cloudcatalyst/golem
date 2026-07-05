@@ -194,7 +194,7 @@ export async function golemInitStatus(
   };
 
   const settings = await readSafe(path.join(projectDir, ".claude", "settings.json"));
-  const env = settings?.["env"];
+  const env = settings?.env;
   const claudeSettingsWired =
     typeof env === "object" &&
     env !== null &&
@@ -202,7 +202,7 @@ export async function golemInitStatus(
     (env as JsonObject)[ENV_BASE_URL] === baseUrl;
 
   const mcp = await readSafe(path.join(projectDir, ".mcp.json"));
-  const servers = mcp?.["mcpServers"];
+  const servers = mcp?.mcpServers;
   const mcpRegistered =
     typeof servers === "object" &&
     servers !== null &&

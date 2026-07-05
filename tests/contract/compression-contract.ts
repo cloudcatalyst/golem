@@ -52,9 +52,7 @@ export function describeCompressionServiceContract(
     it("level 1 preserves message structure (roles/order, tool blocks intact)", async () => {
       const svc = await makeService();
       const result = await svc.compress(MESSAGES, sliderPolicyForLevel(1), PROJECT);
-      expect(result.messagesOut.map((m) => m["role"])).toStrictEqual(
-        MESSAGES.map((m) => m["role"]),
-      );
+      expect(result.messagesOut.map((m) => m.role)).toStrictEqual(MESSAGES.map((m) => m.role));
     });
 
     it("re-compression is deterministic (prompt-cache stability)", async () => {
