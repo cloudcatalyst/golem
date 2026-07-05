@@ -304,7 +304,13 @@ mcp
       let knowledge: KnowledgeBase | undefined;
       if (settings.knowledge.enabled) {
         try {
-          ({ knowledge } = await buildKnowledgeStack({ projectDir: opts.dir }));
+          const stack = await buildKnowledgeStack({ projectDir: opts.dir });
+          knowledge = stack.knowledge;
+          process.stderr.write(
+            `golem: knowledge base ready (${stack.embedMode} embeddings${
+              stack.embedMode === "lexical" ? "; pull bge-m3 + run Ollama for semantic" : ""
+            })\n`,
+          );
         } catch (err) {
           process.stderr.write(
             `golem: knowledge base unavailable, serving without it (${
@@ -487,16 +493,20 @@ program
   .action(
     async (pathArg: string | undefined, opts: { dir: string; watch: boolean; json: boolean }) => {
       try {
-        const { knowledge } = await buildKnowledgeStack({ projectDir: opts.dir });
+        const { knowledge, embedMode } = await buildKnowledgeStack({ projectDir: opts.dir });
         const target = pathArg ?? opts.dir;
         const report = await knowledge.ingest(target, opts.dir, opts.watch);
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+          process.stdout.write(`${JSON.stringify({ ...report, embedMode }, null, 2)}\n`);
         } else {
+          const embedNote =
+            embedMode === "semantic"
+              ? "semantic (Ollama bge-m3)"
+              : "lexical (built-in, no Ollama — pull bge-m3 for semantic)";
           process.stdout.write(
             `Indexed ${report.path}: ${report.chunksIndexed} chunks from ` +
-              `${report.filesSeen} file(s) (${report.filesSkipped} skipped)` +
-              `${report.watching ? ", watching for changes" : ""}.\n`,
+              `${report.filesSeen} file(s) (${report.filesSkipped} skipped) ` +
+              `using ${embedNote}${report.watching ? ", watching for changes" : ""}.\n`,
           );
           if (!report.watching) {
             process.stdout.write(

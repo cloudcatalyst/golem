@@ -3,13 +3,13 @@
  * store + WS-D local inference, so `golem mcp serve`, `golem index`, and
  * `golem devices` share one construction path.
  *
- * The embedder is WS-D's Ollama-backed InferenceService (C3): capability is
- * detected once (cheap, degrades to CPU tier), and the durable pure-TS
- * FileVectorDriver persists the index under `<project>/.golem/knowledge`, so an
- * index built in one session is found by the next (§26 refinement; LanceDB stays
- * the optional scale upgrade). Building this NEVER contacts Ollama; only an
- * actual search/ingest embeds, so failures (endpoint down, model not pulled)
- * surface at call time as actionable tool errors, not at startup.
+ * Embedder selection (zero-setup by default): if Ollama is reachable AND the
+ * tier's embedding model is pulled, use the SEMANTIC bge-m3 embedder (WS-D C3);
+ * otherwise fall back to the pure-TS hashing embedder (LEXICAL) so `golem_search`
+ * works out of the box with no model download. The choice is made ONCE here so an
+ * index is never built with mixed embedders. The durable FileVectorDriver
+ * persists under `<project>/.golem/knowledge`, so an index survives across
+ * sessions (§26 refinement).
  */
 
 import { loadConfig } from "../config/index.js";
@@ -17,16 +17,21 @@ import {
   type CapabilityFacts,
   createProbeRunner,
   detectCapability,
+  embedModelFor,
   OllamaClient,
   OllamaInferenceService,
 } from "../inference/index.js";
 import type { InferenceService, KnowledgeBase } from "../interfaces/index.js";
-import { openKnowledgeBase } from "../knowledge/index.js";
+import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
+
+export type EmbedMode = "semantic" | "lexical";
 
 export interface KnowledgeStack {
   readonly knowledge: KnowledgeBase;
   readonly inference: InferenceService;
   readonly facts: CapabilityFacts;
+  /** Which embedder backs the KB this run: bge-m3 semantic, or hashing lexical. */
+  readonly embedMode: EmbedMode;
 }
 
 export interface BuildKnowledgeOptions {
@@ -36,11 +41,27 @@ export interface BuildKnowledgeOptions {
 }
 
 /**
+ * Is Ollama reachable AND is `model` pulled? A short GET to `/api/tags` — never
+ * throws, resolves false on any timeout/error (Ollama absent is the common,
+ * non-error case). Matches by name prefix so `bge-m3` matches `bge-m3:latest`.
+ */
+async function ollamaHasModel(baseUrl: string, model: string): Promise<boolean> {
+  try {
+    const res = await fetch(new URL("/api/tags", baseUrl), {
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { models?: Array<{ name?: unknown }> };
+    return (body.models ?? []).some((m) => typeof m.name === "string" && m.name.startsWith(model));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Build the local inference service + knowledge base for a project. Resolves
- * config for the Ollama endpoint (unless overridden) and detects the hardware
- * tier once. Throws only on genuinely broken config (e.g. an unsupported
- * `knowledge.vector_db_url` server driver); Ollama being offline is not an error
- * here — it surfaces when a tool actually embeds.
+ * config for the Ollama endpoint, detects the hardware tier once, and picks the
+ * embedder by probing Ollama. Never throws for Ollama being offline.
  */
 export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promise<KnowledgeStack> {
   const { settings } = await loadConfig({ projectDir: options.projectDir });
@@ -50,13 +71,16 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   const facts = await detectCapability(createProbeRunner());
   const inference = new OllamaInferenceService(client, facts);
 
+  // Semantic only if the query embed model is actually available; else lexical.
+  const textEmbedModel = embedModelFor(facts.tier, "text");
+  const semantic = await ollamaHasModel(baseUrl, textEmbedModel);
+  const embedMode: EmbedMode = semantic ? "semantic" : "lexical";
+
   const knowledge = openKnowledgeBase({
     projectDir: options.projectDir,
-    inference,
-    // vector_db_url (Qdrant server) is not implemented yet (§26); passing it
-    // would throw at open time, so the embedded default is used until the
-    // native/server driver lands. Config toggle stays honest via `golem status`.
+    // Choose ONE embedder for the whole index (mixing spaces would corrupt it).
+    ...(semantic ? { inference } : { embed: hashingEmbedFn() }),
   });
 
-  return { knowledge, inference, facts };
+  return { knowledge, inference, facts, embedMode };
 }

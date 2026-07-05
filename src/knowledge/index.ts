@@ -15,8 +15,8 @@ import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { VectorDriver } from "./driver.js";
 import { inferenceEmbedFn } from "./embedder.js";
 import { FileVectorDriver } from "./file-driver.js";
+import { hashingEmbedFn } from "./hashing-embedder.js";
 import {
-  type EmbedFn,
   GolemKnowledgeBase,
   type KnowledgeBaseOptions,
   NotImplementedYetError,
@@ -35,6 +35,7 @@ export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
 export { FileVectorDriver } from "./file-driver.js";
+export { DEFAULT_HASH_DIM, hashEmbed, hashingEmbedFn, tokenize } from "./hashing-embedder.js";
 export type { IngestPlan, PreparedChunk } from "./ingest.js";
 export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
 export type { EmbedFn, KnowledgeBaseOptions } from "./knowledge-base.js";
@@ -63,15 +64,14 @@ export interface OpenKnowledgeBaseOptions extends KnowledgeBaseOptions {
  * Build a KnowledgeBase, selecting the vector driver and the embedder:
  *  - driver: an injected `driver` wins; else `vectorDbUrl` → Qdrant (stub);
  *    else the embedded default (in-memory at C1 until the native engine, §26);
- *  - embedder: explicit `embed` wins; else derived from `inference` (WS-D, C3);
- *    else none (ingest/search raise NotImplementedYetError).
+ *  - embedder: explicit `embed` wins; else `inference` (WS-D bge-m3, SEMANTIC);
+ *    else the pure-TS hashing embedder (LEXICAL) so the KB works with zero setup.
  */
 export function openKnowledgeBase(options: OpenKnowledgeBaseOptions): KnowledgeBase {
   const driver = selectDriver(options);
   const embed =
-    options.embed ?? (options.inference ? inferenceEmbedFn(options.inference) : undefined);
-  const kbOptions: KnowledgeBaseOptions = {};
-  if (embed !== undefined) (kbOptions as { embed?: EmbedFn }).embed = embed;
+    options.embed ?? (options.inference ? inferenceEmbedFn(options.inference) : hashingEmbedFn());
+  const kbOptions: KnowledgeBaseOptions = { embed };
   return new GolemKnowledgeBase(driver, kbOptions);
 }
 
