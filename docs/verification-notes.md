@@ -543,6 +543,35 @@ watch:true)` currently throws `NotImplementedYetError("file watching",
 "C2-followup")` rather than silently not-watching; the watcher lands as a small
 follow-up behind the existing `watch` flag.
 
+## 28. Claude Code status line — the native terminal-wrapper surface (2026-07-04, for Decision 21c)
+
+Source: https://code.claude.com/docs/en/statusline (fetched 2026-07-04). The
+status line is the canonical way to render a persistent "wrapper" under the
+Claude Code prompt in the terminal.
+
+- **Config** (`settings.json`): `{"statusLine": {"type":"command",
+  "command":"golem statusline","padding":0,"refreshInterval":<sec>}}`. Runs the
+  command frequently during a session; the doc warns to cache slow ops and keep
+  output short. Multi-line output IS supported; ANSI colors allowed; script must
+  write to stdout.
+- **stdin JSON** (the payload our command parses) — key fields:
+  - `model.id` / `model.display_name`
+  - `workspace.current_dir` / `project_dir` / `git_worktree` / `repo.{host,owner,name}`
+  - `cost.{total_cost_usd,total_duration_ms,total_lines_added,total_lines_removed}`
+  - `context_window.{total_input_tokens,total_output_tokens,context_window_size,
+    used_percentage,remaining_percentage, current_usage.{input_tokens,output_tokens,
+    cache_creation_input_tokens,cache_read_input_tokens}}` — **`cache_read_input_tokens`
+    reflects prompt-cache hits, which Golem's byte-stable compression directly
+    optimizes; a natural KPI to surface.**
+  - `rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}` — **feeds the
+    "running out of tokens / quota" awareness for Decisions 20a/21a/21e.**
+  - `exceeds_200k_tokens`, `effort.level`, `thinking.enabled`, `session_id`,
+    `version`, `output_style.name`, `vim`.
+- **Implication:** a `golem statusline` command merges this per-session stdin
+  with Golem's own state (savings/slider/upstream/proxy-reachable/storage) to
+  render the terminal wrapper. `golem init` installs the `statusLine` config
+  (same pattern as the PostToolUse hook).
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
