@@ -17,6 +17,7 @@
  */
 
 import { loadConfig } from "../config/index.js";
+import { readSessionState } from "../hooks/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
@@ -36,6 +37,8 @@ export interface GolemState {
   readonly upstreamLabel: string;
   readonly tokensBefore?: number;
   readonly tokensAfter?: number;
+  /** Session is waiting on the human (21b blocked-state), if known. */
+  readonly blocked?: boolean;
 }
 
 function num(v: unknown): number | undefined {
@@ -119,6 +122,7 @@ export function renderStatusLine(
 
   const parts: string[] = [];
   parts.push(`${green("⬢ golem")} ${cyan(`→${golem.upstreamLabel}`)}`);
+  if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   parts.push(`L${golem.sliderLevel}`);
 
   // Cumulative Golem savings from telemetry.
@@ -159,7 +163,13 @@ export async function collectGolemState(dir: string): Promise<GolemState> {
   } catch {
     // defaults
   }
-  const state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
+  let state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
+  try {
+    const session = await readSessionState(dir);
+    if (session?.blocked === true) state = { ...state, blocked: true };
+  } catch {
+    // no session state
+  }
   try {
     const agg = await openTelemetryStore(dir).aggregate();
     if (agg.requests > 0) {

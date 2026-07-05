@@ -14,10 +14,35 @@
 import process from "node:process";
 import { Command } from "commander";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
+import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
+
+const stdio = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
 
 /** Build the `hook` command group with the `post-tool-use` sub-command. */
 export function buildHookCommand(options: PostToolUseOptions = {}): Command {
   const hook = new Command("hook").description("Golem Claude Code hook handlers");
+
+  hook
+    .command("notification")
+    .description("Notification handler: record that the session is waiting on the human")
+    .action(async () => {
+      try {
+        process.exitCode = await runNotificationHook(stdio(), new Date().toISOString());
+      } catch {
+        process.exitCode = 0; // fail-safe
+      }
+    });
+
+  hook
+    .command("prompt-submit")
+    .description("UserPromptSubmit handler: clear the blocked flag once the human responds")
+    .action(async () => {
+      try {
+        process.exitCode = await runUserPromptSubmitHook(stdio(), new Date().toISOString());
+      } catch {
+        process.exitCode = 0; // fail-safe
+      }
+    });
 
   hook
     .command("post-tool-use")
