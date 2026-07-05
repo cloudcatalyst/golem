@@ -25,6 +25,15 @@ import {
   telemetryStatsSource,
 } from "../telemetry/index.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
+import {
+  portInUse,
+  proxyStatus,
+  removeProxyPid,
+  startDetached,
+  stopProxy,
+  waitForPortFree,
+  writeProxyPid,
+} from "./proxy-daemon.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
@@ -110,58 +119,157 @@ program
     }
   });
 
-program
+async function resolvePort(
+  dir: string,
+  portOpt?: string,
+): Promise<{ port: number; upstream: string; sliderLevel: number }> {
+  const { settings } = await loadConfig({ projectDir: dir });
+  const port = portOpt === undefined ? settings.proxy.port : Number(portOpt);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new InitError(`invalid port "${portOpt}"`);
+  }
+  return { port, upstream: settings.proxy.upstream_base_url, sliderLevel: settings.slider.level };
+}
+
+/** Run the proxy in the foreground: bind, write a pid file, serve until stopped. */
+async function runProxyForeground(dir: string, portOpt?: string): Promise<void> {
+  const { settings } = await loadConfig({ projectDir: dir });
+  const { port } = await resolvePort(dir, portOpt);
+
+  // Idempotent: refuse (cleanly) if a proxy is already up on this port.
+  if (await portInUse(port)) {
+    process.stdout.write(`golem proxy: already running on port ${port}\n`);
+    return;
+  }
+
+  const telemetry = openTelemetryStore(dir);
+  const pipeline = createGolemPipeline({
+    compression: NativeLosslessCompression.forProjectDir(dir),
+    policy: () => policyFromSettings(settings),
+    projectId: dir,
+    onEvent: (event) => {
+      void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
+    },
+  });
+  const proxy = new GolemProxy({
+    upstreamBaseUrl: settings.proxy.upstream_base_url,
+    connectTimeoutMs: settings.proxy.connect_timeout_ms,
+    headersTimeoutMs: settings.proxy.request_timeout_ms,
+    bodyTimeoutMs: settings.proxy.request_timeout_ms,
+    pipeline,
+    onPipelineError: (err) => {
+      process.stderr.write(
+        `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      );
+    },
+  });
+  const addr = await proxy.listen(port);
+  await writeProxyPid(dir, { pid: process.pid, port: addr.port, ts: new Date().toISOString() });
+  process.stdout.write(
+    `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
+  );
+  const shutdown = (): void => {
+    void Promise.allSettled([proxy.close(), telemetry.close(), removeProxyPid(dir)]).finally(() =>
+      process.exit(0),
+    );
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+}
+
+const proxyCmd = program
   .command("proxy")
-  .description("Run the Golem proxy (Claude Code's ANTHROPIC_BASE_URL target)")
+  .description("Golem proxy (Claude Code's ANTHROPIC_BASE_URL target)");
+
+proxyCmd
+  .command("start", { isDefault: true })
+  .description("Start the proxy (foreground; --detach runs it as a background daemon)")
   .option("--dir <path>", "project directory (for .golem/ config)", process.cwd())
   .option("--port <port>", "listen port (overrides config)")
-  .action(async (opts: { dir: string; port?: string }) => {
+  .option("--detach", "run in the background, surviving this shell", false)
+  .action(async (opts: { dir: string; port?: string; detach: boolean }) => {
     try {
-      const { settings } = await loadConfig({ projectDir: opts.dir });
-      const port = opts.port === undefined ? settings.proxy.port : Number(opts.port);
-      if (!Number.isInteger(port) || port < 0 || port > 65535) {
-        throw new InitError(`invalid port "${opts.port}"`);
+      if (opts.detach) {
+        const { port, upstream } = await resolvePort(opts.dir, opts.port);
+        if (await portInUse(port)) {
+          process.stdout.write(`golem proxy: already running on port ${port}\n`);
+          return;
+        }
+        const pid = await startDetached(opts.dir, port, process.argv[1] ?? "");
+        if (pid === null) fail(new InitError(`proxy did not come up on port ${port}`));
+        process.stdout.write(
+          `golem proxy started (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
+        );
+        return;
       }
-      // Redaction → compression pipeline (A3), reading the slider level from
-      // settings resolved at startup. (Live slider changes need a restart for
-      // now — acceptable for P0.) Per-request savings are recorded to the
-      // durable telemetry store (A4), fire-and-forget so it never blocks or
-      // breaks the request path.
-      const telemetry = openTelemetryStore(opts.dir);
-      const pipeline = createGolemPipeline({
-        compression: NativeLosslessCompression.forProjectDir(opts.dir),
-        policy: () => policyFromSettings(settings),
-        projectId: opts.dir,
-        onEvent: (event) => {
-          void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
-        },
-      });
-      const proxy = new GolemProxy({
-        upstreamBaseUrl: settings.proxy.upstream_base_url,
-        connectTimeoutMs: settings.proxy.connect_timeout_ms,
-        headersTimeoutMs: settings.proxy.request_timeout_ms,
-        bodyTimeoutMs: settings.proxy.request_timeout_ms,
-        pipeline,
-        // Fail-open is silent to the client by design; surface it on the proxy's
-        // own stderr so a persistent pipeline problem is visible to the operator.
-        onPipelineError: (err) => {
-          process.stderr.write(
-            `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
-              err instanceof Error ? err.message : String(err)
-            }\n`,
-          );
-        },
-      });
-      const addr = await proxy.listen(port);
+      await runProxyForeground(opts.dir, opts.port);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+proxyCmd
+  .command("stop")
+  .description("Stop the running proxy")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const pid = await stopProxy(opts.dir);
       process.stdout.write(
-        `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
+        pid === null ? "golem proxy: not running\n" : `golem proxy stopped (pid ${pid})\n`,
       );
-      const shutdown = (): void => {
-        // Drain pending telemetry appends before exiting.
-        void Promise.allSettled([proxy.close(), telemetry.close()]).finally(() => process.exit(0));
-      };
-      process.on("SIGINT", shutdown);
-      process.on("SIGTERM", shutdown);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+proxyCmd
+  .command("restart")
+  .description("Reliably stop then start the proxy as a background daemon")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--port <port>", "listen port (overrides config)")
+  .option("--foreground", "restart in the foreground instead of detached", false)
+  .action(async (opts: { dir: string; port?: string; foreground: boolean }) => {
+    try {
+      const { port, upstream } = await resolvePort(opts.dir, opts.port);
+      await stopProxy(opts.dir);
+      // Also clear anything still holding the port (a proxy started without a
+      // pid file), then wait for release.
+      await waitForPortFree(port);
+      if (opts.foreground) {
+        await runProxyForeground(opts.dir, opts.port);
+        return;
+      }
+      const pid = await startDetached(opts.dir, port, process.argv[1] ?? "");
+      if (pid === null) fail(new InitError(`proxy did not come up on port ${port}`));
+      process.stdout.write(
+        `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+proxyCmd
+  .command("status")
+  .description("Show whether the proxy is running")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const { port, upstream } = await resolvePort(opts.dir);
+      const st = await proxyStatus(opts.dir, port);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify({ ...st, upstream })}\n`);
+        return;
+      }
+      process.stdout.write(
+        st.running
+          ? `golem proxy: running${st.pid ? ` (pid ${st.pid})` : ""} on port ${st.port ?? port} -> ${upstream}\n`
+          : "golem proxy: not running\n",
+      );
     } catch (err) {
       fail(err);
     }
