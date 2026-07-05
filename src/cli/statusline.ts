@@ -18,7 +18,10 @@
 
 import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
+import type { SliderLevel } from "../interfaces/policy.js";
 import { openTelemetryStore } from "../telemetry/index.js";
+import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
+import { SLIDER_LEVEL_NAMES } from "./slider.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
 export interface SessionInput {
@@ -39,6 +42,14 @@ export interface GolemState {
   readonly tokensAfter?: number;
   /** Session is waiting on the human (21b blocked-state), if known. */
   readonly blocked?: boolean;
+  /** Whether the Golem proxy is actually running (pid-file check), if known. */
+  readonly proxyRunning?: boolean;
+}
+
+/** Human-facing name for a slider level, Title-cased ("balanced" → "Balanced"). */
+export function levelName(level: number): string {
+  const raw = SLIDER_LEVEL_NAMES[level as SliderLevel] ?? `level ${level}`;
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
 }
 
 function num(v: unknown): number | undefined {
@@ -121,9 +132,16 @@ export function renderStatusLine(
   const red = ansi(31, color);
 
   const parts: string[] = [];
-  parts.push(`${green("⬢ golem")} ${cyan(`→${golem.upstreamLabel}`)}`);
+  // Lead with the brand + level NAME, and an icon that signals whether Golem is
+  // actually carrying traffic: filled green hexagon when the proxy is running,
+  // hollow dim hexagon when it is configured but off.
+  // Unknown (undefined) is treated as active so we never falsely signal "off";
+  // only a confirmed-dead proxy shows the hollow icon + note.
+  const active = golem.proxyRunning !== false;
+  const brand = active ? green("⬢ Golem") : dim("⬡ Golem");
+  parts.push(`${brand}: ${cyan(levelName(golem.sliderLevel))}`);
+  if (golem.proxyRunning === false) parts.push(dim("proxy off"));
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
-  parts.push(`L${golem.sliderLevel}`);
 
   // Cumulative Golem savings from telemetry.
   const before = golem.tokensBefore ?? 0;
@@ -132,6 +150,9 @@ export function renderStatusLine(
     const pct = Math.round(((before - after) / before) * 100);
     parts.push(green(`saved ${pct}% (${fmtTokens(before)}→${fmtTokens(after)})`));
   }
+
+  // Which upstream the traffic is fronting.
+  parts.push(cyan(`→${golem.upstreamLabel}`));
 
   // Live session context usage.
   if (session.contextUsedPct !== undefined) {
@@ -164,6 +185,14 @@ export async function collectGolemState(dir: string): Promise<GolemState> {
     // defaults
   }
   let state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
+  // Is the proxy actually running? Pid-file + kill(pid,0) only — instant, no
+  // network probe (the status line runs on every turn).
+  try {
+    const pid = await readProxyPid(dir);
+    state = { ...state, proxyRunning: pid !== null && isProcessAlive(pid.pid) };
+  } catch {
+    // pid file unreadable — leave proxyRunning unknown
+  }
   try {
     const session = await readSessionState(dir);
     if (session?.blocked === true) state = { ...state, blocked: true };
