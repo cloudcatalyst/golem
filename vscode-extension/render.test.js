@@ -48,8 +48,15 @@ test("buildModel is defensive against null/missing input", () => {
 });
 
 test("statusBarText", () => {
-  assert.match(statusBarText({ proxyReachable: true, savedPct: 91, slider: 1 }), /saved 91% · L1/);
-  assert.match(statusBarText({ proxyReachable: false, savedPct: 0, slider: 0 }), /warning/);
+  // Leads with the level NAME and a filled hexagon when the proxy is reachable.
+  assert.match(
+    statusBarText({ proxyReachable: true, savedPct: 8, slider: 3, sliderName: "balanced" }),
+    /^⬢ Golem: Balanced · saved 8%$/,
+  );
+  // Hollow hexagon + "proxy off" when unreachable; falls back to L<n> without a name.
+  const off = statusBarText({ proxyReachable: false, savedPct: 0, slider: 0, sliderName: "" });
+  assert.match(off, /^⬡ Golem: L0/);
+  assert.match(off, /proxy off/);
 });
 
 test("renderHtml contains CSP nonce, slider buttons, and escapes", () => {
