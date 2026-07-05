@@ -657,7 +657,18 @@ program
     }
   });
 
-program.addCommand(buildHookCommand());
+program.addCommand(
+  buildHookCommand({
+    // Web-fetch capture ingests into the SAME KB (embedder) the auto-index uses.
+    buildKnowledge: async (projectDir) => {
+      try {
+        return (await buildKnowledgeStack({ projectDir })).knowledge;
+      } catch {
+        return null; // KB unavailable → capture skips the vector ingest (cache still written)
+      }
+    },
+  }),
+);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);

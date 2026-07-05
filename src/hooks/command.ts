@@ -13,13 +13,23 @@
 
 import process from "node:process";
 import { Command } from "commander";
+import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
 import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
+import { runWebFetchPost, runWebFetchPre, type WebFetchHookOptions } from "./web-fetch.js";
 
 const stdio = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
 
+/** Extra wiring the CLI injects (KB builder for the web-fetch capture hook). */
+export interface HookCommandOptions extends PostToolUseOptions {
+  /** Builds a KB for a project dir — cli passes buildKnowledgeStack; avoids a hooks→cli import. */
+  readonly buildKnowledge?: (projectDir: string) => Promise<KnowledgeBase | null>;
+  /** Web-cache freshness window (hours); from config. */
+  readonly webCacheTtlHours?: number;
+}
+
 /** Build the `hook` command group with the `post-tool-use` sub-command. */
-export function buildHookCommand(options: PostToolUseOptions = {}): Command {
+export function buildHookCommand(options: HookCommandOptions = {}): Command {
   const hook = new Command("hook").description("Golem Claude Code hook handlers");
 
   hook
@@ -74,6 +84,34 @@ export function buildHookCommand(options: PostToolUseOptions = {}): Command {
         code = 0;
       }
       process.exitCode = code;
+    });
+
+  const webFetchOpts = (): WebFetchHookOptions => ({
+    ...(options.buildKnowledge !== undefined ? { buildKnowledge: options.buildKnowledge } : {}),
+    ...(options.webCacheTtlHours !== undefined ? { ttlHours: options.webCacheTtlHours } : {}),
+    ...(options.redact !== undefined ? { redact: options.redact } : {}),
+  });
+
+  hook
+    .command("web-fetch-pre")
+    .description("PreToolUse(WebFetch): serve a fresh cached URL from the KB, skipping the fetch")
+    .action(async () => {
+      try {
+        process.exitCode = await runWebFetchPre(stdio(), webFetchOpts());
+      } catch {
+        process.exitCode = 0; // fail-open
+      }
+    });
+
+  hook
+    .command("web-fetch-post")
+    .description("PostToolUse(WebFetch): capture the fetched page into the KB + web cache")
+    .action(async () => {
+      try {
+        process.exitCode = await runWebFetchPost(stdio(), webFetchOpts());
+      } catch {
+        process.exitCode = 0; // fail-safe
+      }
     });
 
   return hook;

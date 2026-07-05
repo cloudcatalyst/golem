@@ -934,6 +934,31 @@ Audited init against the full feature set; closed the gaps a fresh
   `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
   touches the real `~/.vscode/extensions`.
 
+## §44 — Hook capabilities for KB-backed web cache (verified 2026-07-05)
+
+Verified against live docs (code.claude.com/docs/en/hooks) for the "query KB
+before WebFetch + capture fetches" feature:
+
+- **PreToolUse can block a tool** with
+  `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}`
+  — the tool does NOT run and **Claude is shown the reason text**. Values:
+  allow/deny/ask/defer. Also supports `updatedInput` (rewrite args, tool still
+  runs) and `additionalContext`. There is **no** field to substitute a tool's
+  OUTPUT at PreToolUse — so to "serve from cache" we **deny and put the cached
+  content in `permissionDecisionReason`** (Claude reads it; the fetch is skipped).
+- **PostToolUse** receives `tool_input` + **`tool_response`** (the fetched
+  content) on stdin; can rewrite via `updatedToolOutput` or add `additionalContext`.
+  A store-only capture hook just reads `tool_response` and writes NO stdout, so it
+  never conflicts with the existing CCR-swap PostToolUse hook.
+- stdin common fields: `session_id`, `cwd`, `hook_event_name`, `tool_name`,
+  `tool_input`, `tool_response`. Matcher `"WebFetch"` is an exact tool-name match.
+- WebFetch `tool_input` carries the `url` (+ `prompt`); `tool_response` shape is
+  tool-dependent (string, or `{output|content|text|...}`) — probe like §20.
+
+Design: PreToolUse(WebFetch) = exact-URL cache gate (fast file lookup, deny+serve
+when fresh); PostToolUse(WebFetch) = capture into web-cache + vector KB (same
+embedder as auto-index, injected, so the collection isn't corrupted by mixed dims).
+
 ## §43 — Incremental KB freshness (edits tracked, not full-rebuilt) (2026-07-05)
 
 §41 auto-indexed on first run / embedder change but skipped otherwise, so files

@@ -101,6 +101,11 @@ function isGolemHook(hook: unknown): boolean {
   return isRecord(hook) && hook.command === POST_TOOL_USE_COMMAND;
 }
 
+/** WebFetch KB-cache hooks (verification-notes §44). */
+export const WEB_FETCH_PRE_COMMAND = "golem hook web-fetch-pre";
+export const WEB_FETCH_POST_COMMAND = "golem hook web-fetch-post";
+export const WEB_FETCH_MATCHER = "WebFetch";
+
 /**
  * Remove Golem hook objects from a PostToolUse entry list, preserving foreign
  * entries and foreign hooks that share an entry with ours. Entries emptied by
@@ -209,4 +214,110 @@ export async function removePostToolUseHook(options: HookSettingsOptions): Promi
 
   if (options.dryRun !== true) await writeJsonObject(file, settings);
   return { kind: "modify", path: relPath, detail: "removed Golem PostToolUse hook" };
+}
+
+/** A generic matcher'd hook to install (event + matcher + our command). */
+export interface MatcherHookSpec {
+  /** "PreToolUse" | "PostToolUse" | … */
+  readonly event: string;
+  readonly matcher: string;
+  readonly command: string;
+  readonly timeoutSeconds?: number;
+  /** async:true = non-blocking (capture); false = blocking (the pre-fetch gate). */
+  readonly async?: boolean;
+}
+
+function matcherEntry(spec: MatcherHookSpec): JsonObject {
+  const hook: JsonObject = { type: "command", command: spec.command };
+  if (spec.async !== undefined) hook.async = spec.async;
+  if (spec.timeoutSeconds !== undefined) hook.timeout = spec.timeoutSeconds;
+  return { matcher: spec.matcher, hooks: [hook] };
+}
+
+function stripByCommand(list: readonly unknown[], command: string): unknown[] | null {
+  let changed = false;
+  const out: unknown[] = [];
+  for (const entry of list) {
+    if (!isRecord(entry) || !Array.isArray(entry.hooks)) {
+      out.push(entry);
+      continue;
+    }
+    const kept = entry.hooks.filter((h) => !(isRecord(h) && h.command === command));
+    if (kept.length === entry.hooks.length) {
+      out.push(entry);
+      continue;
+    }
+    changed = true;
+    if (kept.length > 0) out.push({ ...entry, hooks: kept });
+  }
+  return changed ? out : null;
+}
+
+/** Idempotently add a matcher'd hook (any event) for our command; stale copies replaced. */
+export async function addMatcherHook(
+  options: HookSettingsOptions,
+  spec: MatcherHookSpec,
+): Promise<InitAction> {
+  const { projectDir } = options;
+  const file = settingsPath(projectDir);
+  const existing = await readJsonObject(file);
+  const settings = existing ?? {};
+
+  const hooksValue = settings.hooks;
+  if (hooksValue !== undefined && !isRecord(hooksValue)) {
+    throw new InitError(`${file}: "hooks" must be a JSON object`);
+  }
+  const hooks: JsonObject = isRecord(hooksValue) ? hooksValue : {};
+  settings.hooks = hooks;
+
+  const listValue = hooks[spec.event];
+  if (listValue !== undefined && !Array.isArray(listValue)) {
+    throw new InitError(`${file}: "hooks.${spec.event}" must be a JSON array`);
+  }
+  const list: unknown[] = Array.isArray(listValue) ? listValue : [];
+
+  const desired = matcherEntry(spec);
+  if (list.some((e) => JSON.stringify(e) === JSON.stringify(desired))) {
+    return {
+      kind: "skip",
+      path: rel(projectDir, file),
+      detail: `${spec.command} already installed`,
+    };
+  }
+  const next = stripByCommand(list, spec.command) ?? [...list];
+  next.push(desired);
+  hooks[spec.event] = next;
+
+  if (options.dryRun !== true) await writeJsonObject(file, settings);
+  return {
+    kind: existing === null ? "create" : "modify",
+    path: rel(projectDir, file),
+    detail: `hooks.${spec.event} += ${spec.command} (matcher ${spec.matcher})`,
+  };
+}
+
+/** Remove the matcher'd hook(s) for `command` under `event`; prunes emptied containers. */
+export async function removeMatcherHook(
+  options: HookSettingsOptions,
+  event: string,
+  command: string,
+): Promise<InitAction> {
+  const { projectDir } = options;
+  const file = settingsPath(projectDir);
+  const relPath = rel(projectDir, file);
+  const settings = await readJsonObject(file);
+  const hooks = settings?.hooks;
+  const list = isRecord(hooks) ? hooks[event] : undefined;
+  if (settings === null || !isRecord(hooks) || !Array.isArray(list)) {
+    return { kind: "skip", path: relPath, detail: `${command} not installed` };
+  }
+  const stripped = stripByCommand(list, command);
+  if (stripped === null) {
+    return { kind: "skip", path: relPath, detail: `${command} not installed` };
+  }
+  if (stripped.length > 0) hooks[event] = stripped;
+  else delete hooks[event];
+  if (Object.keys(hooks).length === 0) delete settings.hooks;
+  if (options.dryRun !== true) await writeJsonObject(file, settings);
+  return { kind: "modify", path: relPath, detail: `removed ${command}` };
 }
