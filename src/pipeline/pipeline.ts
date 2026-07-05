@@ -58,7 +58,12 @@ export interface GolemPipelineOptions {
   readonly semantic?: SemanticCompressor;
 }
 
-const MESSAGES_PATH_RE = /^\/(?:v1\/)?messages\b/;
+// Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
+// at the start — so provider-prefixed gateways work too: Anthropic
+// `/v1/messages`, and Azure Foundry / OpenRouter-style `/anthropic/v1/messages`
+// (Decision 22). End-anchored so it excludes sub-resources like
+// `/v1/messages/batches` (different body shape). Query string allowed.
+const MESSAGES_PATH_RE = /\/(?:v1\/)?messages(?:\?.*)?$/;
 
 function isMessagesRequest(request: ProxyRequest): boolean {
   return request.method.toUpperCase() === "POST" && MESSAGES_PATH_RE.test(request.url);
