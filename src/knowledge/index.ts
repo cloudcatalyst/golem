@@ -10,8 +10,10 @@
  */
 
 import path from "node:path";
+import type { InferenceService } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { InMemoryVectorDriver, type VectorDriver } from "./driver.js";
+import { inferenceEmbedFn } from "./embedder.js";
 import {
   type EmbedFn,
   GolemKnowledgeBase,
@@ -30,6 +32,7 @@ export {
 } from "./chunker.js";
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
+export { inferenceEmbedFn } from "./embedder.js";
 export type { IngestPlan, PreparedChunk } from "./ingest.js";
 export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
 export type { EmbedFn, KnowledgeBaseOptions } from "./knowledge-base.js";
@@ -46,21 +49,27 @@ export interface OpenKnowledgeBaseOptions extends KnowledgeBaseOptions {
   readonly vectorDbUrl?: string;
   /** Inject a driver directly (tests, or a future native driver). */
   readonly driver?: VectorDriver;
+  /**
+   * WS-D inference service — its `embed` becomes the KB embedder (C3). Ignored
+   * if an explicit `embed` is provided (tests). Without either, ingest/search
+   * raise NotImplementedYetError.
+   */
+  readonly inference?: InferenceService;
 }
 
 /**
- * Build a KnowledgeBase, selecting the vector driver:
- *  - an injected `driver` (tests / native driver) wins;
- *  - a `vectorDbUrl` selects the Qdrant-server driver (stubbed in C1);
- *  - otherwise the embedded driver. C1's embedded default is the in-memory
- *    driver (non-durable) until the chosen native engine (§26) is wired; the
- *    lazy-load + graceful-degrade path for the optional native dep lands with
- *    that engine.
+ * Build a KnowledgeBase, selecting the vector driver and the embedder:
+ *  - driver: an injected `driver` wins; else `vectorDbUrl` → Qdrant (stub);
+ *    else the embedded default (in-memory at C1 until the native engine, §26);
+ *  - embedder: explicit `embed` wins; else derived from `inference` (WS-D, C3);
+ *    else none (ingest/search raise NotImplementedYetError).
  */
 export function openKnowledgeBase(options: OpenKnowledgeBaseOptions): KnowledgeBase {
   const driver = selectDriver(options);
+  const embed =
+    options.embed ?? (options.inference ? inferenceEmbedFn(options.inference) : undefined);
   const kbOptions: KnowledgeBaseOptions = {};
-  if (options.embed !== undefined) (kbOptions as { embed?: EmbedFn }).embed = options.embed;
+  if (embed !== undefined) (kbOptions as { embed?: EmbedFn }).embed = embed;
   return new GolemKnowledgeBase(driver, kbOptions);
 }
 
