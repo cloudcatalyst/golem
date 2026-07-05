@@ -12,8 +12,9 @@
 import path from "node:path";
 import type { InferenceService } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
-import { InMemoryVectorDriver, type VectorDriver } from "./driver.js";
+import type { VectorDriver } from "./driver.js";
 import { inferenceEmbedFn } from "./embedder.js";
+import { FileVectorDriver } from "./file-driver.js";
 import {
   type EmbedFn,
   GolemKnowledgeBase,
@@ -33,6 +34,7 @@ export {
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
+export { FileVectorDriver } from "./file-driver.js";
 export type { IngestPlan, PreparedChunk } from "./ingest.js";
 export { chunkIdFor, MAX_FILE_BYTES, planIngest } from "./ingest.js";
 export type { EmbedFn, KnowledgeBaseOptions } from "./knowledge-base.js";
@@ -81,7 +83,9 @@ function selectDriver(options: OpenKnowledgeBaseOptions): VectorDriver {
       "C1-followup",
     );
   }
-  // Embedded default. C1: in-memory (non-durable). The native embedded driver
-  // (§26) replaces this line and reads/writes under knowledgeDir(projectDir).
-  return new InMemoryVectorDriver();
+  // Embedded default: the durable, pure-TS file driver under knowledgeDir — an
+  // index survives across sessions with no native dependency (§26 refinement:
+  // brute-force at dev-KB scale; LanceDB stays the OPTIONAL scale upgrade behind
+  // this same seam). InMemoryVectorDriver remains for injected/test use.
+  return new FileVectorDriver(knowledgeDir(options.projectDir));
 }
