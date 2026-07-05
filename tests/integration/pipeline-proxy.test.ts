@@ -164,6 +164,30 @@ describe("pipeline through the proxy", () => {
     }
   });
 
+  it("redacts on a provider-prefixed messages path (Foundry /anthropic/v1/messages)", async () => {
+    // Azure Foundry / OpenRouter-style gateways prefix the path; the pipeline
+    // must still recognize the Messages endpoint as the tail (Decision 22).
+    const up = recordingUpstream();
+    const upstream = await startUpstream(up.handler);
+    const proxy = await startProxy({ upstreamBaseUrl: upstream.origin, pipeline: pipelineFor(1) });
+    try {
+      const body = JSON.stringify({
+        model: "claude-x",
+        messages: [{ role: "user", content: `key ${AWS_SECRET}` }],
+      });
+      await rawRequest(proxy.origin, "/anthropic/v1/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+      });
+      expect(up.received.body).not.toContain(AWS_SECRET);
+      expect(up.received.body).toContain("[REDACTED:aws-key:1]");
+    } finally {
+      await proxy.close();
+      await upstream.close();
+    }
+  });
+
   it("FAIL-OPEN: a throwing pipeline forwards the original request byte-faithfully (never breaks the session)", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
