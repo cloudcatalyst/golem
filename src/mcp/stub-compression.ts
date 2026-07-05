@@ -77,10 +77,10 @@ export class InMemoryCompressionService implements CompressionService {
     const stageSavings: Record<string, TokenDelta> = {};
     if (policy.stages.losslessCompression) {
       // Stub applies no lossless transform; report the stage as a no-op delta.
-      stageSavings["lossless"] = { tokensBefore, tokensAfter: tokensBefore };
+      stageSavings.lossless = { tokensBefore, tokensAfter: tokensBefore };
     }
     if (policy.stages.toolResultCache) {
-      stageSavings["tool_result_cache"] = { tokensBefore, tokensAfter };
+      stageSavings.tool_result_cache = { tokensBefore, tokensAfter };
     }
 
     for (const stats of [this.#global, this.#projectStats(projectId)]) {
@@ -141,7 +141,7 @@ export class InMemoryCompressionService implements CompressionService {
   }
 
   #swapLargeToolResults(message: Message, refs: CCRRef[]): Message {
-    const content = message["content"];
+    const content = message.content;
     if (!Array.isArray(content)) return message;
 
     let changed = false;
@@ -149,12 +149,12 @@ export class InMemoryCompressionService implements CompressionService {
       if (
         typeof block !== "object" ||
         block === null ||
-        (block as Record<string, unknown>)["type"] !== "tool_result"
+        (block as Record<string, unknown>).type !== "tool_result"
       ) {
         return block;
       }
       const blockRecord = block as Record<string, unknown>;
-      const text = blockRecord["content"];
+      const text = blockRecord.content;
       if (typeof text !== "string" || text.length < this.#threshold) return block;
 
       const ref = this.#storeContent(text, "text/plain");

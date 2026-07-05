@@ -90,9 +90,9 @@ export class JsonFileSliderStore implements SliderStore {
 
   async get(): Promise<SliderLevel> {
     const settings = await this.#readSettings();
-    const section = settings["slider"];
+    const section = settings.slider;
     if (isPlainObject(section)) {
-      const nested = sliderLevelSchema.safeParse(section["level"]);
+      const nested = sliderLevelSchema.safeParse(section.level);
       if (nested.success) return nested.data;
     }
     // B1's pre-reconciliation flat key (migrated away on the next set()).
@@ -102,10 +102,10 @@ export class JsonFileSliderStore implements SliderStore {
 
   async set(level: SliderLevel): Promise<void> {
     const settings = await this.#readSettings();
-    const existingSection = settings["slider"];
+    const existingSection = settings.slider;
     const section = isPlainObject(existingSection) ? existingSection : {};
-    section["level"] = level;
-    settings["slider"] = section;
+    section.level = level;
+    settings.slider = section;
     delete settings[LEGACY_SLIDER_LEVEL_KEY]; // migrate the flat B1 key
     await mkdir(dirname(this.#filePath), { recursive: true });
     const tempPath = `${this.#filePath}.${process.pid}.tmp`;

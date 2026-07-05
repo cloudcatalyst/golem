@@ -82,7 +82,7 @@ describe("golem stats", () => {
     const report = await collectStats(fake);
     expect(report.source).toBe("telemetry");
     expect(report.tokens_saved).toBe(400);
-    expect(report.per_stage["dedup"]?.tokens_saved).toBe(400);
+    expect(report.per_stage.dedup?.tokens_saved).toBe(400);
     expect(report.note).toBe("durable history");
   });
 });

@@ -138,12 +138,12 @@ describe("runPostToolUseHook — oversized string output", () => {
 
     const env = parseStdout(io);
     const updated = env.hookSpecificOutput.updatedToolOutput as Record<string, unknown>;
-    expect(updated["exitCode"]).toBe(0);
-    expect(updated["durationMs"]).toBe(42);
-    expect(typeof updated["output"]).toBe("string");
-    expect((updated["output"] as string).length).toBeLessThan(big.length);
+    expect(updated.exitCode).toBe(0);
+    expect(updated.durationMs).toBe(42);
+    expect(typeof updated.output).toBe("string");
+    expect((updated.output as string).length).toBeLessThan(big.length);
 
-    const match = CCR_MARKER_RE.exec(updated["output"] as string);
+    const match = CCR_MARKER_RE.exec(updated.output as string);
     expect(match).not.toBeNull();
     expect(await retrieveOriginal((match as RegExpExecArray)[1] as string)).toBe(big);
   });
