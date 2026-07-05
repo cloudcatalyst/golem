@@ -10,7 +10,8 @@
  *   2. `.mcp.json`              — stdio registration of `golem mcp serve` (§9).
  *   3. `.claude/skills/golem/<cmd>/SKILL.md` — namespaced `/golem/*` skills (§11).
  *   4. `.golem/settings.json`   — created with defaults when absent.
- *   5. PostToolUse CCR hook + CLAUDE.md guidance; status line + blocked-state hooks.
+ *   5. PostToolUse CCR hook + Golem guidance (in gitignored CLAUDE.local.md);
+ *      status line + blocked-state hooks; WebFetch KB-cache hooks.
  *   6. The VS Code panel/status-bar extension — copied into VS Code's global
  *      extensions dir when VS Code is present (dependency-free; `deploy:local` style).
  *
@@ -144,6 +145,8 @@ const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
 const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
 const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 const MCP_SERVER_KEY = "golem";
+/** Golem's guidance lives here — gitignored personal instructions (docs: CLAUDE.local.md). */
+const GUIDANCE_FILENAME = "CLAUDE.local.md";
 
 /** Runtime files copied into the installed VS Code extension (no tests/tooling). */
 const VSCODE_EXTENSION_FILES = ["extension.js", "render.js", "package.json", "README.md", "media"];
@@ -155,6 +158,38 @@ function proxyBaseUrl(port: number): string {
 /** Where this package's bundled VS Code extension lives (dist/cli/init.js -> ../../vscode-extension). */
 function defaultVscodeSourceDir(): string {
   return fileURLToPath(new URL("../../vscode-extension", import.meta.url));
+}
+
+/**
+ * Idempotently ensure `entry` is in the project's `.gitignore` (so a personal
+ * file like CLAUDE.local.md is never committed). Creates .gitignore if absent;
+ * a no-op if the entry (exact line) is already present.
+ */
+async function ensureGitignored(
+  projectDir: string,
+  entry: string,
+  dryRun: boolean,
+): Promise<InitAction> {
+  const file = path.join(projectDir, ".gitignore");
+  let existing = "";
+  try {
+    existing = await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const lines = existing.split(/\r?\n/).map((l) => l.trim());
+  if (lines.includes(entry)) {
+    return { kind: "skip", path: ".gitignore", detail: `${entry} already ignored` };
+  }
+  if (!dryRun) {
+    const sep = existing === "" || existing.endsWith("\n") ? "" : "\n";
+    await writeFile(file, `${existing}${sep}${entry}\n`, "utf8");
+  }
+  return {
+    kind: existing === "" ? "create" : "modify",
+    path: ".gitignore",
+    detail: `ignore ${entry}`,
+  };
 }
 
 /** Does a path exist? (module-level; the probe has its own scoped copy.) */
@@ -459,9 +494,18 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
   }
 
-  // 5. PostToolUse hook + CLAUDE.md guidance (WS-B B2).
+  // 5. PostToolUse hook + Golem guidance. The guidance goes in the gitignored
+  // CLAUDE.local.md (personal, not committed to the repo) — Claude Code loads it
+  // alongside CLAUDE.md (docs: "Local instructions").
   actions.push(await addPostToolUseHook({ projectDir, dryRun }));
-  actions.push(await writeGuidanceSection({ projectDir, dryRun }));
+  actions.push(
+    await writeGuidanceSection({
+      projectDir,
+      dryRun,
+      filePath: path.join(projectDir, GUIDANCE_FILENAME),
+    }),
+  );
+  actions.push(await ensureGitignored(projectDir, GUIDANCE_FILENAME, dryRun));
 
   // 6. Status line (21c) + blocked-state event hooks (21b).
   actions.push(await writeStatusLine({ projectDir, dryRun }));
