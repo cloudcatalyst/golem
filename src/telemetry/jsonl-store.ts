@@ -54,6 +54,7 @@ function parseEvent(line: string): TelemetryEvent | null {
     ts: parsed.ts,
     projectId: parsed.projectId,
     level: typeof parsed.level === "number" ? parsed.level : 0,
+    ...(isTokenDelta(parsed.requestTokens) ? { requestTokens: parsed.requestTokens } : {}),
     stageSavings,
     ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
   };
@@ -113,10 +114,14 @@ export class JsonlTelemetryStore implements TelemetryStore {
       requests += 1;
       ccrRefsStored += ev.ccrRefsStored;
 
-      // A request's before = first stage's before; after = last stage's after,
-      // because stages run in series (each stage's output feeds the next).
+      // Headline savings = the WHOLE-request before/after (requestTokens). Only
+      // legacy events (written before that field) fall back to the mixed-scope
+      // stage stitch, which over-reports (verification-notes §30).
       const stageEntries = Object.entries(ev.stageSavings);
-      if (stageEntries.length > 0) {
+      if (ev.requestTokens !== undefined) {
+        tokensBefore += ev.requestTokens.tokensBefore;
+        tokensAfter += ev.requestTokens.tokensAfter;
+      } else if (stageEntries.length > 0) {
         const firstBefore = stageEntries[0]?.[1].tokensBefore ?? 0;
         const lastAfter = stageEntries[stageEntries.length - 1]?.[1].tokensAfter ?? firstBefore;
         tokensBefore += firstBefore;

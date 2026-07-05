@@ -19,6 +19,7 @@
  * Anthropic prompt-cache hits survive.
  */
 
+import { estimateTokens } from "../compression/index.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import { effectiveStages, type SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
@@ -28,6 +29,9 @@ import { redactRequestBody } from "./redaction.js";
 export interface PipelineEvent {
   readonly projectId: string;
   readonly level: number;
+  /** Whole-request before/after — the honest headline savings for this request. */
+  readonly requestTokens: TokenDelta;
+  /** Per-stage deltas (breakdown only; mixed scopes — do not sum). */
   readonly stageSavings: Readonly<Record<string, TokenDelta>>;
   readonly ccrRefsStored: number;
 }
@@ -115,8 +119,25 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         return request;
       }
 
-      emit({ projectId: options.projectId, level: policy.level, stageSavings, ccrRefsStored });
-      return { ...request, body: Buffer.from(JSON.stringify(body), "utf8") };
+      const finalJson = JSON.stringify(body);
+      // Honest end-to-end savings: the WHOLE original body vs the WHOLE final
+      // body — the only apples-to-apples number. Per-stage deltas below are a
+      // breakdown and measure different scopes (redaction=whole body, dedup=the
+      // deduped span, compaction=the messages array), so they must NOT be
+      // stitched into a request total (verification-notes §25/§30).
+      const requestTokens: TokenDelta = {
+        tokensBefore: estimateTokens(JSON.stringify(parsed)),
+        tokensAfter: estimateTokens(finalJson),
+      };
+
+      emit({
+        projectId: options.projectId,
+        level: policy.level,
+        requestTokens,
+        stageSavings,
+        ccrRefsStored,
+      });
+      return { ...request, body: Buffer.from(finalJson, "utf8") };
     },
   };
 }

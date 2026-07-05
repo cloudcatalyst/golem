@@ -593,6 +593,35 @@ ingest→search end to end.
   caller's job; B3's `golem_search`/`golem_index_path` MCP tools will build it.
   The KB does not auto-spawn inference (no surprise network calls at construction).
 
+## 30. Savings metric fix — the "91%" was an artifact (2026-07-04, dogfooding)
+
+The §25 "approximate rollup" was worse than approximate — it was wrong. The
+telemetry aggregate stitched **redaction's `tokensBefore` (the WHOLE request
+body) to compaction's `tokensAfter` (a ~35k messages slice)** — different
+scopes — yielding a fictitious 91% on real Foundry traffic.
+
+Fix: the pipeline now emits an explicit **`requestTokens` = estimate(original
+body) → estimate(final forwarded body)** — the only apples-to-apples number —
+and telemetry aggregates that (legacy events without the field fall back to the
+old stitch). Per-stage deltas remain as a breakdown but must never be summed
+(they measure different scopes: redaction=whole body, dedup=the deduped span,
+compaction=the messages array).
+
+**What the honest numbers revealed on the dogfooding traffic (~1.5M input
+tokens over 6 requests):**
+- **Real end-to-end savings ≈ 12%**, and **~100% of it is the redaction stage**
+  (1,520,615 → 1,335,689 tokens). Dedup + compaction — the actual lossless
+  compression — saved ~a few hundred tokens total (≈0.01%): a single Claude Code
+  request has little *exact* duplication, and prompt caching already covers
+  cross-turn repetition.
+- **Open concern (separate investigation):** redaction removing ~12% is the
+  **entropy sweep over-matching** high-entropy spans (code, base64, hashes, long
+  tokens ≥32 chars) and replacing them with `[REDACTED:high-entropy:N]`. This
+  both inflates "savings" (it's redaction, not compression) and may be stripping
+  legitimate content the model needs — a possible quality regression. Candidate
+  tuning: raise the entropy threshold / min length, require a secret-context
+  cue, or make the entropy sweep slider-gated. Not changed yet — flagged.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

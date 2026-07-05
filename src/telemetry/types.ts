@@ -22,7 +22,13 @@ export interface TelemetryEvent {
   readonly projectId: string;
   /** Slider level in effect for this request. */
   readonly level: number;
-  /** Per-stage token deltas (redaction, dedup, compaction, …). */
+  /**
+   * Whole-request before/after — the honest headline savings. Optional for
+   * backward compatibility with events written before this field existed;
+   * aggregate() falls back to the (mixed-scope) stage stitch when absent.
+   */
+  readonly requestTokens?: TokenDelta;
+  /** Per-stage token deltas (breakdown only; mixed scopes — do not sum). */
   readonly stageSavings: Readonly<Record<string, TokenDelta>>;
   /** CCR originals stored by this request. */
   readonly ccrRefsStored: number;

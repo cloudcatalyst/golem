@@ -115,6 +115,9 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
       {
         projectId: "projA",
         level: 2,
+        // Whole-request total differs from the per-stage numbers on purpose:
+        // the headline must use requestTokens, not the stage stitch.
+        requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
         stageSavings: { dedup: { tokensBefore: 500, tokensAfter: 300 } },
         ccrRefsStored: 3,
       },
@@ -124,9 +127,21 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
     expect(source.kind).toBe("telemetry");
     const stats = await source.stats("projA");
     expect(stats.requests).toBe(1);
-    expect(stats.tokensBefore).toBe(500);
-    expect(stats.tokensAfter).toBe(300);
+    // requestTokens (1000→400), NOT the dedup stage (500→300).
+    expect(stats.tokensBefore).toBe(1000);
+    expect(stats.tokensAfter).toBe(400);
+    expect(stats.perStage.dedup).toStrictEqual({ tokensBefore: 500, tokensAfter: 300 });
     expect(stats.ccrRefsStored).toBe(3);
+    await store.close();
+  });
+
+  it("legacy events (no requestTokens) fall back to the stage stitch", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev()); // ev() has no requestTokens
+    const stats = await store.aggregate();
+    // Falls back to first-before (100) / last-after (60).
+    expect(stats.tokensBefore).toBe(100);
+    expect(stats.tokensAfter).toBe(60);
     await store.close();
   });
 });
