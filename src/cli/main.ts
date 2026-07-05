@@ -81,7 +81,9 @@ program
       printReport(report);
       if (!report.dryRun) {
         process.stdout.write(
-          "\nDone. Start the proxy with `golem proxy`, then restart Claude Code in this project.\n",
+          "\nDone. Start the proxy with `golem proxy`, then restart Claude Code in this project.\n" +
+            "The Golem status line is now in your terminal; for a VS Code panel, install the\n" +
+            "extension in vscode-extension/ (see its README) and reload the window.\n",
         );
       }
     } catch (err) {

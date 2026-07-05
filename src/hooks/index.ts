@@ -63,6 +63,15 @@ export {
   sessionStatePath,
   writeSessionState,
 } from "./session-state.js";
+export {
+  addEventHook,
+  NOTIFICATION_COMMAND,
+  PROMPT_SUBMIT_COMMAND,
+  removeEventHook,
+  removeStatusLine,
+  STATUS_LINE_COMMAND,
+  writeStatusLine,
+} from "./settings-extras.js";
 export type { HookSettingsOptions } from "./settings-writer.js";
 export {
   addPostToolUseHook,
