@@ -359,18 +359,23 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     );
   }
 
-  // Upstream mode: Foundry (Claude Code Foundry env), a generic Anthropic-compatible
-  // gateway, or direct Anthropic. `proxyUpstream` (if set) is written to the proxy
-  // config so the proxy forwards there; Claude Code always points at the LOCAL proxy.
-  const useFoundry = options.foundry !== undefined;
-  const proxyUpstream = options.foundry ?? options.upstream;
-
   // 1. .claude/settings.json — env block (mode-aware).
   const settingsPath = path.join(projectDir, ".claude", "settings.json");
   const settingsExisting = await readJsonObject(settingsPath);
   const settings = settingsExisting ?? {};
   const settingsExisted = settingsExisting !== null;
   const env = objectEntry(settings, "env");
+
+  // Upstream mode: Foundry (Claude Code Foundry env), a generic Anthropic-compatible
+  // gateway, or direct Anthropic. Explicit flags win; otherwise, if the project is
+  // ALREADY wired for Foundry (env has CLAUDE_CODE_USE_FOUNDRY), preserve that mode
+  // rather than adding a conflicting ANTHROPIC_BASE_URL. `proxyUpstream` (if set) is
+  // written to the proxy config; Claude Code always points at the LOCAL proxy.
+  const existingFoundry =
+    env[ENV_USE_FOUNDRY] === "true" && typeof env[ENV_FOUNDRY_BASE_URL] === "string";
+  const useFoundry =
+    options.foundry !== undefined || (options.upstream === undefined && existingFoundry);
+  const proxyUpstream = options.foundry ?? options.upstream;
 
   if (useFoundry) {
     // Foundry appends the request path to the Foundry base URL; the proxy exposes

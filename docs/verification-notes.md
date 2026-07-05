@@ -934,6 +934,17 @@ Audited init against the full feature set; closed the gaps a fresh
   `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
   touches the real `~/.vscode/extensions`.
 
+## §45 — init preserves an existing Foundry wiring (2026-07-06)
+
+Dogfooding bug: running plain `golem init` (no `--foundry`) on a project already
+wired for Foundry (`CLAUDE_CODE_USE_FOUNDRY=true` + `ANTHROPIC_FOUNDRY_BASE_URL`)
+added a stray `ANTHROPIC_BASE_URL` alongside the Foundry env — two competing base
+URLs. Fix: init now computes the upstream mode AFTER reading the existing env —
+explicit `--foundry`/`--upstream` still win, but absent them, an existing Foundry
+wiring is PRESERVED (Foundry mode, no `ANTHROPIC_BASE_URL` added). A foreign
+Foundry base URL (pointing at a non-Golem proxy) still trips the conflict check.
+Re-running `golem init` on a Golem-Foundry project is now an idempotent no-op.
+
 ## §44 — Hook capabilities for KB-backed web cache (verified 2026-07-05)
 
 Verified against live docs (code.claude.com/docs/en/hooks) for the "query KB

@@ -200,6 +200,29 @@ describe("golem init", () => {
     expect((local.proxy as Record<string, unknown>).upstream_base_url).toBe(resource);
   });
 
+  it("preserves an existing Foundry wiring on a plain re-run (no stray ANTHROPIC_BASE_URL)", async () => {
+    // A project already wired for Foundry (env set by a prior `--foundry` init).
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify({
+        env: {
+          CLAUDE_CODE_USE_FOUNDRY: "true",
+          ANTHROPIC_FOUNDRY_BASE_URL: "http://localhost:4653/anthropic",
+          ENABLE_TOOL_SEARCH: "true",
+        },
+      }),
+      "utf8",
+    );
+
+    // A plain `golem init` (no --foundry) must NOT add ANTHROPIC_BASE_URL.
+    await golemInit({ projectDir, probe: okProbe });
+    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
+    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe("http://localhost:4653/anthropic");
+    expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
   it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {
     await golemInit({ projectDir, probe: okProbe, upstream: "https://openrouter.ai/api" });
     const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
