@@ -54,6 +54,15 @@ export {
   REDACTED_SK_ANT_PLACEHOLDER,
   stripKnownSecrets,
 } from "./redact.js";
+export { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
+export type { SessionState } from "./session-state.js";
+export {
+  markBlocked,
+  markUnblocked,
+  readSessionState,
+  sessionStatePath,
+  writeSessionState,
+} from "./session-state.js";
 export type { HookSettingsOptions } from "./settings-writer.js";
 export {
   addPostToolUseHook,
