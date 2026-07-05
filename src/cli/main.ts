@@ -10,6 +10,7 @@
  */
 
 import { Command, InvalidArgumentError } from "commander";
+import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
 import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
@@ -147,6 +148,9 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
 
   const telemetry = openTelemetryStore(dir);
+  // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
+  // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
+  const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: () => policyFromSettings(settings),
@@ -154,7 +158,13 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     onEvent: (event) => {
       void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
     },
+    ...(semantic !== undefined ? { semantic } : {}),
   });
+  if (semantic !== undefined) {
+    process.stdout.write(
+      "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
+    );
+  }
   const proxy = new GolemProxy({
     upstreamBaseUrl: settings.proxy.upstream_base_url,
     connectTimeoutMs: settings.proxy.connect_timeout_ms,
@@ -175,6 +185,7 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
   );
   const shutdown = (): void => {
+    semantic?.stop();
     void Promise.allSettled([proxy.close(), telemetry.close(), removeProxyPid(dir)]).finally(() =>
       process.exit(0),
     );

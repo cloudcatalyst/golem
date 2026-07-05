@@ -13,13 +13,18 @@
  * is returned unchanged (same object, original bytes), so streaming and
  * tool-use traffic and secret-free level-0 requests stay byte-identical.
  *
- * Prefix stability (verification-notes §14): redaction is a pure function of
- * the text and the compression stage is deterministic per A2's contract, so
- * re-processing a previously-sent prefix reproduces identical bytes and
- * Anthropic prompt-cache hits survive.
+ * Prefix stability (verification-notes §14): at levels ≤2, redaction is a pure
+ * function of the text and the lossless compression stage is deterministic per
+ * A2's contract, so re-processing a previously-sent prefix reproduces identical
+ * bytes and Anthropic prompt-cache hits survive. The OPTIONAL semantic stage
+ * (slider ≥3, {@link SemanticCompressor}) is lossy and NOT guaranteed
+ * prefix-stable — an accepted trade-off at those levels (spec §4;
+ * verification-notes §34) — and it always fails open (a null result leaves the
+ * losslessly-compressed body untouched).
  */
 
 import { estimateTokens } from "../compression/index.js";
+import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import { effectiveStages, type SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
@@ -44,6 +49,13 @@ export interface GolemPipelineOptions {
   readonly projectId: string;
   /** Optional sink for per-request telemetry; defaults to a no-op. */
   readonly onEvent?: (event: PipelineEvent) => void;
+  /**
+   * OPTIONAL semantic compressor (slider ≥3). When present and the policy's
+   * `semanticCompression` is not "off", it runs after lossless compression.
+   * It is lossy and fails open — a null result skips the stage. Provided by the
+   * Headroom sidecar (headroom-adapter.ts); absent by default.
+   */
+  readonly semantic?: SemanticCompressor;
 }
 
 const MESSAGES_PATH_RE = /^\/(?:v1\/)?messages\b/;
@@ -112,6 +124,28 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
         ccrRefsStored = result.refs.length;
         changed = true;
+      }
+
+      // Stage 3 — semantic compression (level ≥3, optional, lossy, fail-open).
+      // Runs on the already-losslessly-compressed messages. Any failure resolves
+      // null and leaves the body as-is, preserving the level-≤2 guarantees.
+      if (
+        stages.semanticCompression !== "off" &&
+        options.semantic !== undefined &&
+        Array.isArray(body.messages)
+      ) {
+        const semantic = await options.semantic.compress(
+          body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
+          stages.semanticCompression,
+        );
+        if (semantic !== null) {
+          body = { ...body, messages: [...semantic.messages] };
+          stageSavings.semantic = {
+            tokensBefore: semantic.tokensBefore,
+            tokensAfter: semantic.tokensAfter,
+          };
+          changed = true;
+        }
       }
 
       if (!changed) {
