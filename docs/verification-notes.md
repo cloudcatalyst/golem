@@ -446,6 +446,56 @@ plan explicitly sanctioned the JSONL fallback. It sits behind a narrow
   MCP tool, not the pipeline, so they are not in this event stream yet. Wiring
   expand→telemetry is a follow-up.
 
+## 26. WS-C C1 — embedded vector store decision memo (2026-07-04)
+
+Resolves spec Decision 17 / §6 known unknown "LanceDB vs sqlite-vec". **Both
+ship native binaries**, so whichever wins MUST be an OPTIONAL dependency (lazy
+import behind the `VectorDriver` seam) — the default `npx golem-run` install
+stays pure-TS (CLAUDE.md hard rule).
+
+**Candidates (verify install footprint at build time before pinning):**
+- **LanceDB** (`@lancedb/lancedb`): embedded columnar vector DB, prebuilt N-API
+  binaries per platform (Win/mac/Linux, x64+arm64), no external service, native
+  ANN index (IVF/HNSW), on-disk Lance format. Purpose-built for vector search;
+  scales to large indexes; richest metadata filtering. Heavier install (~tens of
+  MB of prebuilt binary per platform).
+- **sqlite-vec** (`sqlite-vec` + a SQLite binding): a tiny C extension loaded
+  into SQLite. Very small footprint, dead-simple mental model (it's just
+  SQLite), trivially inspectable files. But brute-force / limited ANN at C1's
+  writing, weaker at large-corpus scale, and needs a SQLite host binding
+  (node:sqlite is experimental; better-sqlite3 is another native dep).
+
+**Recommendation: LanceDB** as the embedded driver, for three reasons that map
+to Golem's goals: (1) it's a vector store first, so recall/scale on a real code
++ docs corpus is far better than brute-force sqlite-vec; (2) its prebuilt N-API
+binaries install cleanly on all three OSes without a compiler, preserving the
+zero-friction init story once the add-on is opted into; (3) it needs no separate
+SQLite host binding, avoiding the node:sqlite-experimental / better-sqlite3
+question entirely. sqlite-vec stays the documented fallback if LanceDB's binary
+size or platform coverage becomes a problem.
+
+**How the native-dep constraint is satisfied (implemented in C1):**
+- `package.json` gets `@lancedb/lancedb` in **`optionalDependencies`** (NOT
+  `dependencies`) when the driver lands — it is absent from the default install
+  and pulled only when the user opts into the KB add-on.
+- The engine loads via a lazy dynamic `import()` inside a `LanceVectorDriver`
+  behind the `VectorDriver` seam; if the module is missing, construction throws
+  a clear "vector store add-on not installed — run `npm i @lancedb/lancedb`"
+  error (KnowledgeBase then degrades / is unavailable rather than crashing the
+  whole app). Qdrant **server** mode stays selectable by `knowledge.vector_db_url`
+  (spec Decision 12) via a separate driver.
+- Per-project collections under `<project>/.golem/knowledge/` (`knowledgeDir()`),
+  `KNOWLEDGE_SCHEMA_VERSION` on every driver for forward-compatible open.
+
+**Delivered in C1 (this task):** the `VectorDriver` seam, a functional
+`InMemoryVectorDriver` (cosine search, per-project isolation — the P0 non-durable
+default and the test double), `GolemKnowledgeBase` with the READ path real
+(text `search` via an injected `EmbedFn` + `getChunk`) and KNOWLEDGE-only
+degradation. **Deferred:** `ingest` (heading/code chunking → C2), the `EmbedFn`
+wiring to WS-D (C3), the real `LanceVectorDriver` + optionalDependency, the
+Qdrant-server driver (stub throws), and wiring `describeKnowledgeBaseContract`
+(needs C2+C3 — the harness drives ingest + text search end to end).
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
