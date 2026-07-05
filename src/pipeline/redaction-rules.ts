@@ -155,13 +155,26 @@ export const REDACTION_RULES: readonly RedactionRule[] = [
 export const ENTROPY_RULE_ID = "high-entropy";
 
 /**
- * Candidate tokens for the entropy check: long unbroken runs of the
- * characters secrets are made of (base64/base64url + separators used inside
- * single tokens). 32 is a deliberate floor — real API secrets are almost
- * always >= 32 chars, and shorter thresholds flood dev traffic with false
- * positives.
+ * Candidate tokens for the entropy check: unbroken runs of the characters
+ * secrets are made of (base64/base64url + separators used inside single
+ * tokens), BOUNDED to a credential-plausible length.
+ *
+ * - Floor 32: real API secrets are almost always >= 32 chars; shorter floods
+ *   dev traffic with false positives.
+ * - Ceiling {@link ENTROPY_MAX_CANDIDATE_CHARS}: a run longer than this is not a
+ *   credential — it is DATA (a base64 image, a minified/encoded blob, an inline
+ *   attachment). Redacting those is lossy over-redaction that strips content
+ *   Claude needs and silently inflates "savings" (verification-notes §31/§37).
+ *   Every known provider secret (Anthropic, AWS, GitHub, Slack, JWT, private-key
+ *   PEM bodies handled by their own rules) fits well under the ceiling.
  */
-export const ENTROPY_CANDIDATE_RE = /[A-Za-z0-9+/=_-]{32,}/g;
+export const ENTROPY_MAX_CANDIDATE_CHARS = 128;
+// Lookarounds require the WHOLE unbroken run to be 32–128 chars: a longer run
+// (a big blob) has a candidate char just past 128, so the lookahead fails and it
+// is NOT matched at all — we never redact a 128-char slice out of the middle of
+// a 20 KB image. Delimiters are any non-candidate char (or string edge).
+export const ENTROPY_CANDIDATE_RE =
+  /(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{32,128}(?![A-Za-z0-9+/=_-])/g;
 
 /**
  * Shannon-entropy threshold in bits/char. Random 32+ char base62 material
