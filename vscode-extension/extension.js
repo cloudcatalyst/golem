@@ -6,29 +6,48 @@
 
 const vscode = require("vscode");
 const { execFile } = require("node:child_process");
-const { buildModel, statusBarText, renderHtml } = require("./render.js");
+const { buildModel, statusBarFallback, renderHtml } = require("./render.js");
+
+const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
 /**
- * Run `golem <args>` in the workspace folder; resolve parsed JSON or null.
+ * Run `golem <args>` in the workspace folder; resolve raw stdout or null.
  * `shell: true` so Windows resolves the `golem.cmd` npm shim via PATHEXT (plain
  * execFile ENOENTs on it). Args are controlled (flags + a numeric slider
- * level), so there is no shell-injection surface.
+ * level), so there is no shell-injection surface. `stdin` is closed immediately
+ * so commands that read it (`golem statusline`) render without waiting.
  */
-function golemJson(args) {
-  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+function golemText(args) {
   return new Promise((resolve) => {
-    execFile("golem", args, { cwd, timeout: 8000, windowsHide: true, shell: true }, (err, stdout) => {
-      if (err) {
-        resolve(null);
-        return;
-      }
-      try {
-        resolve(JSON.parse(stdout));
-      } catch {
-        resolve(null);
-      }
-    });
+    const cp = execFile(
+      "golem",
+      args,
+      { cwd: cwd(), timeout: 8000, windowsHide: true, shell: true },
+      (err, stdout) => resolve(err ? null : String(stdout)),
+    );
+    try {
+      cp.stdin?.end();
+    } catch {
+      // no stdin pipe — fine
+    }
   });
+}
+
+/** As {@link golemText} but parse JSON (null on error / non-JSON). */
+async function golemJson(args) {
+  const out = await golemText(args);
+  if (out === null) return null;
+  try {
+    return JSON.parse(out);
+  } catch {
+    return null;
+  }
+}
+
+/** Strip ANSI color so the raw `golem statusline` output is plain status-bar text. */
+function stripAnsi(s) {
+  const esc = String.fromCharCode(27);
+  return s.replace(new RegExp(esc + '\[[0-9;]*m', 'g'), '');
 }
 
 async function fetchModel() {
@@ -71,9 +90,13 @@ let provider;
 let timer;
 
 async function refresh() {
-  const model = await fetchModel();
+  // Single source of truth for the one-line format: the SAME `golem statusline`
+  // the terminal renders, so the two can never drift. `statusBarFallback` is a
+  // deliberately minimal degraded string used only if the CLI call fails.
+  const [model, line] = await Promise.all([fetchModel(), golemText(["statusline"])]);
   if (statusBar) {
-    statusBar.text = statusBarText(model);
+    const text = line ? stripAnsi(line).trim() : "";
+    statusBar.text = text || statusBarFallback(model);
     statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}`;
   }
   if (provider) provider.render(model);
@@ -86,7 +109,7 @@ function activate(context) {
   );
 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-  statusBar.text = "⬢ golem";
+  statusBar.text = "⬢ Golem";
   statusBar.command = "golem.showPanel";
   statusBar.show();
   context.subscriptions.push(statusBar);
