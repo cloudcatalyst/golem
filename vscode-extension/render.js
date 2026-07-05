@@ -65,23 +65,16 @@ function buildModel(stats, status) {
   };
 }
 
-/** Title-case a slider name for display: "balanced" -> "Balanced". */
-function titleCase(s) {
-  const str = String(s || "");
-  return str ? str.charAt(0).toUpperCase() + str.slice(1) : "";
-}
-
 /**
- * Status-bar text — the at-a-glance glance. Leads with the level NAME and a
- * filled/hollow hexagon that signals whether the proxy is actually running
- * (mirrors the terminal status line). Example: "⬢ Golem: Balanced · saved 8%".
+ * Minimal, degraded status-bar string used ONLY when `golem statusline` cannot
+ * be run (the extension shows that command's output verbatim — see
+ * extension.js). Deliberately NOT a reimplementation of the full format: it
+ * carries just the brand + proxy state, so there is no second formatter to drift
+ * from the CLI's single source of truth.
  */
-function statusBarText(model) {
+function statusBarFallback(model) {
   const glyph = model.proxyReachable ? "⬢" : "⬡";
-  const name = model.sliderName ? titleCase(model.sliderName) : `L${model.slider}`;
-  const saved = model.savedPct > 0 ? ` · saved ${model.savedPct}%` : "";
-  const off = model.proxyReachable ? "" : " · proxy off";
-  return `${glyph} Golem: ${name}${saved}${off}`;
+  return `${glyph} Golem${model.proxyReachable ? "" : " · proxy off"}`;
 }
 
 function esc(s) {
@@ -156,4 +149,4 @@ function renderHtml(model, nonce) {
 </body></html>`;
 }
 
-module.exports = { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml };
+module.exports = { fmtTokens, upstreamLabel, buildModel, statusBarFallback, renderHtml };

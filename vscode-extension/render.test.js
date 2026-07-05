@@ -3,7 +3,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml } = require("./render.js");
+const { fmtTokens, upstreamLabel, buildModel, statusBarFallback, renderHtml } = require("./render.js");
 
 test("fmtTokens", () => {
   assert.equal(fmtTokens(1_520_615), "1.5M");
@@ -47,16 +47,11 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.proxyReachable, false);
 });
 
-test("statusBarText", () => {
-  // Leads with the level NAME and a filled hexagon when the proxy is reachable.
-  assert.match(
-    statusBarText({ proxyReachable: true, savedPct: 8, slider: 3, sliderName: "balanced" }),
-    /^⬢ Golem: Balanced · saved 8%$/,
-  );
-  // Hollow hexagon + "proxy off" when unreachable; falls back to L<n> without a name.
-  const off = statusBarText({ proxyReachable: false, savedPct: 0, slider: 0, sliderName: "" });
-  assert.match(off, /^⬡ Golem: L0/);
-  assert.match(off, /proxy off/);
+test("statusBarFallback (minimal, used only when `golem statusline` fails)", () => {
+  // Deliberately minimal — the full format comes from `golem statusline`, so the
+  // fallback carries only brand + proxy state and cannot drift from the CLI.
+  assert.equal(statusBarFallback({ proxyReachable: true }), "⬢ Golem");
+  assert.equal(statusBarFallback({ proxyReachable: false }), "⬡ Golem · proxy off");
 });
 
 test("renderHtml contains CSP nonce, slider buttons, and escapes", () => {
