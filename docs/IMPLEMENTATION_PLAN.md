@@ -191,5 +191,11 @@ Each needs a design memo before build; none touch frozen interfaces or P0 scope.
 | WS-F5 | Tiered user/workspace/org shared standards & knowledge (20e) | P1 local → P4+ hosted | WS-C KnowledgeBase federation, config hierarchy |
 | WS-F6 | Idea/note capture shaping project context (20f) | P2/P3 | WS-C ingest, Headroom-memory (ML sidecar) |
 | WS-F7 | Writing-style adaptation & prompt translation (20g) | P3 | telemetry scoring, WS-D local LLM, memory |
+| WS-F8 | Parallel conversations + mid-thread model escalation (21a) | P2/P3 | WS-D routing, WS-F1 task queue |
+| WS-F9 | Remote monitoring / continuation / permission-granting (21b) | P3/P4 | auth+relay (WS-F3), Claude Code Notification+permission hooks; **security-critical** |
+| WS-F10 | Dashboard-as-sidecar (terminal / VS Code) (21c) | P2 | E3 dashboard, Claude Code status-line hook / VS Code webview |
+| WS-F11 | Account switching (21d) | P2/P3 | proxy credential routing, secure store; **ToS review** |
+| WS-F12 | Multi-LLM / multi-model concurrency & quota routing (21e) | P3 | WS-F8, WS-F11; **ToS review**, capability-preserving router |
+| WS-F13 | Cost-governance goals & benchmarks (21f) | continuous | A4 telemetry, B2 hooks, WS-D; benchmark vs. code.claude.com/docs/en/costs |
 
-Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier.
+Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier. WS-F9/F11/F12 carry security/ToS gates (spec Risks table) — design memo + review before build.
