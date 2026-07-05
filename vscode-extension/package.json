@@ -1,0 +1,42 @@
+{
+  "name": "golem-vscode",
+  "displayName": "Golem",
+  "description": "Live Golem token-savings dashboard: compression stats, slider, and proxy status in a VS Code panel.",
+  "version": "0.1.0",
+  "publisher": "golem-run",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "golem", "title": "Golem", "icon": "media/golem.svg" }
+      ]
+    },
+    "views": {
+      "golem": [
+        { "id": "golem.panel", "name": "Savings", "type": "webview" }
+      ]
+    },
+    "commands": [
+      { "command": "golem.showPanel", "title": "Golem: Show Panel" },
+      { "command": "golem.refresh", "title": "Golem: Refresh" },
+      { "command": "golem.setSlider", "title": "Golem: Set Slider Level" }
+    ],
+    "configuration": {
+      "title": "Golem",
+      "properties": {
+        "golem.pollSeconds": {
+          "type": "number",
+          "default": 5,
+          "minimum": 2,
+          "description": "How often (seconds) the panel and status bar refresh from the golem CLI."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}
