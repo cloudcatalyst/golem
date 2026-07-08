@@ -117,8 +117,13 @@ function renderHtml(model, nonce) {
   td,th{text-align:right;padding:2px 4px}td:first-child,th:first-child{text-align:left;opacity:.85}
   .save{color:var(--vscode-charts-green,#3fb950)}
   .warn{color:var(--vscode-charts-yellow,#d7ba7d)}
+  .ok{color:var(--vscode-charts-green,#3fb950)}
   .pill{display:inline-block;padding:1px 7px;border-radius:9px;background:var(--vscode-badge-background);
         color:var(--vscode-badge-foreground)}
+  .toggle{margin-left:8px;padding:1px 9px;border:1px solid var(--vscode-widget-border,#444);
+       background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);
+       border-radius:5px;cursor:pointer;font:11px var(--vscode-font-family)}
+  .toggle:hover{background:var(--vscode-button-secondaryHoverBackground,var(--vscode-button-background))}
 </style></head><body>
   <div class="big">${model.savedPct}%</div>
   <div class="sub">saved · ${fmtTokens(model.before)} → ${fmtTokens(model.after)} tokens · ${
@@ -126,10 +131,15 @@ function renderHtml(model, nonce) {
   } req</div>
 
   <h2>Status</h2>
+  <div class="row"><span>Proxy</span><span>
+    <span class="${model.proxyReachable ? "ok" : "warn"}">${
+      model.proxyReachable ? "running" : "stopped"
+    }</span>
+    <button class="toggle" id="proxyToggle" data-running="${model.proxyReachable ? "1" : "0"}">${
+      model.proxyReachable ? "Stop" : "Start"
+    }</button>
+  </span></div>
   <div class="row"><span>Upstream</span><span class="pill">${esc(model.upstreamLabel)}</span></div>
-  <div class="row"><span>Proxy</span><span class="${model.proxyReachable ? "" : "warn"}">${
-    model.proxyReachable ? "reachable" : "not running"
-  }</span></div>
   <div class="row"><span>Stats source</span><span class="sub">${esc(model.source)}</span></div>
 
   <h2>Slider (level ${model.slider}${model.sliderName ? ` · ${esc(model.sliderName)}` : ""})</h2>
@@ -145,6 +155,8 @@ function renderHtml(model, nonce) {
     for (const b of document.querySelectorAll('.lvl')) {
       b.addEventListener('click', () => vscode.postMessage({ type: 'setSlider', level: Number(b.dataset.level) }));
     }
+    const pt = document.getElementById('proxyToggle');
+    if (pt) pt.addEventListener('click', () => vscode.postMessage({ type: pt.dataset.running === '1' ? 'proxyStop' : 'proxyStart' }));
   </script>
 </body></html>`;
 }

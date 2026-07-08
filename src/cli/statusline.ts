@@ -46,6 +46,18 @@ export interface GolemState {
   readonly proxyRunning?: boolean;
 }
 
+/**
+ * A blocked flag older than this is treated as stale — the "waiting" indicator
+ * clears itself rather than sticking on if the clearing hook never fired.
+ */
+export const BLOCKED_STALE_MS = 10 * 60_000;
+
+/** Is a blocked-state timestamp recent enough to still show "waiting"? */
+export function isBlockedFresh(ts: string, nowMs: number = Date.now()): boolean {
+  const t = Date.parse(ts);
+  return Number.isFinite(t) && nowMs - t >= 0 && nowMs - t < BLOCKED_STALE_MS;
+}
+
 /** Human-facing name for a slider level, Title-cased ("balanced" → "Balanced"). */
 export function levelName(level: number): string {
   const raw = SLIDER_LEVEL_NAMES[level as SliderLevel] ?? `level ${level}`;
@@ -151,8 +163,10 @@ export function renderStatusLine(
     parts.push(green(`saved ${pct}% (${fmtTokens(before)}→${fmtTokens(after)})`));
   }
 
-  // Which upstream the traffic is fronting.
-  parts.push(cyan(`→${golem.upstreamLabel}`));
+  // Which upstream the traffic is fronting — only when the proxy is actually
+  // running. When it's off, nothing is going to that upstream, so showing it
+  // (e.g. "→foundry") is misleading.
+  if (active) parts.push(cyan(`→${golem.upstreamLabel}`));
 
   // Live session context usage.
   if (session.contextUsedPct !== undefined) {
@@ -195,7 +209,12 @@ export async function collectGolemState(dir: string): Promise<GolemState> {
   }
   try {
     const session = await readSessionState(dir);
-    if (session?.blocked === true) state = { ...state, blocked: true };
+    // Only show "waiting" if the blocked flag is RECENT. A stale flag (the
+    // UserPromptSubmit clear-hook didn't fire, or the session moved on / switched
+    // models) self-heals instead of sticking on forever.
+    if (session?.blocked === true && isBlockedFresh(session.ts)) {
+      state = { ...state, blocked: true };
+    }
   } catch {
     // no session state
   }

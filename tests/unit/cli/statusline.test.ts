@@ -3,7 +3,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { parseSessionInput, renderStatusLine, upstreamLabel } from "../../../src/cli/statusline.js";
+import {
+  isBlockedFresh,
+  parseSessionInput,
+  renderStatusLine,
+  upstreamLabel,
+} from "../../../src/cli/statusline.js";
 
 describe("parseSessionInput", () => {
   it("extracts the fields we use from the real stdin shape", () => {
@@ -49,6 +54,20 @@ describe("upstreamLabel", () => {
   });
 });
 
+describe("isBlockedFresh (stale 'waiting' self-heals)", () => {
+  const now = Date.parse("2026-07-06T12:00:00Z");
+  it("is true for a recent blocked timestamp", () => {
+    expect(isBlockedFresh("2026-07-06T11:55:00Z", now)).toBe(true); // 5 min ago
+  });
+  it("is false for a stale one (past the TTL)", () => {
+    expect(isBlockedFresh("2026-07-06T11:30:00Z", now)).toBe(false); // 30 min ago
+  });
+  it("is false for a garbage or future timestamp", () => {
+    expect(isBlockedFresh("not-a-date", now)).toBe(false);
+    expect(isBlockedFresh("2026-07-06T12:05:00Z", now)).toBe(false);
+  });
+});
+
 describe("renderStatusLine", () => {
   it("renders the core line without color, leading with the level name", () => {
     const line = renderStatusLine(
@@ -71,13 +90,15 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain(String.fromCharCode(27));
   });
 
-  it("shows a hollow icon + 'proxy off' when the proxy is not running", () => {
+  it("shows a hollow icon + 'proxy off' and HIDES the upstream when not running", () => {
     const line = renderStatusLine(
       {},
       { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
     );
     expect(line).toContain("⬡ Golem: Lossless");
     expect(line).toContain("proxy off");
+    // Nothing is going to the upstream when the proxy is off — don't imply it is.
+    expect(line).not.toContain("→foundry");
   });
 
   it("omits sections whose data is absent", () => {

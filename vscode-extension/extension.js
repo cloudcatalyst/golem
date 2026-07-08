@@ -73,9 +73,14 @@ class GolemViewProvider {
     this.view = view;
     view.webview.options = { enableScripts: true };
     view.webview.onDidReceiveMessage(async (msg) => {
-      if (msg && msg.type === "setSlider" && typeof msg.level === "number") {
+      if (!msg) return;
+      if (msg.type === "setSlider" && typeof msg.level === "number") {
         await golemJson(["slider", String(msg.level), "--json"]);
         refresh();
+      } else if (msg.type === "proxyStart") {
+        await setProxy(true);
+      } else if (msg.type === "proxyStop") {
+        await setProxy(false);
       }
     });
     refresh();
@@ -88,16 +93,26 @@ class GolemViewProvider {
 let statusBar;
 let provider;
 let timer;
+/** The most recent model, so the status-bar menu knows whether the proxy is running. */
+let lastModel = null;
+
+/** Start (detached) or stop the proxy in the workspace, then refresh. */
+async function setProxy(running) {
+  const verb = running ? ["proxy", "start", "--detach"] : ["proxy", "stop"];
+  await golemText([...verb, "--dir", cwd()]);
+  await refresh();
+}
 
 async function refresh() {
   // Single source of truth for the one-line format: the SAME `golem statusline`
   // the terminal renders, so the two can never drift. `statusBarFallback` is a
   // deliberately minimal degraded string used only if the CLI call fails.
   const [model, line] = await Promise.all([fetchModel(), golemText(["statusline"])]);
+  lastModel = model;
   if (statusBar) {
     const text = line ? stripAnsi(line).trim() : "";
     statusBar.text = text || statusBarFallback(model);
-    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}`;
+    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}\nClick for actions`;
   }
   if (provider) provider.render(model);
 }
@@ -110,7 +125,7 @@ function activate(context) {
 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.text = "⬢ Golem";
-  statusBar.command = "golem.showPanel";
+  statusBar.command = "golem.menu"; // click → actions menu (toggle proxy, slider, panel)
   statusBar.show();
   context.subscriptions.push(statusBar);
 
@@ -119,15 +134,36 @@ function activate(context) {
     vscode.commands.registerCommand("golem.showPanel", () =>
       vscode.commands.executeCommand("golem.panel.focus"),
     ),
+    vscode.commands.registerCommand("golem.toggleProxy", () => setProxy(!lastModel?.proxyReachable)),
     vscode.commands.registerCommand("golem.setSlider", async () => {
       const pick = await vscode.window.showQuickPick(
-        ["0", "1", "2", "3", "4", "5"].map((l) => ({ label: `Level ${l}` , level: Number(l) })),
+        ["0", "1", "2", "3", "4", "5"].map((l) => ({ label: `Level ${l}`, level: Number(l) })),
         { placeHolder: "Golem savings slider" },
       );
       if (pick) {
         await golemJson(["slider", String(pick.level), "--json"]);
         refresh();
       }
+    }),
+    vscode.commands.registerCommand("golem.menu", async () => {
+      const running = lastModel?.proxyReachable ?? false;
+      const items = [
+        {
+          label: running ? "$(primitive-square) Stop Golem proxy" : "$(play) Start Golem proxy",
+          action: "proxy",
+        },
+        { label: "$(arrow-both) Set slider level…", action: "slider" },
+        { label: "$(window) Open Golem panel", action: "panel" },
+        { label: "$(refresh) Refresh", action: "refresh" },
+      ];
+      const pick = await vscode.window.showQuickPick(items, {
+        placeHolder: `Golem — proxy ${running ? "running" : "stopped"}`,
+      });
+      if (!pick) return;
+      if (pick.action === "proxy") await setProxy(!running);
+      else if (pick.action === "slider") await vscode.commands.executeCommand("golem.setSlider");
+      else if (pick.action === "panel") await vscode.commands.executeCommand("golem.showPanel");
+      else await refresh();
     }),
   );
 

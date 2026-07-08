@@ -934,6 +934,27 @@ Audited init against the full feature set; closed the gaps a fresh
   `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
   touches the real `~/.vscode/extensions`.
 
+## §46 — Status-bar accuracy + VS Code proxy toggle (2026-07-06)
+
+Two dogfooding fixes + a feature, all surfaced when the user switched Claude Code
+back to direct Anthropic (proxy bypassed/off):
+
+- **Stale "waiting" self-heals.** The blocked flag (Notification hook sets,
+  UserPromptSubmit clears) stuck on after a model/session switch. The status line
+  now only shows "⏸ waiting" if the flag's `ts` is within `BLOCKED_STALE_MS`
+  (10 min); older = stale = hidden. Per Decision 21b the local indicator is only a
+  subtle hint anyway (Claude Code shows prompts natively).
+- **Upstream label hidden when the proxy is off.** The line read the proxy's
+  configured `upstream_base_url` and showed "→foundry" even with the proxy DOWN
+  and Claude Code going direct — misleading. Now the `→<upstream>` segment renders
+  only when the proxy is running (`active`), so an off proxy shows just
+  `⬡ Golem: <level> · proxy off`.
+- **Proxy toggle in VS Code.** The panel gained a Proxy Start/Stop button, and the
+  status-bar click now opens an actions QuickPick (Start/Stop proxy · Set slider ·
+  Open panel · Refresh) instead of just focusing the panel. Both run
+  `golem proxy start --detach` / `golem proxy stop --dir <workspace>`. New commands
+  `golem.toggleProxy` + `golem.menu`.
+
 ## §45 — init preserves an existing Foundry wiring (2026-07-06)
 
 Dogfooding bug: running plain `golem init` (no `--foundry`) on a project already
