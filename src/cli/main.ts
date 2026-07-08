@@ -47,6 +47,7 @@ import {
   waitForPortFree,
   writeProxyPid,
 } from "./proxy-daemon.js";
+import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
@@ -104,19 +105,22 @@ program
       startProxy: boolean;
     }) => {
       try {
-        const { settings } = await loadConfig({ projectDir: opts.dir });
+        // Don't pass proxyPort — golemInit assigns/persists a per-project port
+        // (an explicit proxy.port in the project's settings still wins).
         const report = await golemInit({
           projectDir: opts.dir,
           dryRun: opts.dryRun,
-          proxyPort: settings.proxy.port,
           ...(opts.foundry !== undefined ? { foundry: opts.foundry } : {}),
           ...(opts.upstream !== undefined ? { upstream: opts.upstream } : {}),
         });
         printReport(report);
         if (report.dryRun) return;
 
-        // Optionally bring the proxy up now (detached daemon).
+        // Optionally bring the proxy up now (detached daemon), on the per-project
+        // port init just assigned. Also record the intent so SessionStart re-starts it.
         if (opts.startProxy) {
+          const { settings } = await loadConfig({ projectDir: opts.dir });
+          await writeProxyDesired(opts.dir, "running", new Date().toISOString());
           const pid = await startDetached(opts.dir, settings.proxy.port, process.argv[1] ?? "");
           process.stdout.write(
             pid === null
@@ -292,6 +296,8 @@ proxyCmd
   .option("--detach", "run in the background, surviving this shell", false)
   .action(async (opts: { dir: string; port?: string; detach: boolean }) => {
     try {
+      // Persist the intent so SessionStart auto-starts it next time the project opens.
+      await writeProxyDesired(opts.dir, "running", new Date().toISOString());
       if (opts.detach) {
         const { port, upstream } = await resolvePort(opts.dir, opts.port);
         if (await portInUse(port)) {
@@ -317,6 +323,7 @@ proxyCmd
   .option("--dir <path>", "project directory", process.cwd())
   .action(async (opts: { dir: string }) => {
     try {
+      await writeProxyDesired(opts.dir, "stopped", new Date().toISOString());
       const pid = await stopProxy(opts.dir);
       process.stdout.write(
         pid === null ? "golem proxy: not running\n" : `golem proxy stopped (pid ${pid})\n`,
@@ -334,6 +341,7 @@ proxyCmd
   .option("--foreground", "restart in the foreground instead of detached", false)
   .action(async (opts: { dir: string; port?: string; foreground: boolean }) => {
     try {
+      await writeProxyDesired(opts.dir, "running", new Date().toISOString());
       const { port, upstream } = await resolvePort(opts.dir, opts.port);
       await stopProxy(opts.dir);
       // Also clear anything still holding the port (a proxy started without a
@@ -657,18 +665,49 @@ program
     }
   });
 
-program.addCommand(
-  buildHookCommand({
-    // Web-fetch capture ingests into the SAME KB (embedder) the auto-index uses.
-    buildKnowledge: async (projectDir) => {
+const hookCmd = buildHookCommand({
+  // Web-fetch capture ingests into the SAME KB (embedder) the auto-index uses.
+  buildKnowledge: async (projectDir) => {
+    try {
+      return (await buildKnowledgeStack({ projectDir })).knowledge;
+    } catch {
+      return null; // KB unavailable → capture skips the vector ingest (cache still written)
+    }
+  },
+});
+
+/** Read all of stdin as UTF-8 (best-effort; empty on TTY/no input). */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// SessionStart (project open): auto-start the proxy if this project had it running.
+// Lives here (not src/hooks/) because it drives the proxy daemon + config. Fail-safe.
+hookCmd
+  .command("session-start")
+  .description("SessionStart handler: auto-start the proxy if it was running for this project")
+  .action(async () => {
+    try {
+      let cwd = process.cwd();
       try {
-        return (await buildKnowledgeStack({ projectDir })).knowledge;
+        const j = JSON.parse(await readStdin()) as { cwd?: unknown };
+        if (typeof j.cwd === "string" && j.cwd.length > 0) cwd = j.cwd;
       } catch {
-        return null; // KB unavailable → capture skips the vector ingest (cache still written)
+        // no/!json payload — the hook's process cwd is the project anyway
       }
-    },
-  }),
-);
+      if ((await readProxyDesired(cwd)) !== "running") return; // not wanted → do nothing
+      const { settings } = await loadConfig({ projectDir: cwd });
+      if ((await proxyStatus(cwd, settings.proxy.port)).running) return; // already up
+      await startDetached(cwd, settings.proxy.port, process.argv[1] ?? "");
+    } catch {
+      // never break session startup over the proxy autostart
+    }
+  });
+
+program.addCommand(hookCmd);
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
