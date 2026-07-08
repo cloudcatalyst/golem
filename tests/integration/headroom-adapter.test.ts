@@ -101,4 +101,10 @@ describe("HeadroomSidecar (fake worker)", () => {
     const sc = track(fakeSidecar({ FAKE_MODE: "slowstart" }, 1200));
     expect(await sc.start()).toBe(false);
   });
+
+  it("fails open (false) when the worker announces a port but never passes the health check", async () => {
+    const sc = track(fakeSidecar({ FAKE_MODE: "unhealthy" }));
+    expect(await sc.start()).toBe(false);
+    expect(sc.isRunning()).toBe(false);
+  });
 });

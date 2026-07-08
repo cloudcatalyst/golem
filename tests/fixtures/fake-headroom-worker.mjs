@@ -6,6 +6,7 @@
  * Env knobs for negative tests:
  *   FAKE_MODE=badstatus  -> /compress returns 500
  *   FAKE_MODE=slowstart  -> never prints the listening line (startup timeout)
+ *   FAKE_MODE=unhealthy  -> announces + listens, but /health returns 503
  */
 import { createServer } from "node:http";
 
@@ -19,6 +20,11 @@ if (mode === "slowstart") {
 } else {
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {
+      if (mode === "unhealthy") {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false }));
+        return;
+      }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true, headroom: "fake", pid: process.pid }));
       return;
