@@ -6,7 +6,7 @@
 
 const vscode = require("vscode");
 const { execFile } = require("node:child_process");
-const { buildModel, statusBarFallback, renderHtml } = require("./render.js");
+const { buildModel, statusBarText, renderHtml } = require("./render.js");
 
 const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
@@ -15,7 +15,7 @@ const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.
  * `shell: true` so Windows resolves the `golem.cmd` npm shim via PATHEXT (plain
  * execFile ENOENTs on it). Args are controlled (flags + a numeric slider
  * level), so there is no shell-injection surface. `stdin` is closed immediately
- * so commands that read it (`golem statusline`) render without waiting.
+ * so any command that reads it returns without waiting.
  */
 function golemText(args) {
   return new Promise((resolve) => {
@@ -42,12 +42,6 @@ async function golemJson(args) {
   } catch {
     return null;
   }
-}
-
-/** Strip ANSI color so the raw `golem statusline` output is plain status-bar text. */
-function stripAnsi(s) {
-  const esc = String.fromCharCode(27);
-  return s.replace(new RegExp(esc + '\[[0-9;]*m', 'g'), '');
 }
 
 async function fetchModel() {
@@ -104,14 +98,14 @@ async function setProxy(running) {
 }
 
 async function refresh() {
-  // Single source of truth for the one-line format: the SAME `golem statusline`
-  // the terminal renders, so the two can never drift. `statusBarFallback` is a
-  // deliberately minimal degraded string used only if the CLI call fails.
-  const [model, line] = await Promise.all([fetchModel(), golemText(["statusline"])]);
+  // The status bar renders its own compact line from `model` (see
+  // render.statusBarText) — intentionally distinct from `golem statusline` (the
+  // terminal line): provider-focused (`→ <provider>`), no savings. Cumulative
+  // savings live in the hover tooltip below and the panel.
+  const model = await fetchModel();
   lastModel = model;
   if (statusBar) {
-    const text = line ? stripAnsi(line).trim() : "";
-    statusBar.text = text || statusBarFallback(model);
+    statusBar.text = statusBarText(model);
     statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}\nClick for actions`;
   }
   if (provider) provider.render(model);
