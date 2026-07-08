@@ -13,7 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit } from "../../src/cli/init.js";
-import { collectStatus, probeProxy } from "../../src/cli/status.js";
+import {
+  collectStatus,
+  probeProxy,
+  renderStatus,
+  type StatusReport,
+} from "../../src/cli/status.js";
 
 const VERSION = "0.1.0-test";
 
@@ -121,5 +126,116 @@ describe("probeProxy", () => {
   it("returns false quickly when nothing is listening", async () => {
     // Port 1 is privileged/unused in test envs; connection is refused fast.
     await expect(probeProxy(1, 300)).resolves.toBe(false);
+  });
+});
+
+describe("renderStatus", () => {
+  const healthyReport: StatusReport = {
+    version: "1.2.3",
+    project_dir: "/tmp/healthy-project",
+    initialized: {
+      overall: true,
+      claude_settings: true,
+      mcp_registered: true,
+      skills: true,
+      golem_settings: true,
+    },
+    proxy: { port: 4653, url: "http://localhost:4653", reachable: true },
+    slider: { level: 1, name: "lossless", layer: "project", source: ".golem/settings.json" },
+    config: {
+      "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
+      "proxy.port": { value: 4653, layer: "default" },
+    },
+    warnings: [],
+  };
+
+  const unhealthyReport: StatusReport = {
+    version: "1.2.3",
+    project_dir: "/tmp/unhealthy-project",
+    initialized: {
+      overall: false,
+      claude_settings: false,
+      mcp_registered: true,
+      skills: false,
+      golem_settings: false,
+    },
+    proxy: { port: 4653, url: "http://localhost:4653", reachable: false },
+    slider: { level: 4, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+    config: {
+      "slider.level": { value: 4, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+      "proxy.port": { value: 4653, layer: "default" },
+    },
+    warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
+  };
+
+  it("renders an all-healthy report with [ok] checkboxes, reachable proxy, and no warnings section", () => {
+    const output = renderStatus(healthyReport);
+
+    expect(output).toContain("Golem 1.2.3 — /tmp/healthy-project");
+    expect(output).toContain("Project wiring (initialized)");
+    expect(output).toContain("[ok] .claude/settings.json -> proxy base URL");
+    expect(output).toContain("[ok] .mcp.json -> golem MCP server");
+    expect(output).toContain("[ok] /golem/* skills installed");
+    expect(output).toContain("[ok] .golem/settings.json present");
+    expect(output).toContain("Proxy: http://localhost:4653 — reachable");
+    expect(output).toContain("Slider: level 1 (lossless) — set by project (.golem/settings.json)");
+    expect(output).toContain("Config (value — layer):");
+    expect(output).toContain("slider.level = 1 — project (.golem/settings.json)");
+    // Default-layer entry has no `source`, so no trailing "(...)" suffix.
+    expect(output).toContain("proxy.port = 4653 — default");
+    expect(output).not.toContain("proxy.port = 4653 — default (");
+    expect(output).not.toContain("Warnings:");
+    expect(output.endsWith("\n")).toBe(true);
+  });
+
+  it("renders an unhealthy/partial report with [--] checkboxes, unreachable proxy, and a warnings section", () => {
+    const output = renderStatus(unhealthyReport);
+
+    expect(output).toContain("Golem 1.2.3 — /tmp/unhealthy-project");
+    expect(output).toContain("Project wiring (run `golem init`)");
+    expect(output).toContain("[--] .claude/settings.json -> proxy base URL");
+    // Mixed state: mcp_registered is true even though the project overall isn't initialized.
+    expect(output).toContain("[ok] .mcp.json -> golem MCP server");
+    expect(output).toContain("[--] /golem/* skills installed");
+    expect(output).toContain("[--] .golem/settings.json present");
+    expect(output).toContain(
+      "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
+    );
+    expect(output).toContain("Slider: level 4 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
+    expect(output).toContain("slider.level = 4 — env (GOLEM_SLIDER_LEVEL)");
+    expect(output).toContain("Warnings:");
+    expect(output).toContain(
+      "  - config file .golem/settings.json is malformed JSON; using defaults",
+    );
+  });
+
+  it("renders collectStatus's real output for an uninitialized project (no source suffixes, no warnings)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "golem-status-render-"));
+    try {
+      const projectDir = join(root, "project");
+      const userDir = join(root, "user");
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(userDir, { recursive: true });
+
+      const report = await collectStatus({
+        projectDir,
+        version: VERSION,
+        userDir,
+        probeTimeoutMs: 200,
+      });
+      const output = renderStatus(report);
+
+      expect(output).toContain(`Golem ${VERSION} — ${projectDir}`);
+      expect(output).toContain("Project wiring (run `golem init`)");
+      expect(output).toContain("[--] .claude/settings.json -> proxy base URL");
+      expect(output).toContain(
+        "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
+      );
+      expect(output).toContain("Slider: level 1 (lossless) — set by default");
+      expect(output).toContain("slider.level = 1 — default");
+      expect(output).not.toContain("Warnings:");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
