@@ -60,3 +60,13 @@ test("renderHtml contains CSP nonce, slider buttons, and escapes", () => {
   assert.match(html, /data-level="3"/);
   assert.match(html, /50%/); // savedPct
 });
+
+test("renderHtml proxy toggle reflects running state (Stop when running)", () => {
+  const running = renderHtml(buildModel({}, { proxy: { reachable: true } }), "n1");
+  assert.match(running, /id="proxyToggle" data-running="1">Stop</);
+  assert.match(running, />running</);
+
+  const stopped = renderHtml(buildModel({}, { proxy: { reachable: false } }), "n2");
+  assert.match(stopped, /id="proxyToggle" data-running="0">Start</);
+  assert.match(stopped, />stopped</);
+});
