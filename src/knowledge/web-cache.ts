@@ -60,7 +60,13 @@ export class WebCache {
     } catch {
       return null;
     }
-    const parsed = entrySchema.safeParse(JSON.parse(raw));
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const parsed = entrySchema.safeParse(parsedJson);
     // URL collision guard: the stored url must match (sha prefix is not unique-proof).
     return parsed.success && parsed.data.url === url ? parsed.data : null;
   }
