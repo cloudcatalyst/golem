@@ -4,12 +4,17 @@
  * URLs through. Uses the real WebCache + hashing KB (no network, no Ollama).
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type HookIo, runWebFetchPost, runWebFetchPre } from "../../../src/hooks/index.js";
-import { openKnowledgeBase, WebCache, webCacheDir } from "../../../src/knowledge/index.js";
+import {
+  openKnowledgeBase,
+  WebCache,
+  webCacheDir,
+  webCacheKey,
+} from "../../../src/knowledge/index.js";
 
 let projectDir: string;
 beforeEach(async () => {
@@ -151,5 +156,18 @@ describe("WebFetch gate (PreToolUse)", () => {
     const io = fakeIo(preInput(url));
     await runWebFetchPre(io, { projectDir, nowMs: Date.parse("2026-07-05T00:05:00Z") });
     expect(io.out[0]).toContain("Roundtrip content here.");
+  });
+});
+
+describe("WebCache.get corrupt entries", () => {
+  it("resolves null (not a rejection) for a syntactically-invalid JSON cache file", async () => {
+    const url = "https://example.com/corrupt";
+    const dir = webCacheDir(projectDir);
+    await mkdir(dir, { recursive: true });
+    // Simulate a crash mid-write (put() is a plain non-atomic writeFile): the
+    // file exists and is readable but is not valid JSON.
+    await writeFile(path.join(dir, `${webCacheKey(url)}.json`), '{"url": "trunc', "utf8");
+
+    await expect(new WebCache(dir).get(url)).resolves.toBeNull();
   });
 });
