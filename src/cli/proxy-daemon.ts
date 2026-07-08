@@ -11,9 +11,28 @@
  */
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import path from "node:path";
+
+/** Base of the per-project proxy port range, and its span. */
+export const PROXY_PORT_BASE = 4653;
+export const PROXY_PORT_SPAN = 1000;
+
+/**
+ * A stable, per-project proxy port derived from the project path — so multiple
+ * projects each get their own proxy without colliding on one shared port
+ * (per-project-proxy model). Deterministic (same project → same port across
+ * restarts); range PROXY_PORT_BASE..+SPAN. A user can always override via
+ * `proxy.port` in the project's settings. Collisions across projects are highly
+ * unlikely at 1000 ports and surface as a clear bind error rather than silent
+ * cross-talk (the pid file, not the port, is the source of truth for "ours").
+ */
+export function defaultProjectPort(projectDir: string): number {
+  const n = createHash("sha256").update(projectDir, "utf8").digest().readUInt32BE(0);
+  return PROXY_PORT_BASE + (n % PROXY_PORT_SPAN);
+}
 
 export interface ProxyPidInfo {
   readonly pid: number;

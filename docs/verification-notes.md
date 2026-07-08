@@ -934,6 +934,32 @@ Audited init against the full feature set; closed the gaps a fresh
   `.golem/settings.local.json`, gitignored). Tests inject a probe so uninit never
   touches the real `~/.vscode/extensions`.
 
+## §47 — Per-project proxy: own port, persisted run-state, auto-start on open (2026-07-06)
+
+User decision (per-project-proxy model over a single shared multi-tenant daemon):
+each project gets its own proxy on its own port, with persisted run-state and
+auto-start on project open. Partitioning (KB/webcache/CCR/telemetry under
+`<project>/.golem/`) was already per-project — no change needed there.
+
+- **Per-project port.** `defaultProjectPort(projectDir)` = `4653 + sha256(dir) %
+  1000` — deterministic, stable, so two projects don't collide on one port. init
+  assigns + persists it to `.golem/settings.json` `proxy.port` (an explicit
+  `proxy.port` still wins); every surface reads it via config. Collisions across
+  projects are unlikely at 1000 ports and surface as a bind error, not cross-talk
+  (the pid file is the source of truth for "ours").
+- **Persisted desired run-state.** `.golem/state/proxy.json` `{desired}` —
+  `golem proxy start/restart` write "running", `stop` writes "stopped". This is
+  the "was it running for this project" intent, distinct from the live pid file.
+- **Auto-start on open.** A `SessionStart` (matcher `startup|resume`) hook,
+  `golem hook session-start`: reads the desired state; if "running" and the proxy
+  isn't already up, starts it detached on the project's port. Fail-safe (never
+  breaks session start); no-op if already running or desired=stopped.
+- init wires the SessionStart hook (uninit removes it); the VS Code panel/menu
+  toggle and `golem proxy start/stop` all flow through the same persisted state.
+- Verified: port determinism/range/uniqueness + state round-trip unit-tested;
+  init wires SessionStart + persists proxy.port (cli-init tests updated to the
+  per-project port). 366 tests.
+
 ## §46 — Status-bar accuracy + VS Code proxy toggle (2026-07-06)
 
 Two dogfooding fixes + a feature, all surfaced when the user switched Claude Code

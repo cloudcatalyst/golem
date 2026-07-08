@@ -38,12 +38,15 @@ import {
   removeMatcherHook,
   removePostToolUseHook,
   removeStatusLine,
+  SESSION_START_COMMAND,
+  SESSION_START_MATCHER,
   WEB_FETCH_MATCHER,
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
   writeGuidanceSection,
   writeStatusLine,
 } from "../hooks/index.js";
+import { defaultProjectPort } from "./proxy-daemon.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** External-state checks, injectable for tests. */
@@ -340,9 +343,21 @@ export async function golemInitStatus(
 export async function golemInit(options: InitOptions): Promise<InitReport> {
   const { projectDir } = options;
   const dryRun = options.dryRun ?? false;
-  const port = options.proxyPort ?? DEFAULT_PROXY_PORT;
-  const baseUrl = proxyBaseUrl(port);
   const probe = options.probe ?? defaultProbe();
+
+  // Per-project proxy port: an explicit `proxy.port` in the project's settings
+  // wins; then a forced option; else a stable per-project default so multiple
+  // projects each get their own proxy without colliding on one port. A newly
+  // assigned port is persisted below (step 4) so every surface reads the same one.
+  const golemSettingsPath = path.join(projectDir, ".golem", "settings.json");
+  const existingGolem = await readJsonObject(golemSettingsPath).catch(() => null);
+  const explicitPort = (existingGolem?.proxy as JsonObject | undefined)?.port;
+  const portAssigned = typeof explicitPort !== "number";
+  const port =
+    typeof explicitPort === "number"
+      ? explicitPort
+      : (options.proxyPort ?? defaultProjectPort(projectDir));
+  const baseUrl = proxyBaseUrl(port);
   const actions: InitAction[] = [];
 
   if (!(await probe.claudeCodeInstalled())) {
@@ -482,15 +497,25 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     }
   }
 
-  // 4. .golem/settings.json with defaults, only when absent.
-  const golemSettingsPath = path.join(projectDir, ".golem", "settings.json");
-  if ((await readJsonObject(golemSettingsPath)) === null) {
+  // 4. .golem/settings.json — defaults when absent, plus the assigned proxy port.
+  if (existingGolem === null) {
     actions.push({
       kind: "create",
       path: rel(projectDir, golemSettingsPath),
-      detail: "slider.level=1 (lossless)",
+      detail: `slider.level=1, proxy.port=${port}`,
     });
-    if (!dryRun) await writeSetting("project", "slider.level", 1, { projectDir });
+    if (!dryRun) {
+      await writeSetting("project", "slider.level", 1, { projectDir });
+      await writeSetting("project", "proxy.port", port, { projectDir });
+    }
+  } else if (portAssigned) {
+    // Existing config but no explicit port yet — pin the per-project one.
+    actions.push({
+      kind: "modify",
+      path: rel(projectDir, golemSettingsPath),
+      detail: `proxy.port=${port}`,
+    });
+    if (!dryRun) await writeSetting("project", "proxy.port", port, { projectDir });
   } else {
     actions.push({
       kind: "skip",
@@ -542,6 +567,20 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
         command: WEB_FETCH_POST_COMMAND,
         async: true,
         timeoutSeconds: 60,
+      },
+    ),
+  );
+
+  // 6c. SessionStart: auto-start the proxy on project open if it was running (§47).
+  actions.push(
+    await addMatcherHook(
+      { projectDir, dryRun },
+      {
+        event: "SessionStart",
+        matcher: SESSION_START_MATCHER,
+        command: SESSION_START_COMMAND,
+        async: false,
+        timeoutSeconds: 15,
       },
     ),
   );
@@ -625,7 +664,16 @@ export interface UninitOptions {
 export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   const { projectDir } = options;
   const dryRun = options.dryRun ?? false;
-  const baseUrl = proxyBaseUrl(options.proxyPort ?? DEFAULT_PROXY_PORT);
+  // Resolve the SAME per-project port init used, so we remove the right base URL.
+  const existingGolem = await readJsonObject(
+    path.join(projectDir, ".golem", "settings.json"),
+  ).catch(() => null);
+  const explicitPort = (existingGolem?.proxy as JsonObject | undefined)?.port;
+  const port =
+    typeof explicitPort === "number"
+      ? explicitPort
+      : (options.proxyPort ?? defaultProjectPort(projectDir));
+  const baseUrl = proxyBaseUrl(port);
   const actions: InitAction[] = [];
 
   // 1. Remove only the env keys init set, and only if they hold init's values.
@@ -699,12 +747,15 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
   );
 
-  // 5b. Remove the WebFetch KB-cache hooks.
+  // 5b. Remove the WebFetch KB-cache hooks + the SessionStart auto-start hook.
   actions.push(
     await removeMatcherHook({ projectDir, dryRun }, "PreToolUse", WEB_FETCH_PRE_COMMAND),
   );
   actions.push(
     await removeMatcherHook({ projectDir, dryRun }, "PostToolUse", WEB_FETCH_POST_COMMAND),
+  );
+  actions.push(
+    await removeMatcherHook({ projectDir, dryRun }, "SessionStart", SESSION_START_COMMAND),
   );
 
   // 6. Remove the installed VS Code extension (global; only if present).

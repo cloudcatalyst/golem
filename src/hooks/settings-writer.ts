@@ -106,6 +106,11 @@ export const WEB_FETCH_PRE_COMMAND = "golem hook web-fetch-pre";
 export const WEB_FETCH_POST_COMMAND = "golem hook web-fetch-post";
 export const WEB_FETCH_MATCHER = "WebFetch";
 
+/** SessionStart hook: auto-start the proxy on project open if it was running (§47). */
+export const SESSION_START_COMMAND = "golem hook session-start";
+/** Fire on a new session and on resume (project (re)open). */
+export const SESSION_START_MATCHER = "startup|resume";
+
 /**
  * Remove Golem hook objects from a PostToolUse entry list, preserving foreign
  * entries and foreign hooks that share an entry with ours. Entries emptied by

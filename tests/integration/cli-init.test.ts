@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli/init.js";
+import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
 
 const okProbe: InitProbe = {
@@ -45,9 +46,10 @@ describe("golem init", () => {
     const report = await golemInit({ projectDir, probe: okProbe });
     expect(report.dryRun).toBe(false);
 
+    const port = defaultProjectPort(projectDir);
     const settings = await readJson(".claude/settings.json");
     expect(settings.env).toStrictEqual({
-      ANTHROPIC_BASE_URL: "http://localhost:4653",
+      ANTHROPIC_BASE_URL: `http://localhost:${port}`,
       ENABLE_TOOL_SEARCH: "true",
     });
 
@@ -65,7 +67,7 @@ describe("golem init", () => {
     }
 
     const golemSettings = await readJson(".golem/settings.json");
-    expect(golemSettings).toStrictEqual({ slider: { level: 1 } });
+    expect(golemSettings).toStrictEqual({ slider: { level: 1 }, proxy: { port } });
 
     // Status line (21c) + blocked-state event hooks (21b) are installed.
     const cs = await readJson(".claude/settings.json");
@@ -77,6 +79,8 @@ describe("golem init", () => {
       );
     expect(cmds("Notification")).toContain("golem hook notification");
     expect(cmds("UserPromptSubmit")).toContain("golem hook prompt-submit");
+    // SessionStart auto-starts the proxy on project open (§47).
+    expect(cmds("SessionStart")).toContain("golem hook session-start");
   });
 
   it("uninit removes the status line and blocked-state hooks", async () => {
@@ -193,7 +197,9 @@ describe("golem init", () => {
 
     const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
     expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
-    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe("http://localhost:4653/anthropic");
+    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe(
+      `http://localhost:${defaultProjectPort(projectDir)}/anthropic`,
+    );
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
 
     const local = await readJson(".golem/settings.local.json");
@@ -201,14 +207,16 @@ describe("golem init", () => {
   });
 
   it("preserves an existing Foundry wiring on a plain re-run (no stray ANTHROPIC_BASE_URL)", async () => {
-    // A project already wired for Foundry (env set by a prior `--foundry` init).
+    // A project already wired for Foundry (env set by a prior `--foundry` init),
+    // at this project's assigned port.
+    const foundryUrl = `http://localhost:${defaultProjectPort(projectDir)}/anthropic`;
     await mkdir(path.join(projectDir, ".claude"), { recursive: true });
     await writeFile(
       path.join(projectDir, ".claude", "settings.json"),
       JSON.stringify({
         env: {
           CLAUDE_CODE_USE_FOUNDRY: "true",
-          ANTHROPIC_FOUNDRY_BASE_URL: "http://localhost:4653/anthropic",
+          ANTHROPIC_FOUNDRY_BASE_URL: foundryUrl,
           ENABLE_TOOL_SEARCH: "true",
         },
       }),
@@ -219,14 +227,14 @@ describe("golem init", () => {
     await golemInit({ projectDir, probe: okProbe });
     const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
     expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
-    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe("http://localhost:4653/anthropic");
+    expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe(foundryUrl);
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 
   it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {
     await golemInit({ projectDir, probe: okProbe, upstream: "https://openrouter.ai/api" });
     const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
-    expect(env.ANTHROPIC_BASE_URL).toBe("http://localhost:4653");
+    expect(env.ANTHROPIC_BASE_URL).toBe(`http://localhost:${defaultProjectPort(projectDir)}`);
     const local = await readJson(".golem/settings.local.json");
     expect((local.proxy as Record<string, unknown>).upstream_base_url).toBe(
       "https://openrouter.ai/api",
