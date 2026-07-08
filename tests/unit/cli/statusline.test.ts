@@ -2,13 +2,21 @@
  * Decision 21c — golem statusline: defensive stdin parsing + pure rendering.
  */
 
-import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { proxyPidPath, writeProxyPid } from "../../../src/cli/proxy-daemon.js";
 import {
+  BLOCKED_STALE_MS,
+  collectGolemState,
   isBlockedFresh,
   parseSessionInput,
   renderStatusLine,
   upstreamLabel,
 } from "../../../src/cli/statusline.js";
+import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
+import { openTelemetryStore } from "../../../src/telemetry/index.js";
 
 describe("parseSessionInput", () => {
   it("extracts the fields we use from the real stdin shape", () => {
@@ -125,5 +133,111 @@ describe("renderStatusLine", () => {
       { sliderLevel: 1, upstreamLabel: "foundry", tokensBefore: 0, tokensAfter: 0 },
     );
     expect(line).not.toContain("saved");
+  });
+});
+
+describe("collectGolemState", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "golem-statusline-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("returns sane defaults for a bare project dir with no Golem state", async () => {
+    const state = await collectGolemState(dir);
+    expect(state.sliderLevel).toBe(1);
+    expect(state.upstreamLabel).toBe("anthropic");
+    expect(state.tokensBefore).toBeUndefined();
+    expect(state.tokensAfter).toBeUndefined();
+    expect(state.blocked).toBeUndefined();
+  });
+
+  describe("proxy running", () => {
+    it("is true when the pid file points at this (alive) process", async () => {
+      await writeProxyPid(dir, { pid: process.pid, port: 4653, ts: "2026-07-08T00:00:00Z" });
+      const state = await collectGolemState(dir);
+      expect(state.proxyRunning).toBe(true);
+    });
+
+    it("is false when the pid file points at a certainly-dead pid", async () => {
+      await writeProxyPid(dir, { pid: 2_000_000_000, port: 4653, ts: "2026-07-08T00:00:00Z" });
+      const state = await collectGolemState(dir);
+      expect(state.proxyRunning).toBe(false);
+    });
+
+    it("resolves with defaults (does not throw) on a corrupt pid file", async () => {
+      await mkdir(path.dirname(proxyPidPath(dir)), { recursive: true });
+      await writeFile(proxyPidPath(dir), "{bad json", "utf8");
+      await expect(collectGolemState(dir)).resolves.toBeDefined();
+      const state = await collectGolemState(dir);
+      expect(state.proxyRunning).toBe(false);
+    });
+  });
+
+  describe("blocked", () => {
+    it("is true for a fresh blocked session state", async () => {
+      await writeSessionState(dir, { blocked: true, ts: new Date().toISOString() });
+      const state = await collectGolemState(dir);
+      expect(state.blocked).toBe(true);
+    });
+
+    it("is not set for a stale blocked session state", async () => {
+      const staleTs = new Date(Date.now() - BLOCKED_STALE_MS - 60_000).toISOString();
+      await writeSessionState(dir, { blocked: true, ts: staleTs });
+      const state = await collectGolemState(dir);
+      expect(state.blocked).toBeFalsy();
+    });
+
+    it("resolves with defaults (does not throw) on a corrupt session-state file", async () => {
+      await mkdir(path.dirname(sessionStatePath(dir)), { recursive: true });
+      await writeFile(sessionStatePath(dir), "{bad json", "utf8");
+      const state = await collectGolemState(dir);
+      expect(state.blocked).toBeUndefined();
+    });
+  });
+
+  describe("telemetry aggregate", () => {
+    it("includes tokensBefore/tokensAfter once telemetry has at least one request", async () => {
+      const store = openTelemetryStore(dir);
+      await store.record({
+        ts: "2026-07-08T00:00:00.000Z",
+        projectId: "projA",
+        level: 1,
+        requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
+        stageSavings: { dedup: { tokensBefore: 1000, tokensAfter: 400 } },
+        ccrRefsStored: 1,
+      });
+      await store.close();
+
+      const state = await collectGolemState(dir);
+      expect(state.tokensBefore).toBe(1000);
+      expect(state.tokensAfter).toBe(400);
+    });
+
+    it("omits tokens fields when the telemetry store has no requests yet", async () => {
+      // Touch the store without recording anything (empty/unseeded).
+      const store = openTelemetryStore(dir);
+      await store.close();
+
+      const state = await collectGolemState(dir);
+      expect(state.tokensBefore).toBeUndefined();
+      expect(state.tokensAfter).toBeUndefined();
+    });
+  });
+
+  it("never throws or rejects when every piece of state is corrupt at once", async () => {
+    await mkdir(path.dirname(proxyPidPath(dir)), { recursive: true });
+    await writeFile(proxyPidPath(dir), "{bad json", "utf8");
+    await mkdir(path.dirname(sessionStatePath(dir)), { recursive: true });
+    await writeFile(sessionStatePath(dir), "{bad json", "utf8");
+
+    await expect(collectGolemState(dir)).resolves.toStrictEqual({
+      sliderLevel: 1,
+      upstreamLabel: "anthropic",
+      proxyRunning: false,
+    });
   });
 });
