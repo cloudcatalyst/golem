@@ -5,6 +5,12 @@
  * actually ships to users. The contract already runs against
  * InMemoryVectorDriver (tests/unit/knowledge/ingest.test.ts); until now the
  * driver that real installs use had never been checked against it.
+ *
+ * Every `it()` here ingests and searches within one open instance — it does
+ * not close and reopen the driver, so it doesn't exercise FileVectorDriver's
+ * reload-from-disk path. That path is covered separately by
+ * tests/integration/knowledge-persistence.test.ts (fresh KB over the same
+ * dir in a second "session").
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
