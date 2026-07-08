@@ -66,15 +66,22 @@ function buildModel(stats, status) {
 }
 
 /**
- * Minimal, degraded status-bar string used ONLY when `golem statusline` cannot
- * be run (the extension shows that command's output verbatim — see
- * extension.js). Deliberately NOT a reimplementation of the full format: it
- * carries just the brand + proxy state, so there is no second formatter to drift
- * from the CLI's single source of truth.
+ * The VS Code status-bar line. Intentionally distinct from `golem statusline`
+ * (the terminal line): the status bar is a compact, at-a-glance presence
+ * indicator — brand + slider level + which upstream the traffic fronts, in the
+ * form `→ <provider>`. It deliberately OMITS cumulative savings, which live in
+ * the hover tooltip (see extension.js) and the panel instead.
+ *
+ * When the proxy is off, the upstream is not shown — nothing is going there, so
+ * `→ foundry` would mislead (mirrors the terminal statusline's rule).
+ *
+ * (Model name is not yet displayed: no source is available to the extension —
+ * it would slot in as `→ <provider> (<model>)` once one exists.)
  */
-function statusBarFallback(model) {
+function statusBarText(model) {
   const glyph = model.proxyReachable ? "⬢" : "⬡";
-  return `${glyph} Golem${model.proxyReachable ? "" : " · proxy off"}`;
+  if (!model.proxyReachable) return `${glyph} Golem · proxy off`;
+  return `${glyph} Golem · L${model.slider} · → ${model.upstreamLabel}`;
 }
 
 function esc(s) {
@@ -161,4 +168,4 @@ function renderHtml(model, nonce) {
 </body></html>`;
 }
 
-module.exports = { fmtTokens, upstreamLabel, buildModel, statusBarFallback, renderHtml };
+module.exports = { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml };

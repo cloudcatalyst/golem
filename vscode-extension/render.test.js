@@ -3,7 +3,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { fmtTokens, upstreamLabel, buildModel, statusBarFallback, renderHtml } = require("./render.js");
+const { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml } = require("./render.js");
 
 test("fmtTokens", () => {
   assert.equal(fmtTokens(1_520_615), "1.5M");
@@ -47,11 +47,22 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.proxyReachable, false);
 });
 
-test("statusBarFallback (minimal, used only when `golem statusline` fails)", () => {
-  // Deliberately minimal — the full format comes from `golem statusline`, so the
-  // fallback carries only brand + proxy state and cannot drift from the CLI.
-  assert.equal(statusBarFallback({ proxyReachable: true }), "⬢ Golem");
-  assert.equal(statusBarFallback({ proxyReachable: false }), "⬡ Golem · proxy off");
+test("statusBarText — compact, provider-focused, no savings", () => {
+  // Running: brand + slider level + `→ <provider>`. No savings in the bar.
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry", savedPct: 34 }),
+    "⬢ Golem · L1 · → foundry",
+  );
+  // Savings never leak into the bar text (they live in the hover tooltip).
+  assert.doesNotMatch(
+    statusBarText({ proxyReachable: true, slider: 2, upstreamLabel: "anthropic", savedPct: 91 }),
+    /saved|%|91/,
+  );
+  // Proxy off: brand + state only, no upstream (nothing is fronting it).
+  assert.equal(
+    statusBarText({ proxyReachable: false, slider: 1, upstreamLabel: "foundry" }),
+    "⬡ Golem · proxy off",
+  );
 });
 
 test("renderHtml contains CSP nonce, slider buttons, and escapes", () => {
