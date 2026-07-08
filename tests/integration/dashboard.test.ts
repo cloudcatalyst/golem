@@ -80,4 +80,41 @@ describe("dashboard server", () => {
     handle = await startDashboard({ port: 0, snapshot });
     expect(handle.url).toContain("127.0.0.1");
   });
+
+  it("405s non-GET/HEAD methods", async () => {
+    handle = await startDashboard({ port: 0, snapshot });
+    const res = await fetch(handle.url, { method: "POST" });
+    expect(res.status).toBe(405);
+    const body = await res.text();
+    expect(body).toBe("method not allowed\n");
+  });
+
+  it("HEADs the HTML page with an empty body", async () => {
+    handle = await startDashboard({ port: 0, snapshot });
+    const res = await fetch(handle.url, { method: "HEAD" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/html");
+    const body = await res.text();
+    expect(body).toBe("");
+  });
+
+  it("HEADs the JSON stats endpoint with an empty body", async () => {
+    handle = await startDashboard({ port: 0, snapshot });
+    const res = await fetch(`${handle.url}api/stats`, { method: "HEAD" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = await res.text();
+    expect(body).toBe("");
+  });
+
+  it("500s with the error message when the snapshot callback rejects", async () => {
+    handle = await startDashboard({
+      port: 0,
+      snapshot: () => Promise.reject(new Error("boom")),
+    });
+    const res = await fetch(handle.url);
+    expect(res.status).toBe(500);
+    const body = await res.text();
+    expect(body).toBe("dashboard error: boom\n");
+  });
 });
