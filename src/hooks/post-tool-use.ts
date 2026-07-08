@@ -35,9 +35,10 @@
  *
  * ## Redaction (hard rule: strip BEFORE storing)
  * The stored original and the digest excerpts are both produced from the
- * redacted text: injected {@link RedactFn} first (pipeline stage, TODO T-C3),
- * then the always-on built-in secret strip (redact.ts). `retrieve()` is
- * byte-identical with the *stored* (redacted) original.
+ * redacted text: injected {@link RedactFn} first — defaulting to the real
+ * pipeline redaction stage, `pipelineRedact` (T-C3) — then the always-on
+ * built-in secret strip (redact.ts). `retrieve()` is byte-identical with the
+ * *stored* (redacted) original.
  *
  * The digest marker uses A2's `hash=<sha256>` grammar (CCR_MARKER_RE), and the
  * refId is the sha256 of the stored content, so `golem_expand` retrieves it
@@ -49,7 +50,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
-import { identityRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
+import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
 
 export const HOOK_EVENT_NAME = "PostToolUse";
 
@@ -95,8 +96,11 @@ export interface PostToolUseOptions {
   /** Inline threshold in characters; default {@link DEFAULT_MAX_INLINE_CHARS}. */
   readonly maxInlineChars?: number;
   /**
-   * Pipeline redaction stage (task T-C3). Runs BEFORE the built-in secret
-   * strip, which is always applied on top — injection can only strengthen.
+   * Pipeline redaction stage (task T-C3). Defaults to `pipelineRedact` — the
+   * full REDACTION_RULES table plus the high-entropy sweep. Runs BEFORE the
+   * built-in secret strip, which is always applied on top regardless of what
+   * (if anything) is injected here — injection can only strengthen, never
+   * weaken, redaction.
    */
   readonly redact?: RedactFn;
   /** CCR store project root override; default: the payload's `cwd`. */
@@ -216,8 +220,9 @@ export async function runPostToolUseHook(
 
   try {
     // Redaction BEFORE storage or excerpting (hard rule): injected pipeline
-    // stage first (identity until T-C3), built-in secret strip always on top.
-    const stored = stripKnownSecrets((options.redact ?? identityRedact)(slot.text));
+    // stage first (defaults to pipelineRedact, T-C3), built-in secret strip
+    // always on top — this order means injection/default can only strengthen.
+    const stored = stripKnownSecrets((options.redact ?? pipelineRedact)(slot.text));
     const refId = createHash("sha256").update(stored, "utf8").digest("hex");
 
     const digest = buildDigest(payload.tool_name, stored, refId);

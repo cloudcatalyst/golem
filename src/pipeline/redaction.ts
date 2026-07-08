@@ -136,6 +136,20 @@ export function redactText(text: string, table: PlaceholderTable): RedactionResu
   return { text: afterEntropy, count: total + entropyCount };
 }
 
+/**
+ * Redact a single, standalone string with its own fresh placeholder table:
+ * the full {@link REDACTION_RULES} table plus the high-entropy sweep, as a
+ * pure `(text) => text` function. Convenience entry point for callers that
+ * redact one independent string at a time (e.g. the PostToolUse hook's
+ * tool-output text, T-C3) and don't need placeholders shared across multiple
+ * strings the way {@link redactRequestBody} shares one table across a whole
+ * request body. Allocating a fresh table per call keeps this pure and
+ * deterministic — no state survives between calls.
+ */
+export function redactStandaloneText(text: string): string {
+  return redactText(text, new PlaceholderTable()).text;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

@@ -26,7 +26,7 @@ import {
   webCacheDir,
 } from "../knowledge/index.js";
 import type { HookIo } from "./post-tool-use.js";
-import { identityRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
+import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
 
 /** Cap on cached content echoed in a deny reason (Claude Code flags hook output >10k chars). */
 export const MAX_SERVED_CHARS = 8_000;
@@ -90,7 +90,13 @@ export interface WebFetchHookOptions {
   readonly cache?: WebCache;
   /** Build a KB for the project (cli injects buildKnowledgeStack). Post hook only. */
   readonly buildKnowledge?: (projectDir: string) => Promise<KnowledgeBase | null>;
-  /** Pipeline redaction stage; the built-in secret strip always runs on top. */
+  /**
+   * Pipeline redaction stage; defaults to `pipelineRedact` (the full
+   * REDACTION_RULES table + high-entropy sweep). The built-in secret strip
+   * always runs on top, so injection can only strengthen redaction. Fetched
+   * pages are stored in the web cache AND ingested into the vector KB, so they
+   * must be redacted to the same standard as the CCR-swap path (T-C3).
+   */
   readonly redact?: RedactFn;
 }
 
@@ -153,8 +159,9 @@ export async function runWebFetchPost(
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
     const nowIso = options.nowIso ?? new Date().toISOString();
-    // Redact BEFORE storing (hard rule): injected stage first, built-in strip on top.
-    const content = stripKnownSecrets((options.redact ?? identityRedact)(text));
+    // Redact BEFORE storing/ingesting (hard rule): pipeline stage first
+    // (defaults to pipelineRedact), built-in secret strip always on top.
+    const content = stripKnownSecrets((options.redact ?? pipelineRedact)(text));
 
     await (options.cache ?? new WebCache(webCacheDir(projectDir))).put(url, content, nowIso);
 
