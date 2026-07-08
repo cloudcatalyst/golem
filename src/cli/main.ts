@@ -12,9 +12,8 @@
 
 import { spawn } from "node:child_process";
 import { Command, InvalidArgumentError } from "commander";
-import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
-import { loadConfig, policyFromSettings, settingsFilePaths } from "../config/index.js";
+import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
 import { buildHookCommand } from "../hooks/index.js";
 import { VERSION } from "../index.js";
@@ -28,13 +27,7 @@ import type { HardwareTier } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
-import { createGolemPipeline } from "../pipeline/index.js";
-import { GolemProxy } from "../proxy/index.js";
-import {
-  openTelemetryStore,
-  recordPipelineEvent,
-  telemetryStatsSource,
-} from "../telemetry/index.js";
+import { openTelemetryStore, telemetryStatsSource } from "../telemetry/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
@@ -47,6 +40,7 @@ import {
   waitForPortFree,
   writeProxyPid,
 } from "./proxy-daemon.js";
+import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
@@ -238,37 +232,12 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
 
   const telemetry = openTelemetryStore(dir);
-  // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
-  // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
-  const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
-  const pipeline = createGolemPipeline({
-    compression: NativeLosslessCompression.forProjectDir(dir),
-    policy: () => policyFromSettings(settings),
-    projectId: dir,
-    onEvent: (event) => {
-      void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
-    },
-    ...(semantic !== undefined ? { semantic } : {}),
-  });
+  const { proxy, semantic } = buildProxyFromSettings(dir, settings, telemetry);
   if (semantic !== undefined) {
     process.stdout.write(
       "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
     );
   }
-  const proxy = new GolemProxy({
-    upstreamBaseUrl: settings.proxy.upstream_base_url,
-    connectTimeoutMs: settings.proxy.connect_timeout_ms,
-    headersTimeoutMs: settings.proxy.request_timeout_ms,
-    bodyTimeoutMs: settings.proxy.request_timeout_ms,
-    pipeline,
-    onPipelineError: (err) => {
-      process.stderr.write(
-        `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
-          err instanceof Error ? err.message : String(err)
-        }\n`,
-      );
-    },
-  });
   const addr = await proxy.listen(port);
   await writeProxyPid(dir, { pid: process.pid, port: addr.port, ts: new Date().toISOString() });
   process.stdout.write(
