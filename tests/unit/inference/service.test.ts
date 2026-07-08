@@ -124,6 +124,39 @@ describe("OllamaInferenceService routing", () => {
       await client.close();
     }
   });
+
+  it("stops at the first InferenceEndpointError instead of hammering every remaining tier", async () => {
+    // Every request gets a 200 with a malformed (non-JSON) body, which
+    // ollama-client.ts turns into an InferenceEndpointError — distinct from
+    // the ModelNotAvailableError (404) the other tests simulate. That error
+    // is documented as terminal for the fallback loop (service.ts `break`),
+    // so with stepDownTier from P_MAX down to P_CPU we expect exactly ONE
+    // request, not one per tier (4, if `break` regressed to `continue`).
+    let requestCount = 0;
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        requestCount += 1;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("not valid json");
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const client = new OllamaClient({ baseUrl });
+    try {
+      const svc = new OllamaInferenceService(client, facts(HardwareTier.PMax), {
+        fallback: { stepDownTier: true },
+      });
+      await expect(svc.chat("judge", [{ role: "user", content: "hi" }])).rejects.toBeInstanceOf(
+        CapabilityUnavailableError,
+      );
+      expect(requestCount).toBe(1);
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 // The frozen contract, backed by a server that has every model the CPU tier
