@@ -3,7 +3,7 @@
  * hooks. Temp dirs; hook I/O injected.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -14,6 +14,7 @@ import {
   readSessionState,
   runNotificationHook,
   runUserPromptSubmitHook,
+  sessionStatePath,
 } from "../../../src/hooks/index.js";
 
 let dir: string;
@@ -53,6 +54,56 @@ describe("session state read/write", () => {
 
   it("returns null on a missing/corrupt file (never throws)", async () => {
     expect(await readSessionState(dir)).toBeNull();
+  });
+
+  it("returns null when the file contains invalid JSON", async () => {
+    const file = sessionStatePath(dir);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "{not valid json", "utf8");
+    expect(await readSessionState(dir)).toBeNull();
+  });
+
+  it.each([
+    ["an array", "[1,2,3]"],
+    ["a number", "42"],
+    ["a string", '"a string"'],
+  ])("returns null when the JSON root is not an object (%s)", async (_label, json) => {
+    const file = sessionStatePath(dir);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, json, "utf8");
+    expect(await readSessionState(dir)).toBeNull();
+  });
+
+  it.each([
+    ["missing blocked", { ts: "2026-07-08T00:00:00Z" }],
+    ["blocked is a string, not boolean", { blocked: "yes", ts: "t" }],
+    ["missing ts", { blocked: true }],
+  ])("returns null when required fields are missing/mistyped (%s)", async (_label, obj) => {
+    const file = sessionStatePath(dir);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify(obj), "utf8");
+    expect(await readSessionState(dir)).toBeNull();
+  });
+
+  it("omits optional fields with the wrong type rather than nulling the whole object", async () => {
+    const file = sessionStatePath(dir);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(
+      file,
+      JSON.stringify({
+        blocked: true,
+        ts: "2026-07-08T00:00:00Z",
+        reason: 123,
+        sessionId: 456,
+      }),
+      "utf8",
+    );
+    const s = await readSessionState(dir);
+    expect(s).not.toBeNull();
+    expect(s?.blocked).toBe(true);
+    expect(s?.ts).toBe("2026-07-08T00:00:00Z");
+    expect(s?.reason).toBeUndefined();
+    expect(s?.sessionId).toBeUndefined();
   });
 });
 
