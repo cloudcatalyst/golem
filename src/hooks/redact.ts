@@ -1,15 +1,19 @@
 /**
  * Redaction seam for the PostToolUse hook (WS-B task B2).
  *
- * ⚠ TODO(T-C3): the real redaction stage lives in src/pipeline/ and had not
- * shipped when B2 was built (src/pipeline/index.ts is a placeholder). Until
- * the integrator wires the pipeline's redaction in via
- * {@link PostToolUseOptions.redact}, only {@link stripKnownSecrets} protects
- * stored originals. That built-in strip is deliberately conservative and is
- * ALWAYS applied — after any injected RedactFn — so injection can only
- * strengthen redaction, never weaken it (CLAUDE.md hard rule: redaction runs
- * before content is stored, and is never weakened).
+ * T-C3: {@link pipelineRedact} adapts the real src/pipeline/ redaction stage
+ * (`REDACTION_RULES` + the high-entropy sweep) to this module's text-level
+ * {@link RedactFn} shape, and is now the default the PostToolUse hook applies
+ * (see post-tool-use.ts). {@link stripKnownSecrets} is a conservative built-in
+ * floor that is ALWAYS applied on top — after any injected or default
+ * RedactFn — so nothing can weaken redaction below that floor (CLAUDE.md hard
+ * rule: redaction runs before content is stored, and is never weakened).
+ * {@link identityRedact} remains available for callers that want no
+ * pipeline-stage redaction (e.g. explicit test injection) while still getting
+ * the always-on floor.
  */
+
+import { redactStandaloneText } from "../pipeline/index.js";
 
 /**
  * A redaction pass over tool-output text. Must be pure and deterministic.
@@ -17,8 +21,17 @@
  */
 export type RedactFn = (text: string) => string;
 
-/** Identity redaction — explicit default until T-C3 wires the pipeline stage. */
+/** Identity redaction — a no-op RedactFn (e.g. for isolating the floor in tests). */
 export const identityRedact: RedactFn = (text) => text;
+
+/**
+ * The real redaction stage (T-C3): the pipeline's full `REDACTION_RULES`
+ * table plus the high-entropy sweep, adapted to the text-level {@link RedactFn}
+ * shape. Allocates a fresh placeholder table on every call via
+ * {@link redactStandaloneText}, so this stays a pure, deterministic
+ * `(text) => text` function — required for prompt-cache prefix stability.
+ */
+export const pipelineRedact: RedactFn = (text) => redactStandaloneText(text);
 
 /**
  * A complete PEM private-key block. Label-anchored on "PRIVATE KEY" so public
@@ -45,7 +58,7 @@ export const REDACTED_SK_ANT_PLACEHOLDER = "[golem:redacted sk-ant-key]";
 /**
  * Built-in conservative secret strip: PEM private-key blocks and `sk-ant-`
  * API keys are replaced with fixed placeholders. This is a floor, not the
- * redaction stage — see the module doc (TODO T-C3).
+ * redaction stage — see the module doc.
  */
 export function stripKnownSecrets(text: string): string {
   return text

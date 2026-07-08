@@ -67,6 +67,28 @@ describe("WebFetch capture (PostToolUse)", () => {
     expect(hits[0]?.chunk.sourcePath).toBe(`web:${url}`);
   });
 
+  it("redacts secrets (full pipeline, not just the floor) before caching + ingesting", async () => {
+    // A canonical AWS docs example access-key ID, assembled from fragments so
+    // the contiguous AKIA-pattern never appears as a literal in this source
+    // file (this repo's own Golem proxy would otherwise redact it in tooling
+    // views). It is matched by the pipeline's `aws-key` rule but NOT by the
+    // built-in floor (PEM / sk-ant only) — so it proves the capture path runs
+    // the full pipeline, not identityRedact; otherwise the key would land
+    // verbatim in the web cache and the vector KB.
+    const url = "https://example.com/leak";
+    const awsKey = `AKIA${"IOSFODNN7EXAMPLE"}`; // 20 chars: AKIA + 16
+    await runWebFetchPost(fakeIo(postInput(url, `deploy notes\naws_key ${awsKey}\nfin.`)), {
+      projectDir,
+      nowIso: "2026-07-05T00:00:00Z",
+      buildKnowledge,
+    });
+
+    const cached = (await new WebCache(webCacheDir(projectDir)).get(url))?.content ?? "";
+    expect(cached).not.toContain(awsKey); // the raw key must not be stored
+    expect(cached).toContain("[REDACTED:aws-key:"); // replaced by the pipeline placeholder
+    expect(cached).toContain("deploy notes"); // surrounding content preserved
+  });
+
   it("extracts content from a {output} response shape too", async () => {
     const url = "https://example.com/x";
     await runWebFetchPost(fakeIo(postInput(url, { output: "Alpha beta gamma delta." })), {

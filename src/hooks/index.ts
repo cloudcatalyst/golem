@@ -8,7 +8,7 @@
  *   - addPostToolUseHook / removePostToolUseHook — `.claude/settings.json`
  *     writers for the E2 init/uninit flows.
  *   - writeGuidanceSection             — CLAUDE.md guidance-section writer.
- *   - RedactFn / stripKnownSecrets     — redaction seam (TODO T-C3).
+ *   - RedactFn / pipelineRedact / stripKnownSecrets — redaction seam (T-C3).
  *
  * ## Integrator wiring (files owned by other agents — do NOT edit them here)
  *
@@ -50,6 +50,7 @@ export {
 export type { RedactFn } from "./redact.js";
 export {
   identityRedact,
+  pipelineRedact,
   REDACTED_PEM_PLACEHOLDER,
   REDACTED_SK_ANT_PLACEHOLDER,
   stripKnownSecrets,

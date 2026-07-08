@@ -20,6 +20,7 @@ import {
 import {
   DEFAULT_MAX_INLINE_CHARS,
   type HookIo,
+  identityRedact,
   REDACTED_PEM_PLACEHOLDER,
   REDACTED_SK_ANT_PLACEHOLDER,
   type RedactFn,
@@ -187,7 +188,11 @@ describe("runPostToolUseHook — redaction before storage", () => {
     const stored = await retrieveOriginal(refId);
     expect(stored).not.toContain("BEGIN RSA PRIVATE KEY");
     expect(stored).not.toContain("examplekeymaterial");
-    expect(stored).toContain(REDACTED_PEM_PLACEHOLDER);
+    // Default redact is now pipelineRedact (T-C3): the pipeline's private-key
+    // rule catches the PEM block before the built-in floor gets a chance, so
+    // the stored text carries the pipeline's placeholder, not the floor's.
+    expect(stored).toMatch(/\[REDACTED:private-key:\d+\]/);
+    expect(stored).not.toContain(REDACTED_PEM_PLACEHOLDER);
   });
 
   it("strips an sk-ant- API key from the stored original", async () => {
@@ -205,7 +210,10 @@ describe("runPostToolUseHook — redaction before storage", () => {
 
     const stored = await retrieveOriginal(refId);
     expect(stored).not.toContain(secret);
-    expect(stored).toContain(REDACTED_SK_ANT_PLACEHOLDER);
+    // Default redact is now pipelineRedact (T-C3): the pipeline's
+    // anthropic-key rule catches sk-ant- before the built-in floor does.
+    expect(stored).toMatch(/\[REDACTED:anthropic-key:\d+\]/);
+    expect(stored).not.toContain(REDACTED_SK_ANT_PLACEHOLDER);
   });
 
   it("applies an injected RedactFn before the built-in strip", async () => {
@@ -224,6 +232,33 @@ describe("runPostToolUseHook — redaction before storage", () => {
     const stored = await retrieveOriginal(refId);
     expect(stored).not.toContain("hunter2");
     expect(stored).toContain("PASSWORD=[redacted]");
+  });
+
+  it("still applies the built-in secret-strip floor when the injected RedactFn is identity", async () => {
+    // Fake fixtures only — not real key material.
+    const pem = [
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "FAKEKEYMATERIALFAKEKEYMATERIALFAKE",
+      "-----END RSA PRIVATE KEY-----",
+    ].join("\n");
+    const skAnt = "sk-ant-FAKE0123456789ABCDEFGHIJ";
+    const output = `${pem}\n${skAnt}\n${"line\n".repeat(4_000)}`;
+
+    const io = fakeIo(payload("Bash", output));
+    // Bypass the pipeline stage entirely — the floor must still fire on its own.
+    await runPostToolUseHook(io, { projectDir, redact: identityRedact });
+    const env = parseStdout(io);
+    const refId = (
+      CCR_MARKER_RE.exec(
+        env.hookSpecificOutput.updatedToolOutput as string,
+      ) as RegExpExecArray | null
+    )?.[1] as string;
+
+    const stored = await retrieveOriginal(refId);
+    expect(stored).not.toContain("FAKEKEYMATERIALFAKEKEYMATERIALFAKE");
+    expect(stored).not.toContain(skAnt);
+    expect(stored).toContain(REDACTED_PEM_PLACEHOLDER);
+    expect(stored).toContain(REDACTED_SK_ANT_PLACEHOLDER);
   });
 });
 

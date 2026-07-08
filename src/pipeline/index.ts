@@ -9,7 +9,7 @@
 export type { GolemPipelineOptions, PipelineEvent } from "./pipeline.js";
 export { createGolemPipeline } from "./pipeline.js";
 export type { RedactBodyResult } from "./redaction.js";
-export { redactRequestBody } from "./redaction.js";
+export { redactRequestBody, redactStandaloneText } from "./redaction.js";
 export type { RedactionRule } from "./redaction-rules.js";
 export {
   ENTROPY_THRESHOLD_BITS,
