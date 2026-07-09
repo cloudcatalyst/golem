@@ -45,13 +45,36 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.slider, 1);
   assert.equal(m.upstreamLabel, "anthropic");
   assert.equal(m.proxyReachable, false);
+  assert.equal(m.localFirstIntended, false);
+  assert.equal(m.localFirstReady, false);
+});
+
+test("buildModel surfaces local_first intended/ready from status --json", () => {
+  const status = {
+    slider: { level: 5, name: "local-first" },
+    proxy: { reachable: true },
+    local_first: { intended: true, ready: true, model: "qwen2.5-coder:7b" },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.localFirstIntended, true);
+  assert.equal(m.localFirstReady, true);
 });
 
 test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry", savedPct: 34 }),
-    "⬢ Golem · L1 · → foundry",
+    "⬢ Golem · L1 → foundry",
+  );
+  // Slider name, title-cased, is preferred over the bare "L<n>" form.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 5,
+      sliderName: "max savings",
+      upstreamLabel: "anthropic",
+    }),
+    "⬢ Golem · Max savings → anthropic",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
@@ -61,6 +84,47 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   // Proxy off: brand + state only, no upstream (nothing is fronting it).
   assert.equal(
     statusBarText({ proxyReachable: false, slider: 1, upstreamLabel: "foundry" }),
+    "⬡ Golem · proxy off",
+  );
+});
+
+test("statusBarText — local segment only appears when ready, ahead of the upstream provider", () => {
+  // Not intended (below slider 5 + opt-in): no local segment at all.
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry" }),
+    "⬢ Golem · L1 → foundry",
+  );
+  // Intended but not ready: omitted rather than spelled out — the bar isn't a diagnostics readout.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 5,
+      upstreamLabel: "anthropic",
+      localFirstIntended: true,
+      localFirstReady: false,
+    }),
+    "⬢ Golem · L5 → anthropic",
+  );
+  // Intended and ready: "local" appears ahead of the upstream provider.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 5,
+      upstreamLabel: "anthropic",
+      localFirstIntended: true,
+      localFirstReady: true,
+    }),
+    "⬢ Golem · L5 · local → anthropic",
+  );
+  // Proxy off short-circuits before the local-first segment is ever considered.
+  assert.equal(
+    statusBarText({
+      proxyReachable: false,
+      slider: 5,
+      upstreamLabel: "anthropic",
+      localFirstIntended: true,
+      localFirstReady: true,
+    }),
     "⬡ Golem · proxy off",
   );
 });

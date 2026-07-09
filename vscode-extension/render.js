@@ -61,6 +61,8 @@ function buildModel(stats, status) {
     upstream,
     upstreamLabel: upstreamLabel(upstream),
     proxyReachable: !!(st.proxy && st.proxy.reachable),
+    localFirstIntended: !!(st.local_first && st.local_first.intended),
+    localFirstReady: !!(st.local_first && st.local_first.ready),
     source: typeof s.source === "string" ? s.source : "live",
   };
 }
@@ -75,13 +77,23 @@ function buildModel(stats, status) {
  * When the proxy is off, the upstream is not shown — nothing is going there, so
  * `→ foundry` would mislead (mirrors the terminal statusline's rule).
  *
+ * When local-first is intended (slider 5 + `local_only_opt_in`) AND a local
+ * model is actually ready to serve it, a `local` segment appears ahead of the
+ * upstream provider — this is a policy/readiness snapshot (Decision 25/26),
+ * not per-request telemetry. Not-ready is omitted rather than spelled out:
+ * the bar is a glance-and-go presence indicator, not a diagnostics readout.
+ *
  * (Model name is not yet displayed: no source is available to the extension —
  * it would slot in as `→ <provider> (<model>)` once one exists.)
  */
 function statusBarText(model) {
   const glyph = model.proxyReachable ? "⬢" : "⬡";
   if (!model.proxyReachable) return `${glyph} Golem · proxy off`;
-  return `${glyph} Golem · L${model.slider} · → ${model.upstreamLabel}`;
+  const levelLabel = model.sliderName
+    ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
+    : `L${model.slider}`;
+  const localSegment = model.localFirstIntended && model.localFirstReady ? " · local" : "";
+  return `${glyph} Golem · ${levelLabel}${localSegment} → ${model.upstreamLabel}`;
 }
 
 function esc(s) {
