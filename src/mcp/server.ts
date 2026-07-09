@@ -4,12 +4,14 @@
  * Tool names (IMPLEMENTATION_PLAN §2.5; short-verb names per Decision 27 —
  * do not rename again without a new Decisions Log entry):
  * - P0 tools: `expand`, `stats`, `level` (formerly `golem_expand`,
- *   `golem_stats`, `golem_set_slider`).
+ *   `golem_stats`, `golem_set_slider`). `devices` (formerly `golem_devices`)
+ *   is registered unconditionally alongside them — it needs no injected
+ *   service, just the always-available hardware-probe functions.
  * - P1 knowledge tools (task B3): `search`, `fetch`, `ingest` (formerly
  *   `golem_search`, `golem_get_chunk`, `golem_index_path`) — registered only
  *   when a KnowledgeBase is injected (`deps.knowledge`). `delegate`
  *   (formerly `golem_delegate`) is registered only when an InferenceService
- *   is injected (`deps.inference`). `golem_devices` is still to come.
+ *   is injected (`deps.inference`).
  * - Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`,
  *   `devices`, `delegate` — surfaced by Claude Code as `/mcp__golem__<name>`
  *   (verification-notes.md §10). Prompt names are unchanged; a tool and a
@@ -30,8 +32,10 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
 import type {
   CompressionService,
+  HardwareTier,
   Hit,
   InferenceService,
   KnowledgeBase,
@@ -275,6 +279,8 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       };
     },
   );
+
+  registerDevicesTool(server);
 
   if (deps.knowledge !== undefined) {
     registerKnowledgeTools(server, deps.knowledge, deps.defaultProjectId ?? "default");
@@ -578,6 +584,65 @@ function registerDelegateTool(server: McpServer, inference: InferenceService): v
   );
 }
 
+/** `golem devices` CLI's tier→name map (src/cli/main.ts), duplicated here since it is a local const there. */
+const DEVICE_TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
+  0: "P_CPU",
+  1: "P_MIN",
+  2: "P_MID",
+  3: "P_MAX",
+};
+
+/**
+ * P0 tool: report the detected local hardware tier and the models Golem
+ * would use for it — the MCP twin of the `golem devices` CLI command.
+ * Registered unconditionally: detection needs no injected service, only the
+ * always-available hardware-probe functions, and `detectCapability` never
+ * throws (every failure path degrades to P_CPU).
+ */
+function registerDevicesTool(server: McpServer): void {
+  server.registerTool(
+    "devices",
+    {
+      title: "Show detected local hardware",
+      description:
+        "Report Golem's detected local hardware tier (GPU/accelerator, memory) and " +
+        "the local models Golem would use at that tier. Same info as the " +
+        "`golem devices` CLI command.",
+      outputSchema: {
+        tier: z.number().int().min(0).max(3),
+        tier_name: z.string(),
+        source: z.string(),
+        device: z.string().optional(),
+        memory_mib: z.number().optional(),
+        detail: z.string(),
+        models: z.array(z.string()),
+      },
+    },
+    async () => {
+      const facts = await detectCapability(createProbeRunner());
+      const models = modelsForTier(facts.tier);
+      const tierName = DEVICE_TIER_NAMES[facts.tier];
+      const lines = [`Hardware tier: ${facts.tier} (${tierName}) — via ${facts.source}`];
+      if (facts.device !== undefined) lines.push(`  device: ${facts.device}`);
+      if (facts.memoryMiB !== undefined) lines.push(`  memory: ${facts.memoryMiB} MiB`);
+      lines.push(`  ${facts.detail}`);
+      lines.push(`  models for this tier: ${models.join(", ")}`);
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        structuredContent: {
+          tier: facts.tier,
+          tier_name: tierName,
+          source: facts.source,
+          detail: facts.detail,
+          models,
+          ...(facts.device !== undefined ? { device: facts.device } : {}),
+          ...(facts.memoryMiB !== undefined ? { memory_mib: facts.memoryMiB } : {}),
+        },
+      };
+    },
+  );
+}
+
 function registerPrompts(server: McpServer): void {
   server.registerPrompt(
     "slider",
@@ -705,7 +770,7 @@ function registerPrompts(server: McpServer): void {
     () =>
       promptMessages(
         "Report the local hardware capabilities Golem detected (tier, GPU/VRAM, " +
-          `available local models) using the golem_devices tool. ${P1_TOOL_FALLBACK}`,
+          `available local models) using the devices tool. ${P1_TOOL_FALLBACK}`,
       ),
   );
 

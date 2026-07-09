@@ -33,7 +33,7 @@ import {
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 
-const P0_TOOLS = ["expand", "stats", "level"] as const;
+const P0_TOOLS = ["expand", "stats", "level", "devices"] as const;
 const ALL_PROMPTS = [
   "slider",
   "index",
@@ -232,6 +232,42 @@ describe("golem MCP server (in-memory transport)", () => {
         arguments: { project_id: 7 },
       });
       expectInvalidParamsResult(result);
+    });
+  });
+
+  describe("devices", () => {
+    it("reports the detected hardware tier and its models, with matching text and structuredContent", async () => {
+      const client = await connectInMemory(createStandaloneDeps());
+      const result = await client.callTool({ name: "devices", arguments: {} });
+      expect(result.isError).toBeFalsy();
+
+      const structured = result.structuredContent as {
+        tier: number;
+        tier_name: string;
+        source: string;
+        device?: string;
+        memory_mib?: number;
+        detail: string;
+        models: string[];
+      };
+      expect(Object.values(HardwareTier)).toContain(structured.tier);
+      expect(structured.tier_name).toMatch(/^P_(CPU|MIN|MID|MAX)$/);
+      expect(typeof structured.source).toBe("string");
+      expect(structured.source.length).toBeGreaterThan(0);
+      expect(typeof structured.detail).toBe("string");
+      expect(structured.detail.length).toBeGreaterThan(0);
+      expect(Array.isArray(structured.models)).toBe(true);
+      expect(structured.models.length).toBeGreaterThan(0);
+      for (const model of structured.models) expect(typeof model).toBe("string");
+      if (structured.device !== undefined) expect(typeof structured.device).toBe("string");
+      if (structured.memory_mib !== undefined) {
+        expect(typeof structured.memory_mib).toBe("number");
+      }
+
+      const text = textOf(result);
+      expect(text).toContain(`Hardware tier: ${structured.tier} (${structured.tier_name})`);
+      expect(text).toContain(structured.detail);
+      expect(text).toContain(structured.models.join(", "));
     });
   });
 
