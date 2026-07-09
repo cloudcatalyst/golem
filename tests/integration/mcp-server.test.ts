@@ -12,7 +12,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
+import { InferenceEndpointError, ModelNotAvailableError } from "../../src/inference/index.js";
+import type { Chunk, Hit, IngestReport, KnowledgeBase } from "../../src/interfaces/index.js";
 import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
+import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 
 const P0_TOOLS = ["golem_expand", "golem_stats", "golem_set_slider"] as const;
@@ -255,6 +258,125 @@ describe("golem MCP server (in-memory transport)", () => {
       const text = first?.content.type === "text" ? first.content.text : "";
       expect(text).toContain("golem_set_slider");
       expect(text).toContain("x-golem-bypass");
+    });
+  });
+});
+
+/**
+ * `backendUnavailableMessage()` (src/mcp/server.ts) maps a knowledge-backend
+ * failure's `err.name` to a friendly, actionable message shared by all three
+ * P1 knowledge tools. It is not exported, so these tests drive it through the
+ * real `golem_search` / `golem_get_chunk` / `golem_index_path` handlers with a
+ * KnowledgeBase stub that throws a chosen error from every method.
+ */
+describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () => {
+  class ThrowingKnowledgeBase implements KnowledgeBase {
+    constructor(private readonly err: Error) {}
+    async ingest(): Promise<IngestReport> {
+      throw this.err;
+    }
+    async search(): Promise<Hit[]> {
+      throw this.err;
+    }
+    async getChunk(): Promise<Chunk> {
+      throw this.err;
+    }
+  }
+
+  function depsWithKnowledgeError(err: Error): Deps {
+    return {
+      ...createStandaloneDeps(),
+      knowledge: new ThrowingKnowledgeBase(err),
+      defaultProjectId: "proj-1",
+    };
+  }
+
+  const modelNotAvailableErr = new ModelNotAvailableError("bge-m3");
+
+  const MAPPED_ERRORS: ReadonlyArray<readonly [name: string, err: Error, friendlyMessage: string]> =
+    [
+      [
+        "InferenceEndpointError",
+        new InferenceEndpointError("connect ECONNREFUSED 127.0.0.1:11434"),
+        "Golem's local inference endpoint (Ollama) is unreachable, so the knowledge " +
+          "base cannot embed. Start Ollama and ensure the embedding model is pulled " +
+          "(see `golem devices`), then retry.",
+      ],
+      [
+        "ModelNotAvailableError",
+        modelNotAvailableErr,
+        `A local model the knowledge base needs is not installed: ${modelNotAvailableErr.message}`,
+      ],
+      [
+        "NotImplementedYetError",
+        new NotImplementedYetError("Qdrant server driver", "C1-followup"),
+        "Golem's knowledge base has no embedding backend available in this run " +
+          "(local inference required). Check `golem devices` and that Ollama is running.",
+      ],
+    ];
+
+  describe.each(MAPPED_ERRORS)("%s", (_name, err, friendlyMessage) => {
+    it("golem_search surfaces the friendly message as an isError result", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(err));
+      const result = await client.callTool({ name: "golem_search", arguments: { query: "q" } });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe(friendlyMessage);
+    });
+
+    it("golem_get_chunk surfaces the friendly message as an isError result", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(err));
+      const result = await client.callTool({
+        name: "golem_get_chunk",
+        arguments: { chunk_id: "chunk-1" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe(friendlyMessage);
+    });
+
+    it("golem_index_path surfaces the friendly message as an isError result", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(err));
+      const result = await client.callTool({
+        name: "golem_index_path",
+        arguments: { path: "src" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe(friendlyMessage);
+    });
+  });
+
+  describe("an error name with no mapping", () => {
+    // err.name defaults to "Error", which matches none of the switch's cases,
+    // so backendUnavailableMessage returns null and the handler rethrows the
+    // original error verbatim. The SDK's own catch-all then turns that into an
+    // `isError: true` result whose text is the raw `err.message` (server/mcp.js
+    // `createToolError`) — no friendly wrapping.
+    const unmapped = new Error("weird backend failure");
+
+    it("golem_search rethrows to a plain isError with the raw message", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(unmapped));
+      const result = await client.callTool({ name: "golem_search", arguments: { query: "q" } });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe("weird backend failure");
+    });
+
+    it("golem_get_chunk rethrows to a plain isError with the raw message", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(unmapped));
+      const result = await client.callTool({
+        name: "golem_get_chunk",
+        arguments: { chunk_id: "chunk-1" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe("weird backend failure");
+    });
+
+    it("golem_index_path rethrows to a plain isError with the raw message", async () => {
+      const client = await connectInMemory(depsWithKnowledgeError(unmapped));
+      const result = await client.callTool({
+        name: "golem_index_path",
+        arguments: { path: "src" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toBe("weird backend failure");
     });
   });
 });
