@@ -129,7 +129,7 @@ function sseEvent(event: string, data: unknown): string {
 }
 
 const ANSWERED_LOCALLY_PREFIX = (model: string): string =>
-  `Answered locally by ${model} — Golem local-first mode; verify independently.\n\n`;
+  `**Golem** Used ${model} locally — verify independently.\n\n`;
 
 function buildLocalJsonResponse(result: ChatResult): LocalResponse {
   const text = `${ANSWERED_LOCALLY_PREFIX(result.model)}${result.text.trim()}`;

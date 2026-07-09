@@ -106,7 +106,10 @@ async function refresh() {
   lastModel = model;
   if (statusBar) {
     statusBar.text = statusBarText(model);
-    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}\nClick for actions`;
+    const localFirstLine = model.localFirstIntended
+      ? `\nLocal-first: ${model.localFirstReady ? "ready" : "not ready"}`
+      : "";
+    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}${localFirstLine}\nClick for actions`;
   }
   if (provider) provider.render(model);
 }

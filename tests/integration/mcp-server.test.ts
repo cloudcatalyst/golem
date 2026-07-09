@@ -465,7 +465,7 @@ describe("golem_delegate tool", () => {
     expect(result.isError).toBeFalsy();
     const text = textOf(result);
     expect(text).toContain("draft code here");
-    expect(text).toContain("produced locally by qwen2.5-coder:7b");
+    expect(text).toContain("**Golem** Used qwen2.5-coder:7b locally");
     expect(result.structuredContent).toMatchObject({
       model: "qwen2.5-coder:7b",
       role: "drafter",

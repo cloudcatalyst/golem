@@ -12,8 +12,11 @@
 
 import http from "node:http";
 import path from "node:path";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, policyFromSettings } from "../config/index.js";
+import type { OllamaBootstrapDeps } from "../inference/index.js";
+import { effectiveStages } from "../interfaces/policy.js";
 import { golemInitStatus } from "./init.js";
+import { collectOllamaStatus } from "./ollama.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
 
 /** One effective setting: value + which layer supplied it. */
@@ -47,6 +50,14 @@ export interface StatusReport {
   };
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
+  readonly local_first: {
+    /** Slider level 5 + `local_only_opt_in` — Decision 25 Mode B is configured to run. */
+    readonly intended: boolean;
+    /** Only meaningful when `intended`: Ollama installed, reachable, and the tier's model pulled. */
+    readonly ready: boolean;
+    /** This tier's drafter model, present whenever `intended` (regardless of readiness). */
+    readonly model?: string;
+  };
   readonly warnings: readonly string[];
 }
 
@@ -59,6 +70,8 @@ export interface StatusOptions {
   /** Test injection (forwarded to loadConfig). */
   readonly userDir?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** Test injection (forwarded to collectOllamaStatus) — avoids real probes in tests. */
+  readonly ollamaDeps?: OllamaBootstrapDeps;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
@@ -103,10 +116,21 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
   };
-  const [init, reachable, slider] = await Promise.all([
+  // Only probe Ollama when local-first is actually configured to run — the
+  // capability + reachability probes are real OS/HTTP calls, not worth paying
+  // on every poll at slider levels where Mode B can't fire anyway.
+  const intended = effectiveStages(policyFromSettings(settings)).localOnlyAnswers;
+  const [init, reachable, slider, ollama] = await Promise.all([
     golemInitStatus(projectDir, settings.proxy.port),
     probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
     getSliderInfo(sliderOpts),
+    intended
+      ? collectOllamaStatus({
+          projectDir,
+          ...(options.userDir !== undefined && { userDir: options.userDir }),
+          ...(options.ollamaDeps !== undefined && { deps: options.ollamaDeps }),
+        })
+      : Promise.resolve(undefined),
   ]);
 
   const config: Record<string, ConfigKeyStatus> = {};
@@ -137,6 +161,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     },
     slider: sliderJson(slider),
     config,
+    local_first: {
+      intended,
+      ready: (ollama?.reachable ?? false) && (ollama?.modelPulled ?? false),
+      ...(ollama !== undefined && { model: ollama.targetModel }),
+    },
     warnings,
   };
 }
@@ -177,6 +206,17 @@ export function renderStatus(report: StatusReport): string {
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
   lines.push("");
+
+  const localFirst = report.local_first;
+  if (localFirst.intended) {
+    lines.push(
+      `Local-first: intended (slider 5 + local_only_opt_in) — ` +
+        (localFirst.ready
+          ? `ready (${localFirst.model})`
+          : `not ready (run \`golem ollama setup\`${localFirst.model !== undefined ? ` for ${localFirst.model}` : ""})`),
+    );
+    lines.push("");
+  }
 
   lines.push("Config (value — layer):");
   for (const [key, entry] of Object.entries(report.config)) {

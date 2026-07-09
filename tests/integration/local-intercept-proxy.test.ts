@@ -192,7 +192,7 @@ describe("local-drafter intercept through the proxy", () => {
       expect(parsed.role).toBe("assistant");
       expect(parsed.model).toBe("qwen2.5-coder:7b");
       expect(parsed.stop_reason).toBe("end_turn");
-      expect(parsed.content[0].text).toContain("Answered locally by qwen2.5-coder:7b");
+      expect(parsed.content[0].text).toContain("**Golem** Used qwen2.5-coder:7b locally");
       expect(parsed.content[0].text).toContain("new array");
     } finally {
       await proxy.close();

@@ -381,8 +381,8 @@ function registerKnowledgeTools(
         const structuredHits = hits.map(toStructuredHit);
         const summary =
           hits.length === 0
-            ? `No knowledge-base hits for "${query}" in project ${projectId}.`
-            : `${hits.length} hit(s) for "${query}":\n` +
+            ? `**Golem** Found no knowledge-base hits for "${query}" in project ${projectId}.`
+            : `**Golem** Found ${hits.length} hit(s) for "${query}":\n` +
               hits
                 .map((h, i) => {
                   const loc = h.chunk.sourcePath
@@ -498,7 +498,7 @@ function registerKnowledgeTools(
             {
               type: "text",
               text:
-                `Indexed ${report.path} into project ${report.projectId}: ` +
+                `**Golem** Indexed ${report.path} into project ${report.projectId}: ` +
                 `${report.chunksIndexed} chunks from ${report.filesSeen} file(s) ` +
                 `(${report.filesSkipped} skipped)${report.watching ? ", watching for changes" : ""}.`,
             },
@@ -556,7 +556,7 @@ function registerDelegateTool(server: McpServer, inference: InferenceService): v
           content: [
             {
               type: "text",
-              text: `${result.text}\n\n(produced locally by ${result.model}; review before relying on it)`,
+              text: `**Golem** Used ${result.model} locally — verify independently.\n\n${result.text}`,
             },
           ],
           structuredContent: {
