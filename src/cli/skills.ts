@@ -8,7 +8,7 @@
  */
 
 const slider = `---
-description: Show or set the Golem token-savings slider (0 passthrough … 5 max)
+description: Show or set the Golem token-savings slider (0 passthrough … 5 maximum)
 invocationMode: user
 ---
 
