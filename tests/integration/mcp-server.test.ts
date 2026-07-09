@@ -13,8 +13,23 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { InferenceEndpointError, ModelNotAvailableError } from "../../src/inference/index.js";
-import type { Chunk, Hit, IngestReport, KnowledgeBase } from "../../src/interfaces/index.js";
-import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
+import type {
+  ChatMessage,
+  ChatOptions,
+  ChatResult,
+  Chunk,
+  Hit,
+  InferenceService,
+  IngestReport,
+  KnowledgeBase,
+  Role,
+  Vector,
+} from "../../src/interfaces/index.js";
+import {
+  CapabilityUnavailableError,
+  HardwareTier,
+  sliderPolicyForLevel,
+} from "../../src/interfaces/index.js";
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 
@@ -378,6 +393,146 @@ describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () 
       expect(result.isError).toBe(true);
       expect(textOf(result)).toBe("weird backend failure");
     });
+  });
+});
+
+/**
+ * `golem_delegate` (src/mcp/server.ts `registerDelegateTool`) is registered
+ * only when `deps.inference` is supplied, and hands the task off to the
+ * "drafter" role of an injected InferenceService.
+ */
+describe("golem_delegate tool", () => {
+  class FakeInferenceService implements InferenceService {
+    lastRole: Role | undefined;
+    lastMessages: readonly ChatMessage[] | undefined;
+
+    constructor(
+      private readonly impl: (
+        role: Role,
+        messages: readonly ChatMessage[],
+        opts?: ChatOptions,
+      ) => Promise<ChatResult>,
+    ) {}
+
+    async chat(
+      role: Role,
+      messages: readonly ChatMessage[],
+      opts?: ChatOptions,
+    ): Promise<ChatResult> {
+      this.lastRole = role;
+      this.lastMessages = messages;
+      return this.impl(role, messages, opts);
+    }
+
+    async embed(): Promise<Vector[]> {
+      throw new Error("not used by these tests");
+    }
+
+    capabilities(): HardwareTier {
+      return HardwareTier.PMid;
+    }
+  }
+
+  function depsWithInference(inference: InferenceService): Deps {
+    return {
+      ...createStandaloneDeps(),
+      inference,
+    };
+  }
+
+  it("is not listed when deps.inference is omitted", async () => {
+    const client = await connectInMemory(createStandaloneDeps());
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain("golem_delegate");
+  });
+
+  it("delegates a task-only call and reports the local model in text and structuredContent", async () => {
+    const fake = new FakeInferenceService(async (role) => ({
+      text: "draft code here",
+      model: "qwen2.5-coder:7b",
+      role,
+      promptTokens: 10,
+      completionTokens: 20,
+      finishReason: "stop",
+    }));
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "golem_delegate",
+      arguments: { task: "write a hello world function" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).toContain("draft code here");
+    expect(text).toContain("produced locally by qwen2.5-coder:7b");
+    expect(result.structuredContent).toMatchObject({
+      model: "qwen2.5-coder:7b",
+      role: "drafter",
+    });
+  });
+
+  it("sends both task and context to the local model when context is provided", async () => {
+    const fake = new FakeInferenceService(async (role) => ({
+      text: "ok",
+      model: "qwen2.5-coder:7b",
+      role,
+      promptTokens: 1,
+      completionTokens: 1,
+      finishReason: "stop",
+    }));
+    const client = await connectInMemory(depsWithInference(fake));
+
+    await client.callTool({
+      name: "golem_delegate",
+      arguments: {
+        task: "refactor this function",
+        context: "function foo() { return 1; }",
+      },
+    });
+
+    expect(fake.lastRole).toBe("drafter");
+    const sent = (fake.lastMessages ?? []).map((m) => String(m.content)).join("\n");
+    expect(sent).toContain("refactor this function");
+    expect(sent).toContain("function foo() { return 1; }");
+  });
+
+  it("surfaces a friendly isError result when the inference endpoint is unreachable", async () => {
+    const fake = new FakeInferenceService(async () => {
+      throw new InferenceEndpointError("connect ECONNREFUSED 127.0.0.1:11434");
+    });
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "golem_delegate",
+      arguments: { task: "write a hello world function" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "Golem's local inference endpoint (Ollama) is unreachable, so the knowledge " +
+        "base cannot embed. Start Ollama and ensure the embedding model is pulled " +
+        "(see `golem devices`), then retry.",
+    );
+  });
+
+  it("surfaces a friendly isError result when no local model is available at the current tier", async () => {
+    const fake = new FakeInferenceService(async () => {
+      throw new CapabilityUnavailableError("drafter", HardwareTier.PCpu);
+    });
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "golem_delegate",
+      arguments: { task: "write a hello world function" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "Golem has no local model available for this task at the current hardware " +
+        "tier. Check `golem devices` for what's detected, or ask Claude to do this " +
+        "task directly instead of delegating it.",
+    );
   });
 });
 
