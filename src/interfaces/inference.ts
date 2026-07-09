@@ -54,10 +54,20 @@ export interface ChatResult {
 /**
  * Thrown when no backend can serve the requested role at the current tier and
  * no fallback (lower tier / Haiku-via-API) is permitted by config.
+ *
+ * `cause`, when present, is the last underlying error the fallback ladder hit
+ * (a timeout, an endpoint 5xx, a malformed response, ...) before giving up.
+ * This is one generic error covering several distinct failure modes — "model
+ * genuinely not pulled anywhere" looks identical to "endpoint timed out under
+ * load" without it — so callers that surface this to a human/agent should
+ * read `cause` and report it rather than the canned message alone.
  */
 export class CapabilityUnavailableError extends Error {
-  constructor(role: Role, tier: HardwareTier) {
-    super(`no backend available for role "${role}" at hardware tier ${tier}`);
+  constructor(role: Role, tier: HardwareTier, cause?: unknown) {
+    super(
+      `no backend available for role "${role}" at hardware tier ${tier}`,
+      cause !== undefined ? { cause } : undefined,
+    );
     this.name = "CapabilityUnavailableError";
   }
 }

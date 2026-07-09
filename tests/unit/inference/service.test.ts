@@ -110,6 +110,21 @@ describe("OllamaInferenceService routing", () => {
     }
   });
 
+  it("carries the last ModelNotAvailableError as .cause when every tier is missing its model", async () => {
+    await start(new Set()); // no models at all
+    const client = new OllamaClient({ baseUrl });
+    try {
+      const svc = new OllamaInferenceService(client, facts(HardwareTier.PMin), {
+        fallback: { stepDownTier: true, allowHaiku: false },
+      });
+      await expect(svc.chat("drafter", [{ role: "user", content: "hi" }])).rejects.toMatchObject({
+        cause: expect.objectContaining({ name: "ModelNotAvailableError" }),
+      });
+    } finally {
+      await client.close();
+    }
+  });
+
   it("signals HaikuFallbackRequired when local fails and Haiku is allowed", async () => {
     await start(new Set());
     const client = new OllamaClient({ baseUrl });
@@ -152,7 +167,10 @@ describe("OllamaInferenceService routing", () => {
       await expect(svc.chat("judge", [{ role: "user", content: "hi" }])).rejects.toBeInstanceOf(
         CapabilityUnavailableError,
       );
-      expect(requestCount).toBe(1);
+      await expect(svc.chat("judge", [{ role: "user", content: "hi" }])).rejects.toMatchObject({
+        cause: expect.objectContaining({ name: "InferenceEndpointError" }),
+      });
+      expect(requestCount).toBe(2);
     } finally {
       await client.close();
     }
