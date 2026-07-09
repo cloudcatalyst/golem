@@ -8,11 +8,12 @@
  * its rejection behavior is covered here rather than in the shared contract.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalDirBlobStore } from "../../../src/compression/index.js";
+import { BlobNotFoundError } from "../../../src/interfaces/storage.js";
 
 let root: string;
 let store: LocalDirBlobStore;
@@ -60,5 +61,57 @@ describe("LocalDirBlobStore key validation", () => {
 
     await store.delete(key);
     expect(await store.exists(key)).toBe(false);
+  });
+});
+
+describe("LocalDirBlobStore stream()", () => {
+  it("rejects with BlobNotFoundError for a missing key", async () => {
+    const drain = async () => {
+      for await (const _chunk of store.stream("missing")) {
+        // never reached; draining forces the generator body to run.
+      }
+    };
+    await expect(drain()).rejects.toBeInstanceOf(BlobNotFoundError);
+  });
+});
+
+describe("LocalDirBlobStore put() rename-collision fallback", () => {
+  // #pathFor("collidingkey123") shards on the first two chars, so the target
+  // path is `<root>/co/collidingkey123`. Pre-creating a *directory* there
+  // makes the atomic rename(tmp, target) fail on every OS (POSIX rename(2)
+  // and Windows both refuse file-over-directory renames with EISDIR/EPERM),
+  // and then makes the fallback's `rm(target, { force: true })` fail too
+  // (fs.rm on a directory without `recursive: true` throws ERR_FS_EISDIR).
+  // That drives the exact branch where both the rename and the fallback
+  // attempt fail, and the ORIGINAL rename error must be what put() rejects
+  // with — not the fallback rm's error.
+  const key = "collidingkey123";
+
+  it("rejects with the original rename error, not the fallback error, when both fail", async () => {
+    const target = join(root, "co", key);
+    await mkdir(target, { recursive: true });
+
+    const rejection = await store.put(key, new Uint8Array([1, 2, 3])).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(rejection).toBeDefined();
+    // The original error comes from the rename() syscall, not from rm().
+    expect((rejection as NodeJS.ErrnoException).syscall).toBe("rename");
+  });
+
+  it("leaves no leftover .tmp file and does not disturb the colliding directory", async () => {
+    const shardDir = join(root, "co");
+    const target = join(shardDir, key);
+    await mkdir(target, { recursive: true });
+
+    await expect(store.put(key, new Uint8Array([1, 2, 3]))).rejects.toThrow();
+
+    // The pre-existing directory at the target path must be untouched.
+    expect((await stat(target)).isDirectory()).toBe(true);
+    // The only entry in the shard directory is that directory — the
+    // `<target>.<uuid>.tmp` scratch file must have been cleaned up.
+    expect(await readdir(shardDir)).toStrictEqual([key]);
   });
 });
