@@ -22,8 +22,10 @@ import {
   detectCapability,
   embedModelFor,
   modelsForTier,
+  OllamaClient,
+  OllamaInferenceService,
 } from "../inference/index.js";
-import type { HardwareTier } from "../interfaces/inference.js";
+import type { HardwareTier, InferenceService } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
@@ -365,10 +367,12 @@ mcp
       // "serve without knowledge tools" rather than crashing the server.
       const { settings } = await loadConfig({ projectDir: opts.dir });
       let knowledge: KnowledgeBase | undefined;
+      let inference: InferenceService | undefined;
       if (settings.knowledge.enabled) {
         try {
           const stack = await buildKnowledgeStack({ projectDir: opts.dir });
           knowledge = stack.knowledge;
+          inference = stack.inference;
           process.stderr.write(
             `golem: knowledge base ready (${stack.embedMode} embeddings${
               stack.embedMode === "lexical" ? "; pull bge-m3 + run Ollama for semantic" : ""
@@ -399,12 +403,29 @@ mcp
           );
         }
       }
+      // golem_delegate doesn't need the knowledge base — build a standalone
+      // InferenceService when the KB path above didn't already produce one
+      // (KB disabled, or its own construction failed before reaching this far).
+      if (inference === undefined) {
+        try {
+          const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+          const facts = await detectCapability(createProbeRunner());
+          inference = new OllamaInferenceService(client, facts);
+        } catch (err) {
+          process.stderr.write(
+            `golem: local inference unavailable, golem_delegate will be disabled (${
+              err instanceof Error ? err.message : String(err)
+            })\n`,
+          );
+        }
+      }
       await serveStdio({
         compression: NativeLosslessCompression.forProjectDir(opts.dir),
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
         ...(knowledge !== undefined ? { knowledge, defaultProjectId: opts.dir } : {}),
+        ...(inference !== undefined ? { inference } : {}),
       });
     } catch (err) {
       fail(err);
