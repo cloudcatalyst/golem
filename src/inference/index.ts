@@ -13,6 +13,26 @@ export {
   embedModelFor,
   modelsForTier,
 } from "./catalog.js";
+export type {
+  InstallEnvironment,
+  InstallMethodKind,
+  InstallPlan,
+  InstallResult,
+  OllamaBootstrapDeps,
+  PullResult,
+} from "./ollama-bootstrap.js";
+export {
+  createOllamaBootstrapDeps,
+  detectInstallEnvironment,
+  installOllama,
+  isOllamaInstalled,
+  OLLAMA_DOWNLOAD_URL,
+  OLLAMA_LINUX_INSTALL_SCRIPT_URL,
+  OllamaNotReadyError,
+  pullDrafterModel,
+  resolveInstallPlan,
+  smokeTestModel,
+} from "./ollama-bootstrap.js";
 export type { OllamaClientOptions } from "./ollama-client.js";
 export {
   DEFAULT_OLLAMA_BASE_URL,
@@ -20,6 +40,13 @@ export {
   ModelNotAvailableError,
   OllamaClient,
 } from "./ollama-client.js";
+export type { PulledModel, PullProgressEvent } from "./ollama-native.js";
+export {
+  OllamaNativeClient,
+  OllamaPullError,
+  OllamaUnreachableError,
+  parsePullProgressLine,
+} from "./ollama-native.js";
 export {
   createProbeRunner,
   DEFAULT_PROBE_TIMEOUT_MS,
