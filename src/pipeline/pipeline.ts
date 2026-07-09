@@ -26,8 +26,10 @@
 import { estimateTokens } from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
+import type { InferenceService } from "../interfaces/inference.js";
 import { effectiveStages, type SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
+import { appendSystemBlock, runDraftStage, runLocalFirstStage } from "./local-intercept.js";
 import { redactRequestBody } from "./redaction.js";
 
 /** A telemetry record emitted once per processed request (A4 consumes it). */
@@ -43,8 +45,12 @@ export interface PipelineEvent {
 
 export interface GolemPipelineOptions {
   readonly compression: CompressionService;
-  /** Resolve the active policy per request (e.g. from live settings). */
-  readonly policy: () => SliderPolicy;
+  /**
+   * Resolve the active policy per request (e.g. from live settings). May
+   * return a promise so callers can re-read a persisted slider level on
+   * every request instead of freezing it at construction time.
+   */
+  readonly policy: () => SliderPolicy | Promise<SliderPolicy>;
   /** Logical project id for compression stats/telemetry attribution. */
   readonly projectId: string;
   /** Optional sink for per-request telemetry; defaults to a no-op. */
@@ -56,6 +62,12 @@ export interface GolemPipelineOptions {
    * Headroom sidecar (headroom-adapter.ts); absent by default.
    */
   readonly semantic?: SemanticCompressor;
+  /**
+   * OPTIONAL local inference (Decision 25). When present, drives Mode A
+   * "draft" injection (level >= 4) and Mode B "local_first" responses (level
+   * 5, opt-in). Absent by default — both modes are then no-ops, fail-open.
+   */
+  readonly inference?: InferenceService;
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -99,7 +111,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         return request;
       }
 
-      const policy = options.policy();
+      const policy = await options.policy();
       const stages = effectiveStages(policy);
       const stageSavings: Record<string, TokenDelta> = {};
       let body: Record<string, unknown> = parsed;
@@ -149,6 +161,48 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
             tokensBefore: semantic.tokensBefore,
             tokensAfter: semantic.tokensAfter,
           };
+          changed = true;
+        }
+      }
+
+      // Stage 4 — local-first responder (Decision 25 Mode B: level 5, opt-in).
+      // Tries to answer entirely from local inference; on success returns
+      // directly and Claude is never called. Escalates (falls through to
+      // Stage 5's injection, reusing the same rejected draft) on any error,
+      // timeout, empty draft, or refusal/uncertainty-shaped text.
+      let escalatedDraftText: string | null = null;
+      if (
+        stages.localOnlyAnswers &&
+        options.inference !== undefined &&
+        Array.isArray(body.messages)
+      ) {
+        const outcome = await runLocalFirstStage(options.inference, body, body.stream === true);
+        if (outcome.kind === "served") {
+          const requestTokens: TokenDelta = {
+            tokensBefore: estimateTokens(JSON.stringify(parsed)),
+            tokensAfter: 0,
+          };
+          emit({
+            projectId: options.projectId,
+            level: policy.level,
+            requestTokens,
+            stageSavings: { ...stageSavings, localFirst: requestTokens },
+            ccrRefsStored,
+          });
+          return { ...request, localResponse: outcome.response };
+        }
+        escalatedDraftText = outcome.draftText;
+      }
+
+      // Stage 5 — draft injection (Decision 25 Mode A: level >= 4). When
+      // Stage 4 already ran (level 5), reuse its outcome rather than calling
+      // the drafter a second time; otherwise run a fresh draft.
+      if (stages.localDrafts && options.inference !== undefined && Array.isArray(body.messages)) {
+        const draftText = stages.localOnlyAnswers
+          ? escalatedDraftText
+          : await runDraftStage(options.inference, body);
+        if (draftText !== null) {
+          body = { ...body, system: appendSystemBlock(body.system, draftText) };
           changed = true;
         }
       }

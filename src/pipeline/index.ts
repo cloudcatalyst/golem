@@ -6,6 +6,16 @@
  * `redaction-rules.ts` is the T-C3 security-review audit surface.
  */
 
+export type { LocalFirstOutcome } from "./local-intercept.js";
+export {
+  appendSystemBlock,
+  LOCAL_INTERCEPT_TIMEOUT_MS,
+  labelDraft,
+  looksLikeEscalation,
+  runDraftStage,
+  runLocalFirstStage,
+  toLocalChatMessages,
+} from "./local-intercept.js";
 export type { GolemPipelineOptions, PipelineEvent } from "./pipeline.js";
 export { createGolemPipeline } from "./pipeline.js";
 export type { RedactBodyResult } from "./redaction.js";

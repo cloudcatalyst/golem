@@ -234,7 +234,23 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
 
   const telemetry = openTelemetryStore(dir);
-  const { proxy, semantic } = buildProxyFromSettings(dir, settings, telemetry);
+  const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).project);
+  let inference: InferenceService | undefined;
+  try {
+    const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+    const facts = await detectCapability(createProbeRunner());
+    inference = new OllamaInferenceService(client, facts);
+  } catch (err) {
+    process.stderr.write(
+      `golem proxy: local inference unavailable, draft/local-first modes disabled (${
+        err instanceof Error ? err.message : String(err)
+      })\n`,
+    );
+  }
+  const { proxy, semantic } = buildProxyFromSettings(dir, settings, telemetry, {
+    sliderStore,
+    ...(inference !== undefined ? { inference } : {}),
+  });
   if (semantic !== undefined) {
     process.stdout.write(
       "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
