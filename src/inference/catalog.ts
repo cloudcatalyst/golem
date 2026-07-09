@@ -30,7 +30,7 @@ const P_CPU: TierCatalogEntry = {
     summarizer: "qwen2.5:1.5b",
     extractor: "qwen2.5:1.5b",
     classifier: "qwen2.5:1.5b",
-    drafter: "qwen2.5:1.5b",
+    drafter: "qwen2.5-coder:1.5b", // qwen2.5-coder family
     judge: "qwen2.5:3b",
   },
   textEmbed: "nomic-embed-text",
@@ -42,7 +42,7 @@ const P_MIN: TierCatalogEntry = {
     summarizer: "qwen2.5:3b",
     extractor: "qwen2.5:3b",
     classifier: "qwen2.5:3b",
-    drafter: "llama3.2:3b",
+    drafter: "qwen2.5-coder:3b", // qwen2.5-coder family
     judge: "qwen2.5:7b",
   },
   textEmbed: "bge-m3",
@@ -54,7 +54,7 @@ const P_MID: TierCatalogEntry = {
     summarizer: "qwen2.5:7b",
     extractor: "qwen2.5:7b",
     classifier: "qwen2.5:7b",
-    drafter: "llama3.1:8b",
+    drafter: "qwen2.5-coder:7b", // qwen2.5-coder family
     judge: "qwen2.5:14b",
   },
   textEmbed: "bge-m3",
@@ -66,7 +66,7 @@ const P_MAX: TierCatalogEntry = {
     summarizer: "qwen2.5:14b",
     extractor: "qwen2.5:14b",
     classifier: "qwen2.5:14b",
-    drafter: "qwen2.5:14b",
+    drafter: "qwen2.5-coder:14b", // qwen2.5-coder family
     judge: "qwen2.5:32b",
   },
   textEmbed: "bge-m3",
