@@ -12,7 +12,6 @@
 
 import { spawn } from "node:child_process";
 import { Command, InvalidArgumentError } from "commander";
-import { NativeLosslessCompression } from "../compression/index.js";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
 import { buildHookCommand } from "../hooks/index.js";
@@ -29,10 +28,11 @@ import type { HardwareTier, InferenceService } from "../interfaces/inference.js"
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
-import { openTelemetryStore, telemetryStatsSource } from "../telemetry/index.js";
+import { openTelemetryStore } from "../telemetry/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
+import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import {
   collectOllamaStatus,
   renderOllamaStatus,
@@ -52,7 +52,7 @@ import {
 import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
-import { collectStats, liveStatsSource, renderStats, type StatsSource } from "./stats.js";
+import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 
@@ -72,23 +72,6 @@ function printReport(report: InitReport): void {
 function fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(err instanceof InitError ? 2 : 1);
-}
-
-/**
- * Pick the stats source for read commands: durable telemetry (A4) once it has
- * recorded at least one request, else the in-memory live source (E3). This lets
- * `golem stats` show cross-session history when the proxy has run, and still
- * work before any telemetry exists.
- */
-async function statsSourceForCli(projectDir: string): Promise<StatsSource> {
-  const store = openTelemetryStore(projectDir);
-  try {
-    const agg = await store.aggregate();
-    if (agg.requests > 0) return telemetryStatsSource(store);
-  } catch {
-    // fall through to live
-  }
-  return liveStatsSource(projectDir);
 }
 
 program
@@ -443,7 +426,7 @@ mcp
         }
       }
       await serveStdio({
-        compression: NativeLosslessCompression.forProjectDir(opts.dir),
+        compression: mcpCompressionService(opts.dir),
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
