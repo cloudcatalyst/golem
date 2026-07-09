@@ -1145,6 +1145,22 @@ version, (b) "forgetting" mid-conversation detail from >4 turns back, (c) any
 Foundry 4xx that disappears at level ≤2. Mitigation if it bites: `golem slider 1`
 (same redaction, no semantic stage).
 
+## §48 — Decision 26 manual-verification checklist: real Ollama install/pull (2026-07-09)
+
+Per CLAUDE.md/plan: `install-runner.ts`'s real spawn/download path and a real
+multi-GB `/api/pull` get no unit test (same treatment `headroom-adapter.ts`'s
+real spawn path already gets — see §36). These are **manual-only, never run
+in CI**. One checklist entry per OS; check off (with date + outcome) the first
+time each is actually run for real.
+
+| OS | Manual check | Expected | Status |
+|---|---|---|---|
+| Windows | `golem ollama status` on a machine without Ollama, then `golem ollama setup` (confirm at the TTY prompt) — this machine (RTX 3070 Laptop GPU, 8192 MiB VRAM → P_MID tier) is the first real target | status reports `installed:false`; setup runs `winget install -e --id Ollama.Ollama ...`, waits for the daemon, pulls the tier's drafter model (`qwen2.5-coder:7b`), smoke-test passes | NOT YET RUN |
+| macOS | Same, on a Mac without Ollama and with Homebrew present | setup runs `brew install ollama`; same pull/smoke-test path | NOT YET RUN — no macOS hardware in this session |
+| macOS (no Homebrew) | `golem ollama setup` on a Mac without Homebrew | falls back to the manual plan (prints `https://ollama.com/download`), does not attempt any command, exits cleanly | NOT YET RUN |
+| Linux | `golem ollama setup` on a fresh Linux box | downloads `https://ollama.com/install.sh` to `os.tmpdir()`, runs it via `spawn("sh", [scriptPath])`, cleans up the temp file, then pulls + smoke-tests | NOT YET RUN |
+| Windows (no winget) | `golem ollama setup` on Windows without winget on PATH | falls back to the manual plan, no command executed | NOT YET RUN |
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

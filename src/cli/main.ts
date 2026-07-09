@@ -34,6 +34,13 @@ import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-i
 import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
+  collectOllamaStatus,
+  renderOllamaStatus,
+  renderSetupResult,
+  runOllamaSetup,
+  SetupRefusedError,
+} from "./ollama.js";
+import {
   portInUse,
   proxyStatus,
   removeProxyPid,
@@ -667,6 +674,46 @@ program
       process.stdout.write(`  ${facts.detail}\n`);
       process.stdout.write(`  models for this tier: ${models.join(", ")}\n`);
     } catch (err) {
+      fail(err);
+    }
+  });
+
+const ollamaCmd = program
+  .command("ollama")
+  .description("Manage the local Ollama runtime Golem uses for drafts");
+
+ollamaCmd
+  .command("status")
+  .description("Show whether Ollama is installed, reachable, and has this tier's drafter model")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await collectOllamaStatus({ projectDir: opts.dir });
+      process.stdout.write(renderOllamaStatus(report, opts.json));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+ollamaCmd
+  .command("setup")
+  .description("Install Ollama and pull this tier's drafter model (asks for confirmation)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--yes", "skip the confirmation prompt", false)
+  .action(async (opts: { dir: string; yes: boolean }) => {
+    try {
+      const result = await runOllamaSetup({
+        projectDir: opts.dir,
+        yes: opts.yes,
+        onLine: (line) => process.stdout.write(line.endsWith("\n") ? line : `${line}\n`),
+      });
+      process.stdout.write(renderSetupResult(result));
+    } catch (err) {
+      if (err instanceof SetupRefusedError) {
+        process.stderr.write(`golem: ${err.message}\n`);
+        process.exit(2);
+      }
       fail(err);
     }
   });
