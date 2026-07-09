@@ -110,4 +110,30 @@ describe("writeSetting", () => {
     const config = await loadConfig({ projectDir, userDir, env: {} });
     expect(config.settings.knowledge.watch_paths).toEqual(["docs", "src"]);
   });
+
+  it("refuses to overwrite a section that is not an object", async () => {
+    await mkdir(path.dirname(userFile()), { recursive: true });
+    await writeFile(userFile(), JSON.stringify({ slider: "not-an-object" }), "utf8");
+
+    await expect(writeSetting("user", "slider.level", 3, dirs())).rejects.toThrow(
+      /section "slider" is not an object; refusing to overwrite it/,
+    );
+    // File untouched.
+    const text = await readFile(userFile(), "utf8");
+    expect(JSON.parse(text)).toEqual({ slider: "not-an-object" });
+  });
+
+  it("strips a leading UTF-8 BOM before parsing an existing file", async () => {
+    await mkdir(path.dirname(userFile()), { recursive: true });
+    const original = { slider: { level: 2 } };
+    await writeFile(userFile(), `﻿${JSON.stringify(original, null, 2)}\n`, "utf8");
+
+    await writeSetting("user", "slider.level", 4, dirs());
+
+    const text = await readFile(userFile(), "utf8");
+    // BOM is not preserved in the rewritten file; content parses and is correct.
+    expect(text.charCodeAt(0)).not.toBe(0xfeff);
+    const parsed = JSON.parse(text) as typeof original;
+    expect(parsed.slider.level).toBe(4);
+  });
 });
