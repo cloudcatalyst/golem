@@ -18,7 +18,7 @@ export const SLIDER_LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   2: "conservative",
   3: "balanced",
   4: "aggressive",
-  5: "max savings",
+  5: "max",
 };
 
 /** The effective slider level plus where it came from. */

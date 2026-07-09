@@ -71,10 +71,10 @@ test("statusBarText — compact, provider-focused, no savings", () => {
     statusBarText({
       proxyReachable: true,
       slider: 5,
-      sliderName: "max savings",
+      sliderName: "max",
       upstreamLabel: "anthropic",
     }),
-    "⬢ Golem · Max savings → anthropic",
+    "⬢ Golem · Max → anthropic",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
@@ -105,7 +105,8 @@ test("statusBarText — local segment only appears when ready, ahead of the upst
     }),
     "⬢ Golem · L5 → anthropic",
   );
-  // Intended and ready: "local" appears ahead of the upstream provider.
+  // Intended and ready: "local" appears ahead of the upstream provider, joined with "+"
+  // rather than "→" — both are in play, it's not a hop from one to the other.
   assert.equal(
     statusBarText({
       proxyReachable: true,
@@ -114,7 +115,7 @@ test("statusBarText — local segment only appears when ready, ahead of the upst
       localFirstIntended: true,
       localFirstReady: true,
     }),
-    "⬢ Golem · L5 · local → anthropic",
+    "⬢ Golem · L5 · local + anthropic",
   );
   // Proxy off short-circuits before the local-first segment is ever considered.
   assert.equal(
