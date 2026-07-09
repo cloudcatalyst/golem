@@ -66,11 +66,14 @@ export {
 } from "./session-state.js";
 export {
   addEventHook,
+  GOLEM_DEFAULT_MODE,
   NOTIFICATION_COMMAND,
   PROMPT_SUBMIT_COMMAND,
+  removeDefaultMode,
   removeEventHook,
   removeStatusLine,
   STATUS_LINE_COMMAND,
+  writeDefaultMode,
   writeStatusLine,
 } from "./settings-extras.js";
 export type { HookSettingsOptions, MatcherHookSpec } from "./settings-writer.js";
