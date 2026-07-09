@@ -1155,11 +1155,45 @@ time each is actually run for real.
 
 | OS | Manual check | Expected | Status |
 |---|---|---|---|
-| Windows | `golem ollama status` on a machine without Ollama, then `golem ollama setup` (confirm at the TTY prompt) — this machine (RTX 3070 Laptop GPU, 8192 MiB VRAM → P_MID tier) is the first real target | status reports `installed:false`; setup runs `winget install -e --id Ollama.Ollama ...`, waits for the daemon, pulls the tier's drafter model (`qwen2.5-coder:7b`), smoke-test passes | NOT YET RUN |
+| Windows | `golem ollama status` on a machine without Ollama, then `golem ollama setup` (confirm at the TTY prompt) — this machine (RTX 3070 Laptop GPU, 8192 MiB VRAM → P_MID tier) | status reports `installed:false`; setup runs `winget install -e --id Ollama.Ollama ...`, waits for the daemon, pulls the tier's drafter model (`qwen2.5-coder:7b`), smoke-test passes | **DONE 2026-07-09 — see below** |
 | macOS | Same, on a Mac without Ollama and with Homebrew present | setup runs `brew install ollama`; same pull/smoke-test path | NOT YET RUN — no macOS hardware in this session |
 | macOS (no Homebrew) | `golem ollama setup` on a Mac without Homebrew | falls back to the manual plan (prints `https://ollama.com/download`), does not attempt any command, exits cleanly | NOT YET RUN |
 | Linux | `golem ollama setup` on a fresh Linux box | downloads `https://ollama.com/install.sh` to `os.tmpdir()`, runs it via `spawn("sh", [scriptPath])`, cleans up the temp file, then pulls + smoke-tests | NOT YET RUN |
 | Windows (no winget) | `golem ollama setup` on Windows without winget on PATH | falls back to the manual plan, no command executed | NOT YET RUN |
+
+**Windows run, this machine, 2026-07-09.** `golem ollama status` before setup
+reported `installed:false`, `tier:2 (P_MID)`, `targetModel:qwen2.5-coder:7b`.
+`golem ollama setup --yes` ran `winget install -e --id Ollama.Ollama
+--accept-package-agreements --accept-source-agreements` (real output: "Found
+Ollama [Ollama.Ollama] Version 0.31.2" → downloaded → "Successfully
+installed"), waited for the daemon, pulled `qwen2.5-coder:7b` (streamed
+`pulling manifest` → `pulling <digest>` → `verifying sha256 digest` →
+`writing manifest` → `success`), then ran the post-pull smoke test
+(`OllamaClient.chat()` asking for "OK") — passed, model replied `"OK"`.
+Rendered output: "Installed Ollama (Install Ollama via winget
+(Ollama.Ollama)).", "Pulled model qwen2.5-coder:7b.", "Smoke test passed —
+model replied: \"OK\"". Note: `golem ollama status` run again in the *same*
+already-open shell still reported `installed:false` because winget's PATH
+update hadn't propagated to that shell's already-inherited environment — this
+is real, expected Windows PATH-refresh behavior (the exact case
+`renderSetupResult`'s fallback message anticipates), not a Golem bug;
+`reachable` and `modelPulled` both correctly flipped to `true` since those
+checks go over HTTP, not PATH.
+
+**End-to-end proxy verification (plan step 5), same session.** This repo's own
+`.golem/settings.json` is slider level 5 + `local_only_opt_in:true`, and the
+dogfooded proxy was already running (`golem proxy status` → pid 40288, port
+4930). Sent a real self-contained request straight to it:
+`POST http://localhost:4930/v1/messages` with a throwaway/dummy `x-api-key`
+and the prompt "What is the plural of the word octopus? Answer in one short
+sentence." Response came back as `model:"qwen2.5-coder:7b"` with text
+`"Answered locally by qwen2.5-coder:7b — Golem local-first mode; verify
+independently.\n\nThe plural of \"octopus\" is \"octopodes.\""` — i.e. Mode B
+(`runLocalFirstStage`) served the request entirely locally. The dummy API key
+being accepted confirms the request never reached `api.anthropic.com` at all
+(Decision 25's stage runs, and returns, before the upstream forward). This
+closes the previously-blocked "verify end-to-end local drafting" item from
+Decision 25/the Decision 26 plan.
 
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
