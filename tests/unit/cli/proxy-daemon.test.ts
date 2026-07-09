@@ -1,14 +1,17 @@
 /**
- * Proxy daemon lifecycle — pure helpers (pid file, alive/port checks, status).
- * The detached spawn is covered by a live CLI smoke, not here.
+ * Proxy daemon lifecycle — pure helpers (pid file, alive/port checks, status,
+ * port-wait polling) plus a real-process smoke test of the detached spawn
+ * (startDetached). The full `golem proxy start/stop` CLI flow is covered by a
+ * live CLI smoke test elsewhere, not here.
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultProjectPort,
   isProcessAlive,
@@ -19,9 +22,30 @@ import {
   proxyStatus,
   readProxyPid,
   removeProxyPid,
+  startDetached,
   stopProxy,
+  waitForPort,
+  waitForPortFree,
   writeProxyPid,
 } from "../../../src/cli/proxy-daemon.js";
+
+/** Grab a currently-free loopback port by letting the OS assign one, then releasing it. */
+async function getFreePort(): Promise<number> {
+  const server = createServer();
+  const port = await new Promise<number>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("expected a bound TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+  await new Promise<void>((resolve) => server.close(() => resolve()));
+  return port;
+}
 
 let dir: string;
 beforeEach(async () => {
@@ -174,4 +198,130 @@ describe("stopProxy", () => {
       }
     }
   });
+});
+
+describe("waitForPort", () => {
+  it("resolves true once something actually starts listening on the port", async () => {
+    const port = await getFreePort();
+    const promise = waitForPort(port, 5000);
+    const server = createServer();
+    try {
+      // Give the poll loop a couple of misses before anything is listening.
+      await new Promise((r) => setTimeout(r, 200));
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, "127.0.0.1", () => resolve());
+      });
+      expect(await promise).toBe(true);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("returns false (does not throw/reject) when nothing ever listens before the timeout", async () => {
+    const port = await getFreePort(); // freed immediately; nothing rebinds it
+    await expect(waitForPort(port, 300)).resolves.toBe(false);
+  });
+});
+
+describe("waitForPortFree", () => {
+  it("resolves true once an occupied port becomes free", async () => {
+    const port = await getFreePort();
+    const server = createServer();
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => resolve());
+    });
+
+    const promise = waitForPortFree(port, 5000);
+    // Give the poll loop a couple of misses before the port is freed.
+    await new Promise((r) => setTimeout(r, 200));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+
+    expect(await promise).toBe(true);
+  });
+
+  it("resolves true right away when the port is already free", async () => {
+    const port = await getFreePort();
+    await expect(waitForPortFree(port, 2000)).resolves.toBe(true);
+  });
+});
+
+describe("startDetached", () => {
+  // A minimal stand-in for the real `golem proxy start --dir <dir> --port <port>`
+  // CLI: it parses the same flags, binds the port, writes the same pid-file shape
+  // proxy-daemon.ts reads back, then self-terminates so a missed cleanup can never
+  // leak a background process. CommonJS (`.cjs`) so it runs regardless of the
+  // temp dir's module type.
+  const FAKE_PROXY_SCRIPT = `"use strict";
+const net = require("node:net");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const args = process.argv.slice(2);
+function argVal(flag) {
+  const i = args.indexOf(flag);
+  return i === -1 ? undefined : args[i + 1];
+}
+
+const port = Number(argVal("--port"));
+const dir = argVal("--dir");
+
+const server = net.createServer();
+server.listen(port, "127.0.0.1", () => {
+  if (dir) {
+    const pidDir = path.join(dir, ".golem");
+    fs.mkdirSync(pidDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pidDir, "proxy.pid"),
+      JSON.stringify({ pid: process.pid, port: port, ts: new Date().toISOString() }) + "\\n",
+      "utf8",
+    );
+  }
+});
+
+setTimeout(() => process.exit(0), 4000);
+`;
+
+  it("spawns a detached, unref'd child and resolves with its pid once it is listening", async () => {
+    const scriptPath = path.join(dir, "fake-proxy.cjs");
+    await writeFile(scriptPath, FAKE_PROXY_SCRIPT, "utf8");
+    const port = await getFreePort();
+
+    // Spy on the real ChildProcess prototype (shared singleton class, however it
+    // is required/imported) to observe that the spawned child is unref'd, while
+    // still letting the actual spawn/unref run for real — nothing here is faked.
+    const cp = createRequire(import.meta.url)(
+      "node:child_process",
+    ) as typeof import("node:child_process");
+    const unrefSpy = vi.spyOn(cp.ChildProcess.prototype, "unref");
+
+    let pid: number | null = null;
+    try {
+      pid = await startDetached(dir, port, scriptPath);
+      expect(pid).not.toBeNull();
+      expect(typeof pid).toBe("number");
+      expect(await portInUse(port)).toBe(true);
+      expect(unrefSpy).toHaveBeenCalled();
+    } finally {
+      unrefSpy.mockRestore();
+      if (pid !== null) {
+        try {
+          process.kill(pid);
+        } catch {
+          // already gone / no permission
+        }
+      }
+    }
+  });
+
+  it("returns null when nothing ever comes up on the port", async () => {
+    const scriptPath = path.join(dir, "fake-proxy-noop.cjs");
+    // Never binds the port and exits almost immediately.
+    await writeFile(scriptPath, `"use strict";\nprocess.exit(0);\n`, "utf8");
+    const port = await getFreePort();
+
+    const pid = await startDetached(dir, port, scriptPath);
+    expect(pid).toBeNull();
+  }, 10_000);
 });
