@@ -109,7 +109,7 @@ Level 0–5 → per-stage config. Initial mapping (tune against Headroom's real 
 | 5 | ✅ | ✅ | ✅ | aggressive | loose | ✅ | per-project opt-in |
 
 ### 2.5 MCP surface (WS-B owns; names frozen)
-Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `delegate`, `golem_devices`.
+Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `delegate`, `devices`.
 Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`, `delegate`.
 
 ## 3. Workstreams & task breakdown
@@ -128,7 +128,7 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 ### WS-B — MCP server & Claude Code integration (P0)
 - B1: Unified MCP server (stdio + HTTP): P0 tools `expand`, `stats`, `level`; prompt-based slash commands. *(after T0.1, T0.3)*
 - B2: Claude Code wiring: hook (per T0.1 findings) swapping oversized tool outputs for CCR refs; guidance-file writer (CLAUDE.md section, coordinated with headroom learn).
-- B3: P1 tools: `search`, `ingest`, `fetch`, `delegate`, `golem_devices` (thin wrappers over WS-C/D).
+- B3: P1 tools: `search`, `ingest`, `fetch`, `delegate`, `devices` (thin wrappers over WS-C/D).
 
 ### WS-C — Knowledge base (P1 headline)
 - C1: Embedded vector store setup (spec Decision 17: LanceDB candidate, spike + decision memo required; Qdrant server mode via URL config); per-project collections; schema/migrations.
