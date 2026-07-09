@@ -3,7 +3,7 @@
  *
  * Verifies: small output => no modification, silent exit 0; large output =>
  * updatedToolOutput JSON with a head/tail digest + CCR marker, original
- * retrievable byte-identical from the CCR store via golem_expand's code path;
+ * retrievable byte-identical from the CCR store via expand's code path;
  * a PEM / sk-ant secret in the output is stripped from the stored original.
  */
 
@@ -72,7 +72,7 @@ function parseStdout(io: { out: string[] }): UpdatedOutputEnvelope {
   return JSON.parse(io.out[0] as string) as UpdatedOutputEnvelope;
 }
 
-/** Retrieve exactly as golem_expand's tool handler does. */
+/** Retrieve exactly as expand's tool handler does. */
 async function retrieveOriginal(refId: string): Promise<string> {
   const service = new NativeLosslessCompression(
     new LocalDirBlobStore(path.join(projectDir, ".golem", "ccr")),
@@ -119,17 +119,17 @@ describe("runPostToolUseHook — oversized string output", () => {
     expect(typeof digest).toBe("string");
     const digestText = digest as string;
 
-    // Digest is smaller than the original and mentions golem_expand.
+    // Digest is smaller than the original and mentions the expand tool.
     expect(digestText.length).toBeLessThan(big.length);
-    expect(digestText).toContain("golem_expand");
+    expect(digestText).toContain("expand");
     expect(digestText).toContain("bytes");
 
-    // Marker uses A2's hash= grammar → golem_expand can parse it.
+    // Marker uses A2's hash= grammar → expand can parse it.
     const match = CCR_MARKER_RE.exec(digestText);
     expect(match).not.toBeNull();
     const refId = (match as RegExpExecArray)[1] as string;
 
-    // Original retrievable byte-identical via the golem_expand code path.
+    // Original retrievable byte-identical via the expand code path.
     expect(await retrieveOriginal(refId)).toBe(big);
   });
 

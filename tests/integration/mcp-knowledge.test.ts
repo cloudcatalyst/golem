@@ -19,7 +19,7 @@ import {
   type GolemMcpServerDeps,
 } from "../../src/mcp/index.js";
 
-const KNOWLEDGE_TOOLS = ["golem_search", "golem_get_chunk", "golem_index_path"] as const;
+const KNOWLEDGE_TOOLS = ["search", "fetch", "ingest"] as const;
 
 /** A minimal in-memory KnowledgeBase: ingest() seeds chunks, search() returns them. */
 class FakeKnowledgeBase implements KnowledgeBase {
@@ -126,7 +126,7 @@ describe("MCP knowledge tools (B3)", () => {
     const client = await connect(depsWith(new FakeKnowledgeBase()));
 
     const indexed = await client.callTool({
-      name: "golem_index_path",
+      name: "ingest",
       arguments: { path: "src" },
     });
     expect(indexed.isError).toBeFalsy();
@@ -138,7 +138,7 @@ describe("MCP knowledge tools (B3)", () => {
     });
 
     const search = await client.callTool({
-      name: "golem_search",
+      name: "search",
       arguments: { query: "redaction" },
     });
     expect(search.isError).toBeFalsy();
@@ -155,7 +155,7 @@ describe("MCP knowledge tools (B3)", () => {
     expect(hit?.start_line).toBe(1);
 
     const chunk = await client.callTool({
-      name: "golem_get_chunk",
+      name: "fetch",
       arguments: { chunk_id: "chunk-1" },
     });
     expect(chunk.isError).toBeFalsy();
@@ -172,14 +172,14 @@ describe("MCP knowledge tools (B3)", () => {
     const kb = new FakeKnowledgeBase();
     const client = await connect(depsWith(kb));
     await client.callTool({
-      name: "golem_index_path",
+      name: "ingest",
       arguments: { path: "x", project_id: "other" },
     });
     // Default project has nothing; the explicit one has the chunk.
-    const def = await client.callTool({ name: "golem_search", arguments: { query: "redaction" } });
+    const def = await client.callTool({ name: "search", arguments: { query: "redaction" } });
     expect((def.structuredContent as { count: number }).count).toBe(0);
     const other = await client.callTool({
-      name: "golem_search",
+      name: "search",
       arguments: { query: "redaction", project_id: "other" },
     });
     expect((other.structuredContent as { count: number }).count).toBe(1);
@@ -188,29 +188,29 @@ describe("MCP knowledge tools (B3)", () => {
   it("returns isError with current chunk ids for an unknown chunk", async () => {
     const client = await connect(depsWith(new FakeKnowledgeBase()));
     const result = await client.callTool({
-      name: "golem_get_chunk",
+      name: "fetch",
       arguments: { chunk_id: "nope" },
     });
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain("nope");
-    expect(textOf(result)).toContain("golem_search");
+    expect(textOf(result)).toContain("search");
   });
 
   it("maps a dead inference endpoint to an actionable isError (search + index)", async () => {
     const client = await connect(depsWith(new OfflineKnowledgeBase()));
 
-    const search = await client.callTool({ name: "golem_search", arguments: { query: "q" } });
+    const search = await client.callTool({ name: "search", arguments: { query: "q" } });
     expect(search.isError).toBe(true);
     expect(textOf(search)).toContain("Ollama");
 
-    const index = await client.callTool({ name: "golem_index_path", arguments: { path: "src" } });
+    const index = await client.callTool({ name: "ingest", arguments: { path: "src" } });
     expect(index.isError).toBe(true);
     expect(textOf(index)).toContain("Ollama");
   });
 
   it("rejects invalid input (empty query) as an InvalidParams error result", async () => {
     const client = await connect(depsWith(new FakeKnowledgeBase()));
-    const result = await client.callTool({ name: "golem_search", arguments: { query: "" } });
+    const result = await client.callTool({ name: "search", arguments: { query: "" } });
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(textOf(result)).toContain("Input validation error");
   });

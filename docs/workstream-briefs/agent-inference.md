@@ -45,7 +45,7 @@ graceful degradation.
 
 ## Dependencies
 D1/D2 can start now (interfaces frozen; no other workstream blocks you). Your
-consumers: WS-C (embed/rerank), WS-B (`golem_delegate`, `golem_devices`), WS-A
+consumers: WS-C (embed/rerank), WS-B (`delegate`, `golem_devices`), WS-A
 (semantic compression at slider ≥3, P2).
 
 ## Definition-of-done slice (P1/P2)

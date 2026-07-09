@@ -28,13 +28,13 @@ export async function statsSourceForCli(projectDir: string): Promise<StatsSource
 }
 
 /**
- * `golem_stats`'s CompressionService, wired so `stats()` prefers durable
+ * `stats`'s CompressionService, wired so `stats()` prefers durable
  * telemetry over this process's own live counters (same preference as
  * `statsSourceForCli`). The MCP server never calls `compress()` itself — the
  * proxy does, in a separate process — so the live NativeLosslessCompression
  * instance's in-memory accounts stay empty even while the proxy is actively
  * serving requests. `compress()`/`retrieve()` still delegate to the live
- * instance: it owns the real CCR store `golem_expand` reads from.
+ * instance: it owns the real CCR store `expand` reads from.
  */
 export function mcpCompressionService(projectDir: string): CompressionService {
   const live = NativeLosslessCompression.forProjectDir(projectDir);

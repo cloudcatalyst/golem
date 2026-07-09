@@ -33,7 +33,7 @@ describe("upsertGuidance (pure)", () => {
   it("creates a section when the file is absent", () => {
     const out = upsertGuidance(null);
     expect(countMarkers(out)).toBe(1);
-    expect(out).toContain("golem_expand");
+    expect(out).toContain("expand");
     expect(out).toContain(GUIDANCE_END_MARKER);
   });
 
@@ -59,7 +59,7 @@ describe("upsertGuidance (pure)", () => {
     expect(out.startsWith(before)).toBe(true);
     expect(out.endsWith(after)).toBe(true);
     expect(out).not.toContain("OLD CONTENT");
-    expect(out).toContain("golem_expand");
+    expect(out).toContain("expand");
     expect(countMarkers(out)).toBe(1);
   });
 

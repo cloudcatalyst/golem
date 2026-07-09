@@ -5,7 +5,7 @@
  *
  * Embedder selection (zero-setup by default): if Ollama is reachable AND the
  * tier's embedding model is pulled, use the SEMANTIC bge-m3 embedder (WS-D C3);
- * otherwise fall back to the pure-TS hashing embedder (LEXICAL) so `golem_search`
+ * otherwise fall back to the pure-TS hashing embedder (LEXICAL) so `search`
  * works out of the box with no model download. The choice is made ONCE here so an
  * index is never built with mixed embedders. The durable FileVectorDriver
  * persists under `<project>/.golem/knowledge`, so an index survives across

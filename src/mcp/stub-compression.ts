@@ -9,7 +9,7 @@
  * NOT a compression implementation: level <= 1 is a pure passthrough, and the
  * only transformation ever applied is the level >= 2 tool-result CCR swap
  * (large `tool_result` string content replaced by a deterministic ref marker),
- * which is what `golem_expand` needs to demonstrate end to end.
+ * which is what `expand` needs to demonstrate end to end.
  */
 
 import { createHash } from "node:crypto";
@@ -32,7 +32,7 @@ function estimateTokens(text: string): number {
 
 /** Marker text substituted for a swapped-out tool result. */
 export function ccrMarker(ref: CCRRef): string {
-  return `[golem:ccr ref=${ref.refId} original_tokens=${ref.originalTokens} — expand with the golem_expand tool]`;
+  return `[golem:ccr ref=${ref.refId} original_tokens=${ref.originalTokens} — expand with the expand tool]`;
 }
 
 interface MutableStats {

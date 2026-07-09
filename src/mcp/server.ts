@@ -1,16 +1,20 @@
 /**
  * Unified Golem MCP server (WS-B task B1).
  *
- * Frozen names (IMPLEMENTATION_PLAN §2.5 — do not rename):
- * - P0 tools: `golem_expand`, `golem_stats`, `golem_set_slider`.
- * - P1 knowledge tools (task B3): `golem_search`, `golem_get_chunk`,
- *   `golem_index_path` — registered only when a KnowledgeBase is injected
- *   (`deps.knowledge`). `golem_delegate` is registered only when an
- *   InferenceService is injected (`deps.inference`). `golem_devices` is
- *   still to come.
+ * Tool names (IMPLEMENTATION_PLAN §2.5; short-verb names per Decision 27 —
+ * do not rename again without a new Decisions Log entry):
+ * - P0 tools: `expand`, `stats`, `level` (formerly `golem_expand`,
+ *   `golem_stats`, `golem_set_slider`).
+ * - P1 knowledge tools (task B3): `search`, `fetch`, `ingest` (formerly
+ *   `golem_search`, `golem_get_chunk`, `golem_index_path`) — registered only
+ *   when a KnowledgeBase is injected (`deps.knowledge`). `delegate`
+ *   (formerly `golem_delegate`) is registered only when an InferenceService
+ *   is injected (`deps.inference`). `golem_devices` is still to come.
  * - Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`,
  *   `devices`, `delegate` — surfaced by Claude Code as `/mcp__golem__<name>`
- *   (verification-notes.md §10).
+ *   (verification-notes.md §10). Prompt names are unchanged; a tool and a
+ *   prompt sharing a name (e.g. tool `search` + prompt `search`) is fine —
+ *   MCP tools and prompts are separate namespaces.
  *
  * Tool inputs are zod-validated at the boundary: the zod schemas below are
  * enforced by the SDK, which maps failures to InvalidParams (-32602) MCP tool
@@ -47,12 +51,12 @@ export interface GolemMcpServerDeps {
   readonly sliderStore: SliderStore;
   /**
    * WS-C knowledge base (task B3). When present, the P1 knowledge tools
-   * (`golem_search`, `golem_get_chunk`, `golem_index_path`) are registered.
+   * (`search`, `fetch`, `ingest`) are registered.
    * Omitted for the P0 stubs and for runs where the KB is disabled.
    */
   readonly knowledge?: KnowledgeBase;
   /**
-   * WS-D tiered inference (task B3). When present, the `golem_delegate` tool
+   * WS-D tiered inference (task B3). When present, the `delegate` tool
    * is registered, letting Claude offload a task to a local model (the
    * "drafter" role). Omitted when local inference is unavailable or disabled.
    */
@@ -129,7 +133,7 @@ export function createGolemMcpServer(deps: GolemMcpServerDeps): McpServer {
 
 function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   server.registerTool(
-    "golem_expand",
+    "expand",
     {
       title: "Expand a Golem CCR reference",
       description:
@@ -167,7 +171,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   );
 
   server.registerTool(
-    "golem_stats",
+    "stats",
     {
       title: "Golem savings statistics",
       description:
@@ -240,7 +244,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   );
 
   server.registerTool(
-    "golem_set_slider",
+    "level",
     {
       title: "Set the Golem savings slider",
       description:
@@ -340,13 +344,13 @@ function registerKnowledgeTools(
   defaultProjectId: string,
 ): void {
   server.registerTool(
-    "golem_search",
+    "search",
     {
       title: "Search the Golem knowledge base",
       description:
         "Semantic search over Golem's local vector knowledge base (indexed code, " +
         "docs, and notes). Returns the most relevant chunks with a preview and a " +
-        "`chunk_id`; call golem_get_chunk for a chunk's full text. Runs entirely " +
+        "`chunk_id`; call fetch for a chunk's full text. Runs entirely " +
         "on local embeddings — nothing leaves the machine.",
       inputSchema: {
         query: z.string().min(1).describe("What to search for"),
@@ -409,14 +413,14 @@ function registerKnowledgeTools(
   );
 
   server.registerTool(
-    "golem_get_chunk",
+    "fetch",
     {
       title: "Get a Golem knowledge chunk",
       description:
         "Retrieve the full text (and source location) of a single knowledge-base " +
-        "chunk by its `chunk_id`, as returned by golem_search.",
+        "chunk by its `chunk_id`, as returned by search.",
       inputSchema: {
-        chunk_id: z.string().min(1).describe("The chunk id from a golem_search hit"),
+        chunk_id: z.string().min(1).describe("The chunk id from a search hit"),
       },
       outputSchema: {
         chunk_id: z.string(),
@@ -445,7 +449,7 @@ function registerKnowledgeTools(
         if (err instanceof UnknownChunkError) {
           return errorResult(
             `Unknown chunk "${chunk_id}". It may have been re-indexed or evicted; ` +
-              "re-run golem_search to get current chunk ids.",
+              "re-run search to get current chunk ids.",
           );
         }
         const msg = backendUnavailableMessage(err);
@@ -456,12 +460,12 @@ function registerKnowledgeTools(
   );
 
   server.registerTool(
-    "golem_index_path",
+    "ingest",
     {
       title: "Index a path into the Golem knowledge base",
       description:
         "Ingest a file or directory tree into Golem's local vector knowledge base " +
-        "so golem_search can find it. Chunks code and docs and embeds them locally. " +
+        "so search can find it. Chunks code and docs and embeds them locally. " +
         "Optionally keep watching the path for changes.",
       inputSchema: {
         path: z
@@ -523,7 +527,7 @@ function registerKnowledgeTools(
 
 function registerDelegateTool(server: McpServer, inference: InferenceService): void {
   server.registerTool(
-    "golem_delegate",
+    "delegate",
     {
       title: "Delegate a task to a local model",
       description:
@@ -590,10 +594,10 @@ function registerPrompts(server: McpServer): void {
     ({ level }) =>
       promptMessages(
         level === undefined || level === ""
-          ? "Call the golem_stats tool and report the current Golem slider level, " +
+          ? "Call the stats tool and report the current Golem slider level, " +
               "then briefly list what each level 0–5 enables " +
               "(0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 max savings)."
-          : `Set the Golem savings slider to level ${level} using the golem_set_slider ` +
+          : `Set the Golem savings slider to level ${level} using the level ` +
               "tool (it accepts integers 0–5; if the requested value is not a valid " +
               "level, tell the user instead of guessing). Then confirm the new level " +
               "and summarize in one sentence what changes at that level.",
@@ -614,7 +618,7 @@ function registerPrompts(server: McpServer): void {
     },
     ({ project_id }) =>
       promptMessages(
-        `Call the golem_stats tool${
+        `Call the stats tool${
           project_id === undefined || project_id === "" ? "" : ` with project_id "${project_id}"`
         } and present the results concisely: current slider level, total tokens ` +
           "saved (before → after), request count, per-stage attribution if any, " +
@@ -633,7 +637,7 @@ function registerPrompts(server: McpServer): void {
     },
     ({ ref_id }) =>
       promptMessages(
-        `Call the golem_expand tool with ref_id "${ref_id}" and show the retrieved ` +
+        `Call the expand tool with ref_id "${ref_id}" and show the retrieved ` +
           "original content to the user. If the ref is unknown or expired, say so " +
           "and suggest re-running the tool that produced the content.",
       ),
@@ -648,7 +652,7 @@ function registerPrompts(server: McpServer): void {
     () =>
       promptMessages(
         "The user wants to temporarily bypass Golem's compression pipeline. " +
-          "Call golem_set_slider with level 0 (passthrough — redaction still runs, " +
+          "Call level with level 0 (passthrough — redaction still runs, " +
           "nothing else is transformed) and confirm. Remind the user to restore " +
           "their previous level afterwards (e.g. /mcp__golem__slider 1), and " +
           "mention that direct API callers can bypass per-request with the " +
@@ -670,7 +674,7 @@ function registerPrompts(server: McpServer): void {
       promptMessages(
         `Ingest ${
           path === undefined || path === "" ? "the current project root" : `"${path}"`
-        } into the Golem knowledge base using the golem_index_path tool, then ` +
+        } into the Golem knowledge base using the ingest tool, then ` +
           `report what was indexed. ${P1_TOOL_FALLBACK}`,
       ),
   );
@@ -686,8 +690,8 @@ function registerPrompts(server: McpServer): void {
     },
     ({ query }) =>
       promptMessages(
-        `Search the Golem knowledge base for "${query}" using the golem_search tool ` +
-          "and summarize the most relevant hits (use golem_get_chunk for full " +
+        `Search the Golem knowledge base for "${query}" using the search tool ` +
+          "and summarize the most relevant hits (use fetch for full " +
           `chunk contents when needed). ${P1_TOOL_FALLBACK}`,
       ),
   );
@@ -718,7 +722,7 @@ function registerPrompts(server: McpServer): void {
       promptMessages(
         `Delegate ${
           task === undefined || task === "" ? "the user's current task" : `this task: "${task}"`
-        } to a local model using the golem_delegate tool and relay the result, ` +
+        } to a local model using the delegate tool and relay the result, ` +
           `noting it was produced locally. ${P1_TOOL_FALLBACK}`,
       ),
   );

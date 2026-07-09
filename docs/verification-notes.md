@@ -275,7 +275,7 @@ Verified against the installed package's shipped types/source (`node_modules/
 B1's `JsonFileSliderStore` originally persisted a FLAT root-level `slider_level`
 key in `~/.golem/settings.json`, while the E1 config schema
 (`src/config/schema.ts`) validates the NESTED `slider.level` leaf. Left as-is,
-`/mcp__golem__slider` (golem_set_slider) and `loadConfig()`/`golem slider` would
+`/mcp__golem__slider` (level) and `loadConfig()`/`golem slider` would
 read/write two different keys and disagree.
 
 Reconciliation (sanctioned cross-workstream fix; the `SliderStore` interface is
@@ -442,7 +442,7 @@ plan explicitly sanctioned the JSONL fallback. It sits behind a narrow
   need the pipeline to emit an explicit whole-request before/after pair — a
   small A3 follow-up, noted here rather than silently shipping a wrong headline
   number.
-- `ccrRefsRetrieved` is 0 in telemetry: retrievals happen via the `golem_expand`
+- `ccrRefsRetrieved` is 0 in telemetry: retrievals happen via the `expand`
   MCP tool, not the pipeline, so they are not in this event stream yet. Wiring
   expand→telemetry is a follow-up.
 
@@ -590,7 +590,7 @@ ingest→search end to end.
   reranker surface, or a chat-judge rerank at slider ≥3). Search stays
   cosine-ranked meanwhile — correct, just not reranked.
 - **Real embedder construction** (detect tier → Ollama client → service) is the
-  caller's job; B3's `golem_search`/`golem_index_path` MCP tools will build it.
+  caller's job; B3's `search`/`ingest` MCP tools will build it.
   The KB does not auto-spawn inference (no surprise network calls at construction).
 
 ## 30. Savings metric fix — the "91%" was an artifact (2026-07-04, dogfooding)
@@ -698,7 +698,7 @@ history is re-billed at full price. On Anthropic-with-caching the honest savings
 is ~0%. Golem's durable value is **redaction (secrets never leave the machine),
 local tools (KB / tiered Ollama / expand), routing (front Foundry/OpenRouter), and
 honest observability** — not per-request token compression. CCR store stays (it
-backs `golem_expand` and lossy-level reversibility), but "cut token spend via
+backs `expand` and lossy-level reversibility), but "cut token spend via
 compression" as the lead claim does not survive contact with real cached traffic.
 
 ## §33 — B3: knowledge base wired to Claude (2026-07-05)
@@ -707,8 +707,8 @@ Realized the "local tools" pillar (the durable value from Decision 23): the
 unified MCP server now exposes the three P1 knowledge tools, backed by a real
 local-inference embedder.
 
-- **Tools:** `golem_search` (semantic search → hits with `chunk_id` + preview),
-  `golem_get_chunk` (full chunk by id), `golem_index_path` (ingest a file/dir).
+- **Tools:** `search` (semantic search → hits with `chunk_id` + preview),
+  `fetch` (full chunk by id), `ingest` (ingest a file/dir).
   Registered only when a `KnowledgeBase` is injected (`deps.knowledge`), so the
   P0 stub server is unchanged. Backend failures (Ollama down / model not pulled /
   no embedder) come back as actionable `isError` results, never crashes.
@@ -1053,7 +1053,7 @@ Two tied features via one mechanism — an index `manifest.json` beside each
 collection recording the **embedder signature** it was built with.
 
 - **Auto-index (`mcp serve`):** on startup, if no manifest (first run) the project
-  is indexed in the BACKGROUND (never blocks startup) so `golem_search` is
+  is indexed in the BACKGROUND (never blocks startup) so `search` is
   populated without a manual `golem index`. Paths = configured `knowledge.watch_paths`,
   else the project root (ingest already skips node_modules/.git/dist/dotfiles +
   oversized files, so root is safe). No-op when the signature already matches — no
@@ -1136,7 +1136,7 @@ text) through `headroom.compress(protect_recent=4)` (pin 0.30.0) and diffed.
   touching code/tool context.
 
 **Caveat to watch (the one real risk):** if Headroom *does* elide something into
-its own CCR, `golem_expand` cannot retrieve it — Golem's expand is wired to the
+its own CCR, `expand` cannot retrieve it — Golem's expand is wired to the
 TS CCR store, not Headroom's (verification-notes §32 open item). On tool-heavy
 traffic this rarely triggers (tool content is excluded), but on very long
 prose-heavy sessions a compressed earlier turn is not recoverable from the model

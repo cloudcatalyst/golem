@@ -31,7 +31,7 @@
  * output strings over 10k chars as "large" (saved to file + preview), so
  * ~12k aligns with the platform's own notion of oversized; (c) outputs under
  * ~3k tokens are cheap relative to the risk and latency of forcing the model
- * into a `golem_expand` round-trip when the excerpt turns out not to suffice.
+ * into an `expand` round-trip when the excerpt turns out not to suffice.
  *
  * ## Redaction (hard rule: strip BEFORE storing)
  * The stored original and the digest excerpts are both produced from the
@@ -41,7 +41,7 @@
  * *stored* (redacted) original.
  *
  * The digest marker uses A2's `hash=<sha256>` grammar (CCR_MARKER_RE), and the
- * refId is the sha256 of the stored content, so `golem_expand` retrieves it
+ * refId is the sha256 of the stored content, so `expand` retrieves it
  * through the exact same code path as A2's dedup markers.
  */
 
@@ -156,7 +156,7 @@ function tailExcerpt(text: string, max: number): string {
  * Build the replacement digest. Pure function of its inputs (no clock, no
  * store state) — the same output always produces the same digest.
  * Contains A2's CCR marker (`hash=<64-hex>` — CCR_MARKER_RE) so the model can
- * expand it with the `golem_expand` MCP tool / `/golem/expand`.
+ * expand it with the `expand` MCP tool / `/golem/expand`.
  */
 export function buildDigest(toolName: string | undefined, text: string, refId: string): string {
   const bytes = Buffer.byteLength(text, "utf8");
@@ -170,7 +170,7 @@ export function buildDigest(toolName: string | undefined, text: string, refId: s
     `losslessly. Retrieve original: hash=${refId}]\n` +
     `--- head ---\n${head}\n` +
     `--- tail ---\n${tail}\n` +
-    `--- end of excerpt: to see the full output, call the golem_expand MCP tool with ` +
+    `--- end of excerpt: to see the full output, call the expand MCP tool with ` +
     `ref_id "${refId}" (or /golem/expand ${refId}) ---`
   );
 }

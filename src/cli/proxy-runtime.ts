@@ -28,7 +28,7 @@ export interface ProxyBuild {
 export interface BuildProxyOptions {
   /**
    * When present, the level is re-read from this store on EVERY request
-   * instead of frozen at construction time — makes `golem_set_slider` /
+   * instead of frozen at construction time — makes `level` /
    * `golem slider` double as the live per-task toggle (Decision 25).
    * `local_only_opt_in` always comes from the `settings` snapshot.
    */

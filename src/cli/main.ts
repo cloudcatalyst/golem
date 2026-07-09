@@ -409,7 +409,7 @@ mcp
           );
         }
       }
-      // golem_delegate doesn't need the knowledge base — build a standalone
+      // delegate doesn't need the knowledge base — build a standalone
       // InferenceService when the KB path above didn't already produce one
       // (KB disabled, or its own construction failed before reaching this far).
       if (inference === undefined) {
@@ -419,7 +419,7 @@ mcp
           inference = new OllamaInferenceService(client, facts);
         } catch (err) {
           process.stderr.write(
-            `golem: local inference unavailable, golem_delegate will be disabled (${
+            `golem: local inference unavailable, delegate will be disabled (${
               err instanceof Error ? err.message : String(err)
             })\n`,
           );
@@ -626,7 +626,7 @@ program
           );
           if (!report.watching) {
             process.stdout.write(
-              "The index is persisted under .golem/knowledge, so `golem_search` " +
+              "The index is persisted under .golem/knowledge, so `search` " +
                 "finds it in any later session.\n",
             );
           }

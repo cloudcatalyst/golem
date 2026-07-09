@@ -27,7 +27,7 @@ export function golemGuidanceSection(): string {
     "",
     "When the excerpt is not enough, expand the reference:",
     "",
-    "- call the `golem_expand` MCP tool with `ref_id` set to the hex id, or",
+    "- call the `expand` MCP tool with `ref_id` set to the hex id, or",
     "- use `/golem/expand <id>` (or `/mcp__golem__expand <id>`).",
     "",
     "Expand only when needed — the full original re-enters context and costs",
@@ -39,8 +39,8 @@ export function golemGuidanceSection(): string {
     "This project's local docs (`.md` files) and every page you fetch with",
     "WebFetch are kept in Golem's local vector knowledge base. **Before using",
     "WebFetch or reaching for external docs, search the knowledge base first** —",
-    "call the `golem_search` MCP tool (or `/golem/search`) with your query; use",
-    "`golem_get_chunk` for a hit's full text. A previously-fetched URL is served",
+    "call the `search` MCP tool (or `/golem/search`) with your query; use",
+    "`fetch` for a hit's full text. A previously-fetched URL is served",
     "from the cache automatically (the fetch is skipped and the cached content is",
     "returned), so re-fetching the same page is free and offline.",
     GUIDANCE_END_MARKER,
@@ -103,6 +103,6 @@ export async function writeGuidanceSection(options: GuidanceWriteOptions): Promi
   return {
     kind: existing === null ? "create" : "modify",
     path: relPath,
-    detail: "Golem guidance section (oversized tool outputs / golem_expand)",
+    detail: "Golem guidance section (oversized tool outputs / expand)",
   };
 }

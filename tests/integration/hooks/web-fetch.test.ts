@@ -66,7 +66,7 @@ describe("WebFetch capture (PostToolUse)", () => {
     const entry = await new WebCache(webCacheDir(projectDir)).get(url);
     expect(entry?.content).toContain("widget factory");
 
-    // ...and golem_search finds it.
+    // ...and search finds it.
     const kb = openKnowledgeBase({ projectDir });
     const hits = await kb.search("configure widget factory", projectDir, 3);
     expect(hits[0]?.chunk.sourcePath).toBe(`web:${url}`);
