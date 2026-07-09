@@ -72,6 +72,9 @@ describe("golem init", () => {
     // Status line (21c) + blocked-state event hooks (21b) are installed.
     const cs = await readJson(".claude/settings.json");
     expect(cs.statusLine).toStrictEqual({ type: "command", command: "golem statusline" });
+    // defaultMode = "default" so project allow-rules (Bash(golem:*), mcp__golem)
+    // are authoritative instead of "auto" mode's separate background check.
+    expect(cs.defaultMode).toBe("default");
     const hooks = cs.hooks as Record<string, unknown>;
     const cmds = (event: string) =>
       ((hooks[event] as { hooks: { command: string }[] }[]) ?? []).flatMap((e) =>
@@ -88,8 +91,24 @@ describe("golem init", () => {
     await golemUninit({ projectDir, probe: okProbe });
     const cs = await readJson(".claude/settings.json");
     expect(cs.statusLine).toBeUndefined();
+    expect(cs.defaultMode).toBeUndefined();
     // hooks object is gone entirely once all Golem hooks are removed.
     expect(cs.hooks).toBeUndefined();
+  });
+
+  it("leaves a foreign defaultMode alone on init and uninit", async () => {
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify({ defaultMode: "acceptEdits" }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+    expect((await readJson(".claude/settings.json")).defaultMode).toBe("acceptEdits");
+
+    await golemUninit({ projectDir, probe: okProbe });
+    expect((await readJson(".claude/settings.json")).defaultMode).toBe("acceptEdits");
   });
 
   it("respects a configured proxy port", async () => {

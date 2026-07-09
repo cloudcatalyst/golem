@@ -15,6 +15,14 @@ import type { HookSettingsOptions } from "./settings-writer.js";
 export const NOTIFICATION_COMMAND = "golem hook notification";
 export const PROMPT_SUBMIT_COMMAND = "golem hook prompt-submit";
 export const STATUS_LINE_COMMAND = "golem statusline";
+/**
+ * "auto" mode (Claude Code's research-preview background-safety-check
+ * approval path) evaluates each tool call independently of `permissions.allow`
+ * — a project's `Bash(golem:*)`/`mcp__golem` allow-rules can still re-prompt
+ * under it. "default" makes allow-list matching authoritative again, so
+ * golem's own allow-rules (written elsewhere in init) are actually sufficient.
+ */
+export const GOLEM_DEFAULT_MODE = "default";
 
 type JsonObject = Record<string, unknown>;
 const isRecord = (v: unknown): v is JsonObject =>
@@ -180,4 +188,51 @@ export async function removeStatusLine(options: HookSettingsOptions): Promise<In
   delete settings.statusLine;
   if (options.dryRun !== true) await writeJsonObject(file, settings);
   return { kind: "modify", path: relPath, detail: "removed Golem status line" };
+}
+
+/**
+ * Set `defaultMode` to "default", unless a FOREIGN mode is already set. Only
+ * ever touches an unset `defaultMode` — a user who has deliberately chosen
+ * "auto"/"acceptEdits"/"bypassPermissions" keeps that choice.
+ */
+export async function writeDefaultMode(options: HookSettingsOptions): Promise<InitAction> {
+  const { projectDir } = options;
+  const file = settingsPath(projectDir);
+  const existing = await readJsonObject(file);
+  const settings = existing ?? {};
+
+  const current = settings.defaultMode;
+  if (current === GOLEM_DEFAULT_MODE) {
+    return { kind: "skip", path: rel(projectDir, file), detail: "defaultMode already set" };
+  }
+  if (typeof current === "string") {
+    return {
+      kind: "skip",
+      path: rel(projectDir, file),
+      detail: `defaultMode set to "${current}"; left as is`,
+    };
+  }
+
+  settings.defaultMode = GOLEM_DEFAULT_MODE;
+  if (options.dryRun !== true) await writeJsonObject(file, settings);
+  return {
+    kind: existing === null ? "create" : "modify",
+    path: rel(projectDir, file),
+    detail: `defaultMode = ${GOLEM_DEFAULT_MODE}`,
+  };
+}
+
+/** Remove the `defaultMode` override only if it is ours. */
+export async function removeDefaultMode(options: HookSettingsOptions): Promise<InitAction> {
+  const { projectDir } = options;
+  const file = settingsPath(projectDir);
+  const relPath = rel(projectDir, file);
+  const settings = await readJsonObject(file);
+  const current = settings?.defaultMode;
+  if (settings === null || current !== GOLEM_DEFAULT_MODE) {
+    return { kind: "skip", path: relPath, detail: "defaultMode not ours" };
+  }
+  delete settings.defaultMode;
+  if (options.dryRun !== true) await writeJsonObject(file, settings);
+  return { kind: "modify", path: relPath, detail: "removed Golem defaultMode override" };
 }

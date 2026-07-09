@@ -13,10 +13,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { InitError } from "../../../src/cli/init.js";
 import {
   addEventHook,
+  GOLEM_DEFAULT_MODE,
   NOTIFICATION_COMMAND,
+  removeDefaultMode,
   removeEventHook,
   removeStatusLine,
   STATUS_LINE_COMMAND,
+  writeDefaultMode,
   writeStatusLine,
 } from "../../../src/hooks/index.js";
 
@@ -271,6 +274,64 @@ describe("removeStatusLine", () => {
 
   it("is a skip when settings.json doesn't exist", async () => {
     const action = await removeStatusLine({ projectDir });
+    expect(action.kind).toBe("skip");
+  });
+});
+
+describe("writeDefaultMode", () => {
+  it("creates settings.json with defaultMode = default in a fresh project", async () => {
+    const action = await writeDefaultMode({ projectDir });
+    expect(action.kind).toBe("create");
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.defaultMode).toBe(GOLEM_DEFAULT_MODE);
+  });
+
+  it("is idempotent: second write is a skip", async () => {
+    await writeDefaultMode({ projectDir });
+    const action = await writeDefaultMode({ projectDir });
+    expect(action.kind).toBe("skip");
+  });
+
+  it("refuses to clobber a defaultMode the user already set", async () => {
+    await writeSettings({ defaultMode: "acceptEdits" });
+
+    const action = await writeDefaultMode({ projectDir });
+    expect(action.kind).toBe("skip");
+    expect(action.detail).toBe('defaultMode set to "acceptEdits"; left as is');
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.defaultMode).toBe("acceptEdits");
+  });
+
+  it("does not write in dry-run mode but still reports the action", async () => {
+    const action = await writeDefaultMode({ projectDir, dryRun: true });
+    expect(action.kind).toBe("create");
+    await expect(readSettings()).rejects.toThrow();
+  });
+});
+
+describe("removeDefaultMode", () => {
+  it("removes defaultMode when it is the Golem one", async () => {
+    await writeDefaultMode({ projectDir });
+    const action = await removeDefaultMode({ projectDir });
+    expect(action.kind).toBe("modify");
+    const settings = (await readSettings()) as Any;
+    expect(settings.defaultMode).toBeUndefined();
+  });
+
+  it("is a skip when a foreign defaultMode is set, and leaves it untouched", async () => {
+    await writeSettings({ defaultMode: "acceptEdits" });
+
+    const action = await removeDefaultMode({ projectDir });
+    expect(action.kind).toBe("skip");
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.defaultMode).toBe("acceptEdits");
+  });
+
+  it("is a skip when settings.json doesn't exist", async () => {
+    const action = await removeDefaultMode({ projectDir });
     expect(action.kind).toBe("skip");
   });
 });

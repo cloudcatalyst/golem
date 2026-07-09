@@ -34,6 +34,7 @@ import {
   addPostToolUseHook,
   NOTIFICATION_COMMAND,
   PROMPT_SUBMIT_COMMAND,
+  removeDefaultMode,
   removeEventHook,
   removeMatcherHook,
   removePostToolUseHook,
@@ -43,6 +44,7 @@ import {
   WEB_FETCH_MATCHER,
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
+  writeDefaultMode,
   writeGuidanceSection,
   writeStatusLine,
 } from "../hooks/index.js";
@@ -539,6 +541,7 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
 
   // 6. Status line (21c) + blocked-state event hooks (21b).
   actions.push(await writeStatusLine({ projectDir, dryRun }));
+  actions.push(await writeDefaultMode({ projectDir, dryRun }));
   actions.push(await addEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
   actions.push(
     await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
@@ -742,6 +745,7 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
 
   // 5. Remove the status line + blocked-state event hooks.
   actions.push(await removeStatusLine({ projectDir, dryRun }));
+  actions.push(await removeDefaultMode({ projectDir, dryRun }));
   actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
   actions.push(
     await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
