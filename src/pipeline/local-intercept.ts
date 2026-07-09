@@ -10,10 +10,17 @@
  * - Mode B "local_first" (level 5 + opt-in, `stages.localOnlyAnswers`): tries
  *   to answer the request locally and skip Claude entirely. Escalates to
  *   Claude (via Mode A's injection mechanism, so the local compute is not
- *   wasted) whenever the call errors/times out or the draft text itself
- *   reads as a refusal/uncertainty ("I don't have access", "I can't see the
- *   file", ...) — `InferenceService.chat()` is text-only by frozen contract,
- *   so it structurally cannot serve any turn that needs Read/Edit/Bash.
+ *   wasted) whenever the call errors/times out, the request itself declares
+ *   `tools`, or the draft text reads as a refusal/uncertainty ("I don't have
+ *   access", "I can't see the file", ...) — `InferenceService.chat()` is
+ *   text-only by frozen contract, so it structurally cannot serve any turn
+ *   that needs Read/Edit/Bash. The `tools` check matters even when the draft
+ *   text itself sounds confident: given a tool-bearing request the drafter
+ *   can only narrate an action in plain text ("Let me read the file: ..."),
+ *   never actually invoke it, and serving that as a final `end_turn` message
+ *   silently drops the tool call — which is exactly what broke agentic
+ *   subagent turns under Decision 26's local-first opt-in before this check
+ *   was added.
  *
  * Both modes fail open: any inference error just skips the stage, exactly
  * like the semantic-compression stage's fail-open contract.
@@ -206,6 +213,9 @@ export async function runLocalFirstStage(
   body: Readonly<Record<string, unknown>>,
   streaming: boolean,
 ): Promise<LocalFirstOutcome> {
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    return { kind: "escalate", draftText: null };
+  }
   const messages = toLocalChatMessages(body.messages, body.system);
   const result = await callDrafter(inference, messages);
   if (result === null) return { kind: "escalate", draftText: null };

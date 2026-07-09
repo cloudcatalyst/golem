@@ -267,4 +267,27 @@ describe("runLocalFirstStage (Mode B)", () => {
     const outcome = await runLocalFirstStage(inference, { messages: [] }, false);
     expect(outcome).toStrictEqual({ kind: "escalate", draftText: null });
   });
+
+  it("escalates without calling the model when the request declares tools", async () => {
+    let called = false;
+    const inference = new FakeInferenceService(async () => {
+      called = true;
+      return draft("Let me read the file: docs/IMPLEMENTATION_PLAN.md");
+    });
+    const outcome = await runLocalFirstStage(
+      inference,
+      { ...body, tools: [{ name: "read_file", description: "reads a file", input_schema: {} }] },
+      false,
+    );
+    expect(outcome).toStrictEqual({ kind: "escalate", draftText: null });
+    expect(called).toBe(false);
+  });
+
+  it("does not escalate on tools alone when the tools array is empty", async () => {
+    const inference = new FakeInferenceService(async () =>
+      draft("It creates a new array by applying a function to every element."),
+    );
+    const outcome = await runLocalFirstStage(inference, { ...body, tools: [] }, false);
+    expect(outcome.kind).toBe("served");
+  });
 });
