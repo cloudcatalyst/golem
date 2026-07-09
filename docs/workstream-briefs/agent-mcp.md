@@ -11,18 +11,18 @@ MCP prompts that surface as `/mcp__golem__<cmd>` slash commands, plus the Claude
 hook that swaps oversized tool outputs for CCR refs.
 
 ## Frozen names (plan §2.5 — do not rename)
-Tools: `golem_search`, `golem_get_chunk`, `golem_index_path`, `golem_expand`, `golem_stats`,
-`golem_set_slider`, `golem_delegate`, `golem_devices`.
+Tools: `search`, `fetch`, `ingest`, `expand`, `stats`,
+`level`, `delegate`, `golem_devices`.
 Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`,
 `delegate` → surface as `/mcp__golem__slider` etc. (verified format, notes §10).
 
 ## Task list (in order)
 - **B1 — Unified MCP server.** `src/mcp/` on the official TS MCP SDK; stdio +
   streamable HTTP transports; zod schemas on every tool param. P0 tools:
-  `golem_expand` (→ `CompressionService.retrieve`), `golem_stats` (→ `.stats()` +
-  telemetry), `golem_set_slider` (session-scoped policy override). Define all 8
+  `expand` (→ `CompressionService.retrieve`), `stats` (→ `.stats()` +
+  telemetry), `level` (session-scoped policy override). Define all 8
   prompts. Note (Decision 18): Headroom's own MCP server is Python-only — there is
-  nothing to re-export in P0; `golem_expand`/`golem_stats` cover the CCR/stats surface
+  nothing to re-export in P0; `expand`/`stats` cover the CCR/stats surface
   natively. Sidecar tool bridging is P2.
 - **B2 — Claude Code wiring.**
   - **Hook:** `PostToolUse` hook replacing oversized tool outputs with CCR refs via
@@ -31,11 +31,11 @@ Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`,
     post-tool-use`) so it's cross-platform — never a shell script. Threshold via
     `GOLEM_HOOKS_MAX_TOOL_OUTPUT_TOKENS`.
   - **Guidance writer:** appends the Golem section to the project's CLAUDE.md between
-    `<!-- golem:guidance:start/end -->` markers ("prefer golem_search over bulk file
+    `<!-- golem:guidance:start/end -->` markers ("prefer search over bulk file
     reads", command list). Coordination with `headroom learn` writers only matters
     when the P2 sidecar is present — design the markers so they can't collide.
-- **B3 — P1 tools.** `golem_search`/`golem_get_chunk`/`golem_index_path` (thin wrappers
-  over WS-C `KnowledgeBase`), `golem_delegate` (WS-D `InferenceService`),
+- **B3 — P1 tools.** `search`/`fetch`/`ingest` (thin wrappers
+  over WS-C `KnowledgeBase`), `delegate` (WS-D `InferenceService`),
   `golem_devices` (WS-D capabilities). Ship behind capability checks: tools respond
   with a friendly "not available yet" until the backing service exists.
 
@@ -67,5 +67,5 @@ for WS-C/WS-D implementations.
 1. `/golem/slider`, `/golem/stats`, `/golem/expand`, `/golem/bypass` (skills) and their
    `/mcp__golem__*` prompt twins work in a live Claude Code session (DoD #4).
 2. MCP server registers cleanly via `claude mcp add` on all 3 OSes.
-3. PostToolUse hook round-trip: oversized output → CCR ref → `golem_expand`
+3. PostToolUse hook round-trip: oversized output → CCR ref → `expand`
    retrieves the original.

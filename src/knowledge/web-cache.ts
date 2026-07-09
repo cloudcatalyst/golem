@@ -3,7 +3,7 @@
  * `<project>/.golem/webcache`, so the PreToolUse(WebFetch) gate can answer
  * "have we already fetched this URL (recently)?" with a single file read — no
  * vector search on the latency-sensitive pre-tool path. The same content is ALSO
- * ingested into the vector KB (for semantic `golem_search`); this store is the
+ * ingested into the vector KB (for semantic `search`); this store is the
  * exact-URL index + freshness clock on top of it.
  *
  * Pure/dependency-free (node:fs/crypto). Entries are validated on read (external

@@ -33,7 +33,7 @@ import {
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 
-const P0_TOOLS = ["golem_expand", "golem_stats", "golem_set_slider"] as const;
+const P0_TOOLS = ["expand", "stats", "level"] as const;
 const ALL_PROMPTS = [
   "slider",
   "index",
@@ -115,14 +115,14 @@ describe("golem MCP server (in-memory transport)", () => {
     expect(prompts.map((p) => p.name).sort()).toStrictEqual([...ALL_PROMPTS].sort());
   });
 
-  describe("golem_expand", () => {
+  describe("expand", () => {
     it("returns the original content for a stored CCR ref", async () => {
       const deps = createStandaloneDeps();
       const { refId, original } = await seedCcrRef(deps);
       const client = await connectInMemory(deps);
 
       const result = await client.callTool({
-        name: "golem_expand",
+        name: "expand",
         arguments: { ref_id: refId },
       });
       expect(result.isError).toBeFalsy();
@@ -132,7 +132,7 @@ describe("golem MCP server (in-memory transport)", () => {
     it("returns isError (not a protocol error) for an unknown ref", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const result = await client.callTool({
-        name: "golem_expand",
+        name: "expand",
         arguments: { ref_id: "no-such-ref" },
       });
       expect(result.isError).toBe(true);
@@ -141,27 +141,27 @@ describe("golem MCP server (in-memory transport)", () => {
 
     it("maps invalid input (missing ref_id) to an InvalidParams error result", async () => {
       const client = await connectInMemory(createStandaloneDeps());
-      const result = await client.callTool({ name: "golem_expand", arguments: {} });
+      const result = await client.callTool({ name: "expand", arguments: {} });
       expectInvalidParamsResult(result);
     });
 
     it("maps a wrongly-typed ref_id to an InvalidParams error result", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const result = await client.callTool({
-        name: "golem_expand",
+        name: "expand",
         arguments: { ref_id: 42 },
       });
       expectInvalidParamsResult(result);
     });
   });
 
-  describe("golem_set_slider + golem_stats", () => {
-    it("sets a valid level, persists it, and reports it via golem_stats", async () => {
+  describe("level + stats", () => {
+    it("sets a valid level, persists it, and reports it via stats", async () => {
       const deps = createStandaloneDeps();
       const client = await connectInMemory(deps);
 
       const setResult = await client.callTool({
-        name: "golem_set_slider",
+        name: "level",
         arguments: { level: 3 },
       });
       expect(setResult.isError).toBeFalsy();
@@ -171,7 +171,7 @@ describe("golem MCP server (in-memory transport)", () => {
       });
       await expect(deps.sliderStore.get()).resolves.toBe(3);
 
-      const statsResult = await client.callTool({ name: "golem_stats", arguments: {} });
+      const statsResult = await client.callTool({ name: "stats", arguments: {} });
       expect(statsResult.isError).toBeFalsy();
       expect(statsResult.structuredContent).toMatchObject({ slider_level: 3 });
     });
@@ -181,7 +181,7 @@ describe("golem MCP server (in-memory transport)", () => {
     ])("maps out-of-range level %s to an InvalidParams error result", async (level) => {
       const deps = createStandaloneDeps();
       const client = await connectInMemory(deps);
-      const result = await client.callTool({ name: "golem_set_slider", arguments: { level } });
+      const result = await client.callTool({ name: "level", arguments: { level } });
       expectInvalidParamsResult(result);
       // Invalid calls must not have changed persisted state.
       await expect(deps.sliderStore.get()).resolves.toBe(1);
@@ -190,18 +190,18 @@ describe("golem MCP server (in-memory transport)", () => {
     it("maps a non-numeric level to an InvalidParams error result", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const result = await client.callTool({
-        name: "golem_set_slider",
+        name: "level",
         arguments: { level: "high" },
       });
       expectInvalidParamsResult(result);
     });
 
-    it("golem_stats reports snake_case savings fields, globally and per project", async () => {
+    it("stats reports snake_case savings fields, globally and per project", async () => {
       const deps = createStandaloneDeps();
       await seedCcrRef(deps); // one compress() against "mcp-test-project"
       const client = await connectInMemory(deps);
 
-      const globalStats = await client.callTool({ name: "golem_stats", arguments: {} });
+      const globalStats = await client.callTool({ name: "stats", arguments: {} });
       expect(globalStats.structuredContent).toMatchObject({
         project_id: null,
         slider_level: 1,
@@ -216,7 +216,7 @@ describe("golem MCP server (in-memory transport)", () => {
       expect(structured.tokens_saved).toBeGreaterThan(0);
 
       const projectStats = await client.callTool({
-        name: "golem_stats",
+        name: "stats",
         arguments: { project_id: "mcp-test-project" },
       });
       expect(projectStats.structuredContent).toMatchObject({
@@ -228,7 +228,7 @@ describe("golem MCP server (in-memory transport)", () => {
     it("maps a wrongly-typed project_id to an InvalidParams error result", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const result = await client.callTool({
-        name: "golem_stats",
+        name: "stats",
         arguments: { project_id: 7 },
       });
       expectInvalidParamsResult(result);
@@ -236,22 +236,22 @@ describe("golem MCP server (in-memory transport)", () => {
   });
 
   describe("prompts", () => {
-    it("slider prompt embeds the requested level and points at golem_set_slider", async () => {
+    it("slider prompt embeds the requested level and points at the level tool", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const prompt = await client.getPrompt({ name: "slider", arguments: { level: "4" } });
       const first = prompt.messages[0];
       expect(first?.role).toBe("user");
       const text = first?.content.type === "text" ? first.content.text : "";
-      expect(text).toContain("golem_set_slider");
+      expect(text).toContain("level tool");
       expect(text).toContain("level 4");
     });
 
-    it("slider prompt without args points at golem_stats instead", async () => {
+    it("slider prompt without args points at the stats tool instead", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const prompt = await client.getPrompt({ name: "slider", arguments: {} });
       const first = prompt.messages[0];
       const text = first?.content.type === "text" ? first.content.text : "";
-      expect(text).toContain("golem_stats");
+      expect(text).toContain("stats tool");
     });
 
     it("expand prompt requires ref_id", async () => {
@@ -262,7 +262,7 @@ describe("golem MCP server (in-memory transport)", () => {
       const prompt = await client.getPrompt({ name: "expand", arguments: { ref_id: "abc123" } });
       const first = prompt.messages[0];
       const text = first?.content.type === "text" ? first.content.text : "";
-      expect(text).toContain("golem_expand");
+      expect(text).toContain("expand tool");
       expect(text).toContain("abc123");
     });
 
@@ -271,7 +271,7 @@ describe("golem MCP server (in-memory transport)", () => {
       const prompt = await client.getPrompt({ name: "bypass" });
       const first = prompt.messages[0];
       const text = first?.content.type === "text" ? first.content.text : "";
-      expect(text).toContain("golem_set_slider");
+      expect(text).toContain("Call level");
       expect(text).toContain("x-golem-bypass");
     });
   });
@@ -281,7 +281,7 @@ describe("golem MCP server (in-memory transport)", () => {
  * `backendUnavailableMessage()` (src/mcp/server.ts) maps a knowledge-backend
  * failure's `err.name` to a friendly, actionable message shared by all three
  * P1 knowledge tools. It is not exported, so these tests drive it through the
- * real `golem_search` / `golem_get_chunk` / `golem_index_path` handlers with a
+ * real `search` / `fetch` / `ingest` handlers with a
  * KnowledgeBase stub that throws a chosen error from every method.
  */
 describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () => {
@@ -331,27 +331,27 @@ describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () 
     ];
 
   describe.each(MAPPED_ERRORS)("%s", (_name, err, friendlyMessage) => {
-    it("golem_search surfaces the friendly message as an isError result", async () => {
+    it("search surfaces the friendly message as an isError result", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(err));
-      const result = await client.callTool({ name: "golem_search", arguments: { query: "q" } });
+      const result = await client.callTool({ name: "search", arguments: { query: "q" } });
       expect(result.isError).toBe(true);
       expect(textOf(result)).toBe(friendlyMessage);
     });
 
-    it("golem_get_chunk surfaces the friendly message as an isError result", async () => {
+    it("fetch surfaces the friendly message as an isError result", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(err));
       const result = await client.callTool({
-        name: "golem_get_chunk",
+        name: "fetch",
         arguments: { chunk_id: "chunk-1" },
       });
       expect(result.isError).toBe(true);
       expect(textOf(result)).toBe(friendlyMessage);
     });
 
-    it("golem_index_path surfaces the friendly message as an isError result", async () => {
+    it("ingest surfaces the friendly message as an isError result", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(err));
       const result = await client.callTool({
-        name: "golem_index_path",
+        name: "ingest",
         arguments: { path: "src" },
       });
       expect(result.isError).toBe(true);
@@ -367,27 +367,27 @@ describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () 
     // `createToolError`) — no friendly wrapping.
     const unmapped = new Error("weird backend failure");
 
-    it("golem_search rethrows to a plain isError with the raw message", async () => {
+    it("search rethrows to a plain isError with the raw message", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(unmapped));
-      const result = await client.callTool({ name: "golem_search", arguments: { query: "q" } });
+      const result = await client.callTool({ name: "search", arguments: { query: "q" } });
       expect(result.isError).toBe(true);
       expect(textOf(result)).toBe("weird backend failure");
     });
 
-    it("golem_get_chunk rethrows to a plain isError with the raw message", async () => {
+    it("fetch rethrows to a plain isError with the raw message", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(unmapped));
       const result = await client.callTool({
-        name: "golem_get_chunk",
+        name: "fetch",
         arguments: { chunk_id: "chunk-1" },
       });
       expect(result.isError).toBe(true);
       expect(textOf(result)).toBe("weird backend failure");
     });
 
-    it("golem_index_path rethrows to a plain isError with the raw message", async () => {
+    it("ingest rethrows to a plain isError with the raw message", async () => {
       const client = await connectInMemory(depsWithKnowledgeError(unmapped));
       const result = await client.callTool({
-        name: "golem_index_path",
+        name: "ingest",
         arguments: { path: "src" },
       });
       expect(result.isError).toBe(true);
@@ -397,11 +397,11 @@ describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () 
 });
 
 /**
- * `golem_delegate` (src/mcp/server.ts `registerDelegateTool`) is registered
+ * `delegate` (src/mcp/server.ts `registerDelegateTool`) is registered
  * only when `deps.inference` is supplied, and hands the task off to the
  * "drafter" role of an injected InferenceService.
  */
-describe("golem_delegate tool", () => {
+describe("delegate tool", () => {
   class FakeInferenceService implements InferenceService {
     lastRole: Role | undefined;
     lastMessages: readonly ChatMessage[] | undefined;
@@ -443,7 +443,7 @@ describe("golem_delegate tool", () => {
   it("is not listed when deps.inference is omitted", async () => {
     const client = await connectInMemory(createStandaloneDeps());
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).not.toContain("golem_delegate");
+    expect(tools.map((t) => t.name)).not.toContain("delegate");
   });
 
   it("delegates a task-only call and reports the local model in text and structuredContent", async () => {
@@ -458,7 +458,7 @@ describe("golem_delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "golem_delegate",
+      name: "delegate",
       arguments: { task: "write a hello world function" },
     });
 
@@ -484,7 +484,7 @@ describe("golem_delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     await client.callTool({
-      name: "golem_delegate",
+      name: "delegate",
       arguments: {
         task: "refactor this function",
         context: "function foo() { return 1; }",
@@ -504,7 +504,7 @@ describe("golem_delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "golem_delegate",
+      name: "delegate",
       arguments: { task: "write a hello world function" },
     });
 
@@ -523,7 +523,7 @@ describe("golem_delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "golem_delegate",
+      name: "delegate",
       arguments: { task: "write a hello world function" },
     });
 
@@ -555,7 +555,7 @@ describe("golem MCP server (streamable HTTP transport)", () => {
     expect(tools.map((t) => t.name).sort()).toStrictEqual([...P0_TOOLS].sort());
 
     const setResult = await clientA.callTool({
-      name: "golem_set_slider",
+      name: "level",
       arguments: { level: 5 },
     });
     expect(setResult.structuredContent).toMatchObject({ slider_level: 5 });
@@ -563,7 +563,7 @@ describe("golem MCP server (streamable HTTP transport)", () => {
     // A second, independent session sees the same injected deps (shared state).
     const clientB = new Client({ name: "http-client-b", version: "0.0.0" });
     await clientB.connect(new StreamableHTTPClientTransport(handle.url) as Transport);
-    const stats = await clientB.callTool({ name: "golem_stats", arguments: {} });
+    const stats = await clientB.callTool({ name: "stats", arguments: {} });
     expect(stats.structuredContent).toMatchObject({ slider_level: 5 });
 
     await clientA.close();

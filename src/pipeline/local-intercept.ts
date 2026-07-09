@@ -1,6 +1,6 @@
 /**
  * Decision 25 (spec v1.8) — proxy-side local-drafter intercept: "draft" and
- * "local_first" modes. Realizes spec §3.3 Draft/Critic using `golem_delegate`'s
+ * "local_first" modes. Realizes spec §3.3 Draft/Critic using `delegate`'s
  * engine (`InferenceService`) with the proxy as the policy trigger.
  *
  * - Mode A "draft" (level >= 4, `stages.localDrafts`): runs a local model on

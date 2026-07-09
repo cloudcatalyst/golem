@@ -1,5 +1,5 @@
 /**
- * Regression coverage for the `golem mcp serve` stats bug: `golem_stats`
+ * Regression coverage for the `golem mcp serve` stats bug: `stats`
  * always reported zero requests because it read a per-process in-memory
  * NativeLosslessCompression counter, while the real traffic is processed
  * (and telemetry recorded) by the separate `golem proxy` process.

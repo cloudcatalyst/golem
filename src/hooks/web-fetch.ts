@@ -7,7 +7,7 @@
  *   the deny reason is shown to Claude and the network fetch is skipped). Else
  *   allow the fetch (empty output).
  * - PostToolUse(WebFetch): capture the fetched content — redact, write it to the
- *   web cache, and ingest it into the vector KB (so `golem_search` finds it and
+ *   web cache, and ingest it into the vector KB (so `search` finds it and
  *   re-fetches stay in sync). Store-only: writes NO stdout, so it never conflicts
  *   with the CCR-swap PostToolUse hook that shares the WebFetch matcher.
  *
@@ -122,7 +122,7 @@ export async function runWebFetchPre(
 
     const served =
       entry.content.length > MAX_SERVED_CHARS
-        ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use golem_search / golem_get_chunk.]`
+        ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
         : entry.content;
     const reason =
       `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), ` +
@@ -165,7 +165,7 @@ export async function runWebFetchPost(
 
     await (options.cache ?? new WebCache(webCacheDir(projectDir))).put(url, content, nowIso);
 
-    // Also ingest into the vector KB for semantic golem_search (same embedder as
+    // Also ingest into the vector KB for semantic search (same embedder as
     // auto-index, so the collection isn't corrupted by mixed dimensions).
     if (options.buildKnowledge !== undefined) {
       const kb = await options.buildKnowledge(projectDir);

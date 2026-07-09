@@ -4,7 +4,7 @@
  *
  * The level lives at the NESTED `slider.level` path — the exact key the E1
  * config loader (`src/config/schema.ts`) validates — inside a Golem settings
- * file, so `/mcp__golem__slider` (golem_set_slider), `golem slider`, and
+ * file, so `/mcp__golem__slider` (level), `golem slider`, and
  * `loadConfig()` all read and write one value. The CLI wires this store at
  * the PROJECT settings file (`<project>/.golem/settings.json`); the default
  * remains the user-scope file (`~/.golem/settings.json`) for standalone runs.

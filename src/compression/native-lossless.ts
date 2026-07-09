@@ -74,13 +74,13 @@ const TEXT_PLAIN = "text/plain";
  */
 export const DEFAULT_MIN_DEDUP_CHARS = 256;
 
-/** Regex that extracts the refId from an inline CCR marker (for golem_expand). */
+/** Regex that extracts the refId from an inline CCR marker (for expand). */
 export const CCR_MARKER_RE = /hash=([0-9a-f]{64})/;
 
 /**
  * Inline retrieval marker, following Headroom's marker convention
  * ("... Retrieve more: hash=<h>", verification-notes.md §2) so a future P2
- * sidecar and golem_expand share one `hash=` grammar. Pure function of
+ * sidecar and expand share one `hash=` grammar. Pure function of
  * (refId, originalTokens) — REQUIRED for prefix byte-stability.
  */
 export function ccrMarker(refId: string, originalTokens: number): string {

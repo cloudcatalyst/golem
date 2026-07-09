@@ -144,7 +144,7 @@ export class JsonlTelemetryStore implements TelemetryStore {
       tokensAfter,
       perStage,
       ccrRefsStored,
-      // CCR retrievals are recorded by golem_expand, not the pipeline; the
+      // CCR retrievals are recorded by expand, not the pipeline; the
       // JSONL event stream does not carry them yet (0 until wired — see §25).
       ccrRefsRetrieved: 0,
     };
