@@ -1,0 +1,12 @@
+{
+  "slider": {
+    "level": 5,
+    "local_only_opt_in": true
+  },
+  "compression": {
+    "headroom_sidecar": true
+  },
+  "proxy": {
+    "port": 4930
+  }
+}

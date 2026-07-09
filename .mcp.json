@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "golem": {
+      "type": "stdio",
+      "command": "golem",
+      "args": [
+        "mcp",
+        "serve"
+      ]
+    }
+  }
+}
