@@ -214,7 +214,7 @@ describe("runLocalFirstStage (Mode B)", () => {
     expect(parsed.stop_sequence).toBeNull();
     expect(Array.isArray(parsed.content)).toBe(true);
     expect(parsed.content[0].type).toBe("text");
-    expect(parsed.content[0].text).toContain("Answered locally by qwen2.5-coder:7b");
+    expect(parsed.content[0].text).toContain("**Golem** Used qwen2.5-coder:7b locally");
     expect(parsed.content[0].text).toContain("verify independently");
     expect(parsed.content[0].text).toContain("new array");
     expect(parsed.usage).toStrictEqual({ input_tokens: 10, output_tokens: 5 });
