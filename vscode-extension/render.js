@@ -92,8 +92,10 @@ function statusBarText(model) {
   const levelLabel = model.sliderName
     ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
     : `L${model.slider}`;
-  const localSegment = model.localFirstIntended && model.localFirstReady ? " · local" : "";
-  return `${glyph} Golem · ${levelLabel}${localSegment} → ${model.upstreamLabel}`;
+  const localReady = model.localFirstIntended && model.localFirstReady;
+  const localSegment = localReady ? " · local" : "";
+  const joiner = localReady ? "+" : "→";
+  return `${glyph} Golem · ${levelLabel}${localSegment} ${joiner} ${model.upstreamLabel}`;
 }
 
 function esc(s) {

@@ -489,7 +489,7 @@ program
 
 program
   .command("slider")
-  .description("Show the Golem savings slider, or set it (0 passthrough … 5 max savings)")
+  .description("Show the Golem savings slider, or set it (0 passthrough … 5 max)")
   .argument("[level]", "new slider level 0–5; omit to show the current level", parseSliderLevel)
   .option("--dir <path>", "project directory", process.cwd())
   .option("--json", "machine-readable output", false)

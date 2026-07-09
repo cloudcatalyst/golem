@@ -85,7 +85,7 @@ const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   2: "conservative",
   3: "balanced",
   4: "aggressive",
-  5: "max savings",
+  5: "max",
 };
 
 const sliderLevelInput = z
@@ -94,7 +94,7 @@ const sliderLevelInput = z
   .min(0)
   .max(5)
   .describe(
-    "Slider level: 0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 max savings",
+    "Slider level: 0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 max",
   );
 
 function asSliderLevel(level: number): SliderLevel {
@@ -661,7 +661,7 @@ function registerPrompts(server: McpServer): void {
         level === undefined || level === ""
           ? "Call the stats tool and report the current Golem slider level, " +
               "then briefly list what each level 0–5 enables " +
-              "(0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 max savings)."
+              "(0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 max)."
           : `Set the Golem savings slider to level ${level} using the level ` +
               "tool (it accepts integers 0–5; if the requested value is not a valid " +
               "level, tell the user instead of guessing). Then confirm the new level " +
