@@ -5,7 +5,9 @@
  * - P0 tools: `golem_expand`, `golem_stats`, `golem_set_slider`.
  * - P1 knowledge tools (task B3): `golem_search`, `golem_get_chunk`,
  *   `golem_index_path` — registered only when a KnowledgeBase is injected
- *   (`deps.knowledge`). `golem_delegate` / `golem_devices` are still to come.
+ *   (`deps.knowledge`). `golem_delegate` is registered only when an
+ *   InferenceService is injected (`deps.inference`). `golem_devices` is
+ *   still to come.
  * - Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`,
  *   `devices`, `delegate` — surfaced by Claude Code as `/mcp__golem__<name>`
  *   (verification-notes.md §10).
@@ -24,7 +26,13 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { CompressionService, Hit, KnowledgeBase, SliderLevel } from "../interfaces/index.js";
+import type {
+  CompressionService,
+  Hit,
+  InferenceService,
+  KnowledgeBase,
+  SliderLevel,
+} from "../interfaces/index.js";
 import { UnknownChunkError, UnknownRefError } from "../interfaces/index.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
@@ -43,6 +51,12 @@ export interface GolemMcpServerDeps {
    * Omitted for the P0 stubs and for runs where the KB is disabled.
    */
   readonly knowledge?: KnowledgeBase;
+  /**
+   * WS-D tiered inference (task B3). When present, the `golem_delegate` tool
+   * is registered, letting Claude offload a task to a local model (the
+   * "drafter" role). Omitted when local inference is unavailable or disabled.
+   */
+  readonly inference?: InferenceService;
   /** projectId used by knowledge tools when a call omits `project_id`. */
   readonly defaultProjectId?: string;
 }
@@ -261,6 +275,10 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   if (deps.knowledge !== undefined) {
     registerKnowledgeTools(server, deps.knowledge, deps.defaultProjectId ?? "default");
   }
+
+  if (deps.inference !== undefined) {
+    registerDelegateTool(server, deps.inference);
+  }
 }
 
 /** Longest chunk preview echoed in a search result's text/summary. */
@@ -287,6 +305,12 @@ function backendUnavailableMessage(err: unknown): string | null {
       return (
         "Golem's knowledge base has no embedding backend available in this run " +
         "(local inference required). Check `golem devices` and that Ollama is running."
+      );
+    case "CapabilityUnavailableError":
+      return (
+        "Golem has no local model available for this task at the current hardware " +
+        "tier. Check `golem devices` for what's detected, or ask Claude to do this " +
+        "task directly instead of delegating it."
       );
     default:
       return null;
@@ -486,6 +510,59 @@ function registerKnowledgeTools(
             chunks_indexed: report.chunksIndexed,
             files_skipped: report.filesSkipped,
             watching: report.watching,
+          },
+        };
+      } catch (err) {
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
+    },
+  );
+}
+
+function registerDelegateTool(server: McpServer, inference: InferenceService): void {
+  server.registerTool(
+    "golem_delegate",
+    {
+      title: "Delegate a task to a local model",
+      description:
+        'Delegate a task to Golem\'s local tiered Ollama inference (the "drafter" ' +
+        "role — currently backed by a qwen2.5-coder-family model tuned for cheap " +
+        "first-draft code generation) instead of doing everything yourself. Use it " +
+        "to offload simple or initial work — e.g. a first coding draft — then " +
+        "refine the result. Nothing leaves the machine, but the local model may be " +
+        "slower or lower-quality than you: treat the result as a draft to review, " +
+        "not a final answer.",
+      inputSchema: {
+        task: z.string().min(1).describe("The task or instructions for the local model"),
+        context: z
+          .string()
+          .optional()
+          .describe("Extra context to include, e.g. relevant code or file contents"),
+      },
+      outputSchema: {
+        text: z.string(),
+        model: z.string(),
+        role: z.string(),
+      },
+    },
+    async ({ task, context }) => {
+      const prompt =
+        context === undefined || context === "" ? task : `${task}\n\n---\nContext:\n${context}`;
+      try {
+        const result = await inference.chat("drafter", [{ role: "user", content: prompt }]);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `${result.text}\n\n(produced locally by ${result.model}; review before relying on it)`,
+            },
+          ],
+          structuredContent: {
+            text: result.text,
+            model: result.model,
+            role: result.role,
           },
         };
       } catch (err) {
