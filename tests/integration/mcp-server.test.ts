@@ -570,6 +570,30 @@ describe("delegate tool", () => {
         "task directly instead of delegating it.",
     );
   });
+
+  it("appends the underlying cause when CapabilityUnavailableError carries one", async () => {
+    const fake = new FakeInferenceService(async () => {
+      throw new CapabilityUnavailableError(
+        "drafter",
+        HardwareTier.PMid,
+        new InferenceEndpointError("could not reach inference endpoint: timeout"),
+      );
+    });
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "delegate",
+      arguments: { task: "write a hello world function" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toBe(
+      "Golem has no local model available for this task at the current hardware " +
+        "tier. Check `golem devices` for what's detected, or ask Claude to do this " +
+        "task directly instead of delegating it. Last attempt failed: could not reach " +
+        "inference endpoint: timeout",
+    );
+  });
 });
 
 describe("golem MCP server (streamable HTTP transport)", () => {

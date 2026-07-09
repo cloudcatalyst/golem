@@ -316,12 +316,14 @@ function backendUnavailableMessage(err: unknown): string | null {
         "Golem's knowledge base has no embedding backend available in this run " +
         "(local inference required). Check `golem devices` and that Ollama is running."
       );
-    case "CapabilityUnavailableError":
+    case "CapabilityUnavailableError": {
+      const detail = err.cause instanceof Error ? ` Last attempt failed: ${err.cause.message}` : "";
       return (
         "Golem has no local model available for this task at the current hardware " +
         "tier. Check `golem devices` for what's detected, or ask Claude to do this " +
-        "task directly instead of delegating it."
+        `task directly instead of delegating it.${detail}`
       );
+    }
     default:
       return null;
   }

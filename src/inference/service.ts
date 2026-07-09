@@ -87,6 +87,7 @@ export class OllamaInferenceService implements InferenceService {
   ): Promise<ChatResult> {
     // Try this tier, then step down toward P_CPU (0) if permitted.
     const lowest = this.#stepDownTier ? 0 : this.#tier;
+    let lastError: unknown;
     for (let tier = this.#tier; tier >= lowest; tier -= 1) {
       const model = chatModelFor(tier as HardwareTier, modelRole);
       let completion: ChatCompletion;
@@ -101,7 +102,11 @@ export class OllamaInferenceService implements InferenceService {
         });
       } catch (err) {
         // A missing model → try the next lower tier. Any other endpoint error
-        // is terminal for the local path (don't hammer a broken endpoint).
+        // is terminal for the local path (don't hammer a broken endpoint) —
+        // but keep it, since it's almost always more informative than "missing
+        // model" (e.g. a timeout under GPU/VRAM contention, or a malformed
+        // response) for whoever ends up reading CapabilityUnavailableError.
+        lastError = err;
         if (err instanceof ModelNotAvailableError) continue;
         if (err instanceof InferenceEndpointError) break;
         throw err;
@@ -119,7 +124,7 @@ export class OllamaInferenceService implements InferenceService {
     if (this.#allowHaiku) {
       throw new HaikuFallbackRequired(modelRole, messages, opts);
     }
-    throw new CapabilityUnavailableError(modelRole, this.#tier);
+    throw new CapabilityUnavailableError(modelRole, this.#tier, lastError);
   }
 
   async embed(texts: readonly string[], kind: "text" | "code"): Promise<Vector[]> {
