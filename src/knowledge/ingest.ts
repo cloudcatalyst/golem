@@ -24,7 +24,7 @@ export interface IngestPlan {
 }
 
 /** Directories never walked (vendored, build output, VCS, Golem state). */
-const SKIP_DIRS = new Set([
+export const SKIP_DIRS = new Set([
   "node_modules",
   ".git",
   ".hg",
@@ -45,7 +45,7 @@ const SKIP_DIRS = new Set([
 /** Files larger than this are skipped (bytes) — avoids huge generated blobs. */
 export const MAX_FILE_BYTES = 1_000_000;
 
-function toPosix(p: string): string {
+export function toPosix(p: string): string {
   return p.split(path.sep).join("/");
 }
 

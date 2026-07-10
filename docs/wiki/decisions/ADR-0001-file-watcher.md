@@ -9,7 +9,7 @@ updated: 2026-07-11
 
 # ADR-0001: File Watcher Backend
 
-**Status:** proposed
+**Status:** accepted
 
 ## Context
 

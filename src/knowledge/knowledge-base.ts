@@ -11,6 +11,8 @@
  * search degrades to KNOWLEDGE only (documented P0 behavior).
  */
 
+import { stat } from "node:fs/promises";
+import path from "node:path";
 import {
   type Chunk,
   DEFAULT_SCOPES,
@@ -23,7 +25,14 @@ import {
 } from "../interfaces/knowledge.js";
 import { chunkMarkdown } from "./chunker.js";
 import { isDeletable, type StoredChunk, type VectorDriver } from "./driver.js";
-import { chunkFilesRelativeTo, chunkIdFor, type PreparedChunk, planIngest } from "./ingest.js";
+import { type FileChangeBatch, type FileWatcher, watchPath } from "./file-watcher.js";
+import {
+  chunkFilesRelativeTo,
+  chunkIdFor,
+  type PreparedChunk,
+  planIngest,
+  toPosix,
+} from "./ingest.js";
 
 /** Turns text into embedding vectors. Supplied by WS-D InferenceService (C3). */
 export type EmbedFn = (texts: readonly string[], kind: "text" | "code") => Promise<number[][]>;
@@ -83,6 +92,7 @@ export interface KnowledgeBaseOptions {
 export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
   readonly #driver: VectorDriver;
   readonly #embed: EmbedFn | undefined;
+  readonly #watchers: FileWatcher[] = [];
 
   constructor(driver: VectorDriver, options: KnowledgeBaseOptions = {}) {
     this.#driver = driver;
@@ -121,20 +131,33 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
   }
 
   async ingest(pathArg: string, projectId: string, watch?: boolean): Promise<IngestReport> {
-    if (watch === true) {
-      // File watching (fs.watch/chokidar decision, verification-notes §27) is a
-      // C2 follow-up; refuse rather than silently not-watching.
-      throw new NotImplementedYetError("file watching", "C2-followup");
-    }
     if (this.#embed === undefined) {
       // Chunking works without an embedder, but storing vectors needs one
       // (wired to WS-D in C3).
       throw new NotImplementedYetError("ingest (chunk embedding)", "C3");
     }
+    // Watching drives reindexFiles/removeSourcePaths on every change (ADR-0001);
+    // both require a deletable driver. Fail now, not silently on the first event.
+    if (watch === true && !isDeletable(this.#driver)) {
+      throw new NotImplementedYetError("file watching", "driver");
+    }
 
     const plan = await planIngest(pathArg);
     await this.#driver.openCollection(projectId);
     const chunksIndexed = await this.#embedAndStore(projectId, plan.chunks);
+
+    let watching = false;
+    if (watch === true) {
+      const absRoot = path.resolve(pathArg);
+      const baseDir = (await stat(absRoot)).isFile() ? path.dirname(absRoot) : absRoot;
+      const watcher = await watchPath(absRoot, (batch) => {
+        // Background maintenance: a failed reindex must never crash the host
+        // process — the next change event naturally retries.
+        void this.#applyWatchBatch(baseDir, projectId, batch).catch(() => {});
+      });
+      this.#watchers.push(watcher);
+      watching = true;
+    }
 
     return {
       path: pathArg,
@@ -142,8 +165,30 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
       filesSeen: plan.filesSeen,
       chunksIndexed,
       filesSkipped: plan.filesSkipped,
-      watching: false,
+      watching,
     };
+  }
+
+  /**
+   * Stop every watcher started by `ingest(..., true)` on this instance
+   * (graceful shutdown, test cleanup). Extra capability, not part of the
+   * frozen KnowledgeBase contract.
+   */
+  closeWatchers(): void {
+    for (const w of this.#watchers) w.close();
+    this.#watchers.length = 0;
+  }
+
+  async #applyWatchBatch(
+    baseDir: string,
+    projectId: string,
+    batch: FileChangeBatch,
+  ): Promise<void> {
+    if (batch.changed.length > 0) await this.reindexFiles(baseDir, projectId, batch.changed);
+    if (batch.removed.length > 0) {
+      const sourcePaths = batch.removed.map((abs) => toPosix(path.relative(baseDir, abs)));
+      await this.removeSourcePaths(projectId, sourcePaths);
+    }
   }
 
   /** True only when the driver supports deletion AND an embedder is present. */
