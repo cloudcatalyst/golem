@@ -67,3 +67,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-10-T2.md — shipped the missing `wiki-query`/`wiki-ingest` skills
 - debriefs/2026-07-10-T4.md — shipped `golem note` capture (spec Decision 20f)
 - debriefs/2026-07-11-T5.md — graph-first lookup ahead of vector search in `search`
+- debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
