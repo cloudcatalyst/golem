@@ -8,9 +8,12 @@
  * results, not crashes.
  */
 
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Chunk, Hit, IngestReport, KnowledgeBase, Scope } from "../../src/interfaces/index.js";
 import { UnknownChunkError } from "../../src/interfaces/index.js";
 import {
@@ -18,6 +21,7 @@ import {
   createStandaloneDeps,
   type GolemMcpServerDeps,
 } from "../../src/mcp/index.js";
+import { FileWikiStore } from "../../src/wiki/index.js";
 
 const KNOWLEDGE_TOOLS = ["search", "fetch", "ingest"] as const;
 
@@ -260,5 +264,112 @@ describe("MCP knowledge tools (B3)", () => {
     const search = await client.callTool({ name: "search", arguments: { query: "q" } });
     const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
     expect(structured.hits.map((h) => h.chunk_id)).toEqual(["wiki-1", "src-1"]);
+  });
+});
+
+/**
+ * T5 — graph-first lookup ahead of vector search, over a real FileWikiStore.
+ */
+describe("MCP search: graph-first + vector merge (T5)", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "golem-search-graph-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function depsWithWikiAnd(knowledge: KnowledgeBase): Promise<GolemMcpServerDeps> {
+    const wiki = new FileWikiStore({ wikiDir: dir, now: () => "2026-07-11" });
+    await wiki.upsertPage({
+      relPath: "concepts/Redaction.md",
+      frontmatter: { title: "Redaction", type: "concept", tags: [], sources: [] },
+      body: "Redaction runs before compression. See [[Prompt Caching]] for the other half.",
+    });
+    await wiki.upsertPage({
+      relPath: "concepts/Prompt Caching.md",
+      frontmatter: { title: "Prompt Caching", type: "concept", tags: [], sources: [] },
+      body: "no links here",
+    });
+    return {
+      ...createStandaloneDeps(),
+      knowledge,
+      wiki,
+      wikiDir: "docs/wiki",
+      defaultProjectId: "proj-1",
+    };
+  }
+
+  it("ranks an exact wiki-title match and its 1-hop link above a vector hit", async () => {
+    const client = await connect(await depsWithWikiAnd(new FakeKnowledgeBase()));
+    await client.callTool({ name: "ingest", arguments: { path: "src" } });
+
+    const search = await client.callTool({ name: "search", arguments: { query: "redaction" } });
+    expect(search.isError).toBeFalsy();
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual([
+      "wiki:concepts/Redaction.md",
+      "wiki:concepts/Prompt Caching.md",
+      "chunk-1",
+    ]);
+  });
+
+  it("fetches a graph-first hit's full text straight from the wiki, not the vector store", async () => {
+    const client = await connect(await depsWithWikiAnd(new FakeKnowledgeBase()));
+    const fetched = await client.callTool({
+      name: "fetch",
+      arguments: { chunk_id: "wiki:concepts/Redaction.md" },
+    });
+    expect(fetched.isError).toBeFalsy();
+    expect(textOf(fetched)).toContain("Redaction runs before compression");
+  });
+
+  it("de-duplicates a vector hit whose sourcePath matches a graph-matched wiki page", async () => {
+    class DuplicatingKnowledgeBase implements KnowledgeBase {
+      async ingest(): Promise<IngestReport> {
+        throw new Error("not used");
+      }
+      async search(): Promise<Hit[]> {
+        return [
+          {
+            chunk: {
+              chunkId: "vector-dup",
+              projectId: "proj-1",
+              text: "stale vector-ingested copy of the same wiki page",
+              sourcePath: "docs/wiki/concepts/Redaction.md",
+              metadata: {},
+            },
+            score: 0.95,
+            scope: "knowledge",
+          },
+        ];
+      }
+      async getChunk(chunkId: string): Promise<Chunk> {
+        throw new UnknownChunkError(chunkId);
+      }
+    }
+
+    const client = await connect(await depsWithWikiAnd(new DuplicatingKnowledgeBase()));
+    const search = await client.callTool({ name: "search", arguments: { query: "redaction" } });
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual([
+      "wiki:concepts/Redaction.md",
+      "wiki:concepts/Prompt Caching.md",
+    ]);
+  });
+
+  it("degrades cleanly to vector-only search when no wiki is injected", async () => {
+    const client = await connect({
+      ...createStandaloneDeps(),
+      knowledge: new FakeKnowledgeBase(),
+      defaultProjectId: "proj-1",
+    });
+    await client.callTool({ name: "ingest", arguments: { path: "src" } });
+    const search = await client.callTool({ name: "search", arguments: { query: "redaction" } });
+    expect(search.isError).toBeFalsy();
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual(["chunk-1"]);
   });
 });

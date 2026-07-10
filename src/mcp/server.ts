@@ -42,6 +42,7 @@ import type {
   SliderLevel,
   WikiPage,
   WikiPageType,
+  WikiReader,
   WikiStore,
 } from "../interfaces/index.js";
 import {
@@ -50,6 +51,7 @@ import {
   UnknownWikiPageError,
   WikiWriteConflictError,
 } from "../interfaces/index.js";
+import { extractWikilinks } from "../wiki/frontmatter.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -319,6 +321,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       // Historical fallback: the CLI has always wired the project dir as the
       // project id, so it doubles as the ingest root when none is given.
       deps.projectRootDir ?? deps.defaultProjectId,
+      deps.wiki,
     );
   }
 
@@ -412,6 +415,78 @@ export function boostWikiHits(hits: readonly Hit[], wikiDir: string | undefined)
     .map((entry) => entry.hit);
 }
 
+/**
+ * Score assigned to a graph-first wiki hit, before `boostWikiHits` applies
+ * its own multiplier on top. Vector hits score at most 1 pre-boost (cosine
+ * similarity), so both tiers here clear `1 * WIKI_RANK_BOOST` — an exact
+ * title match (the query names a page) ranks above a 1-hop neighbor found
+ * only via that page's outgoing wikilinks.
+ */
+const GRAPH_TITLE_MATCH_SCORE = 2;
+const GRAPH_LINKED_PAGE_SCORE = 1.6;
+
+function normalizeTitleKey(title: string): string {
+  return title.trim().toLowerCase();
+}
+
+/** Inverse of the `chunkId` a graph-first hit's synthetic chunk carries. */
+function wikiChunkRelPath(chunkId: string): string | undefined {
+  return chunkId.startsWith("wiki:") ? chunkId.slice("wiki:".length) : undefined;
+}
+
+/**
+ * Build a synthetic search Hit for a wiki page. `sourcePath` mirrors the
+ * convention vector-ingested wiki chunks use (`${wikiDir}/${relPath}`), so
+ * `boostWikiHits` and de-duplication against real vector hits both work
+ * unmodified.
+ */
+export function pageToHit(page: WikiPage, wikiDir: string, projectId: string, score: number): Hit {
+  return {
+    chunk: {
+      chunkId: `wiki:${page.relPath}`,
+      projectId,
+      text: page.body,
+      sourcePath: `${wikiDir}/${page.relPath}`,
+      metadata: { kind: "wiki", title: page.frontmatter.title },
+    },
+    score,
+    scope: "knowledge",
+  };
+}
+
+/**
+ * Graph-first lookup (spec Decision 28 §2, proposal `wiki-knowledge-pivot.md`):
+ * before vector search, try an exact/case-insensitive title match against the
+ * wiki, then expand one hop along that page's outgoing wikilinks. Cheap and
+ * precise — no embedding call — and purely additive: vector search always
+ * still runs, so free-text queries that don't name a page keep working.
+ * `listPages()` is called once per invocation, not memoized across calls.
+ */
+export async function graphFirstWikiHits(
+  query: string,
+  wiki: WikiReader,
+  wikiDir: string,
+  projectId: string,
+): Promise<Hit[]> {
+  const pages = await wiki.listPages();
+  if (pages.length === 0) return [];
+  const byTitle = new Map<string, WikiPage>();
+  for (const page of pages) byTitle.set(normalizeTitleKey(page.frontmatter.title), page);
+
+  const matched = byTitle.get(normalizeTitleKey(query));
+  if (matched === undefined) return [];
+
+  const hits = [pageToHit(matched, wikiDir, projectId, GRAPH_TITLE_MATCH_SCORE)];
+  const seen = new Set([matched.relPath]);
+  for (const linkedTitle of extractWikilinks(matched.body)) {
+    const linked = byTitle.get(normalizeTitleKey(linkedTitle));
+    if (linked === undefined || seen.has(linked.relPath)) continue;
+    seen.add(linked.relPath);
+    hits.push(pageToHit(linked, wikiDir, projectId, GRAPH_LINKED_PAGE_SCORE));
+  }
+  return hits;
+}
+
 /** Register the P1 knowledge tools (task B3) against an injected KnowledgeBase. */
 function registerKnowledgeTools(
   server: McpServer,
@@ -419,6 +494,7 @@ function registerKnowledgeTools(
   defaultProjectId: string,
   wikiDir?: string,
   projectRootDir?: string,
+  wiki?: WikiReader,
 ): void {
   server.registerTool(
     "search",
@@ -457,8 +533,17 @@ function registerKnowledgeTools(
     },
     async ({ query, k, project_id }) => {
       const projectId = project_id ?? defaultProjectId;
+      const limit = k ?? 8;
       try {
-        const hits = boostWikiHits(await knowledge.search(query, projectId, k ?? 8), wikiDir);
+        const graphHits =
+          wiki !== undefined && wikiDir !== undefined
+            ? await graphFirstWikiHits(query, wiki, wikiDir, projectId)
+            : [];
+        const graphSourcePaths = new Set(graphHits.map((h) => h.chunk.sourcePath));
+        const vectorHits = (await knowledge.search(query, projectId, limit)).filter(
+          (h) => h.chunk.sourcePath === undefined || !graphSourcePaths.has(h.chunk.sourcePath),
+        );
+        const hits = boostWikiHits([...graphHits, ...vectorHits], wikiDir).slice(0, limit);
         const structuredHits = hits.map(toStructuredHit);
         const summary =
           hits.length === 0
@@ -509,6 +594,37 @@ function registerKnowledgeTools(
       },
     },
     async ({ chunk_id }) => {
+      // Graph-first search hits carry a synthetic `wiki:<relPath>` chunk id
+      // (they were never ingested into the vector store), so fetch must
+      // resolve those straight from the wiki rather than knowledge.getChunk.
+      const wikiRelPath = wikiChunkRelPath(chunk_id);
+      if (wikiRelPath !== undefined && wiki !== undefined && wikiDir !== undefined) {
+        try {
+          const chunk = pageToHit(
+            await wiki.readPage(wikiRelPath),
+            wikiDir,
+            defaultProjectId,
+            0,
+          ).chunk;
+          return {
+            content: [{ type: "text", text: chunk.text }],
+            structuredContent: {
+              chunk_id: chunk.chunkId,
+              project_id: chunk.projectId,
+              text: chunk.text,
+              ...(chunk.sourcePath !== undefined ? { source_path: chunk.sourcePath } : {}),
+            },
+          };
+        } catch (err) {
+          if (err instanceof UnknownWikiPageError) {
+            return errorResult(
+              `Unknown chunk "${chunk_id}". It may have been re-indexed or evicted; ` +
+                "re-run search to get current chunk ids.",
+            );
+          }
+          throw err;
+        }
+      }
       try {
         const chunk = await knowledge.getChunk(chunk_id);
         return {

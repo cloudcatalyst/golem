@@ -72,7 +72,7 @@ export class FileWikiStore implements WikiStore {
   }
 
   /** All parseable pages under wikiDir. Unparsable files are skipped (see `golem wiki check`). */
-  private async listPages(): Promise<WikiPage[]> {
+  async listPages(): Promise<WikiPage[]> {
     let entries: string[];
     try {
       entries = await readdir(this.wikiDir, { recursive: true });

@@ -153,5 +153,25 @@ export function describeWikiStoreContract(
       await expect(store.backlinks("Prompt Caching")).resolves.toEqual([]);
       await expect(store.backlinks("Nonexistent")).resolves.toEqual([]);
     });
+
+    it("listPages returns an empty array for an empty wiki, and every page once populated", async () => {
+      const store = await makeStore();
+      expect(await store.listPages()).toEqual([]);
+      await store.upsertPage({
+        relPath: "concepts/Prompt Caching.md",
+        frontmatter: { title: "Prompt Caching", type: "concept", tags: [], sources: [] },
+        body: "body",
+      });
+      await store.upsertPage({
+        relPath: "concepts/Wiki-First Knowledge.md",
+        frontmatter: { title: "Wiki-First Knowledge", type: "concept", tags: [], sources: [] },
+        body: "Related: [[Prompt Caching]].",
+      });
+      const pages = await store.listPages();
+      expect(pages.map((p) => p.frontmatter.title).sort()).toEqual([
+        "Prompt Caching",
+        "Wiki-First Knowledge",
+      ]);
+    });
   });
 }
