@@ -43,8 +43,19 @@ export class FileWikiStore implements WikiStore {
     this.now = options.now ?? (() => new Date().toISOString().slice(0, 10));
   }
 
+  /**
+   * Resolve a wiki-relative path, refusing anything that escapes `wikiDir`
+   * (`../…` traversal or an absolute path). `relPath` reaches here straight
+   * from the `wiki_read`/`wiki_upsert` MCP params, so containment is enforced
+   * at this choke point rather than trusted to every caller.
+   */
   private absPath(relPath: string): string {
-    return path.join(this.wikiDir, relPath);
+    const root = path.resolve(this.wikiDir);
+    const abs = path.resolve(root, relPath);
+    if (abs !== root && !abs.startsWith(root + path.sep)) {
+      throw new Error(`wiki path escapes the wiki directory: ${JSON.stringify(relPath)}`);
+    }
+    return abs;
   }
 
   /** Read + parse one page by its exact wiki-relative path; undefined if absent. */

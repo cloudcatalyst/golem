@@ -107,7 +107,7 @@ export class HeadroomSidecar implements SemanticCompressor {
     if (this.#startPromise !== null) return this.#startPromise;
     this.#startPromise = this.#startInner().catch((err: unknown) => {
       this.#log(`failed to start: ${err instanceof Error ? err.message : String(err)}`);
-      this.#cleanup();
+      this.stop(); // kill a half-started worker so it can't linger orphaned
       return false;
     });
     return this.#startPromise;
@@ -133,12 +133,30 @@ export class HeadroomSidecar implements SemanticCompressor {
     });
 
     const port = await this.#awaitListeningPort(child);
-    if (port === null) return false;
+    if (port === null) {
+      // Startup timeout: the process may still be alive (e.g. a slow first
+      // package download) — kill it or it lingers orphaned. Its exit event
+      // then runs #cleanup, so a later compress() may retry a fresh start.
+      this.#log("worker did not announce a listening port in time");
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+      this.#cleanup();
+      return false;
+    }
     this.#port = port;
 
     const healthy = await this.#health();
     if (!healthy) {
+      // Same orphan risk: the worker is listening but unhealthy — kill it.
       this.#log("worker did not pass health check");
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
       this.#cleanup();
       return false;
     }

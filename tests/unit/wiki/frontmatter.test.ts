@@ -48,6 +48,17 @@ describe("parseFrontmatter", () => {
     expect(frontmatter.sources).toEqual([]);
   });
 
+  it("parses CRLF pages the same as LF pages (checkout without eol=lf)", () => {
+    const { frontmatter, body } = parseFrontmatter(SAMPLE.replaceAll("\n", "\r\n"));
+    expect(frontmatter.title).toBe("Prompt Caching");
+    expect(frontmatter.tags).toEqual(["cache", "prompts"]);
+    // Body lines keep their CR (content is untouched); the blank separator
+    // line after the closing delimiter is skipped like in the LF case.
+    expect(body.replaceAll("\r\n", "\n")).toBe(
+      "# Prompt Caching\n\nSee [[Wiki-First Knowledge]] for context.",
+    );
+  });
+
   it("throws when the leading --- delimiter is missing", () => {
     expect(() => parseFrontmatter("title: X\n---\nbody")).toThrow(/leading/);
   });

@@ -33,6 +33,7 @@ function wikiSchemaTemplate(date: string): string {
     "title: WIKI",
     "type: schema",
     "tags: [meta]",
+    "sources: []",
     `created: ${date}`,
     `updated: ${date}`,
     "---",

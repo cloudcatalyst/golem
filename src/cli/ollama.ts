@@ -125,6 +125,14 @@ export interface SetupOptions {
   readonly userDir?: string;
   /** Test injection (forwarded to pullDrafterModel) — default is a real 30s poll window. */
   readonly reachableTimeoutMs?: number;
+  /**
+   * Test injection: replaces the post-pull smoke test. The default builds a
+   * real OllamaClient against the configured endpoint — the one step of setup
+   * that would otherwise hit a live daemon from inside a test.
+   */
+  readonly smokeTest?: (
+    model: string,
+  ) => Promise<{ readonly ok: boolean; readonly detail: string }>;
 }
 
 async function defaultConfirm(question: string): Promise<boolean> {
@@ -194,6 +202,10 @@ export async function runOllamaSetup(opts: SetupOptions): Promise<SetupResult> {
     throw err;
   }
 
+  if (opts.smokeTest !== undefined) {
+    const smokeTest = await opts.smokeTest(pull.model);
+    return { kind: "completed", install, pull, smokeTest };
+  }
   const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
   try {
     const smokeTest = await smokeTestModel(client, pull.model);

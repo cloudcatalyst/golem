@@ -67,6 +67,20 @@ describe("FileWikiStore", () => {
     );
   });
 
+  it("refuses paths that escape the wiki directory (traversal or absolute)", async () => {
+    const store = new FileWikiStore({ wikiDir: dir, now: () => today });
+    const input = (relPath: string) => ({
+      relPath,
+      frontmatter: { title: "Evil", type: "concept" as const, tags: [], sources: [] },
+      body: "nope",
+    });
+    await expect(store.upsertPage(input("../escape.md"))).rejects.toThrow(/escapes the wiki/);
+    await expect(store.upsertPage(input(path.join(tmpdir(), "abs.md")))).rejects.toThrow(
+      /escapes the wiki/,
+    );
+    await expect(store.readPage("../../outside.md")).rejects.toThrow(/escapes the wiki/);
+  });
+
   it("creates nested zone directories on demand", async () => {
     const store = new FileWikiStore({ wikiDir: dir, now: () => today });
     await store.upsertPage({

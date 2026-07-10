@@ -25,14 +25,20 @@ function parseListValue(value: string): readonly string[] {
   return inner.split(",").map((item) => item.trim());
 }
 
-/** Parse `---`-delimited frontmatter + body from a raw wiki page file. */
+/**
+ * Parse `---`-delimited frontmatter + body from a raw wiki page file.
+ * Delimiter/blank-line checks trim each line so CRLF pages (a checkout
+ * without this repo's `eol=lf` attribute) parse the same as LF pages.
+ */
 export function parseFrontmatter(raw: string): ParsedFrontmatter {
   const lines = raw.split("\n");
   if (lines[0]?.trim() !== FRONTMATTER_DELIMITER) {
     throw new Error("wiki page is missing the leading --- frontmatter delimiter");
   }
 
-  const closingIndex = lines.indexOf(FRONTMATTER_DELIMITER, 1);
+  const closingIndex = lines.findIndex(
+    (line, index) => index >= 1 && line.trim() === FRONTMATTER_DELIMITER,
+  );
   if (closingIndex === -1) {
     throw new Error("wiki page is missing the closing --- frontmatter delimiter");
   }
@@ -61,7 +67,7 @@ export function parseFrontmatter(raw: string): ParsedFrontmatter {
   };
 
   let bodyStart = closingIndex + 1;
-  if (lines[bodyStart] === "") bodyStart += 1;
+  if (bodyStart < lines.length && lines[bodyStart]?.trim() === "") bodyStart += 1;
   const body = lines.slice(bodyStart).join("\n");
 
   return { frontmatter, body };
