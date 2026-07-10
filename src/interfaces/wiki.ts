@@ -96,6 +96,14 @@ export interface WikiReader {
 
   /** relPaths of every page whose body wikilinks the given title or path. */
   backlinks(titleOrPath: string): Promise<readonly string[]>;
+
+  /**
+   * Every page in the wiki (added T5, spec Decision 28's graph-first search:
+   * `search` needs a title/alias table it can build once per call and reuse
+   * for both exact-match and 1-hop wikilink expansion, instead of each of
+   * readPage/resolveLink/backlinks re-scanning the directory independently).
+   */
+  listPages(): Promise<readonly WikiPage[]>;
 }
 
 /** Full wiki surface: graph-aware reads plus the single, gated write path. */
