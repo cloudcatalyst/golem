@@ -10,7 +10,6 @@
  * E3: status / slider / stats / dashboard (+ index/devices stubs for WS-C/D).
  */
 
-import { spawn } from "node:child_process";
 import { Command, InvalidArgumentError } from "commander";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
@@ -31,7 +30,7 @@ import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
-import { buildKnowledgeStack } from "./build-knowledge.js";
+import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import {
@@ -176,27 +175,18 @@ async function initSummary(dir: string, proxyStarted: boolean): Promise<string> 
   return `${lines.join("\n")}\n`;
 }
 
-/** Is a command resolvable on PATH? (spawns `<cmd> --version`, resolves false on failure.) */
-function commandExists(cmd: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const child = spawn(cmd, ["--version"], { stdio: "ignore", shell: true, windowsHide: true });
-    child.on("error", () => resolve(false));
-    child.on("exit", (code) => resolve(code === 0));
-  });
+/** Is a command resolvable on PATH? (runs `<cmd> --version` via the D1 probe runner.) */
+async function commandExists(cmd: string): Promise<boolean> {
+  return (await createProbeRunner()({ command: cmd, args: ["--version"] })).ok;
 }
 
-/** Is Ollama up with the tier's text embed model pulled? (mirrors build-knowledge's probe.) */
+/** Is Ollama up with the tier's text embed model pulled? (build-knowledge's probe.) */
 async function ollamaEmbedReady(dir: string): Promise<boolean> {
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     const facts = await detectCapability(createProbeRunner());
     const model = embedModelFor(facts.tier, "text");
-    const res = await fetch(new URL("/api/tags", settings.inference.ollama_base_url), {
-      signal: AbortSignal.timeout(1500),
-    });
-    if (!res.ok) return false;
-    const body = (await res.json()) as { models?: Array<{ name?: unknown }> };
-    return (body.models ?? []).some((m) => typeof m.name === "string" && m.name.startsWith(model));
+    return await ollamaHasModel(settings.inference.ollama_base_url, model);
   } catch {
     return false;
   }
@@ -499,6 +489,7 @@ mcp
           ? {
               knowledge,
               defaultProjectId: opts.dir,
+              projectRootDir: opts.dir,
               wikiDir: wikiSourcePrefix(
                 opts.dir,
                 resolveWikiDir(opts.dir, settings.knowledge.wiki_dir),

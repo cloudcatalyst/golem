@@ -92,17 +92,19 @@ export class LocalDirBlobStore implements BlobStore {
   }
 
   async *stream(key: string): AsyncIterable<Uint8Array> {
-    const target = this.#pathFor(key);
-    try {
-      await access(target);
-    } catch {
-      throw new BlobNotFoundError(key);
-    }
-    const rs = createReadStream(target);
+    // No exists() pre-check (it would be a TOCTOU race) — a missing file
+    // surfaces as ENOENT from the stream itself and is mapped to the
+    // contract's BlobNotFoundError.
+    const rs = createReadStream(this.#pathFor(key));
     try {
       for await (const chunk of rs as AsyncIterable<Buffer>) {
         yield new Uint8Array(chunk);
       }
+    } catch (err) {
+      if (isErrnoWithCode(err, "ENOENT")) {
+        throw new BlobNotFoundError(key);
+      }
+      throw err;
     } finally {
       rs.destroy();
     }

@@ -45,7 +45,7 @@ export interface BuildKnowledgeOptions {
  * throws, resolves false on any timeout/error (Ollama absent is the common,
  * non-error case). Matches by name prefix so `bge-m3` matches `bge-m3:latest`.
  */
-async function ollamaHasModel(baseUrl: string, model: string): Promise<boolean> {
+export async function ollamaHasModel(baseUrl: string, model: string): Promise<boolean> {
   try {
     const res = await fetch(new URL("/api/tags", baseUrl), {
       signal: AbortSignal.timeout(1500),

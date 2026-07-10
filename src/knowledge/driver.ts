@@ -58,11 +58,19 @@ export interface VectorDriver {
 export interface DeletableVectorDriver extends VectorDriver {
   /** Remove every chunk in `projectId` whose `sourcePath` equals `sourcePath`; returns the count removed. */
   deleteBySourcePath(projectId: string, sourcePath: string): Promise<number>;
+  /**
+   * Batch form of {@link deleteBySourcePath}: remove every chunk whose
+   * `sourcePath` is in `sourcePaths`, in ONE pass (and, for persisted drivers,
+   * one flush). The incremental sync deletes many files per run — calling the
+   * singular form in a loop rewrites the whole collection once per file.
+   */
+  deleteBySourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number>;
 }
 
 /** Structural check for {@link DeletableVectorDriver}. */
 export function isDeletable(driver: VectorDriver): driver is DeletableVectorDriver {
-  return typeof (driver as Partial<DeletableVectorDriver>).deleteBySourcePath === "function";
+  const d = driver as Partial<DeletableVectorDriver>;
+  return typeof d.deleteBySourcePath === "function" && typeof d.deleteBySourcePaths === "function";
 }
 
 /** Cosine similarity; 0 when either vector is zero or dimensions mismatch. */
@@ -136,11 +144,16 @@ export class InMemoryVectorDriver implements DeletableVectorDriver {
   }
 
   deleteBySourcePath(projectId: string, sourcePath: string): Promise<number> {
+    return this.deleteBySourcePaths(projectId, [sourcePath]);
+  }
+
+  deleteBySourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number> {
     const c = this.#byProject.get(projectId);
-    if (c === undefined) return Promise.resolve(0);
+    if (c === undefined || sourcePaths.length === 0) return Promise.resolve(0);
+    const targets = new Set(sourcePaths);
     let removed = 0;
     for (const [id, rec] of c) {
-      if (rec.chunk.sourcePath === sourcePath) {
+      if (rec.chunk.sourcePath !== undefined && targets.has(rec.chunk.sourcePath)) {
         c.delete(id);
         this.#chunkIndex.delete(id);
         removed += 1;

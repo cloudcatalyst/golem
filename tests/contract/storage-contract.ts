@@ -39,6 +39,16 @@ export function describeBlobStoreContract(
       expect(await store.exists("k3")).toBe(false);
     });
 
+    it("stream of a missing key rejects with BlobNotFoundError", async () => {
+      const store = await makeStore();
+      const consume = async (): Promise<void> => {
+        for await (const _chunk of store.stream("missing")) {
+          // drain — the iterator should reject before yielding anything
+        }
+      };
+      await expect(consume()).rejects.toBeInstanceOf(BlobNotFoundError);
+    });
+
     it("stream concatenates to the full blob", async () => {
       const store = await makeStore();
       const payload = new Uint8Array(10_000).map((_, i) => (i * 7) % 256);
