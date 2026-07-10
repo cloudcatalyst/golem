@@ -10,9 +10,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   type EmbedFn,
+  GolemKnowledgeBase,
   InMemoryVectorDriver,
   openKnowledgeBase,
   planIngest,
+  type VectorDriver,
 } from "../../../src/knowledge/index.js";
 import { describeKnowledgeBaseContract } from "../../contract/knowledge-contract.js";
 
@@ -98,12 +100,26 @@ describe("KnowledgeBase.ingest → search (end to end)", () => {
     expect(hits[0]?.chunk.sourcePath).toBe("deploy.md");
   });
 
-  it("watch:true is refused (file watching is a C2 follow-up)", async () => {
-    const kb = openKnowledgeBase({
-      projectDir: dir,
-      driver: new InMemoryVectorDriver(),
-      embed: lexicalEmbed(),
-    });
+  it("watch:true starts a live watcher and reports watching:true", async () => {
+    const kb = new GolemKnowledgeBase(new InMemoryVectorDriver(), { embed: lexicalEmbed() });
+    try {
+      const report = await kb.ingest(dir, "proj", true);
+      expect(report.watching).toBe(true);
+    } finally {
+      kb.closeWatchers();
+    }
+  });
+
+  it("watch:true is refused without a deletable driver", async () => {
+    const undeletable: VectorDriver = {
+      schemaVersion: 1,
+      openCollection: async () => {},
+      upsert: async () => {},
+      search: async () => [],
+      getChunk: async () => null,
+      close: async () => {},
+    };
+    const kb = new GolemKnowledgeBase(undeletable, { embed: lexicalEmbed() });
     await expect(kb.ingest(dir, "proj", true)).rejects.toThrow(/file watching/);
   });
 });

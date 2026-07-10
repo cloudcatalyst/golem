@@ -45,6 +45,8 @@ export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
 export { collectionDir, FileVectorDriver } from "./file-driver.js";
+export type { FileChangeBatch, FileWatcher, FileWatcherOptions } from "./file-watcher.js";
+export { watchPath } from "./file-watcher.js";
 export { DEFAULT_HASH_DIM, hashEmbed, hashingEmbedFn, tokenize } from "./hashing-embedder.js";
 export type { FileState, IngestPlan, PreparedChunk } from "./ingest.js";
 export {
@@ -52,7 +54,9 @@ export {
   chunkIdFor,
   MAX_FILE_BYTES,
   planIngest,
+  SKIP_DIRS,
   scanFiles,
+  toPosix,
 } from "./ingest.js";
 export type { EmbedFn, IncrementalIngest, KnowledgeBaseOptions } from "./knowledge-base.js";
 export {
