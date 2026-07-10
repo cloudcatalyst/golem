@@ -12,6 +12,12 @@ coverage/
 
 # Golem local state
 .golem/settings.local.json
+.golem/proxy.pid
+.golem/state/
+.golem/telemetry/
+.golem/webcache/
+.golem/ccr/
+.golem/knowledge/
 
 # Claude Code personal settings
 .claude/settings.local.json

@@ -111,6 +111,12 @@ describe("writeSetting", () => {
     expect(config.settings.knowledge.watch_paths).toEqual(["docs", "src"]);
   });
 
+  it("writes knowledge.wiki_dir, overriding the docs/wiki default", async () => {
+    await writeSetting("project", "knowledge.wiki_dir", "notes/wiki", dirs());
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.knowledge.wiki_dir).toBe("notes/wiki");
+  });
+
   it("refuses to overwrite a section that is not an object", async () => {
     await mkdir(path.dirname(userFile()), { recursive: true });
     await writeFile(userFile(), JSON.stringify({ slider: "not-an-object" }), "utf8");

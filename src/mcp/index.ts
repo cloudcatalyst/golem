@@ -15,6 +15,7 @@ export type { GolemHttpServerHandle, ServeHttpOptions } from "./serve.js";
 export { serveHttp, serveStdio } from "./serve.js";
 export type { GolemMcpServerDeps } from "./server.js";
 export {
+  boostWikiHits,
   createGolemMcpServer,
   createStandaloneDeps,
   GOLEM_MCP_SERVER_NAME,

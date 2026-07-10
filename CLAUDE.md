@@ -9,7 +9,7 @@ Golem is an agentic developer-assistant layer for Claude: a local-first **TypeSc
 
 ## Source of truth
 1. `docs/edge-offload-spec.md` (v1.x) — architecture and decisions. Do not diverge silently; propose spec changes via the Decisions Log. **Decision 16 switched the implementation language to TypeScript (2026-07-03, user decision).**
-2. `docs/IMPLEMENTATION_PLAN.md` — workstreams, frozen interfaces, task order.
+2. `docs/plan/IMPLEMENTATION_PLAN.md` — workstreams, frozen interfaces, task order (planning docs — plan, workstream briefs, proposals — live under `docs/plan/`).
 3. `docs/verification-notes.md` — dated live-doc findings (T0.1). Check it before building on any external-tool fact.
 
 ## Hard rules

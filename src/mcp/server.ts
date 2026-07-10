@@ -40,8 +40,16 @@ import type {
   InferenceService,
   KnowledgeBase,
   SliderLevel,
+  WikiPage,
+  WikiPageType,
+  WikiStore,
 } from "../interfaces/index.js";
-import { UnknownChunkError, UnknownRefError } from "../interfaces/index.js";
+import {
+  UnknownChunkError,
+  UnknownRefError,
+  UnknownWikiPageError,
+  WikiWriteConflictError,
+} from "../interfaces/index.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -67,6 +75,19 @@ export interface GolemMcpServerDeps {
   readonly inference?: InferenceService;
   /** projectId used by knowledge tools when a call omits `project_id`. */
   readonly defaultProjectId?: string;
+  /**
+   * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
+   * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
+   * under it above equal-scoring non-wiki hits, since the wiki is canonical
+   * and the vector index is just a derived cache of it.
+   */
+  readonly wikiDir?: string;
+  /**
+   * WS-W W2 wiki authoring surface. When present, the `wiki_read` /
+   * `wiki_upsert` tools are registered (spec Decisions 28/29). Omitted when
+   * the knowledge base — and so the wiki — is disabled.
+   */
+  readonly wiki?: WikiStore;
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -283,11 +304,20 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   registerDevicesTool(server);
 
   if (deps.knowledge !== undefined) {
-    registerKnowledgeTools(server, deps.knowledge, deps.defaultProjectId ?? "default");
+    registerKnowledgeTools(
+      server,
+      deps.knowledge,
+      deps.defaultProjectId ?? "default",
+      deps.wikiDir,
+    );
   }
 
   if (deps.inference !== undefined) {
     registerDelegateTool(server, deps.inference);
+  }
+
+  if (deps.wiki !== undefined) {
+    registerWikiTools(server, deps.wiki);
   }
 }
 
@@ -345,11 +375,39 @@ function toStructuredHit(hit: Hit): Record<string, unknown> {
   };
 }
 
+/** Multiplicative rank boost for hits under the wiki (spec Decision 28). */
+const WIKI_RANK_BOOST = 1.25;
+
+function isUnderWikiDir(sourcePath: string | undefined, wikiDir: string): boolean {
+  return (
+    sourcePath !== undefined && (sourcePath === wikiDir || sourcePath.startsWith(`${wikiDir}/`))
+  );
+}
+
+/**
+ * Re-rank hits so wiki pages surface above equal-scoring non-wiki hits — the
+ * wiki is canonical and the vector index is a derived cache of it (Decision
+ * 28). A no-op (stable, original order) when `wikiDir` is undefined or no hit
+ * falls under it.
+ */
+export function boostWikiHits(hits: readonly Hit[], wikiDir: string | undefined): Hit[] {
+  if (wikiDir === undefined) return [...hits];
+  return hits
+    .map((hit, index) => ({
+      hit,
+      index,
+      key: (isUnderWikiDir(hit.chunk.sourcePath, wikiDir) ? WIKI_RANK_BOOST : 1) * hit.score,
+    }))
+    .sort((a, b) => b.key - a.key || a.index - b.index)
+    .map((entry) => entry.hit);
+}
+
 /** Register the P1 knowledge tools (task B3) against an injected KnowledgeBase. */
 function registerKnowledgeTools(
   server: McpServer,
   knowledge: KnowledgeBase,
   defaultProjectId: string,
+  wikiDir?: string,
 ): void {
   server.registerTool(
     "search",
@@ -389,7 +447,7 @@ function registerKnowledgeTools(
     async ({ query, k, project_id }) => {
       const projectId = project_id ?? defaultProjectId;
       try {
-        const hits = await knowledge.search(query, projectId, k ?? 8);
+        const hits = boostWikiHits(await knowledge.search(query, projectId, k ?? 8), wikiDir);
         const structuredHits = hits.map(toStructuredHit);
         const summary =
           hits.length === 0
@@ -525,6 +583,167 @@ function registerKnowledgeTools(
           },
         };
       } catch (err) {
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
+    },
+  );
+}
+
+const WIKI_PAGE_TYPES: [WikiPageType, ...WikiPageType[]] = [
+  "schema",
+  "concept",
+  "entity",
+  "source",
+  "synthesis",
+  "question",
+  "artifact",
+  "adr",
+  "debrief",
+];
+
+function structuredWikiPage(page: WikiPage): {
+  rel_path: string;
+  title: string;
+  type: WikiPageType;
+  tags: string[];
+  sources: string[];
+  created: string;
+  updated: string;
+  body: string;
+} {
+  return {
+    rel_path: page.relPath,
+    title: page.frontmatter.title,
+    type: page.frontmatter.type,
+    tags: [...page.frontmatter.tags],
+    sources: [...page.frontmatter.sources],
+    created: page.frontmatter.created,
+    updated: page.frontmatter.updated,
+    body: page.body,
+  };
+}
+
+/** WS-W W2: wiki authoring tools over an injected WikiStore (spec Decisions 28/29). */
+function registerWikiTools(server: McpServer, wiki: WikiStore): void {
+  server.registerTool(
+    "wiki_read",
+    {
+      title: "Read a Golem wiki page",
+      description:
+        "Read one page from the project's committed wiki (spec Decision 28) by its " +
+        "title or its wiki-relative path. The wiki is the canonical knowledge store " +
+        "— check it before falling back to search or the outside world.",
+      inputSchema: {
+        title_or_path: z
+          .string()
+          .min(1)
+          .describe(
+            'A page title (e.g. "Prompt Caching") or a wiki-relative path ' +
+              '(e.g. "concepts/Prompt Caching.md")',
+          ),
+      },
+      outputSchema: {
+        rel_path: z.string(),
+        title: z.string(),
+        type: z.enum(WIKI_PAGE_TYPES),
+        tags: z.array(z.string()),
+        sources: z.array(z.string()),
+        created: z.string(),
+        updated: z.string(),
+        body: z.string(),
+      },
+    },
+    async ({ title_or_path }) => {
+      try {
+        const page = await wiki.readPage(title_or_path);
+        return {
+          content: [{ type: "text", text: page.body }],
+          structuredContent: structuredWikiPage(page),
+        };
+      } catch (err) {
+        if (err instanceof UnknownWikiPageError) {
+          return errorResult(
+            `No wiki page found for "${title_or_path}". Check docs/wiki/WIKI.md's ` +
+              "index, or search for it before proposing a new page.",
+          );
+        }
+        const msg = backendUnavailableMessage(err);
+        if (msg !== null) return errorResult(msg);
+        throw err;
+      }
+    },
+  );
+
+  server.registerTool(
+    "wiki_upsert",
+    {
+      title: "Write a Golem wiki page",
+      description:
+        "Create or refine a page in the project's committed wiki (spec Decisions " +
+        "28/29). Writes are plan-gated: only call this after proposing the page (or " +
+        "the addition) to the user and getting approval — never write unprompted. " +
+        "If a page already exists at rel_path, the new body is appended under a " +
+        "dated separator and tags/sources are merged in; this never replaces " +
+        "existing content wholesale. title/type must match the existing page's " +
+        "when one is already there.",
+      inputSchema: {
+        rel_path: z
+          .string()
+          .min(1)
+          .describe('Wiki-relative path, e.g. "concepts/Prompt Caching.md"'),
+        title: z.string().min(1),
+        type: z.enum(WIKI_PAGE_TYPES),
+        tags: z.array(z.string()).optional().describe("Tags to add (default none)"),
+        sources: z
+          .array(z.string())
+          .optional()
+          .describe("URLs or repo paths this content comes from (default none)"),
+        body: z.string().min(1).describe("Markdown body; frontmatter is generated"),
+      },
+      outputSchema: {
+        rel_path: z.string(),
+        title: z.string(),
+        type: z.enum(WIKI_PAGE_TYPES),
+        tags: z.array(z.string()),
+        sources: z.array(z.string()),
+        created: z.string(),
+        updated: z.string(),
+        body: z.string(),
+        appended: z.boolean(),
+      },
+    },
+    async ({ rel_path, title, type, tags, sources, body }) => {
+      let existedBefore = true;
+      try {
+        await wiki.readPage(rel_path);
+      } catch (err) {
+        if (err instanceof UnknownWikiPageError) {
+          existedBefore = false;
+        } else {
+          const msg = backendUnavailableMessage(err);
+          if (msg !== null) return errorResult(msg);
+          throw err;
+        }
+      }
+      try {
+        const page = await wiki.upsertPage({
+          relPath: rel_path,
+          frontmatter: { title, type, tags: tags ?? [], sources: sources ?? [] },
+          body,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Golem: ${existedBefore ? "updated" : "created"} wiki page ${page.relPath}.`,
+            },
+          ],
+          structuredContent: { ...structuredWikiPage(page), appended: existedBefore },
+        };
+      } catch (err) {
+        if (err instanceof WikiWriteConflictError) return errorResult(err.message);
         const msg = backendUnavailableMessage(err);
         if (msg !== null) return errorResult(msg);
         throw err;

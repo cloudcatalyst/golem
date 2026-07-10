@@ -136,6 +136,17 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 - C3: Embedding + rerank via InferenceService; CPU fallback.
 - C4: Federated search: knowledge + Headroom memory (**via optional P2 sidecar only — Python-only subsystem, spec Decisions 13/18**), merged rerank; graceful KNOWLEDGE-only degradation.
 
+### WS-W — Wiki knowledge store (spec Decision 28; W1 done, W2 done 2026-07-10)
+Pages are canonical, vectors are a derived rebuildable index. Design: `docs/plan/proposals/wiki-knowledge-pivot.md`. Consumes WS-C machinery; `src/interfaces/knowledge.ts` untouched.
+- W1: Make the wiki exist and be found first (config + scaffold, no new interfaces):
+  - W1a: `wiki_dir` project-settings key (default `docs/wiki`), env `GOLEM_KNOWLEDGE_WIKI_DIR`.
+  - W1b: `golem wiki init` — scaffold `wiki_dir` (WIKI.md zone-0 schema, `concepts/ entities/ sources/ syntheses/ decisions/ debriefs/ questions/ artifacts/`), idempotent like `golem init`.
+  - W1c: search-rank boost for hits whose `sourcePath` is under `wiki_dir` (wiki pages beat raw chunks at equal similarity).
+  - W1d: wiki-first retrieval guidance in the generated Claude Code surfaces (CLAUDE.local.md template / skills): wiki lookup → `search` → outside world.
+- W2: Authoring surface (contract-first): NEW frozen `src/interfaces/wiki.ts` (readPage/upsertPage/resolveLink/backlinks) + contract tests; `wiki_read` + `wiki_upsert` MCP tools (plan-gated writes); `/golem/wiki-ingest <url>` + `/golem/wiki-query` skills; `golem wiki check` link/frontmatter lint.
+- W3 (post WS-D): local-model distillation queue (fetch → source note draft), `golem note` capture (Decision 20f), webcache backfill distillation, graph-first lookup step ahead of vector search.
+- W4: user-scope `~/.golem/wiki/` federation (Decision 20e local tier); weekly synthesis reports.
+
 ### WS-D — Inference & hardware (P1/P2)
 - D1: Capability detection (GPU/VRAM/unified memory, all 3 OS) → tier.
 - D2: Ollama client (OpenAI-compat), model catalog per tier, pull-on-demand UX; endpoint URL-configurable (lab box ready).
