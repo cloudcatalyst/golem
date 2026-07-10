@@ -162,9 +162,10 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
     }
     await this.#driver.openCollection(projectId);
     const chunks = await chunkFilesRelativeTo(absFiles, baseDir);
-    // Clear each touched file's old chunks first (content-based ids would orphan).
+    // Clear the touched files' old chunks first (content-based ids would
+    // orphan) — one batch call so persisted drivers flush once, not per file.
     const sourcePaths = new Set(chunks.map((c) => c.sourcePath));
-    for (const sp of sourcePaths) await this.#driver.deleteBySourcePath(projectId, sp);
+    await this.#driver.deleteBySourcePaths(projectId, [...sourcePaths]);
     return this.#embedAndStore(projectId, chunks);
   }
 
@@ -174,9 +175,7 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
       throw new NotImplementedYetError("incremental delete", "driver");
     }
     await this.#driver.openCollection(projectId);
-    let removed = 0;
-    for (const sp of sourcePaths) removed += await this.#driver.deleteBySourcePath(projectId, sp);
-    return removed;
+    return this.#driver.deleteBySourcePaths(projectId, sourcePaths);
   }
 
   /** {@link IncrementalIngest.ingestText} — chunk + (re)store a named document. */

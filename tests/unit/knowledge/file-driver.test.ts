@@ -70,6 +70,24 @@ describe("FileVectorDriver", () => {
     ).toStrictEqual(["b1"]);
   });
 
+  it("deleteBySourcePaths removes several files' chunks in one batch and persists", async () => {
+    const d = new FileVectorDriver(base);
+    const withSource = (id: string, sp: string): StoredChunk => ({
+      chunk: { chunkId: id, projectId: "p1", text: id, sourcePath: sp, metadata: {} },
+      vector: [1, 0],
+    });
+    await d.upsert("p1", [
+      withSource("a1", "a.ts"),
+      withSource("b1", "b.ts"),
+      withSource("c1", "c.ts"),
+    ]);
+    expect(await d.deleteBySourcePaths("p1", ["a.ts", "b.ts"])).toBe(2);
+    expect(await d.deleteBySourcePaths("p1", [])).toBe(0);
+    expect(
+      (await new FileVectorDriver(base).search("p1", [1, 0], 10)).map((h) => h.chunkId),
+    ).toStrictEqual(["c1"]);
+  });
+
   it("upsert replaces a record by chunkId (no duplicates)", async () => {
     const d = new FileVectorDriver(base);
     await d.upsert("p1", [stored("a", [1, 0], "old")]);

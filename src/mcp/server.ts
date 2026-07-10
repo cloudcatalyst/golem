@@ -76,6 +76,13 @@ export interface GolemMcpServerDeps {
   /** projectId used by knowledge tools when a call omits `project_id`. */
   readonly defaultProjectId?: string;
   /**
+   * Absolute project root the `ingest` tool indexes when a call omits `path`.
+   * Kept separate from {@link defaultProjectId} on purpose: the CLI happens to
+   * use the project directory as the project id today, but ids are opaque —
+   * only this field is guaranteed to be a filesystem path.
+   */
+  readonly projectRootDir?: string;
+  /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
    * under it above equal-scoring non-wiki hits, since the wiki is canonical
@@ -309,6 +316,9 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       deps.knowledge,
       deps.defaultProjectId ?? "default",
       deps.wikiDir,
+      // Historical fallback: the CLI has always wired the project dir as the
+      // project id, so it doubles as the ingest root when none is given.
+      deps.projectRootDir ?? deps.defaultProjectId,
     );
   }
 
@@ -408,6 +418,7 @@ function registerKnowledgeTools(
   knowledge: KnowledgeBase,
   defaultProjectId: string,
   wikiDir?: string,
+  projectRootDir?: string,
 ): void {
   server.registerTool(
     "search",
@@ -560,7 +571,13 @@ function registerKnowledgeTools(
     },
     async ({ path, project_id, watch }) => {
       const projectId = project_id ?? defaultProjectId;
-      const target = path ?? defaultProjectId;
+      const target = path ?? projectRootDir;
+      if (target === undefined) {
+        return errorResult(
+          "No `path` was given and this server has no project root configured — " +
+            "pass `path` explicitly.",
+        );
+      }
       try {
         const report = await knowledge.ingest(target, projectId, watch ?? false);
         return {

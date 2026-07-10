@@ -166,13 +166,23 @@ export class FileVectorDriver implements DeletableVectorDriver {
   }
 
   /** Remove all of one source file's chunks (for incremental re-index). Flushes if any changed. */
-  async deleteBySourcePath(projectId: string, sourcePath: string): Promise<number> {
+  deleteBySourcePath(projectId: string, sourcePath: string): Promise<number> {
+    return this.deleteBySourcePaths(projectId, [sourcePath]);
+  }
+
+  /**
+   * Batch removal with a SINGLE flush — the whole collection file is rewritten
+   * once, not once per source path (the incremental sync deletes many files per
+   * run, so per-path flushing is O(files × collection size) in write I/O).
+   */
+  async deleteBySourcePaths(projectId: string, sourcePaths: readonly string[]): Promise<number> {
     await this.openCollection(projectId);
     const col = this.#collections.get(projectId);
-    if (col === undefined) return 0;
+    if (col === undefined || sourcePaths.length === 0) return 0;
+    const targets = new Set(sourcePaths);
     let removed = 0;
     for (const [id, rec] of col.records) {
-      if (rec.chunk.sourcePath === sourcePath) {
+      if (rec.chunk.sourcePath !== undefined && targets.has(rec.chunk.sourcePath)) {
         col.records.delete(id);
         this.#chunkIndex.delete(id);
         removed += 1;
