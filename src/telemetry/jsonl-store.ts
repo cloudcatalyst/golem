@@ -54,9 +54,11 @@ function parseEvent(line: string): TelemetryEvent | null {
     ts: parsed.ts,
     projectId: parsed.projectId,
     level: typeof parsed.level === "number" ? parsed.level : 0,
+    kind: parsed.kind === "retrieval" ? "retrieval" : "request",
     ...(isTokenDelta(parsed.requestTokens) ? { requestTokens: parsed.requestTokens } : {}),
     stageSavings,
     ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
+    ccrRefsRetrieved: typeof parsed.ccrRefsRetrieved === "number" ? parsed.ccrRefsRetrieved : 0,
   };
 }
 
@@ -104,12 +106,20 @@ export class JsonlTelemetryStore implements TelemetryStore {
     let tokensBefore = 0;
     let tokensAfter = 0;
     let ccrRefsStored = 0;
+    let ccrRefsRetrieved = 0;
     const perStage: Record<string, TokenDelta> = {};
 
     for (const line of raw.split("\n")) {
       const ev = parseEvent(line);
       if (ev === null) continue;
       if (projectId !== undefined && ev.projectId !== projectId) continue;
+
+      if (ev.kind === "retrieval") {
+        // Not a pipeline run — counts toward ccrRefsRetrieved only, never
+        // toward `requests` or token savings (verification-notes §25).
+        ccrRefsRetrieved += ev.ccrRefsRetrieved ?? 0;
+        continue;
+      }
 
       requests += 1;
       ccrRefsStored += ev.ccrRefsStored;
@@ -144,9 +154,7 @@ export class JsonlTelemetryStore implements TelemetryStore {
       tokensAfter,
       perStage,
       ccrRefsStored,
-      // CCR retrievals are recorded by expand, not the pipeline; the
-      // JSONL event stream does not carry them yet (0 until wired — see §25).
-      ccrRefsRetrieved: 0,
+      ccrRefsRetrieved,
     };
   }
 

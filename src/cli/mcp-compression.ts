@@ -7,7 +7,7 @@
 
 import { NativeLosslessCompression } from "../compression/index.js";
 import type { CompressionService } from "../interfaces/compression.js";
-import { openTelemetryStore, telemetryStatsSource } from "../telemetry/index.js";
+import { openTelemetryStore, recordRetrieval, telemetryStatsSource } from "../telemetry/index.js";
 import { liveStatsSource, type StatsSource } from "./stats.js";
 
 /**
@@ -33,14 +33,24 @@ export async function statsSourceForCli(projectDir: string): Promise<StatsSource
  * `statsSourceForCli`). The MCP server never calls `compress()` itself — the
  * proxy does, in a separate process — so the live NativeLosslessCompression
  * instance's in-memory accounts stay empty even while the proxy is actively
- * serving requests. `compress()`/`retrieve()` still delegate to the live
- * instance: it owns the real CCR store `expand` reads from.
+ * serving requests. `compress()` still delegates to the live instance: it
+ * owns the real CCR store `expand` reads from. `retrieve()` also records a
+ * durable retrieval event (task T1, verification-notes §25) so `ccr_refs_
+ * retrieved` survives this process exiting, same reasoning as `stats()`
+ * preferring telemetry over the live in-memory counters above.
  */
 export function mcpCompressionService(projectDir: string): CompressionService {
   const live = NativeLosslessCompression.forProjectDir(projectDir);
+  const telemetry = openTelemetryStore(projectDir);
   return {
     compress: (messages, policy, projectId) => live.compress(messages, policy, projectId),
-    retrieve: (ref) => live.retrieve(ref),
+    retrieve: async (ref) => {
+      const original = await live.retrieve(ref);
+      // Fire-and-forget, matching recordPipelineEvent's proxy-side pattern —
+      // a telemetry write must never fail the retrieve() the model is waiting on.
+      void recordRetrieval(telemetry, projectDir, new Date().toISOString()).catch(() => {});
+      return original;
+    },
     stats: async (projectId) => (await statsSourceForCli(projectDir)).stats(projectId),
   };
 }

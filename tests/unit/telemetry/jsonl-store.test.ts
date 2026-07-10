@@ -11,6 +11,7 @@ import type { TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
   JsonlTelemetryStore,
   recordPipelineEvent,
+  recordRetrieval,
   telemetryFilePath,
   telemetryStatsSource,
 } from "../../../src/telemetry/index.js";
@@ -142,6 +143,52 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
     // Falls back to first-before (100) / last-after (60).
     expect(stats.tokensBefore).toBe(100);
     expect(stats.tokensAfter).toBe(60);
+    await store.close();
+  });
+});
+
+describe("recordRetrieval (T1, §25)", () => {
+  it("counts toward ccrRefsRetrieved without inflating requests or token savings", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordPipelineEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 2,
+        requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
+        stageSavings: {},
+        ccrRefsStored: 1,
+      },
+      "2026-07-10T00:00:00.000Z",
+    );
+    await recordRetrieval(store, "projA", "2026-07-10T00:00:01.000Z");
+    await recordRetrieval(store, "projA", "2026-07-10T00:00:02.000Z", 3);
+
+    const stats = await store.aggregate("projA");
+    expect(stats.ccrRefsRetrieved).toBe(4); // 1 + 3
+    // Only the one pipeline event counts as a request; retrievals don't.
+    expect(stats.requests).toBe(1);
+    expect(stats.tokensBefore).toBe(1000);
+    expect(stats.tokensAfter).toBe(400);
+    await store.close();
+  });
+
+  it("scopes retrievals by projectId like everything else", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordRetrieval(store, "projA", "2026-07-10T00:00:00.000Z");
+    await recordRetrieval(store, "projB", "2026-07-10T00:00:00.000Z", 2);
+    expect((await store.aggregate("projA")).ccrRefsRetrieved).toBe(1);
+    expect((await store.aggregate("projB")).ccrRefsRetrieved).toBe(2);
+    expect((await store.aggregate()).ccrRefsRetrieved).toBe(3);
+    await store.close();
+  });
+
+  it("survives an old JSONL line with no kind field (backward compatible)", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev()); // ev() predates the `kind` field entirely
+    const stats = await store.aggregate();
+    expect(stats.requests).toBe(1); // absent kind must still parse as "request"
+    expect(stats.ccrRefsRetrieved).toBe(0);
     await store.close();
   });
 });
