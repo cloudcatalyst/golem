@@ -69,3 +69,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T5.md — graph-first lookup ahead of vector search in `search`
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
+- decisions/ADR-0001-file-watcher.md — proposed: `node:fs.watch` (native recursive on Windows/macOS, manual per-directory on Linux) behind a swappable `FileWatcher` interface, `chokidar` deferred unless proven necessary
