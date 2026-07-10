@@ -18,6 +18,7 @@ coverage/
 .golem/webcache/
 .golem/ccr/
 .golem/knowledge/
+.golem/notes/
 
 # Claude Code personal settings
 .claude/settings.local.json
