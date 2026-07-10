@@ -1195,6 +1195,29 @@ being accepted confirms the request never reached `api.anthropic.com` at all
 closes the previously-blocked "verify end-to-end local drafting" item from
 Decision 25/the Decision 26 plan.
 
+## §49 — Live finding: high-entropy redaction false-positives on repo paths (2026-07-10)
+
+Observed live while dogfooding at slider level 0 (redaction-only): the entropy
+sweep replaced an ordinary repo path (`docs/wiki/decisions/ADR-0001-file-watcher.md`,
+written inside a planning doc) with `[REDACTED:high-entropy:N]` in the model's
+request context. The file on disk was untouched (verified by grep counts — the
+response path is byte-faithful); only the model's VIEW of the conversation was
+corrupted, which is enough to break an agent: it cannot open a path it sees as
+a placeholder, and every subsequent request re-redacts it.
+
+Root cause: `ENTROPY_CANDIDATE_RE` (src/pipeline/redaction-rules.ts) includes
+`/`, `-`, `_` in the candidate charset, so a multi-segment path forms one
+32–128-char "token"; a path with mixed case + digits (ADR numbers, versioned
+filenames) passes `isHighEntropyToken`'s three-charclass check, and such paths
+can measure ≥ 4.2 bits/char on their own alphabet.
+
+Not fixed on the spot because tuning redaction is T-C3-gated (CLAUDE.md: never
+weaken the redaction stage outside a reviewed change) — a fix must add these
+as NEGATIVE cases to tests/unit/pipeline/redaction-corpus.ts while proving no
+POSITIVE (real-secret) case regresses; note standard-base64 secrets also
+contain `/`, so a blanket slash exclusion is wrong. Filed as task T7 in
+docs/plan/NEXT_BATCH.md.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
