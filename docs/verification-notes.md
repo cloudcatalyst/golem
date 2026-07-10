@@ -1218,6 +1218,37 @@ POSITIVE (real-secret) case regresses; note standard-base64 secrets also
 contain `/`, so a blanket slash exclusion is wrong. Filed as task T7 in
 docs/plan/NEXT_BATCH.md.
 
+T7 (2026-07-10): fixed via `isPathLikeToken` in redaction-rules.ts — splits
+a candidate on `/-_` and excludes it from the entropy check only if every
+resulting chunk is purely alphabetic or purely numeric (the signature of a
+real path/slug; random secret material essentially never lands every chunk in
+one character class). Negative cases (repo path, versioned/slugged filename)
+and a positive regression case (mixed-chunk dash-delimited secret still
+redacts) added to tests/unit/pipeline/redaction-audit.test.ts. See wiki
+[[Redaction Stage]] and debriefs/2026-07-10-T7.md for the full writeup.
+
+## §50 — Live finding: credit-card rule false-positive on sparse digit runs (2026-07-10)
+
+Discovered incidentally while diagnosing the §49 investigation above (dumping
+raw file bytes as space-separated decimal ASCII codes at slider level 5 for a
+ground-truth check): several spans were replaced with
+`[REDACTED:credit-card:N]` even though the content was byte values, not card
+numbers.
+
+Root cause: the `credit-card` rule's pattern
+(`(?<![\d.-])\d(?:[ -]?\d){12,18}(?![\d.-])`, src/pipeline/redaction-rules.ts)
+allows unbounded single-space or single-dash separators between digits before
+the Luhn gate (`luhnValid`) runs. A long run of small space-separated numbers
+(e.g. ASCII codes) can coincidentally contain a 13-19-digit window that passes
+the Luhn checksum by chance, producing a false positive on data that has
+nothing to do with payment cards.
+
+Not fixed on the spot — out of T7's scope (a different rule, discovered
+incidentally, not part of the plan's T7 task description) and tuning
+redaction is T-C3-gated. Needs its own task: likely tightening the separator
+run length or requiring separator consistency (all-space or all-dash, not
+mixed) before the Luhn check. No task ID assigned yet.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

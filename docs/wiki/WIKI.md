@@ -57,6 +57,8 @@ updated: YYYY-MM-DD
 ## Index
 
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
+- [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
   originating article
 - `questions/` — open questions carried over from the Decision 28 proposal
+- debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix

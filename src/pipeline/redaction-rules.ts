@@ -209,6 +209,32 @@ export function shannonEntropy(text: string): number {
 const INTEGRITY_HASH_RE = /^(sha1|sha224|sha256|sha384|sha512|md5)-/i;
 
 /**
+ * Whether a candidate is shaped like a repo path or a versioned/slugged
+ * filename rather than random secret material (verification-notes §49): a
+ * whole path (`docs/wiki/decisions/ADR-0012-file-watcher`) forms one
+ * candidate token because `/` sits in the entropy charset, and a path with
+ * mixed case + digits (ADR numbers, dates) can measure above the entropy
+ * threshold on its own alphabet.
+ *
+ * Splitting on the path/identifier delimiters `/`, `-`, `_` distinguishes the
+ * two: every chunk of a real path or slug is a clean word or a clean number
+ * (`docs`, `wiki`, `ADR`, `0012`, `file`, `watcher`). A chunk of real random
+ * secret material drawn from a 64-symbol alphabet is very unlikely to land
+ * entirely in one class — a handful of characters from base64/base64url have
+ * good odds of mixing a letter and a digit — so requiring EVERY chunk to be
+ * purely alphabetic or purely numeric is a strong non-secret signal without
+ * blanket-excluding `/` (standard-base64 secrets legitimately contain it).
+ * Single-chunk tokens (no delimiter at all) are left to the entropy check.
+ */
+function isPathLikeToken(token: string): boolean {
+  const chunks = token.split(/[/_-]/).filter((c) => c.length > 0);
+  if (chunks.length < 2) {
+    return false;
+  }
+  return chunks.every((c) => /^[A-Za-z]+$/.test(c) || /^[0-9]+$/.test(c));
+}
+
+/**
  * Whether a candidate token is high-entropy secret material.
  *
  * Deliberate exclusions (audit rationale):
@@ -219,6 +245,8 @@ const INTEGRITY_HASH_RE = /^(sha1|sha224|sha256|sha384|sha512|md5)-/i;
  *   UUIDs, and Golem's own CCR `hash=<sha256>` markers saturate developer
  *   traffic and are not secrets. Hex-shaped provider secrets are covered by
  *   the pattern rules above.
+ * - path-like candidates ({@link isPathLikeToken}): repo paths and versioned
+ *   filenames/ADR names (§49).
  * - tokens missing any of lowercase/uppercase/digit: long identifiers,
  *   camelCase names, and shouted constants lack one of the three classes;
  *   real random secrets essentially never do at 32+ chars.
@@ -229,6 +257,9 @@ export function isHighEntropyToken(token: string): boolean {
   }
   const dehyphenated = token.replace(/[-_]/g, "");
   if (/^[0-9a-fA-F]*$/.test(dehyphenated)) {
+    return false;
+  }
+  if (isPathLikeToken(token)) {
     return false;
   }
   if (!/[a-z]/.test(token) || !/[A-Z]/.test(token) || !/[0-9]/.test(token)) {
