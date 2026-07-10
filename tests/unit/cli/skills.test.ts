@@ -18,4 +18,12 @@ describe("wiki skills (T2, W2 leftover)", () => {
     // The write must come strictly after the approval instruction, not before it.
     expect(skill.indexOf("approval")).toBeLessThan(skill.indexOf("wiki_upsert"));
   });
+
+  it("wiki-ingest prefers an existing distill draft over re-distilling (T3)", () => {
+    const skill = P0_SKILLS["wiki-ingest"];
+    if (skill === undefined) throw new Error("expected a wiki-ingest skill");
+    expect(skill).toContain("golem wiki distill");
+    // The distill step must come before the approval/write steps.
+    expect(skill.indexOf("golem wiki distill")).toBeLessThan(skill.indexOf("approval"));
+  });
 });

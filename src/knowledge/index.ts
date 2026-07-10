@@ -31,6 +31,16 @@ export {
   isChunkableExtension,
   MAX_CHUNK_CHARS,
 } from "./chunker.js";
+export type { DistillDraft, DistillInput } from "./distill.js";
+export { DistillParseError, distillPage } from "./distill.js";
+export type { DraftFile } from "./distill-store.js";
+export {
+  distillDir,
+  findDraftByUrl,
+  listDraftFiles,
+  readDraftFile,
+  writeDraftFile,
+} from "./distill-store.js";
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";

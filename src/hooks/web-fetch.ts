@@ -19,6 +19,7 @@
 import { z } from "zod";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import {
+  findDraftByUrl,
   type IncrementalIngest,
   isFresh,
   supportsIncremental,
@@ -124,9 +125,26 @@ export async function runWebFetchPre(
       entry.content.length > MAX_SERVED_CHARS
         ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
         : entry.content;
+
+    // Lazy-backfill pointer (T3): note an existing distill draft, if any.
+    // Self-contained — a lookup failure here must never regress the cache
+    // serve above, so it gets its own try/catch rather than sharing the
+    // outer one.
+    let draftNote = "";
+    try {
+      const draft = await findDraftByUrl(projectDir, url);
+      if (draft !== null) {
+        draftNote =
+          `\n\n(A distilled source-note draft for this URL already exists at ${draft.path} — ` +
+          "review it with `golem wiki distill --pending` rather than re-distilling.)";
+      }
+    } catch {
+      // best-effort only
+    }
+
     const reason =
       `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), ` +
-      `skipping the web fetch. Content follows:\n\n${served}`;
+      `skipping the web fetch. Content follows:\n\n${served}${draftNote}`;
     io.stdout.write(
       `${JSON.stringify({
         hookSpecificOutput: {

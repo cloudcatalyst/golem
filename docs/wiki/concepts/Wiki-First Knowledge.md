@@ -45,3 +45,23 @@ synthetic `wiki:<relPath>` chunk id; `fetch` resolves those straight from the
 `WikiStore` rather than the vector store. Degrades to vector-only search when no
 `WikiStore`/`wikiDir` is configured. See [[Distillation Pipeline]] for how pages get
 into the wiki in the first place.
+
+## Zone 1 -> zone 2 data flow (implemented, T3/T4)
+
+Raw capture never enters the wiki directly. The path in:
+
+1. **Capture**, zone 1, no inference: `golem note` (notes.jsonl) and WebFetch's
+   PostToolUse hook (webcache) both redact-then-store raw text locally,
+   gitignored, uncommitted.
+2. **Distill**, zone 1, local model: `golem wiki distill <url>` (or the lazy
+   pointer the WebFetch pre-hook leaves on a cached URL) turns a webcache
+   entry into a wiki-shaped draft under `.golem/distill/<slug>.md` — still
+   zone 1, still not committed, but already carrying real frontmatter and a
+   summary in the model's own words instead of a raw mirror.
+3. **Promote**, zone 2, human-gated: an agent reviews the draft, proposes it
+   to the user, and only on approval calls `wiki_upsert` to commit it under
+   `sources/` (or another zone). This is the same plan-gate every zone-2
+   write goes through (Decision 29) — distillation produces a better-shaped
+   proposal, it does not skip the gate.
+
+Full detail on each stage: [[Distillation Pipeline]].
