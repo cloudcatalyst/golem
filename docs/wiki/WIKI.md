@@ -63,3 +63,4 @@ updated: YYYY-MM-DD
 - `questions/` — open questions carried over from the Decision 28 proposal
 - debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix
 - debriefs/2026-07-10-T1.md — wired durable `ccrRefsRetrieved` telemetry
+- debriefs/2026-07-10-T2.md — shipped the missing `wiki-query`/`wiki-ingest` skills

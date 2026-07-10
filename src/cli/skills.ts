@@ -63,10 +63,54 @@ off, and remind them to run \`/golem/slider 1\` (or their previous level) to
 re-enable savings when done.
 `;
 
+const wikiQuery = `---
+description: Answer a question from the project's wiki first, vector search second
+invocationMode: user
+---
+
+The user wants to know about: $ARGUMENTS
+
+Follow the wiki-first knowledge ladder (spec Decision 28):
+
+1. Call \`wiki_read\` with the topic as \`title_or_path\` (try the page title
+   first, e.g. "Prompt Caching"). If that misses, check the wiki's
+   \`WIKI.md\` index (via \`fetch\` or \`search\`) for a page whose title is
+   close but not identical, and \`wiki_read\` that instead.
+2. If no wiki page covers it, call \`search\` and use \`fetch\` on the best
+   hit(s) — wiki pages rank above other results, so a hit there is
+   equivalent to step 1.
+3. Answer using what you found, citing the page(s) or source path(s) you
+   used. If nothing turned up in either the wiki or the knowledge base, say
+   so plainly rather than guessing — don't fall back to general knowledge
+   silently.
+`;
+
+const wikiIngest = `---
+description: Distill a URL into a new wiki source note (proposed, not auto-written)
+invocationMode: user
+---
+
+The user wants to add this URL to the project's wiki: $ARGUMENTS
+
+1. Fetch the URL (WebFetch's knowledge-base cache hook captures the raw
+   content automatically — no separate ingest step needed for that).
+2. Distill a source note IN YOUR OWN WORDS: what the page says, why it's
+   relevant to this project, and any specifics worth remembering. Do not
+   mirror or quote the page at length — the wiki stores distilled notes, not
+   raw copies (see \`docs/wiki/WIKI.md\`'s write rules).
+3. Propose the note to the user (show the title, a slug for
+   \`sources/<slug>.md\`, and the body) and wait for approval — wiki writes
+   are plan-gated (spec Decision 29), never automatic.
+4. Only after approval, call \`wiki_upsert\` with \`rel_path: "sources/<slug>.md"\`,
+   \`type: "source"\`, \`sources: ["$ARGUMENTS"]\`, and the approved body.
+`;
+
 /** name -> SKILL.md content; installed under .claude/skills/golem/<name>/. */
 export const P0_SKILLS: Readonly<Record<string, string>> = {
   slider,
   stats,
   expand,
   bypass,
+  "wiki-query": wikiQuery,
+  "wiki-ingest": wikiIngest,
 };
