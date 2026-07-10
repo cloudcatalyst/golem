@@ -14,6 +14,7 @@ import {
   WebCache,
   webCacheDir,
   webCacheKey,
+  writeDraftFile,
 } from "../../../src/knowledge/index.js";
 
 let projectDir: string;
@@ -144,6 +145,39 @@ describe("WebFetch gate (PreToolUse)", () => {
       ttlHours: 24,
     });
     expect(io.out).toStrictEqual([]);
+  });
+
+  it("notes an existing distill draft in the served reason (T3 lazy backfill)", async () => {
+    const url = "https://example.com/cached";
+    await new WebCache(webCacheDir(projectDir)).put(
+      url,
+      "CACHED BODY TEXT",
+      "2026-07-05T00:00:00Z",
+    );
+    await writeDraftFile(
+      projectDir,
+      url,
+      {
+        title: "Cached Page Basics",
+        slug: "cached-page-basics",
+        tags: ["misc"],
+        summary: "summary",
+        wikilinks: [],
+      },
+      "2026-07-05T00:00:00Z",
+    );
+
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs: Date.parse("2026-07-05T01:00:00Z"),
+      ttlHours: 168,
+    });
+    const decision = JSON.parse(io.out[0] ?? "{}");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain(
+      "distilled source-note draft for this URL already exists",
+    );
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("cached-page-basics.md");
   });
 
   it("round-trips: capture then the very next fetch is served from cache", async () => {

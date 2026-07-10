@@ -31,6 +31,7 @@ import { openTelemetryStore } from "../telemetry/index.js";
 import { FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
+import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "./notes.js";
@@ -249,6 +250,57 @@ wiki
       fail(err);
     }
   });
+
+wiki
+  .command("distill")
+  .description("Distill a cached page into a zone-1 source-note draft (local model, T3)")
+  .argument("[url]", "URL to distill (must already be cached by a prior WebFetch)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--pending", "list drafts awaiting review instead of distilling one", false)
+  .option("--force", "re-distill even if a draft already exists for this URL", false)
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (
+      url: string | undefined,
+      opts: { dir: string; pending: boolean; force: boolean; json: boolean },
+    ) => {
+      try {
+        if (opts.pending) {
+          const drafts = await pendingDrafts(opts.dir);
+          if (opts.json) {
+            process.stdout.write(
+              `${JSON.stringify(
+                drafts.map((d) => ({
+                  slug: d.slug,
+                  path: d.path,
+                  title: d.frontmatter.title,
+                  sources: d.frontmatter.sources,
+                })),
+                null,
+                2,
+              )}\n`,
+            );
+            return;
+          }
+          process.stdout.write(renderPendingDrafts(drafts));
+          return;
+        }
+
+        if (url === undefined) {
+          throw new InitError("provide a URL to distill, or pass --pending to list drafts");
+        }
+
+        const result = await distillOne({ projectDir: opts.dir, url, force: opts.force });
+        process.stdout.write(
+          result.kind === "exists"
+            ? `draft already exists: ${result.path} (pass --force to re-distill)\n`
+            : `distilled: ${result.path}\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 async function resolvePort(
   dir: string,
