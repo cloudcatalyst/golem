@@ -41,6 +41,34 @@ export function recordPipelineEvent(
   return store.record(telemetryEvent);
 }
 
+/**
+ * Persist a CCR retrieval event (the `expand` MCP tool's retrieve() path,
+ * verification-notes §25). Durable so retrieval counts survive process exit
+ * and cross the proxy/MCP-server process split — retrieval happens in the
+ * MCP server process, which never sees the proxy's in-memory compression
+ * counters. `nowIso` is injected like {@link recordPipelineEvent}. A
+ * retrieval isn't a pipeline run (no policy, no token savings), so `level`
+ * is an unused placeholder and `kind: "retrieval"` keeps it out of
+ * aggregate()'s `requests` count.
+ */
+export function recordRetrieval(
+  store: TelemetryStore,
+  projectId: string,
+  nowIso: string,
+  count = 1,
+): Promise<void> {
+  const telemetryEvent: TelemetryEvent = {
+    ts: nowIso,
+    projectId,
+    level: 0,
+    kind: "retrieval",
+    stageSavings: {},
+    ccrRefsStored: 0,
+    ccrRefsRetrieved: count,
+  };
+  return store.record(telemetryEvent);
+}
+
 /** StatsSource (E3 seam) backed by durable telemetry. */
 export function telemetryStatsSource(store: TelemetryStore): {
   readonly kind: string;

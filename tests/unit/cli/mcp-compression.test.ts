@@ -16,7 +16,19 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mcpCompressionService, statsSourceForCli } from "../../../src/cli/mcp-compression.js";
+import { sliderPolicyForLevel } from "../../../src/interfaces/index.js";
 import { JsonlTelemetryStore, recordPipelineEvent } from "../../../src/telemetry/index.js";
+
+const LEVEL_1 = sliderPolicyForLevel(1);
+
+/** Poll until a predicate holds, for asserting on a fire-and-forget write. */
+async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("waitFor: predicate never became true");
+}
 
 let projectDir: string;
 
@@ -81,5 +93,33 @@ describe("mcpCompressionService", () => {
     expect(source.kind).toBe("telemetry");
     const global = await mcpCompressionService(projectDir).stats();
     expect(global.requests).toBe(1);
+  });
+
+  it("retrieve() durably records ccrRefsRetrieved (T1, §25)", async () => {
+    const service = mcpCompressionService(projectDir);
+    const repeated = "x".repeat(300); // over DEFAULT_MIN_DEDUP_CHARS so it dedups
+    const { refs } = await service.compress(
+      [
+        { role: "user", content: repeated },
+        { role: "user", content: repeated },
+      ],
+      LEVEL_1,
+      projectDir,
+    );
+    const ref = refs[0];
+    if (ref === undefined) throw new Error("expected compress() to emit a CCR ref");
+
+    await service.retrieve(ref);
+    await service.retrieve(ref);
+
+    // The write is fire-and-forget from retrieve()'s perspective, so poll a
+    // FRESH store reading the same file — proves durability, not just
+    // in-memory state, and doesn't rely on stats()'s telemetry-vs-live
+    // fallback (which requires a "request" event to prefer telemetry, and
+    // a retrieval alone deliberately isn't one).
+    await waitFor(async () => {
+      const agg = await new JsonlTelemetryStore(projectDir).aggregate(projectDir);
+      return agg.ccrRefsRetrieved === 2;
+    });
   });
 });
