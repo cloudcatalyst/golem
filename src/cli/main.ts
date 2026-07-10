@@ -33,6 +33,7 @@ import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-i
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
+import { appendNote, listNotes, renderNotes } from "./notes.js";
 import {
   collectOllamaStatus,
   renderOllamaStatus,
@@ -603,6 +604,45 @@ program
       const report = await collectStats(await statsSourceForCli(opts.dir), opts.project);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const noteCmd = program
+  .command("note")
+  .description("Capture a quick idea/note into the local capture log (spec Decision 20f)")
+  .argument("[text...]", "note text to capture (quote it, or pass several words)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (text: string[], opts: { dir: string }) => {
+    if (text.length === 0) {
+      noteCmd.help();
+      return;
+    }
+    try {
+      const entry = await appendNote(opts.dir, text.join(" "), new Date().toISOString());
+      process.stdout.write(`captured: ${entry.text}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+noteCmd
+  .command("list")
+  .description("Show recently captured notes, newest first")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("-n, --limit <count>", "how many notes to show", "20")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; limit: string; json: boolean }) => {
+    try {
+      const limit = Number(opts.limit);
+      if (!Number.isInteger(limit) || limit <= 0) {
+        throw new InitError(`invalid --limit "${opts.limit}"`);
+      }
+      const entries = await listNotes(opts.dir, limit);
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(entries, null, 2)}\n` : renderNotes(entries),
       );
     } catch (err) {
       fail(err);

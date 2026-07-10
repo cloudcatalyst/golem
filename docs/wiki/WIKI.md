@@ -58,9 +58,11 @@ updated: YYYY-MM-DD
 
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
+- [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture stage built, T4)
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
   originating article
 - `questions/` — open questions carried over from the Decision 28 proposal
 - debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix
 - debriefs/2026-07-10-T1.md — wired durable `ccrRefsRetrieved` telemetry
 - debriefs/2026-07-10-T2.md — shipped the missing `wiki-query`/`wiki-ingest` skills
+- debriefs/2026-07-10-T4.md — shipped `golem note` capture (spec Decision 20f)
