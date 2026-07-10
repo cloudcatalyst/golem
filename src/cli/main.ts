@@ -29,6 +29,7 @@ import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
+import { FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack } from "./build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
@@ -55,6 +56,13 @@ import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
+import {
+  checkWiki,
+  golemWikiInit,
+  resolveWikiDir,
+  type WikiCheckReport,
+  wikiSourcePrefix,
+} from "./wiki.js";
 
 const program = new Command();
 
@@ -67,6 +75,19 @@ function printReport(report: InitReport): void {
   if (report.dryRun) {
     process.stdout.write("dry run: nothing was written.\n");
   }
+}
+
+function printWikiCheckReport(report: WikiCheckReport): void {
+  if (report.issues.length === 0) {
+    process.stdout.write(`golem wiki check: ${report.pagesChecked} page(s), no issues.\n`);
+    return;
+  }
+  for (const issue of report.issues) {
+    process.stdout.write(`  ${issue.relPath} — ${issue.message}\n`);
+  }
+  process.stdout.write(
+    `golem wiki check: ${report.pagesChecked} page(s), ${report.issues.length} issue(s).\n`,
+  );
 }
 
 function fail(err: unknown): never {
@@ -195,6 +216,44 @@ program
         proxyPort: settings.proxy.port,
       });
       printReport(report);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const wiki = program.command("wiki").description("Golem project wiki (spec Decision 28)");
+
+wiki
+  .command("init")
+  .description("Scaffold the project wiki (WIKI.md schema + zone directories)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dry-run", "show what would change without writing", false)
+  .action(async (opts: { dir: string; dryRun: boolean }) => {
+    try {
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+      const report = await golemWikiInit({
+        projectDir: opts.dir,
+        wikiDir,
+        dryRun: opts.dryRun,
+      });
+      printReport(report);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+wiki
+  .command("check")
+  .description("Lint wiki pages: frontmatter, dates, wikilinks, duplicate titles")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+      const report = await checkWiki(wikiDir);
+      printWikiCheckReport(report);
+      if (report.issues.length > 0) process.exitCode = 1;
     } catch (err) {
       fail(err);
     }
@@ -374,6 +433,12 @@ mcp
       const { settings } = await loadConfig({ projectDir: opts.dir });
       let knowledge: KnowledgeBase | undefined;
       let inference: InferenceService | undefined;
+      // The wiki is a plain filesystem store (spec Decision 28) — build it
+      // whenever the knowledge base is enabled, independent of whether the
+      // vector KB below manages to construct.
+      const wiki = settings.knowledge.enabled
+        ? new FileWikiStore({ wikiDir: resolveWikiDir(opts.dir, settings.knowledge.wiki_dir) })
+        : undefined;
       if (settings.knowledge.enabled) {
         try {
           const stack = await buildKnowledgeStack({ projectDir: opts.dir });
@@ -430,8 +495,18 @@ mcp
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
-        ...(knowledge !== undefined ? { knowledge, defaultProjectId: opts.dir } : {}),
+        ...(knowledge !== undefined
+          ? {
+              knowledge,
+              defaultProjectId: opts.dir,
+              wikiDir: wikiSourcePrefix(
+                opts.dir,
+                resolveWikiDir(opts.dir, settings.knowledge.wiki_dir),
+              ),
+            }
+          : {}),
         ...(inference !== undefined ? { inference } : {}),
+        ...(wiki !== undefined ? { wiki } : {}),
       });
     } catch (err) {
       fail(err);

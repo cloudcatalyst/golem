@@ -199,7 +199,7 @@ describe("golem init", () => {
   it("writes Golem guidance to gitignored CLAUDE.local.md, not committed CLAUDE.md", async () => {
     await golemInit({ projectDir, probe: okProbe });
     const local = await readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8");
-    expect(local).toContain("search before you fetch");
+    expect(local).toContain("wiki-first knowledge");
     // The committed CLAUDE.md must not gain a Golem section.
     await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",

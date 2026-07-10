@@ -86,6 +86,15 @@ describe("env override mapping", () => {
     );
   });
 
+  it("overrides knowledge.wiki_dir as a plain string (verbatim, not trimmed)", async () => {
+    const config = await load({ GOLEM_KNOWLEDGE_WIKI_DIR: "notes/wiki" });
+    expect(config.settings.knowledge.wiki_dir).toBe("notes/wiki");
+    expect(config.provenance["knowledge.wiki_dir"]).toEqual({
+      layer: "env",
+      source: "GOLEM_KNOWLEDGE_WIKI_DIR",
+    });
+  });
+
   it("rejects non-numeric values for numeric keys, naming the variable", async () => {
     await expect(load({ GOLEM_PROXY_PORT: "eighty" })).rejects.toThrow(/GOLEM_PROXY_PORT.*number/);
   });

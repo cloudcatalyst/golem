@@ -47,3 +47,13 @@ export { effectiveStages, SliderLevel, sliderPolicyForLevel } from "./policy.js"
 
 export type { BlobStore } from "./storage.js";
 export { BlobNotFoundError } from "./storage.js";
+
+export type {
+  WikiFrontmatter,
+  WikiPage,
+  WikiPageType,
+  WikiReader,
+  WikiStore,
+  WikiUpsertInput,
+} from "./wiki.js";
+export { UnknownWikiPageError, WikiWriteConflictError } from "./wiki.js";

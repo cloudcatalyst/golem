@@ -37,6 +37,16 @@ describe("upsertGuidance (pure)", () => {
     expect(out).toContain(GUIDANCE_END_MARKER);
   });
 
+  it("guides Claude to the wiki before search and search before WebFetch (Decision 28)", () => {
+    const out = upsertGuidance(null);
+    const wikiIdx = out.indexOf("Check the wiki first");
+    const searchIdx = out.indexOf("`search` MCP tool");
+    const webFetchIdx = out.indexOf("Then WebFetch or external docs");
+    expect(wikiIdx).toBeGreaterThan(-1);
+    expect(searchIdx).toBeGreaterThan(wikiIdx);
+    expect(webFetchIdx).toBeGreaterThan(searchIdx);
+  });
+
   it("appends after existing prose without disturbing it", () => {
     const existing = "# My project\n\nSome notes.\n";
     const out = upsertGuidance(existing);

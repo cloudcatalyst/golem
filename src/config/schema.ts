@@ -72,6 +72,12 @@ export const SETTINGS_LEAVES = {
     vector_db_url: z.string().url().optional(),
     /** Paths auto-ingested and watched for changes. */
     watch_paths: z.array(z.string()),
+    /**
+     * Project wiki directory (spec Decision 28): the durable, committable
+     * knowledge store. Relative values are project-rooted; absolute values are
+     * used as-is. Auto-indexed like any other watched path.
+     */
+    wiki_dir: z.string(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -130,6 +136,7 @@ export interface KnowledgeSettings {
   readonly enabled: boolean;
   readonly vector_db_url?: string;
   readonly watch_paths: readonly string[];
+  readonly wiki_dir: string;
 }
 
 export interface TelemetrySettings {
@@ -173,6 +180,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   knowledge: {
     enabled: true,
     watch_paths: [],
+    wiki_dir: "docs/wiki",
   },
   telemetry: {
     enabled: true,

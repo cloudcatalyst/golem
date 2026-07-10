@@ -12,10 +12,11 @@ Native Windows, macOS, and Linux.
 > Formerly "EOL / Edge Offload Layer" — renamed Golem 2026-07-03 (spec Decision 19).
 
 - **Spec:** [docs/edge-offload-spec.md](docs/edge-offload-spec.md) (source of truth)
-- **Plan:** [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
+- **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md)
 - **Live-doc findings:** [docs/verification-notes.md](docs/verification-notes.md)
 - **Agent guidance:** [CLAUDE.md](CLAUDE.md)
-- **Workstream briefs:** [docs/workstream-briefs/](docs/workstream-briefs/)
+- **Workstream briefs:** [docs/plan/workstream-briefs/](docs/plan/workstream-briefs/)
+- **Project wiki:** [docs/wiki/](docs/wiki/) (knowledge base — see [WIKI.md](docs/wiki/WIKI.md))
 
 ## Development
 

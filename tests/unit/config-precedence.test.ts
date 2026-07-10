@@ -129,6 +129,20 @@ describe("loadConfig precedence", () => {
     expect(config.settings.slider.level).toBe(3);
   });
 
+  it("defaults knowledge.wiki_dir to docs/wiki and lets layers override it", async () => {
+    const defaults = await loadConfig({ projectDir, userDir, env: {} });
+    expect(defaults.settings.knowledge.wiki_dir).toBe("docs/wiki");
+    expect(defaults.provenance["knowledge.wiki_dir"]).toEqual({ layer: "default" });
+
+    await writeJson(projectFile(), { knowledge: { wiki_dir: "notes/wiki" } });
+    const config = await loadConfig({ projectDir, userDir, env: {} });
+    expect(config.settings.knowledge.wiki_dir).toBe("notes/wiki");
+    expect(config.provenance["knowledge.wiki_dir"]).toEqual({
+      layer: "project",
+      source: projectFile(),
+    });
+  });
+
   it("policyFromSettings maps slider settings onto the frozen contract", async () => {
     await writeJson(projectFile(), { slider: { level: 5, local_only_opt_in: true } });
     const config = await loadConfig({ projectDir, userDir, env: {} });

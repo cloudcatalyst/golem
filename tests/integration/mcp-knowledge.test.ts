@@ -214,4 +214,51 @@ describe("MCP knowledge tools (B3)", () => {
     expect((result as { isError?: boolean }).isError).toBe(true);
     expect(textOf(result)).toContain("Input validation error");
   });
+
+  it("ranks a wiki hit above an equal-scoring non-wiki hit when wikiDir is set (Decision 28)", async () => {
+    class TiedKnowledgeBase implements KnowledgeBase {
+      async ingest(): Promise<IngestReport> {
+        throw new Error("not used");
+      }
+      async search(): Promise<Hit[]> {
+        return [
+          {
+            chunk: {
+              chunkId: "src-1",
+              projectId: "proj-1",
+              text: "t",
+              sourcePath: "src/a.ts",
+              metadata: {},
+            },
+            score: 0.7,
+            scope: "knowledge",
+          },
+          {
+            chunk: {
+              chunkId: "wiki-1",
+              projectId: "proj-1",
+              text: "t",
+              sourcePath: "docs/wiki/Concept.md",
+              metadata: {},
+            },
+            score: 0.7,
+            scope: "knowledge",
+          },
+        ];
+      }
+      async getChunk(chunkId: string): Promise<Chunk> {
+        throw new UnknownChunkError(chunkId);
+      }
+    }
+
+    const client = await connect({
+      ...createStandaloneDeps(),
+      knowledge: new TiedKnowledgeBase(),
+      defaultProjectId: "proj-1",
+      wikiDir: "docs/wiki",
+    });
+    const search = await client.callTool({ name: "search", arguments: { query: "q" } });
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual(["wiki-1", "src-1"]);
+  });
 });
