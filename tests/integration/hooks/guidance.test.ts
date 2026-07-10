@@ -47,6 +47,27 @@ describe("upsertGuidance (pure)", () => {
     expect(webFetchIdx).toBeGreaterThan(searchIdx);
   });
 
+  it("tells Claude to skim the wiki's own index at the start of a session", () => {
+    const out = upsertGuidance(null);
+    expect(out).toContain("WIKI.md` Index once");
+  });
+
+  it("directs captures (fetch/ingest/note) toward wiki promotion with real wikilinks", () => {
+    const out = upsertGuidance(null);
+    expect(out).toContain("`ingest` tool");
+    expect(out).toContain("`golem note`");
+    expect(out).toContain("add real `[[wikilinks]]`");
+  });
+
+  it("directs coding work to the local model via delegate once the level allows it", () => {
+    const out = upsertGuidance(null);
+    expect(out).toContain("prefer the local model for coding drafts");
+    expect(out).toContain("`delegate`");
+    expect(out).toContain("level 4");
+    // Deliberately no repo-specific hardware/GPU-pacing rules in the generic template.
+    expect(out.toLowerCase()).not.toContain("gpu");
+  });
+
   it("appends after existing prose without disturbing it", () => {
     const existing = "# My project\n\nSome notes.\n";
     const out = upsertGuidance(existing);
