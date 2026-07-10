@@ -1249,6 +1249,53 @@ redaction is T-C3-gated. Needs its own task: likely tightening the separator
 run length or requiring separator consistency (all-space or all-dash, not
 mixed) before the Luhn check. No task ID assigned yet.
 
+## §51 — T6 decision memo: `node:fs.watch` vs `chokidar` for file watching (2026-07-11)
+
+Required before starting T6 (plan §6 known unknown, flagged in §27 as a
+"deferred impl"). Recorded here with the accompanying ADR
+(`docs/wiki/decisions/ADR-0001-file-watcher.md`) per the T6 task brief.
+
+**Live-checked against https://nodejs.org/api/fs.html (fetched 2026-07-11)
+and https://github.com/nodejs/node issues, refining §27's note:**
+
+- `fs.watch`'s `recursive` option is natively supported on **Windows and
+  macOS** only, going back to early Node versions.
+- **Linux** support was NOT always present — §27 said "since Node 20" from
+  memory; the actual history is: unsupported and silently no-op-ish pre-Node
+  14, then Node 14+ throws `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` explicitly
+  when `recursive: true` is requested on an unsupported platform. Native
+  Linux recursive-watch support was added by nodejs/node PR #45098, landing
+  in the Node 20 line. It shipped with real reliability bugs — nodejs/node
+  issue #48437 documents recursive watch timing out / misbehaving on Ubuntu
+  in Node 20.3.0. No first-party confirmation found that these are fully
+  resolved as of the Node 22 LTS this repo targets (CLAUDE.md: Node ≥22) —
+  treat Linux recursive watching as **unverified-reliable** until this repo's
+  own cross-platform CI proves otherwise.
+- Non-recursive `fs.watch` (watch one directory, no `recursive` option) is
+  reliable cross-platform including Linux, at the cost of having to walk the
+  tree yourself and add/remove a watcher per subdirectory as they appear/
+  disappear.
+- `fs.watch` is independently known to be flaky at the event level on every
+  platform (duplicate events, missing events on rapid changes, `rename` vs
+  `change` semantics differing by OS) — this was already noted in §27 and is
+  unaffected by the recursive-support question above; a debounce + re-stat
+  layer is required regardless of which backend is chosen.
+- `chokidar` (pure JS, no native bindings) normalizes all of the above at the
+  cost of one added dependency. CLAUDE.md's "no heavyweight native deps in
+  the default install" rule targets *native* deps specifically — chokidar
+  would be allowed in the default install per that rule's own wording, but
+  the T6 brief still calls for a memo before adding any new dependency, which
+  this is.
+
+**Recommendation (see ADR-0001 for the accepted decision):** ship
+`node:fs.watch` as the zero-dep default — `recursive: true` on Windows/macOS,
+a manual per-directory watch-and-rewalk on Linux — behind an internal
+`FileWatcher` interface so the backend is swappable without touching
+callers. Debounce + re-stat on every backend. Fall back to `chokidar` later,
+behind the same interface, only if this repo's own Linux CI run (or
+dogfooding) shows native watching is unreliable in practice — not
+pre-emptively.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |
