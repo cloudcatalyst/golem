@@ -130,17 +130,23 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
 
       // Stage 2 — lossless compression (level >= 1).
       if (stages.losslessCompression && Array.isArray(body.messages)) {
-        const result = await options.compression.compress(
-          body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
-          policy,
-          options.projectId,
-        );
-        body = { ...body, messages: [...result.messagesOut] };
+        const messagesIn = body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
+        const result = await options.compression.compress(messagesIn, policy, options.projectId);
         for (const [stage, delta] of Object.entries(result.stageSavings)) {
           stageSavings[stage] = delta;
         }
         ccrRefsStored = result.refs.length;
-        changed = true;
+        // Only mark the request changed when a message actually changed
+        // (transforms return the same reference for untouched messages) —
+        // otherwise a compression no-op would still re-serialize the body and
+        // break the "no stage changed anything → original bytes" guarantee.
+        const compressed =
+          result.messagesOut.length !== messagesIn.length ||
+          result.messagesOut.some((message, i) => message !== messagesIn[i]);
+        if (compressed) {
+          body = { ...body, messages: [...result.messagesOut] };
+          changed = true;
+        }
       }
 
       // Stage 3 — semantic compression (level ≥3, optional, lossy, fail-open).

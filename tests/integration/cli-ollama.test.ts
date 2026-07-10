@@ -210,6 +210,10 @@ describe("runOllamaSetup — happy path", () => {
       yes: true,
       deps,
       onLine: (l) => lines.push(l),
+      // Fake the smoke test too — the default builds a real OllamaClient, and
+      // on a machine with a live local Ollama this "all faked" test would
+      // otherwise trigger a real model generation (and time out).
+      smokeTest: () => Promise.resolve({ ok: true, detail: "OK" }),
     });
 
     expect(result.kind).toBe("completed");
