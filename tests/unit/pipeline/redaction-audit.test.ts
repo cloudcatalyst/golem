@@ -130,6 +130,31 @@ describe("T-C3: entropy backstop for uncontexted secrets", () => {
   });
 });
 
+describe("T-C3: path-like false-positive guard (§49)", () => {
+  it("does not redact a multi-segment repo path (mixed case, digits, ADR-style)", () => {
+    const path = "docs/wiki/decisions/ADR-0012-file-watcher";
+    const out = redact(`write the memo as ${path} and get it reviewed`);
+    expect(out).toContain(path);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
+
+  it("does not redact a versioned/slugged filename with no slash at all", () => {
+    const name = "notes-2026-07-10-W3-summary-review";
+    const out = redact(`draft saved to ${name}`);
+    expect(out).toContain(name);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
+
+  it("still redacts a dash-delimited secret whose chunks mix letters and digits", () => {
+    // Unlike a real path/slug, no chunk here is purely alphabetic or purely
+    // numeric — the fix must not treat this as path-like.
+    const secret = "aB3xZ9-qWmK7p-Lr2Tk3-nP9qWmK";
+    const out = redact(`token=${secret}`);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED:high-entropy");
+  });
+});
+
 describe("T-C3: depth and idempotence", () => {
   it("redacts a secret nested deep in the request body", () => {
     const body = {
