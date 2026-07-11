@@ -38,14 +38,14 @@ describe("JsonFileSliderStore", () => {
   it("persists a level at slider.level (creating parent dirs) and reads it back", async () => {
     const nested = join(dir, "deep", "er", "settings.json");
     const store = new JsonFileSliderStore(nested);
-    await store.set(4);
-    await expect(store.get()).resolves.toBe(4);
+    await store.set(3);
+    await expect(store.get()).resolves.toBe(3);
     // A fresh instance reads the same persisted value.
-    await expect(new JsonFileSliderStore(nested).get()).resolves.toBe(4);
+    await expect(new JsonFileSliderStore(nested).get()).resolves.toBe(3);
 
     // Written at the nested slider.level path the E1 config schema validates.
     const raw = JSON.parse(await readFile(nested, "utf8")) as Record<string, unknown>;
-    expect(raw).toStrictEqual({ slider: { level: 4 } });
+    expect(raw).toStrictEqual({ slider: { level: 3 } });
   });
 
   it("preserves unrelated sections and slider keys on write", async () => {
@@ -70,9 +70,9 @@ describe("JsonFileSliderStore", () => {
     // Legacy value is still readable before any write.
     await expect(store.get()).resolves.toBe(3);
 
-    await store.set(5);
+    await store.set(3);
     const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
-    expect(raw).toStrictEqual({ slider: { level: 5 } });
+    expect(raw).toStrictEqual({ slider: { level: 3 } });
     expect(LEGACY_SLIDER_LEVEL_KEY in raw).toBe(false);
   });
 

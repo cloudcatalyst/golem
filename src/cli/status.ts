@@ -16,6 +16,7 @@ import { loadConfig, policyFromSettings } from "../config/index.js";
 import type { OllamaBootstrapDeps } from "../inference/index.js";
 import { effectiveStages } from "../interfaces/policy.js";
 import { golemInitStatus } from "./init.js";
+import { probeAndCacheLocalModel } from "./local-model.js";
 import { collectOllamaStatus } from "./ollama.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
 
@@ -51,12 +52,20 @@ export interface StatusReport {
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
   readonly local_first: {
-    /** Slider level 5 + `local_only_opt_in` — Decision 25 Mode B is configured to run. */
+    /** Slider level 3 (aggressive) + `local_only_opt_in` — Decision 25 Mode B is configured to run. */
     readonly intended: boolean;
     /** Only meaningful when `intended`: Ollama installed, reachable, and the tier's model pulled. */
     readonly ready: boolean;
     /** This tier's drafter model, present whenever `intended` (regardless of readiness). */
     readonly model?: string;
+  };
+  /**
+   * Whether a local model (Ollama) is reachable. When true, Golem is a
+   * local+upstream hybrid at ANY slider level (`delegate` at every level;
+   * auto-draft/local-first at level 3) — Decision 30.
+   */
+  readonly local_model: {
+    readonly reachable: boolean;
   };
   readonly warnings: readonly string[];
 }
@@ -72,6 +81,8 @@ export interface StatusOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Test injection (forwarded to collectOllamaStatus) — avoids real probes in tests. */
   readonly ollamaDeps?: OllamaBootstrapDeps;
+  /** Test injection for the local-model reachability probe (avoids real network in tests). */
+  readonly localProbe?: (projectDir: string, baseUrl: string) => Promise<boolean>;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
@@ -120,7 +131,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // capability + reachability probes are real OS/HTTP calls, not worth paying
   // on every poll at slider levels where Mode B can't fire anyway.
   const intended = effectiveStages(policyFromSettings(settings)).localOnlyAnswers;
-  const [init, reachable, slider, ollama] = await Promise.all([
+  const localProbe = options.localProbe ?? probeAndCacheLocalModel;
+  const [init, reachable, slider, ollama, localReachable] = await Promise.all([
     golemInitStatus(projectDir, settings.proxy.port),
     probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
     getSliderInfo(sliderOpts),
@@ -131,6 +143,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           ...(options.ollamaDeps !== undefined && { deps: options.ollamaDeps }),
         })
       : Promise.resolve(undefined),
+    localProbe(projectDir, settings.inference.ollama_base_url).catch(() => false),
   ]);
 
   const config: Record<string, ConfigKeyStatus> = {};
@@ -166,9 +179,15 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       ready: (ollama?.reachable ?? false) && (ollama?.modelPulled ?? false),
       ...(ollama !== undefined && { model: ollama.targetModel }),
     },
-    warnings,
+    local_model: { reachable: localReachable },
+    warnings: slider.level === 0 ? [...warnings, REDACTION_OFF_WARNING] : warnings,
   };
 }
+
+/** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
+export const REDACTION_OFF_WARNING =
+  "Slider level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII " +
+  "reach the upstream unredacted. Use level 1 to keep redaction on.";
 
 function sliderJson(slider: SliderInfo): StatusReport["slider"] {
   return {
@@ -205,12 +224,15 @@ export function renderStatus(report: StatusReport): string {
     `Slider: level ${slider.level} (${slider.name}) — set by ${slider.layer}` +
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
+  // Inference topology: a reachable local model makes Golem local+upstream at
+  // any level (Decision 30).
+  lines.push(`Inference: ${report.local_model.reachable ? "local + upstream" : "upstream only"}`);
   lines.push("");
 
   const localFirst = report.local_first;
   if (localFirst.intended) {
     lines.push(
-      `Local-first: intended (slider 5 + local_only_opt_in) — ` +
+      `Local-first: intended (slider 3 + local_only_opt_in) — ` +
         (localFirst.ready
           ? `ready (${localFirst.model})`
           : `not ready (run \`golem ollama setup\`${localFirst.model !== undefined ? ` for ${localFirst.model}` : ""})`),

@@ -31,7 +31,7 @@ const STATS: StatsReport = {
 function snapshot(): Promise<DashboardSnapshot> {
   return Promise.resolve({
     project_dir: "/tmp/example-project",
-    slider: { level: 2, name: "conservative" },
+    slider: { level: 2, name: "balanced" },
     stats: STATS,
     generated_at: "2026-07-04T00:00:00.000Z",
   });
@@ -55,7 +55,7 @@ describe("dashboard server", () => {
     const body = await res.text();
     expect(body).toContain("Golem savings");
     expect(body).toContain("1800"); // tokens saved
-    expect(body).toContain("conservative"); // slider name
+    expect(body).toContain("balanced"); // slider name
     expect(body).toContain("dedup"); // stage attribution row
   });
 

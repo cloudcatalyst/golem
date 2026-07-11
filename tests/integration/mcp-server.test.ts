@@ -167,7 +167,7 @@ describe("golem MCP server (in-memory transport)", () => {
       expect(setResult.isError).toBeFalsy();
       expect(setResult.structuredContent).toMatchObject({
         slider_level: 3,
-        slider_level_name: "balanced",
+        slider_level_name: "aggressive",
       });
       await expect(deps.sliderStore.get()).resolves.toBe(3);
 
@@ -274,12 +274,12 @@ describe("golem MCP server (in-memory transport)", () => {
   describe("prompts", () => {
     it("slider prompt embeds the requested level and points at the level tool", async () => {
       const client = await connectInMemory(createStandaloneDeps());
-      const prompt = await client.getPrompt({ name: "slider", arguments: { level: "4" } });
+      const prompt = await client.getPrompt({ name: "slider", arguments: { level: "2" } });
       const first = prompt.messages[0];
       expect(first?.role).toBe("user");
       const text = first?.content.type === "text" ? first.content.text : "";
       expect(text).toContain("level tool");
-      expect(text).toContain("level 4");
+      expect(text).toContain("level 2");
     });
 
     it("slider prompt without args points at the stats tool instead", async () => {
@@ -302,13 +302,14 @@ describe("golem MCP server (in-memory transport)", () => {
       expect(text).toContain("abc123");
     });
 
-    it("bypass prompt instructs a level-0 set and mentions the bypass header", async () => {
+    it("bypass prompt explains the header and level options (0/1), mentioning the bypass header", async () => {
       const client = await connectInMemory(createStandaloneDeps());
       const prompt = await client.getPrompt({ name: "bypass" });
       const first = prompt.messages[0];
       const text = first?.content.type === "text" ? first.content.text : "";
-      expect(text).toContain("Call level");
       expect(text).toContain("x-golem-bypass");
+      expect(text).toContain("level 1");
+      expect(text).toContain("level 0");
     });
   });
 });
@@ -616,15 +617,15 @@ describe("golem MCP server (streamable HTTP transport)", () => {
 
     const setResult = await clientA.callTool({
       name: "level",
-      arguments: { level: 5 },
+      arguments: { level: 3 },
     });
-    expect(setResult.structuredContent).toMatchObject({ slider_level: 5 });
+    expect(setResult.structuredContent).toMatchObject({ slider_level: 3 });
 
     // A second, independent session sees the same injected deps (shared state).
     const clientB = new Client({ name: "http-client-b", version: "0.0.0" });
     await clientB.connect(new StreamableHTTPClientTransport(handle.url) as Transport);
     const stats = await clientB.callTool({ name: "stats", arguments: {} });
-    expect(stats.structuredContent).toMatchObject({ slider_level: 5 });
+    expect(stats.structuredContent).toMatchObject({ slider_level: 3 });
 
     await clientA.close();
     await clientB.close();

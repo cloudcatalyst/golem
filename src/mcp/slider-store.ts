@@ -19,7 +19,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import type { SliderLevel } from "../interfaces/index.js";
+import { migrateSliderLevel, type SliderLevel } from "../interfaces/index.js";
 
 /** Default slider level when nothing has been persisted yet (P0: lossless). */
 export const DEFAULT_SLIDER_LEVEL: SliderLevel = 1;
@@ -38,14 +38,11 @@ export interface SliderStore {
   set(level: SliderLevel): Promise<void>;
 }
 
-const sliderLevelSchema = z.union([
-  z.literal(0),
-  z.literal(1),
-  z.literal(2),
-  z.literal(3),
-  z.literal(4),
-  z.literal(5),
-]);
+/**
+ * Accepts any legacy 0–5 value on disk; callers migrate the parsed number onto
+ * the current 0–3 scale via {@link migrateSliderLevel} (Decision 30).
+ */
+const persistedLevelSchema = z.number().int().min(0).max(5);
 
 /** Non-persistent store for tests and standalone runs. */
 export class InMemorySliderStore implements SliderStore {
@@ -92,12 +89,12 @@ export class JsonFileSliderStore implements SliderStore {
     const settings = await this.#readSettings();
     const section = settings.slider;
     if (isPlainObject(section)) {
-      const nested = sliderLevelSchema.safeParse(section.level);
-      if (nested.success) return nested.data;
+      const nested = persistedLevelSchema.safeParse(section.level);
+      if (nested.success) return migrateSliderLevel(nested.data);
     }
     // B1's pre-reconciliation flat key (migrated away on the next set()).
-    const legacy = sliderLevelSchema.safeParse(settings[LEGACY_SLIDER_LEVEL_KEY]);
-    return legacy.success ? legacy.data : DEFAULT_SLIDER_LEVEL;
+    const legacy = persistedLevelSchema.safeParse(settings[LEGACY_SLIDER_LEVEL_KEY]);
+    return legacy.success ? migrateSliderLevel(legacy.data) : DEFAULT_SLIDER_LEVEL;
   }
 
   async set(level: SliderLevel): Promise<void> {

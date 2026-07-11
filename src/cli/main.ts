@@ -25,7 +25,7 @@ import {
 } from "../inference/index.js";
 import type { HardwareTier, InferenceService } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
-import type { SliderLevel } from "../interfaces/policy.js";
+import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { FileWikiStore } from "../wiki/index.js";
@@ -576,9 +576,10 @@ program
 function parseSliderLevel(raw: string): SliderLevel {
   const level = Number(raw);
   if (!Number.isInteger(level) || level < 0 || level > 5) {
-    throw new InvalidArgumentError("level must be an integer from 0 to 5");
+    throw new InvalidArgumentError("level must be an integer from 0 to 3 (legacy 4/5 map to 3)");
   }
-  return level as SliderLevel;
+  // Accept a legacy 0–5 value and remap onto the current 0–3 scale (Decision 30).
+  return migrateSliderLevel(level);
 }
 
 program
@@ -608,8 +609,8 @@ program
 
 program
   .command("slider")
-  .description("Show the Golem savings slider, or set it (0 passthrough … 5 maximum)")
-  .argument("[level]", "new slider level 0–5; omit to show the current level", parseSliderLevel)
+  .description("Show the Golem savings slider, or set it (0 passthrough … 3 aggressive)")
+  .argument("[level]", "new slider level 0–3; omit to show the current level", parseSliderLevel)
   .option("--dir <path>", "project directory", process.cwd())
   .option("--json", "machine-readable output", false)
   .action(async (level: SliderLevel | undefined, opts: { dir: string; json: boolean }) => {
@@ -632,6 +633,12 @@ program
       process.stdout.write(
         `slider level set to ${level} (${SLIDER_LEVEL_NAMES[level]}) in ${result.file}\n`,
       );
+      if (level === 0) {
+        process.stdout.write(
+          `⚠ level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII ` +
+            `reach the upstream unredacted. Use level 1 to keep redaction on.\n`,
+        );
+      }
       if (result.overriddenBy !== undefined) {
         const o = result.overriddenBy;
         process.stdout.write(

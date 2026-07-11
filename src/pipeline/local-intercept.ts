@@ -3,11 +3,11 @@
  * "local_first" modes. Realizes spec §3.3 Draft/Critic using `delegate`'s
  * engine (`InferenceService`) with the proxy as the policy trigger.
  *
- * - Mode A "draft" (level >= 4, `stages.localDrafts`): runs a local model on
+ * - Mode A "draft" (level 3 aggressive, `stages.localDrafts`): runs a local model on
  *   the outgoing request and appends its answer as a labeled, clearly-marked
  *   block in `system`. Claude still receives and answers every request — this
  *   never changes what gets forwarded's outcome, only adds context.
- * - Mode B "local_first" (level 5 + opt-in, `stages.localOnlyAnswers`): tries
+ * - Mode B "local_first" (level 3 + opt-in, `stages.localOnlyAnswers`): tries
  *   to answer the request locally and skip Claude entirely. Escalates to
  *   Claude (via Mode A's injection mechanism, so the local compute is not
  *   wasted) whenever the call errors/times out, the request itself declares

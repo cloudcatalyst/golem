@@ -11,14 +11,12 @@
 import { type LayerName, loadConfig, writeSetting } from "../config/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 
-/** Human names for the six levels (spec §4 / interfaces/policy.ts). */
+/** Human names for the four levels (spec §4 / interfaces/policy.ts, Decision 30). */
 export const SLIDER_LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   0: "passthrough",
   1: "lossless",
-  2: "conservative",
-  3: "balanced",
-  4: "aggressive",
-  5: "maximum",
+  2: "balanced",
+  3: "aggressive",
 };
 
 /** The effective slider level plus where it came from. */

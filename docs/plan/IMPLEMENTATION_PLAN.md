@@ -103,16 +103,16 @@ interface FederatedSearch {
 ```
 
 ### 2.4 SliderPolicy (`interfaces/policy.ts`)
-Level 0–5 → per-stage config. Initial mapping (tune against Headroom's real config surface after T0.1):
+Level 0–3 → per-stage config (**simplified from 0–5 by Decision 30, 2026-07-11**):
 
-| Level | redaction | headroom lossless (dedup/compaction/cache-align) | tool-result cache | semantic compression | semantic cache | local drafts | local-only answers |
-|---|---|---|---|---|---|---|---|
-| 0 | ✅ | off | off | off | off | off | off |
-| 1 | ✅ | ✅ | off | off | off | off | off |
-| 2 | ✅ | ✅ | ✅ | off | off | off | off |
-| 3 | ✅ | ✅ | ✅ | stale turns only | strict | off | off |
-| 4 | ✅ | ✅ | ✅ | + low-relevance sections | normal | ✅ | off |
-| 5 | ✅ | ✅ | ✅ | aggressive | loose | ✅ | per-project opt-in |
+| Level | name | redaction | lossless (dedup/compaction/cache-align) | tool-result cache | semantic compression | semantic cache | local drafts | local-only answers |
+|---|---|---|---|---|---|---|---|---|
+| 0 | passthrough | ❌ **full bypass** | off | off | off | off | off | off |
+| 1 | lossless | ✅ | ✅ | off | off | off | off | off |
+| 2 | balanced | ✅ | ✅ | ✅ | stale turns only | strict | off | off |
+| 3 | aggressive | ✅ | ✅ | ✅ | aggressive | loose | ✅ | per-project opt-in |
+
+> **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30, USER decision), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). A reachable local model makes every level "local + upstream" in the status surfaces.
 
 ### 2.5 MCP surface (WS-B owns; names frozen)
 Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `delegate`, `devices`.

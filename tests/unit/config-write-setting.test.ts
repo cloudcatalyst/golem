@@ -50,13 +50,13 @@ describe("writeSetting", () => {
     await mkdir(path.dirname(localFile()), { recursive: true });
     await writeFile(localFile(), `${JSON.stringify(original, null, 4)}\n`, "utf8");
 
-    await writeSetting("local", "slider.level", 5, dirs());
+    await writeSetting("local", "slider.level", 3, dirs());
 
     const text = await readFile(localFile(), "utf8");
     const parsed = JSON.parse(text) as typeof original;
     expect(parsed.x_custom).toEqual({ note: "keep me" });
     expect(parsed.slider.future_flag).toBe(true);
-    expect(parsed.slider.level).toBe(5);
+    expect(parsed.slider.level).toBe(3);
     expect(parsed.proxy.port).toBe(4000);
     // Key order preserved (x_custom still first), 4-space indent, trailing \n.
     expect(Object.keys(parsed)[0]).toBe("x_custom");
@@ -65,7 +65,7 @@ describe("writeSetting", () => {
 
     // The written file still loads (unknown keys warn, don't fail).
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(5);
+    expect(config.settings.slider.level).toBe(3);
     expect(config.warnings.length).toBeGreaterThan(0);
   });
 
@@ -134,12 +134,12 @@ describe("writeSetting", () => {
     const original = { slider: { level: 2 } };
     await writeFile(userFile(), `﻿${JSON.stringify(original, null, 2)}\n`, "utf8");
 
-    await writeSetting("user", "slider.level", 4, dirs());
+    await writeSetting("user", "slider.level", 3, dirs());
 
     const text = await readFile(userFile(), "utf8");
     // BOM is not preserved in the rewritten file; content parses and is correct.
     expect(text.charCodeAt(0)).not.toBe(0xfeff);
     const parsed = JSON.parse(text) as typeof original;
-    expect(parsed.slider.level).toBe(4);
+    expect(parsed.slider.level).toBe(3);
   });
 });

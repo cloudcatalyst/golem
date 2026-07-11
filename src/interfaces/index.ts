@@ -43,7 +43,13 @@ export type {
   SliderPolicy,
   StageConfig,
 } from "./policy.js";
-export { effectiveStages, SliderLevel, sliderPolicyForLevel } from "./policy.js";
+export {
+  effectiveStages,
+  MAX_SLIDER_LEVEL,
+  migrateSliderLevel,
+  SliderLevel,
+  sliderPolicyForLevel,
+} from "./policy.js";
 
 export type { BlobStore } from "./storage.js";
 export { BlobNotFoundError } from "./storage.js";

@@ -8,7 +8,7 @@
  */
 
 const slider = `---
-description: Show or set the Golem token-savings slider (0 passthrough … 5 maximum)
+description: Show or set the Golem token-savings slider (0 passthrough … 3 aggressive)
 invocationMode: user
 ---
 
@@ -16,8 +16,9 @@ The user wants to view or change Golem's savings slider.
 
 Arguments: $ARGUMENTS
 
-- If the arguments contain a level (0-5), call the \`level\` MCP tool
+- If the arguments contain a level (0-3), call the \`level\` MCP tool
   with that level, then confirm the change and briefly say what the new level does.
+  If the level is 0, warn that redaction is OFF at level 0 (full bypass).
 - If no level was given, call \`stats\` and report the current slider level.
 - If the Golem MCP tools are unavailable, tell the user the Golem MCP server is
   not connected and suggest running \`golem init\` and restarting Claude Code.
@@ -57,10 +58,12 @@ invocationMode: user
 The user wants to bypass Golem's compression pipeline.
 
 Golem's proxy honors the \`x-golem-bypass\` header for pure passthrough, and
-slider level 0 disables all transformation. Call the \`level\` MCP
-tool with level 0 to switch to passthrough now, tell the user compression is
-off, and remind them to run \`/golem/slider 1\` (or their previous level) to
-re-enable savings when done.
+slider level 0 (passthrough) disables all transformation. Note: level 0 ALSO
+disables redaction (secrets/PII reach the upstream raw), so prefer \`level 1\`
+(redaction on, byte-faithful) unless a true full bypass is intended. If setting
+level 0, warn the user redaction is off. Call the \`level\` MCP tool with the
+chosen level, then remind them to run \`/golem/slider 1\` (or their previous
+level) to re-enable savings when done.
 `;
 
 const wikiQuery = `---

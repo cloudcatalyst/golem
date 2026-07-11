@@ -11,15 +11,16 @@
  *
  * Hard rule for this command: it must NEVER throw or hang — a broken status
  * line would disrupt the editor. Everything is defensive; on any error it
- * prints a minimal `⬢ golem` and exits 0. It also avoids slow work (no network
- * probe) per the doc's performance warning; it only reads local config +
- * telemetry.
+ * prints a minimal `⬢ golem` and exits 0. It reads local config + telemetry and
+ * does at most ONE bounded, cached local-model probe per minute (the doc's
+ * "cache slow ops" guidance) so the line can show local+upstream.
  */
 
 import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { openTelemetryStore } from "../telemetry/index.js";
+import { localModelReachableCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { SLIDER_LEVEL_NAMES } from "./slider.js";
 
@@ -44,6 +45,8 @@ export interface GolemState {
   readonly blocked?: boolean;
   /** Whether the Golem proxy is actually running (pid-file check), if known. */
   readonly proxyRunning?: boolean;
+  /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known. */
+  readonly localModelReachable?: boolean;
 }
 
 /**
@@ -165,8 +168,14 @@ export function renderStatusLine(
 
   // Which upstream the traffic is fronting — only when the proxy is actually
   // running. When it's off, nothing is going to that upstream, so showing it
-  // (e.g. "→foundry") is misleading.
-  if (active) parts.push(cyan(`→${golem.upstreamLabel}`));
+  // (e.g. "→foundry") is misleading. A reachable local model prefixes "local+"
+  // since Golem is then a local+upstream hybrid at any level (Decision 30).
+  if (active) {
+    const dest = golem.localModelReachable
+      ? `→local+${golem.upstreamLabel}`
+      : `→${golem.upstreamLabel}`;
+    parts.push(cyan(dest));
+  }
 
   // Live session context usage.
   if (session.contextUsedPct !== undefined) {
@@ -188,17 +197,28 @@ export function renderStatusLine(
 }
 
 /** Read Golem-side state (config + telemetry) for `dir`. Never throws. */
-export async function collectGolemState(dir: string): Promise<GolemState> {
+export async function collectGolemState(
+  dir: string,
+  opts: { localReachable?: (dir: string, baseUrl: string) => Promise<boolean> } = {},
+): Promise<GolemState> {
   let sliderLevel = 1;
   let upstream = "https://api.anthropic.com";
+  let ollamaBaseUrl = "http://localhost:11434";
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
     upstream = settings.proxy.upstream_base_url;
+    ollamaBaseUrl = settings.inference.ollama_base_url;
   } catch {
     // defaults
   }
   let state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
+  try {
+    const probe = opts.localReachable ?? localModelReachableCached;
+    state = { ...state, localModelReachable: await probe(dir, ollamaBaseUrl) };
+  } catch {
+    // local-model probe is best-effort; leave the field unknown
+  }
   // Is the proxy actually running? Pid-file + kill(pid,0) only — instant, no
   // network probe (the status line runs on every turn).
   try {

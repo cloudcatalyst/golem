@@ -37,13 +37,13 @@ describe("golem slider", () => {
   });
 
   it("round-trips a set through getSliderInfo with project provenance", async () => {
-    const result = await setSliderLevel(4, { projectDir, userDir });
-    expect(result.effective.level).toBe(4);
+    const result = await setSliderLevel(3, { projectDir, userDir });
+    expect(result.effective.level).toBe(3);
     expect(result.effective.layer).toBe("project");
     expect(result.overriddenBy).toBeUndefined();
 
     const info = await getSliderInfo({ projectDir, userDir });
-    expect(info.level).toBe(4);
+    expect(info.level).toBe(3);
     expect(info.name).toBe("aggressive");
   });
 
@@ -60,22 +60,23 @@ describe("golem slider", () => {
     await expect(store.get()).resolves.toBe(3);
 
     // 3. A set via the MCP store is then visible to the config loader too.
-    await store.set(5);
+    await store.set(2);
     const reloaded = await loadConfig({ projectDir, userDir });
-    expect(reloaded.settings.slider.level).toBe(5);
-    await expect(getSliderInfo({ projectDir, userDir })).resolves.toMatchObject({ level: 5 });
+    expect(reloaded.settings.slider.level).toBe(2);
+    await expect(getSliderInfo({ projectDir, userDir })).resolves.toMatchObject({ level: 2 });
   });
 
   it("reports when a higher-precedence env layer overrides the written value", async () => {
-    const result = await setSliderLevel(2, {
+    const result = await setSliderLevel(1, {
       projectDir,
       userDir,
+      // Legacy env value 5 is accepted and migrated onto the 0–3 scale (→ 3).
       env: { GOLEM_SLIDER_LEVEL: "5" },
     });
     // Written at project scope, but env wins for the effective value.
-    expect(result.effective.level).toBe(5);
+    expect(result.effective.level).toBe(3);
     expect(result.effective.layer).toBe("env");
     expect(result.overriddenBy).toBeDefined();
-    expect(result.overriddenBy?.level).toBe(5);
+    expect(result.overriddenBy?.level).toBe(3);
   });
 });
