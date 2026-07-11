@@ -74,6 +74,53 @@ describe("planIngest traversal", () => {
     expect(plan.filesSeen).toBe(1);
     expect(plan.chunks[0]?.sourcePath).toBe("readme.md");
   });
+
+  it("R3.2: extracts real text from .html, not raw markup", async () => {
+    await writeFile(
+      path.join(dir, "page.html"),
+      "<html><head><style>body{color:red}</style></head>" +
+        "<body><h1>Deploy Guide</h1><p>Run migrations before deploying.</p></body></html>",
+    );
+    const plan = await planIngest(dir);
+    const text = plan.chunks.map((c) => c.text).join("\n");
+    expect(text).toContain("Deploy Guide");
+    expect(text).toContain("Run migrations before deploying.");
+    expect(text).not.toContain("<h1>");
+    expect(text).not.toContain("color:red");
+  });
+
+  it("R3.2: extracts the text layer from .pdf, not binary noise", async () => {
+    const pdfBytes = Buffer.from(
+      `%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> /MediaBox [0 0 612 792] /Contents 5 0 R >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+5 0 obj
+<< /Length 44 >>
+stream
+BT /F1 24 Tf 100 700 Td (Deploy notes) Tj ET
+endstream
+endobj
+trailer
+<< /Size 6 /Root 1 0 R >>
+%%EOF`,
+      "utf8",
+    );
+    await writeFile(path.join(dir, "notes.pdf"), pdfBytes);
+    const plan = await planIngest(dir);
+    const text = plan.chunks.map((c) => c.text).join("\n");
+    expect(text).toContain("Deploy notes");
+    expect(plan.filesSeen).toBe(1);
+  });
 });
 
 describe("KnowledgeBase.ingest → search (end to end)", () => {

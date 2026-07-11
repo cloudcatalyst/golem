@@ -187,5 +187,12 @@ export function chunkFile(filePath: string, content: string): RawChunk[] {
 /** Whether a file extension is one the chunkers handle (used by traversal). */
 export function isChunkableExtension(ext: string): boolean {
   const e = ext.toLowerCase();
-  return MARKDOWN_EXT.has(e) || CODE_EXT.has(e) || e === ".txt" || e === ".rst" || e === ".html";
+  return (
+    MARKDOWN_EXT.has(e) ||
+    CODE_EXT.has(e) ||
+    e === ".txt" ||
+    e === ".rst" ||
+    e === ".html" ||
+    e === ".pdf"
+  );
 }
