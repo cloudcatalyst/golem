@@ -1557,3 +1557,63 @@ UUIDs) with no new false positives.
 Other providers' key shapes remain on the entropy-sweep backstop only,
 consistent with §24/§31's "add rules as needed" stance — not a claim of
 exhaustive provider coverage.
+
+## §57 — R1.7: cross-OS e2e smoke + Linux fs.watch reliability — already shipped (2026-07-11)
+
+`R1_BATCH.md`'s R1.7 asked to build a GitHub Actions cross-OS matrix running
+an e2e smoke (`golem init` → proxy up → byte-faithful level-1 round trip →
+`golem stats` shows an event) plus a Linux recursive-`fs.watch` reliability
+test, with a fallback to wire if Linux native recursive watch proves flaky.
+Checked each piece against what already exists before building anything new:
+
+- **Cross-OS matrix:** `.github/workflows/ci.yml` already runs
+  `ubuntu-latest`/`macos-latest`/`windows-latest` × Node 22/24 on every push
+  to `main` and every PR, running `npm run lint`, `npm run typecheck`,
+  `npm test`, `npm run build` — already exactly the matrix R1.7 asked for.
+- **e2e smoke:** `tests/e2e/golem-init-smoke.test.ts` (T-C2) already covers
+  the exact scenario R1.7 describes — `golemInit` against a temp project dir,
+  the real `buildProxyFromSettings` construction path, a level-1 round trip
+  against a fake upstream asserting byte-faithful response + genuine
+  before/after token savings, and a durable `telemetry.aggregate()` read
+  confirming `requests: 1`. `vitest.config.ts`'s `include:
+  ["tests/**/*.test.ts"]` picks this file up under the plain `npm test` the
+  CI matrix already runs — no separate wiring needed.
+- **Linux fs.watch reliability:** re-reading [[ADR-0001 File Watcher
+  Backend]] and §51 closely — the "if Linux recursive watch proves flaky,
+  wire the fallback" framing in `R1_BATCH.md` doesn't match what ADR-0001
+  actually decided. The decision was **Option 2** (manual per-directory
+  `TreeWatcher` on every platform outside `{win32, darwin}`), specifically
+  *to avoid* depending on Linux's native recursive support at all
+  (`NATIVE_RECURSIVE_PLATFORMS = new Set(["win32", "darwin"])`,
+  `src/knowledge/file-watcher.ts`). There is no code path on Linux that ever
+  attempts native recursive `fs.watch` — so there is nothing for "proves
+  flaky" to trigger, and no fallback left to wire; the fallback *is* the
+  unconditional Linux implementation, shipped with T6.
+  `tests/integration/knowledge-watch.test.ts` (real `GolemKnowledgeBase`,
+  live create/delete through the watcher) and
+  `tests/unit/knowledge/file-watcher.test.ts` (a `platform`-gated
+  `TreeWatcher` case forcing the Linux branch regardless of host OS) already
+  exercise this path, and both already run in the existing cross-OS matrix.
+- **Runner strategy for Ollama/uv (the required decision point):** already
+  decided implicitly and consistently applied — every test that touches
+  Ollama/inference fakes it. `tests/integration/cli-ollama.test.ts` states
+  outright "no real Ollama, no real [network]"; `tests/unit/cli/distill.test.ts`
+  and friends inject a fake `InferenceService`; `golem-init-smoke.test.ts`
+  uses a fake `InitProbe` and never shells out to a real `claude` binary. The
+  one real-install/real-pull path (`install-runner.ts`'s spawn/download,
+  `/api/pull`) is deliberately **manual-only, never run in CI** (§36, §48) —
+  same treatment as `headroom-adapter.ts`'s real spawn path. Recording this
+  as the dated decision R1.7 asked for: **stub/fake Ollama and the `claude`
+  CLI everywhere in the automated suite; the real install/pull path stays a
+  manual-only per-OS checklist (§48), never a CI job.**
+
+**What this means for R1.7:** no new workflow file, no new fallback wiring,
+no new watcher test — the batch item is already satisfied by T-C2 (e2e
+smoke) and T6 (watcher + ADR-0001's design choice), landed in a prior
+session before this task was picked up from `R1_BATCH.md`. One honest
+limitation: this session has no `gh` CLI and the GitHub API returned 404 for
+`golem-run/golem`'s Actions runs (repo not reachable/public from here), so
+actual multi-run CI history could not be inspected to look for real-world
+flakiness beyond what a single local `npm test` run shows (77 files / 730
+tests passing on Windows this session). ADR-0001's status is left as
+`accepted` — no new finding changes it.

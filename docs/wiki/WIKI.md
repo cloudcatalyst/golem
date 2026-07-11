@@ -79,3 +79,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-R1.3.md — fixed the §50 credit-card redaction false-positive (separator-format guard) + new T-C3 corpus cases
 - debriefs/2026-07-11-R1.4.md — closed the §24 provider-key redaction gaps (Google/Stripe/GCP/Azure) with four new dedicated rules
 - questions/r1.6-ollama-verification-blocked.md — R1.6 macOS/Linux/no-winget Ollama checklist rows still NOT YET RUN, no non-Windows hardware in this session
+- debriefs/2026-07-11-R1.7.md — R1.7's cross-OS e2e smoke + Linux fs.watch matrix was already shipped (T-C2/T6); recorded the Ollama/uv CI-stub decision that was only ever implicit
