@@ -129,20 +129,22 @@ export function recordUsageEvent(
 }
 
 /**
- * Persist one `avoidedUpstream` sample (R2.2, spec Decision 24 sub-mode 1,
- * verification-notes §62): input tokens avoided this request by proxy-side
- * context substitution. `nowIso` is injected like {@link recordPipelineEvent}.
- * Not a pipeline run (`kind: "avoidedUpstream"` keeps it out of
- * aggregate()'s `requests`/gross-token counts, same as `recordRetrieval` and
+ * Persist one `avoidedUpstream` sample: input tokens avoided by R2.2's
+ * proxy-side context substitution, output tokens avoided by R2.3's
+ * local-answer sub-mode (spec Decision 24, verification-notes §62), or both.
+ * `nowIso` is injected like {@link recordPipelineEvent}. Not a pipeline run
+ * (`kind: "avoidedUpstream"` keeps it out of aggregate()'s
+ * `requests`/gross-token counts, same as `recordRetrieval` and
  * `recordUsageEvent`); rolled up separately by
  * `TelemetryStore.aggregateAvoidedUpstream`. Callers should skip this call
- * entirely when `inputTokensAvoided` is 0 (nothing to record).
+ * entirely when both counts are 0 (nothing to record).
  */
 export function recordAvoidedUpstream(
   store: TelemetryStore,
   projectId: string,
   nowIso: string,
   inputTokensAvoided: number,
+  outputTokensAvoided = 0,
 ): Promise<void> {
   const telemetryEvent: TelemetryEvent = {
     ts: nowIso,
@@ -152,6 +154,7 @@ export function recordAvoidedUpstream(
     stageSavings: {},
     ccrRefsStored: 0,
     avoidedUpstreamInputTokens: inputTokensAvoided,
+    avoidedUpstreamOutputTokens: outputTokensAvoided,
   };
   return store.record(telemetryEvent);
 }

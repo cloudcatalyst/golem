@@ -12,13 +12,14 @@
  * behavior is covered by tests/integration/headroom-adapter.test.ts.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProxyFromSettings } from "../../../src/cli/proxy-runtime.js";
 import { HeadroomSidecar } from "../../../src/compression/headroom-adapter.js";
 import { loadConfig } from "../../../src/config/index.js";
+import { openKnowledgeBase } from "../../../src/knowledge/index.js";
 import { WebCache, webCacheDir } from "../../../src/knowledge/web-cache.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
@@ -118,5 +119,84 @@ describe("buildProxyFromSettings — compression.headroom_sidecar wiring", () =>
     const build = buildProxyFromSettings(projectDir, settings, telemetry);
     expect(build.semantic).toBeUndefined();
     expect("semantic" in build).toBe(false);
+  });
+});
+
+describe("buildProxyFromSettings — R2.3 knowledge.local_answer_enabled wiring", () => {
+  const SEED_TEXT =
+    "Golem's proxy avoids upstream calls for confidently answered single-turn questions.";
+
+  async function seedKnowledgeBase(): Promise<void> {
+    // Same embedded KnowledgeBase location + embedder buildProxyFromSettings
+    // opens (FileVectorDriver under `.golem/knowledge`, hashingEmbedFn) — a
+    // second openKnowledgeBase() over the same projectDir reads what this
+    // one wrote, exactly like `golem index` then `golem proxy` across
+    // process boundaries.
+    const seedDir = await mkdtemp(path.join(tmpdir(), "golem-proxy-runtime-seed-"));
+    try {
+      await writeFile(path.join(seedDir, "note.md"), SEED_TEXT);
+      const kb = openKnowledgeBase({ projectDir });
+      await kb.ingest(seedDir, projectDir);
+    } finally {
+      await rm(seedDir, { recursive: true, force: true });
+    }
+  }
+
+  it("serves a KB-composed answer directly (respondDirectly) when enabled and confident", async () => {
+    await seedKnowledgeBase();
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: { knowledge: { local_answer_enabled: true } },
+    });
+
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+    const out = await build.proxy.config.pipeline.process(
+      messagesRequest([{ role: "user", content: SEED_TEXT }]),
+    );
+
+    expect(out.respondDirectly).toBeDefined();
+    const text = out.respondDirectly?.body.toString("utf8") ?? "";
+    expect(text).toContain("Golem");
+
+    await waitFor(async () => {
+      const stats = await telemetry.aggregateAvoidedUpstream(projectDir);
+      return stats.events === 1;
+    });
+    const stats = await telemetry.aggregateAvoidedUpstream(projectDir);
+    expect(stats.outputTokensAvoided).toBeGreaterThan(0);
+  });
+
+  it("never wires localAnswer when local_answer_enabled is false (default) — no respondDirectly even for a matching query", async () => {
+    await seedKnowledgeBase();
+    const { settings } = await loadConfig({ projectDir, userDir: fakeUserDir });
+    expect(settings.knowledge.local_answer_enabled).toBe(false);
+
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+    const out = await build.proxy.config.pipeline.process(
+      messagesRequest([{ role: "user", content: SEED_TEXT }]),
+    );
+
+    expect(out.respondDirectly).toBeUndefined();
+  });
+
+  it("falls through to the normal upstream path for an ineligible (multi-turn) request even when enabled", async () => {
+    await seedKnowledgeBase();
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: { knowledge: { local_answer_enabled: true } },
+    });
+
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+    const out = await build.proxy.config.pipeline.process(
+      messagesRequest([
+        { role: "user", content: SEED_TEXT },
+        { role: "assistant", content: "ok" },
+        { role: "user", content: SEED_TEXT },
+      ]),
+    );
+
+    expect(out.respondDirectly).toBeUndefined();
   });
 });

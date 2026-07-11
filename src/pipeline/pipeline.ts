@@ -32,8 +32,10 @@ import {
 } from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
+import type { LocalAnswerService } from "../interfaces/local-answer.js";
 import type { SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
+import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
 import { redactRequestBody } from "./redaction.js";
 
 /**
@@ -74,6 +76,13 @@ export interface PipelineEvent {
    * (verification-notes §59's finding: the gross headline mixes stages).
    */
   readonly avoidedUpstreamInputTokens: number;
+  /**
+   * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): output tokens avoided
+   * this request because the local-answer sub-mode served a KB-composed
+   * answer directly and the request never went upstream at all. 0 whenever
+   * that didn't happen.
+   */
+  readonly avoidedUpstreamOutputTokens: number;
 }
 
 export interface GolemPipelineOptions {
@@ -144,6 +153,22 @@ export interface GolemPipelineOptions {
     /** Overrides DEFAULT_MIN_SUBSTITUTION_CHARS (affects emitted bytes). */
     readonly minChars?: number;
   };
+  /**
+   * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): OPT-IN local-answer
+   * sub-mode. When present, runs right after redaction (stage 1) and before
+   * any compression stage — only for requests {@link eligibleLocalAnswerText}
+   * accepts (single-turn, plain-text user message). A confident result
+   * short-circuits the whole request: `respondDirectly` is set on the
+   * returned {@link ProxyRequest} and every later stage is skipped, since
+   * there is no upstream call left to compress for. Independent of
+   * `slider.level` (Decision 31) and of the caching-upstream gate that
+   * governs the semantic/context-substitution stages — this stage never
+   * forwards a byte upstream, so there is no cached prefix to preserve or
+   * break. Absent → stage does not run (today's behavior).
+   */
+  readonly localAnswer?: {
+    readonly service: LocalAnswerService;
+  };
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -202,6 +227,37 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         if (redacted.count > 0 && isRecord(redacted.value)) {
           body = redacted.value;
           changed = true;
+        }
+      }
+
+      // Stage 1.5 — local-answer sub-mode (R2.3, opt-in, independent of
+      // slider level). Runs on the already-redacted body — the redaction
+      // hard rule applies here same as anywhere else. Only attempted for
+      // requests eligibleLocalAnswerText() accepts; a confident result
+      // short-circuits the whole request, so no compression stage below has
+      // anything left to do.
+      if (options.localAnswer !== undefined) {
+        const queryText = eligibleLocalAnswerText(body);
+        if (queryText !== undefined) {
+          const result = await options.localAnswer.service.tryAnswer({
+            text: queryText,
+            projectId: options.projectId,
+          });
+          if (result.answered) {
+            const stream = body.stream === true;
+            const respondDirectly = synthesizeLocalAnswerResponse(queryText, result.text, stream);
+            const originalJson = JSON.stringify(parsed);
+            emit({
+              projectId: options.projectId,
+              level: policy.level,
+              requestTokens: { tokensBefore: estimateTokens(originalJson), tokensAfter: 0 },
+              stageSavings: {},
+              ccrRefsStored: 0,
+              avoidedUpstreamInputTokens: estimateTokens(originalJson),
+              avoidedUpstreamOutputTokens: estimateTokens(result.text),
+            });
+            return { ...request, respondDirectly };
+          }
         }
       }
 
@@ -318,6 +374,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         stageSavings,
         ccrRefsStored,
         avoidedUpstreamInputTokens,
+        avoidedUpstreamOutputTokens: 0,
       });
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },

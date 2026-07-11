@@ -90,6 +90,21 @@ export const SETTINGS_LEAVES = {
      * used as-is. Auto-indexed like any other watched path.
      */
     wiki_dir: z.string(),
+    /**
+     * OPT-IN (R2.3, spec Decision 24 sub-mode 2 / Decision 33): the
+     * proxy-as-responder local-answer sub-mode. Independent of `slider.level`
+     * (Decision 31 — the slider stays a pure compression dial); off by
+     * default because a served answer is un-reviewed until this has real
+     * usage evidence (see Decision 33's honest evidence-basis note).
+     */
+    local_answer_enabled: z.boolean(),
+    /**
+     * Minimum KB hit score required before `local_answer_enabled` will serve
+     * an answer instead of falling through to the upstream. Unvalidated
+     * starting point — see `src/knowledge/local-answer.ts`'s
+     * `DEFAULT_MIN_CONFIDENCE` doc comment.
+     */
+    local_answer_min_confidence: z.number().min(0).max(1),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -149,6 +164,8 @@ export interface KnowledgeSettings {
   readonly vector_db_url?: string;
   readonly watch_paths: readonly string[];
   readonly wiki_dir: string;
+  readonly local_answer_enabled: boolean;
+  readonly local_answer_min_confidence: number;
 }
 
 export interface TelemetrySettings {
@@ -193,6 +210,8 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     enabled: true,
     watch_paths: [],
     wiki_dir: "docs/wiki",
+    local_answer_enabled: false,
+    local_answer_min_confidence: 0.6,
   },
   telemetry: {
     enabled: true,

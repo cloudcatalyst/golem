@@ -334,7 +334,7 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     inference = new OllamaInferenceService(client, facts);
   } catch (err) {
     process.stderr.write(
-      `golem proxy: local inference unavailable, draft/local-first modes disabled (${
+      `golem proxy: local inference unavailable, local-answer sub-mode falls back to the hashing embedder (${
         err instanceof Error ? err.message : String(err)
       })\n`,
     );

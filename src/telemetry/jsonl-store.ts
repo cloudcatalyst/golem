@@ -89,6 +89,9 @@ function parseEvent(line: string): TelemetryEvent | null {
     ...(typeof parsed.avoidedUpstreamInputTokens === "number"
       ? { avoidedUpstreamInputTokens: parsed.avoidedUpstreamInputTokens }
       : {}),
+    ...(typeof parsed.avoidedUpstreamOutputTokens === "number"
+      ? { avoidedUpstreamOutputTokens: parsed.avoidedUpstreamOutputTokens }
+      : {}),
   };
 }
 
@@ -278,21 +281,28 @@ export class JsonlTelemetryStore implements TelemetryStore {
       raw = await readFile(this.#file, "utf8");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return { projectId: projectId ?? null, events: 0, inputTokensAvoided: 0 };
+        return {
+          projectId: projectId ?? null,
+          events: 0,
+          inputTokensAvoided: 0,
+          outputTokensAvoided: 0,
+        };
       }
       throw err;
     }
 
     let events = 0;
     let inputTokensAvoided = 0;
+    let outputTokensAvoided = 0;
     for (const line of raw.split("\n")) {
       const ev = parseEvent(line);
       if (ev === null || ev.kind !== "avoidedUpstream") continue;
       if (projectId !== undefined && ev.projectId !== projectId) continue;
       events += 1;
       inputTokensAvoided += ev.avoidedUpstreamInputTokens ?? 0;
+      outputTokensAvoided += ev.avoidedUpstreamOutputTokens ?? 0;
     }
-    return { projectId: projectId ?? null, events, inputTokensAvoided };
+    return { projectId: projectId ?? null, events, inputTokensAvoided, outputTokensAvoided };
   }
 
   async close(): Promise<void> {

@@ -104,17 +104,27 @@ export interface TelemetryEvent {
    * R2.2 (spec Decision 24 sub-mode 1, verification-notes §62): input tokens
    * avoided by proxy-side context substitution for this sample. Only set
    * (kind: "avoidedUpstream") by {@link recordAvoidedUpstream}; absent
-   * elsewhere. A future local-answer sub-mode (R2.3) would add an analogous
-   * output-token field to this same event kind rather than a new one.
+   * elsewhere.
    */
   readonly avoidedUpstreamInputTokens?: number;
+  /**
+   * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): output tokens avoided
+   * by the local-answer sub-mode short-circuiting the upstream call entirely
+   * — the analogous output-token field the R2.2 doc comment anticipated,
+   * added to the SAME `avoidedUpstream` event kind rather than a new one.
+   * Only set (kind: "avoidedUpstream") by {@link recordAvoidedUpstream};
+   * absent elsewhere and on events written before this field existed.
+   */
+  readonly avoidedUpstreamOutputTokens?: number;
 }
 
-/** R2.2 rollup: total input tokens avoided via context substitution. */
+/** R2.2/R2.3 rollup: total input/output tokens avoided via either sub-mode. */
 export interface AvoidedUpstreamStats {
   readonly projectId: string | null;
   readonly events: number;
   readonly inputTokensAvoided: number;
+  /** R2.3: output tokens avoided by the local-answer sub-mode. 0 if unused. */
+  readonly outputTokensAvoided: number;
 }
 
 export interface TelemetryStore {

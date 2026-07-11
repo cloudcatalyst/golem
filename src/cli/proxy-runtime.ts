@@ -12,7 +12,10 @@ import { join } from "node:path";
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { type GolemSettings, policyFromSettings } from "../config/index.js";
+import type { InferenceService } from "../interfaces/inference.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
+import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
+import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
@@ -37,6 +40,15 @@ export interface BuildProxyOptions {
    * `golem slider` double as the live per-task toggle (Decision 25/30).
    */
   readonly sliderStore?: SliderStore;
+  /**
+   * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): local inference
+   * service, used ONLY to select the semantic embedder for the local-answer
+   * sub-mode's KnowledgeBase (mirrors `buildKnowledgeStack`'s "choose ONE
+   * embedder" rule — see build-knowledge.ts). Has no effect unless
+   * `settings.knowledge.local_answer_enabled` is also set. Absent → the
+   * sub-mode, if enabled, falls back to the pure-TS hashing embedder.
+   */
+  readonly inference?: InferenceService;
 }
 
 /**
@@ -71,6 +83,26 @@ export function buildProxyFromSettings(
   // without a restart; acceptable cost at realistic project webcache sizes.
   const webCache = new WebCache(webCacheDir(dir));
   const { sliderStore } = build;
+  // R2.3 (spec Decision 24 sub-mode 2 / Decision 33): OFF by default. When
+  // enabled, opens the SAME embedded KnowledgeBase `golem index`/`mcp serve`
+  // build (FileVectorDriver under `.golem/knowledge`), choosing ONE embedder
+  // the way build-knowledge.ts does — semantic when an inference service was
+  // provided, else the zero-setup hashing fallback. Static per-run, like
+  // `headroom_sidecar` above — this is an opt-in gate, not something the live
+  // slider ever toggles (Decision 31: the slider stays a pure compression dial).
+  const localAnswer = settings.knowledge.local_answer_enabled
+    ? {
+        service: new KnowledgeLocalAnswerService(
+          openKnowledgeBase({
+            projectDir: dir,
+            ...(build.inference !== undefined
+              ? { inference: build.inference }
+              : { embed: hashingEmbedFn() }),
+          }),
+          { minConfidence: settings.knowledge.local_answer_min_confidence },
+        ),
+      }
+    : undefined;
   // Shared with onResponseUsage below so a usage sample is tagged with the
   // SAME level-resolution logic the pipeline used for this request's gross
   // savings (R1.1). Re-read rather than threaded through per-request, so
@@ -100,17 +132,19 @@ export function buildProxyFromSettings(
     onEvent: (event) => {
       const nowIso = new Date().toISOString();
       void recordPipelineEvent(telemetry, event, nowIso).catch(() => {});
-      if (event.avoidedUpstreamInputTokens > 0) {
+      if (event.avoidedUpstreamInputTokens > 0 || event.avoidedUpstreamOutputTokens > 0) {
         void recordAvoidedUpstream(
           telemetry,
           event.projectId,
           nowIso,
           event.avoidedUpstreamInputTokens,
+          event.avoidedUpstreamOutputTokens,
         ).catch(() => {});
       }
     },
     ...(semantic !== undefined ? { semantic } : {}),
     ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),
+    ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
   const proxy = new GolemProxy({
     upstreamBaseUrl: settings.proxy.upstream_base_url,
