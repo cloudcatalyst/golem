@@ -140,7 +140,7 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 - C1: Embedded vector store setup (spec Decision 17: LanceDB candidate, spike + decision memo required; Qdrant server mode via URL config); per-project collections; schema/migrations.
 - C2: Ingestion: doc chunking (heading-aware md/html/pdf-text), code chunking (tree-sitter WASM vs native prebuilds — and **first evaluate reusing Headroom `--code-graph`**, decision memo required); file watchers (chokidar/fs.watch, Windows-correct). **✅ shipped:** heuristic pure-TS chunkers (notes §27); file watcher landed 2026-07-11 (T6, ADR-0001). *Follow-ups → ROADMAP R3: real HTML/PDF-text extractor, tree-sitter WASM opt-in.*
 - C3: Embedding + rerank via InferenceService; CPU fallback.
-- C4: Federated search: knowledge + Headroom memory (**via optional P2 sidecar only — Python-only subsystem, spec Decisions 13/18**), merged rerank; graceful KNOWLEDGE-only degradation.
+- C4: Federated search: knowledge + Headroom memory (**via optional P2 sidecar only — Python-only subsystem, spec Decisions 13/18**), merged rerank; graceful KNOWLEDGE-only degradation. *→ ROADMAP R3.6 (not started).*
 
 ### WS-W — Wiki knowledge store (spec Decision 28; W1 done, W2 done 2026-07-10, W3 done 2026-07-11)
 Pages are canonical, vectors are a derived rebuildable index. Design: `docs/plan/proposals/wiki-knowledge-pivot.md`. Consumes WS-C machinery; `src/interfaces/knowledge.ts` untouched.
@@ -196,24 +196,31 @@ Pages are canonical, vectors are a derived rebuildable index. Design: `docs/plan
 - tree-sitter WASM vs native prebuilds — owner WS-C C2.
 - Headroom sidecar version handshake (npm 0.22.4 ↔ PyPI 0.28/0.29) — owner WS-A, P2.
 
-## 7. Future workstreams (post-P1 — spec Decision 20, not yet scheduled)
-Each needs a design memo before build; none touch frozen interfaces or P0 scope.
+## 7. Future workstreams (spec Decision 20) — WS-F ↔ ROADMAP index
 
-| ID (tentative) | Feature (spec ref) | Phase | Depends on |
+> **Not a remaining-work queue.** As of 2026-07-11 every WS-F workstream, plus
+> WS-C C4 and WS-W W4, is scheduled as a numbered task in `ROADMAP.md` (R3–R5).
+> To avoid double-counting, build status, ordering, and gates now live on the
+> ROADMAP task — **this table is only the WS-F→ROADMAP crosswalk and spec-ref
+> map.** The old per-workstream `Phase` (P2/P3/…) is superseded by ROADMAP
+> release ordering. Each item still needs its design memo before build; none
+> touch frozen interfaces or P0 scope.
+
+| ID | Feature (spec ref) | → ROADMAP | Depends on |
 |---|---|---|---|
-| WS-F1 | Durable task queue & auto-resume (20a) | P2 | device/job scheduler §2.2, worktree state capture |
-| WS-F2 | Task/question queue + local conversation multiplexing (20b) | P2/P3 | WS-D InferenceService, slider |
-| WS-F3 | Self-hosted remote session access, no org account (20c) | P3/P4 | auth + relay/tunnel, Decision 12 LAN, threat model |
-| WS-F4 | Cruise-control autonomy modes (20d) | P3 | MCP tool surface, approval-gate guardrails |
-| WS-F5 | Tiered user/workspace/org shared standards & knowledge (20e) | P1 local → P4+ hosted | WS-C KnowledgeBase federation, config hierarchy |
-| WS-F6 | Idea/note capture shaping project context (20f) | P2/P3 | WS-C ingest, Headroom-memory (ML sidecar) |
-| WS-F7 | Writing-style adaptation & prompt translation (20g) | P3 | telemetry scoring, WS-D local LLM, memory |
-| WS-F8 | Parallel conversations + mid-thread model escalation (21a) | P2/P3 | WS-D routing, WS-F1 task queue |
-| WS-F9 | Remote monitoring / continuation / permission-granting (21b) | P3/P4 | auth+relay (WS-F3), Claude Code Notification+permission hooks; **security-critical** |
-| WS-F10 | Dashboard-as-sidecar (terminal / VS Code) (21c) | P2 | E3 dashboard, Claude Code status-line hook / VS Code webview |
-| WS-F11 | Account switching (21d) | P2/P3 | proxy credential routing, secure store; **ToS review** |
-| WS-F12 | Multi-LLM / multi-model concurrency & quota routing (21e) | P3 | WS-F8, WS-F11; **ToS review**, capability-preserving router |
-| WS-F13 | Cost-governance goals & benchmarks (21f) | continuous | A4 telemetry, B2 hooks, WS-D; benchmark vs. code.claude.com/docs/en/costs |
-| WS-F14 | Provider-agnostic pre-LLM pipeline: front Azure AI Foundry / OpenRouter (22) | P3+ | upstream-adapter layer in WS-A proxy (Anthropic byte-faithful path unchanged), generalized translation; product-positioning decision **resolved 2026-07-11, Decision 32 — not yet scheduled, still needs a separate go-ahead per R1_BATCH.md §3 before build starts** |
+| WS-F1 | Durable task queue & auto-resume (20a) | **R4.1** | device/job scheduler §2.2, worktree state capture |
+| WS-F2 | Task/question queue + local conversation multiplexing (20b) | **R4.3** | WS-D InferenceService, slider |
+| WS-F3 | Self-hosted remote session access, no org account (20c) | **R5.3** | auth + relay/tunnel, Decision 12 LAN, threat model |
+| WS-F4 | Cruise-control autonomy modes (20d) | **R4.4** | MCP tool surface, approval-gate guardrails |
+| WS-F5 | Tiered user/workspace/org shared standards & knowledge (20e) | **R3.4** (user/local tier); workspace/org **hosted** tier is P4+, still off-roadmap | WS-C KnowledgeBase federation, config hierarchy |
+| WS-F6 | Idea/note capture shaping project context (20f) | **R3.5** (`golem note` capture already shipped, T4; the shaping step is R3.5) | WS-C ingest, Headroom-memory (ML sidecar) |
+| WS-F7 | Writing-style adaptation & prompt translation (20g) | **R4.5** | telemetry scoring, WS-D local LLM, memory |
+| WS-F8 | Parallel conversations + mid-thread model escalation (21a) | **R4.3** (parallel convos) + **R5.2** (model escalation) | WS-D routing, WS-F1 task queue |
+| WS-F9 | Remote monitoring / continuation / permission-granting (21b) | **R5.3** | auth+relay (WS-F3), Claude Code Notification+permission hooks; **security-critical** |
+| WS-F10 | Dashboard-as-sidecar (terminal / VS Code) (21c) | **R4.2** | E3 dashboard, Claude Code status-line hook / VS Code webview |
+| WS-F11 | Account switching (21d) | **R5.2** | proxy credential routing, secure store; **ToS review** |
+| WS-F12 | Multi-LLM / multi-model concurrency & quota routing (21e) | **R5.2** | WS-F8, WS-F11; **ToS review**, capability-preserving router |
+| WS-F13 | Cost-governance goals & benchmarks (21f) | **R5.4** | A4 telemetry, B2 hooks, WS-D; benchmark vs. code.claude.com/docs/en/costs |
+| WS-F14 | Provider-agnostic pre-LLM pipeline: front Azure AI Foundry / OpenRouter (22) | **R5.1** | upstream-adapter layer in WS-A proxy (Anthropic byte-faithful path unchanged); Decision 32 (2026-07-11) unblocked positioning — go-ahead-gated on ROADMAP before build |
 
-Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier. WS-F9/F11/F12 carry security/ToS gates (spec Risks table) — design memo + review before build.
+Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier — the one piece still off the ROADMAP. WS-F9/F11/F12 carry security/ToS gates (spec Risks table) — design memo + review before build.

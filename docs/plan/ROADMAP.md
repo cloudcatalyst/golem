@@ -112,6 +112,10 @@ The gates that block downstream work, in priority order:
 5. **🔒 R4.4 + all of R5** — autonomy, account-switching, remote approval each need a written memo + review before code. R5.1 is positioning-unblocked (Decision 32) but still needs that memo + an explicit go-ahead before build starts.
 
 ## Deferred / not scheduled
-Everything in `IMPLEMENTATION_PLAN.md` §7 not pulled into R4/R5 above stays
-design-memo-gated. The full spec rationale for each lives in the Decisions Log
-(`docs/edge-offload-spec.md`, Decisions 20–29).
+Every WS-F workstream (`IMPLEMENTATION_PLAN.md` §7), plus WS-C C4 and WS-W W4,
+is now scheduled as a task above (R3–R5) — see §7's WS-F↔ROADMAP crosswalk; they
+are no longer a separate backlog. The **only** work still off the roadmap is the
+**hosted workspace/org knowledge tier** (WS-F5's upper tiers — P4+, candidate
+paid). Each scheduled item still carries its own gate (design memo, security/ToS
+review, or explicit go-ahead) noted on its task; the full spec rationale lives in
+the Decisions Log (`docs/edge-offload-spec.md`, Decisions 20–29).
