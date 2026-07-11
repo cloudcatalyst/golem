@@ -14,8 +14,21 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Chunk, Hit, IngestReport, KnowledgeBase, Scope } from "../../src/interfaces/index.js";
-import { UnknownChunkError } from "../../src/interfaces/index.js";
+import type {
+  ChatMessage,
+  ChatOptions,
+  ChatResult,
+  Chunk,
+  HardwareTier,
+  Hit,
+  InferenceService,
+  IngestReport,
+  KnowledgeBase,
+  Role,
+  Scope,
+  Vector,
+} from "../../src/interfaces/index.js";
+import { HardwareTier as Tier, UnknownChunkError } from "../../src/interfaces/index.js";
 import {
   createGolemMcpServer,
   createStandaloneDeps,
@@ -91,6 +104,34 @@ function namedError(name: string, message: string): Error {
   const err = new Error(message);
   err.name = name;
   return err;
+}
+
+/** R3.1 — a fake "judge" that reverses whatever chunkId order it's given. */
+class ReversingInferenceService implements InferenceService {
+  async chat(
+    role: Role,
+    messages: readonly ChatMessage[],
+    _opts?: ChatOptions,
+  ): Promise<ChatResult> {
+    const prompt = JSON.stringify(messages);
+    const ids = [...prompt.matchAll(/chunkId=([^\s\\]+)/g)].map((m) => m[1] as string);
+    return {
+      text: JSON.stringify({ order: [...ids].reverse() }),
+      model: "fake-judge",
+      role,
+      promptTokens: 1,
+      completionTokens: 1,
+      finishReason: "stop",
+    };
+  }
+
+  async embed(): Promise<Vector[]> {
+    throw new Error("not used by these tests");
+  }
+
+  capabilities(): HardwareTier {
+    return Tier.PMid;
+  }
 }
 
 async function connect(deps: GolemMcpServerDeps): Promise<Client> {
@@ -264,6 +305,72 @@ describe("MCP knowledge tools (B3)", () => {
     const search = await client.callTool({ name: "search", arguments: { query: "q" } });
     const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
     expect(structured.hits.map((h) => h.chunk_id)).toEqual(["wiki-1", "src-1"]);
+  });
+
+  it("R3.1: applies deps.rerank to reorder search hits when injected", async () => {
+    class TwoHitKnowledgeBase implements KnowledgeBase {
+      async ingest(): Promise<IngestReport> {
+        throw new Error("not used");
+      }
+      async search(): Promise<Hit[]> {
+        return [
+          {
+            chunk: { chunkId: "a", projectId: "proj-1", text: "t", metadata: {} },
+            score: 0.9,
+            scope: "knowledge",
+          },
+          {
+            chunk: { chunkId: "b", projectId: "proj-1", text: "t", metadata: {} },
+            score: 0.5,
+            scope: "knowledge",
+          },
+        ];
+      }
+      async getChunk(chunkId: string): Promise<Chunk> {
+        throw new UnknownChunkError(chunkId);
+      }
+    }
+
+    const client = await connect({
+      ...createStandaloneDeps(),
+      knowledge: new TwoHitKnowledgeBase(),
+      defaultProjectId: "proj-1",
+      rerank: new ReversingInferenceService(),
+    });
+    const search = await client.callTool({ name: "search", arguments: { query: "q" } });
+    expect(search.isError).toBeFalsy();
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual(["b", "a"]);
+  });
+
+  it("R3.1: does NOT apply rerank when deps.rerank is absent", async () => {
+    class TwoHitKnowledgeBase implements KnowledgeBase {
+      async ingest(): Promise<IngestReport> {
+        throw new Error("not used");
+      }
+      async search(): Promise<Hit[]> {
+        return [
+          {
+            chunk: { chunkId: "a", projectId: "proj-1", text: "t", metadata: {} },
+            score: 0.9,
+            scope: "knowledge",
+          },
+          {
+            chunk: { chunkId: "b", projectId: "proj-1", text: "t", metadata: {} },
+            score: 0.5,
+            scope: "knowledge",
+          },
+        ];
+      }
+      async getChunk(chunkId: string): Promise<Chunk> {
+        throw new UnknownChunkError(chunkId);
+      }
+    }
+
+    const client = await connect(depsWith(new TwoHitKnowledgeBase()));
+    const search = await client.callTool({ name: "search", arguments: { query: "q" } });
+    const structured = search.structuredContent as { hits: Array<{ chunk_id: string }> };
+    expect(structured.hits.map((h) => h.chunk_id)).toEqual(["a", "b"]);
   });
 });
 

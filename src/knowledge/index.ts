@@ -77,6 +77,7 @@ export {
   NotImplementedYetError,
   supportsIncremental,
 } from "./knowledge-base.js";
+export { rerankHits } from "./rerank.js";
 export { chunkCodeSyntaxAware } from "./tree-sitter-chunker.js";
 export type { WebCacheEntry } from "./web-cache.js";
 export { isFresh, WebCache, webCacheDir, webCacheKey } from "./web-cache.js";

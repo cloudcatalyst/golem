@@ -587,6 +587,11 @@ mcp
             }
           : {}),
         ...(inference !== undefined ? { inference } : {}),
+        // R3.1 (spec Decision 34): opt-in chat-judge rerank, decoupled from the
+        // slider (Decision 31) via its own settings leaf.
+        ...(inference !== undefined && settings.knowledge.rerank_enabled
+          ? { rerank: inference }
+          : {}),
         // R3.4 (spec Decision 20e's local tier): federate the user-scope wiki
         // (~/.golem/wiki/) into search/fetch, read-only — writes still only
         // ever go to the project `wiki` via wiki_upsert.

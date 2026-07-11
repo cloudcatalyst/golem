@@ -121,6 +121,15 @@ export const SETTINGS_LEAVES = {
      * doesn't want personal notes bleeding into a project's search results.
      */
     user_wiki_enabled: z.boolean(),
+    /**
+     * OPT-IN (R3.1, spec Decision 34): chat-judge rerank of `search` hits via
+     * the local "judge" role. Independent of `slider.level` (Decision 31 —
+     * the slider never auto-engages the local model at any level); off by
+     * default because it adds a local-model call (latency) to every search
+     * and has no usage evidence yet (same "opt-in until proven" footing as
+     * `local_answer_enabled`).
+     */
+    rerank_enabled: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -184,6 +193,7 @@ export interface KnowledgeSettings {
   readonly local_answer_min_confidence: number;
   readonly syntax_aware_chunking: boolean;
   readonly user_wiki_enabled: boolean;
+  readonly rerank_enabled: boolean;
 }
 
 export interface TelemetrySettings {
@@ -232,6 +242,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     local_answer_min_confidence: 0.6,
     syntax_aware_chunking: false,
     user_wiki_enabled: true,
+    rerank_enabled: false,
   },
   telemetry: {
     enabled: true,

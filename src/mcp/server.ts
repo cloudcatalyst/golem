@@ -52,6 +52,7 @@ import {
   UnknownWikiPageError,
   WikiWriteConflictError,
 } from "../interfaces/index.js";
+import { rerankHits } from "../knowledge/rerank.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
@@ -106,6 +107,14 @@ export interface GolemMcpServerDeps {
    * existing callers that only ever had one wiki need no changes.
    */
   readonly wikiSearch?: WikiReader;
+  /**
+   * R3.1 (spec Decision 34): opt-in chat-judge rerank of `search` hits via the
+   * local "judge" role (`knowledge.rerank_enabled`, default off). Independent
+   * of `slider.level` (Decision 31 — the slider never auto-engages the local
+   * model). A rerank failure falls back to the pre-rerank order; it never
+   * turns a successful search into an error.
+   */
+  readonly rerank?: InferenceService;
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -336,6 +345,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       // project id, so it doubles as the ingest root when none is given.
       deps.projectRootDir ?? deps.defaultProjectId,
       deps.wikiSearch ?? deps.wiki,
+      deps.rerank,
     );
   }
 
@@ -509,6 +519,7 @@ function registerKnowledgeTools(
   wikiDir?: string,
   projectRootDir?: string,
   wiki?: WikiReader,
+  rerank?: InferenceService,
 ): void {
   server.registerTool(
     "search",
@@ -557,7 +568,8 @@ function registerKnowledgeTools(
         const vectorHits = (await knowledge.search(query, projectId, limit)).filter(
           (h) => h.chunk.sourcePath === undefined || !graphSourcePaths.has(h.chunk.sourcePath),
         );
-        const hits = boostWikiHits([...graphHits, ...vectorHits], wikiDir).slice(0, limit);
+        const boosted = boostWikiHits([...graphHits, ...vectorHits], wikiDir).slice(0, limit);
+        const hits = rerank !== undefined ? await rerankHits(rerank, query, boosted) : boosted;
         const structuredHits = hits.map(toStructuredHit);
         const summary =
           hits.length === 0
