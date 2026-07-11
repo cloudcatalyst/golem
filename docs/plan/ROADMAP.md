@@ -55,16 +55,16 @@ public/golem.run push. No new architecture. **Active batch: `R1_BATCH.md`.**
 
 ### R2 — Real savings, evidence-gated
 The actual big-savings levers. Every build here is gated on R1.1 — no repeat of
-the §31 artifact.
+the §31 artifact. **Active batch: `R2_BATCH.md`.**
 
 | # | Task | Type | Source |
 |---|---|---|---|
+| R2.5 | ~~**Verify** whether Headroom can disable `read_lifecycle`~~ — **DONE** 2026-07-11 (verification-notes §58): possible but not the right lever; the cache-risky half is already off by default; the library's real cache-safe mechanism (read maturation) is proxy-only, out of reach for Golem's sidecar. | 🔬 | §53, §58, Dec 31 |
+| R2.6 | Build the **cache-safe structural tier**: re-enable today's default `compress()` behavior on Anthropic behind a new gate, prove it net-cache-safe with R1.1's `UsageSniffer` infra before flipping `isCachingUpstream()`. Reshaped by R2.5's finding — not the original "drop read_lifecycle" framing. | 🛠️ | §58, Dec 31 |
 | R2.1 | Decision 24 spike: measure real `avoidedUpstream` token volume from proxy-side KB/web-cache answer substitution. | 🔬 | Dec 24 |
+| R2.4 | Fix the `expand`↔Headroom-CCR gap: content Headroom elides at ≥2 is unrecoverable via `expand`. | 🛠️ | §38 |
 | R2.2 | Build context-substitution (conservative sub-mode) behind the compression seam + `avoidedUpstream` telemetry bucket, if R2.1 clears. | 🛠️ | Dec 24 |
 | R2.3 | Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder). Note: Decision 31 removed the old `localResponse` seam, so this re-introduces a proxy-response path from scratch (its own contract). | 🛠️🔒 | Dec 24 |
-| R2.4 | Fix the `expand`↔Headroom-CCR gap: content Headroom elides at ≥2 is unrecoverable via `expand`. | 🛠️ | §38 |
-| R2.5 | **Verify** whether Headroom can disable `read_lifecycle` (keep only deterministic per-turn structural compression) — the prerequisite for a cache-safe tier on Anthropic. | 🔬 | §53, Dec 31 |
-| R2.6 | If R2.5 clears: build the **cache-safe structural tier** — run deterministic per-turn transforms on Anthropic (drop `read_lifecycle`) + a prefix-stability guard, so levels 2/3 save without breaking the cache. Else keep semantic non-caching-upstream-only. | 🛠️ | §53, Dec 31 |
 
 ### R3 — Knowledge depth
 Make the KB/wiki genuinely strong now that the retrieval spine exists.
