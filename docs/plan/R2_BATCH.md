@@ -122,24 +122,22 @@ the opportunity doesn't. R2.3 stays gated behind R2.2, now for a confirmed
 reason (zero telemetry basis for the aggressive sub-mode), not just
 sequencing convention.
 
-### R2.4 (🛠️) — Fix the `expand`↔Headroom-CCR gap
+### R2.4 (🛠️) — Fix the `expand`↔Headroom-CCR gap — ✅ DONE 2026-07-11
 
-**Why:** independent, contained bug — content Headroom elides at
-semantic-compression levels is unrecoverable via the `expand` MCP tool
-(verification-notes §38). No dependency on R2.1/R2.5/R2.6; can be picked up
-any time.
-
-**What to build:** confirm the gap still exists post-Decision-31 (semantic
-now only runs on non-caching upstreams, so re-check the repro on that path),
-then wire whatever CCR-store write Headroom's compressed output is missing
-so `expand <ref>` recovers the original elided content, matching the
-lossless-compaction path's existing recoverability guarantee.
-
-**Read first:** verification-notes §38; `src/compression/headroom-adapter.ts`,
-`src/mcp/` (`expand` tool), CCR store (`src/telemetry/` or wherever the ref
-store lives — confirm via `search`).
-**Wiki writes:** debrief.
-**Size:** small-medium. **Local model:** draft the fix + regression test.
+Confirmed root cause from the pinned `headroom-ai==0.30.0` source: every
+elision transform's `hash=<hex>` marker is a reproducible SHA-256/MD5-prefix
+digest of the pre-elision content, keyed into Headroom's own in-process
+store that Golem's TS `CcrStore` never receives. Fixed with
+`backfillHeadroomCcrRefs` (`src/compression/headroom-ccr-bridge.ts`): diffs
+the semantic stage's pre/post messages, verifies each `hash=` marker against
+SHA-256/MD5 of the replaced content, and backfills Golem's own `CcrStore`
+under that exact hash — no marker-text rewriting, so the existing `expand`
+path resolves it unchanged. Wired via a new non-frozen
+`GolemPipelineOptions.headroomCcrStore` option; `src/cli/proxy-runtime.ts`
+points it at the same `.golem/ccr` directory the proxy and `expand` already
+share. `tsc`/Biome/vitest all green (79 files, 748 tests — 18 new/extended
+for this fix). See verification-notes §61, §38,
+`debriefs/2026-07-11-R2.4.md`.
 
 ### R2.2 (🛠️) — Context-substitution (conservative sub-mode)
 

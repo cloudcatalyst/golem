@@ -23,7 +23,8 @@
  * losslessly-compressed body untouched).
  */
 
-import { estimateTokens } from "../compression/index.js";
+import type { CcrStore } from "../compression/ccr-store.js";
+import { backfillHeadroomCcrRefs, estimateTokens } from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { SliderPolicy } from "../interfaces/policy.js";
@@ -94,6 +95,20 @@ export interface GolemPipelineOptions {
    * gate-off billed cache-read totals.
    */
   readonly forceSemanticOnCaching?: boolean;
+  /**
+   * R2.4 (verification-notes §38): Golem's own CCR store, rooted at the same
+   * `.golem/ccr` directory `options.compression` writes to, so `expand` can
+   * recover content the semantic stage elides. Headroom's `read_lifecycle`
+   * transform substitutes stale/superseded Read tool-results with an inline
+   * `hash=<hex>` marker (the same grammar `ccrMarker()` mirrors) pointing at
+   * a hash Headroom's own in-process store never shares with Golem. When
+   * this is present, the pipeline verifies each such marker's hash is
+   * actually derived from the content it replaced and backfills the
+   * original here, so the marker Headroom already emits resolves through
+   * the existing `expand` path unchanged. Absent → no backfill (today's
+   * behavior; the gap verification-notes §38 documents).
+   */
+  readonly headroomCcrStore?: CcrStore;
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -189,11 +204,21 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         (!isCachingUpstream(options.upstreamBaseUrl) || options.forceSemanticOnCaching === true) &&
         Array.isArray(body.messages)
       ) {
+        const messagesInSemantic = body.messages as ReadonlyArray<
+          Readonly<Record<string, unknown>>
+        >;
         const semantic = await options.semantic.compress(
-          body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
+          messagesInSemantic,
           stages.semanticCompression,
         );
         if (semantic !== null) {
+          if (options.headroomCcrStore !== undefined) {
+            ccrRefsStored += await backfillHeadroomCcrRefs(
+              options.headroomCcrStore,
+              messagesInSemantic,
+              semantic.messages,
+            );
+          }
           body = { ...body, messages: [...semantic.messages] };
           stageSavings.semantic = {
             tokensBefore: semantic.tokensBefore,

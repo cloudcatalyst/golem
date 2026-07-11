@@ -29,6 +29,7 @@ export const HEADROOM_CLIENT_NPM_PIN = "0.22.4";
 export type { CcrEnvelope } from "./ccr-store.js";
 export { CcrStore } from "./ccr-store.js";
 export { COMPACTION_VERSION, compactText } from "./compaction.js";
+export { backfillHeadroomCcrRefs } from "./headroom-ccr-bridge.js";
 export { LocalDirBlobStore } from "./local-blob-store.js";
 export type { NativeLosslessOptions } from "./native-lossless.js";
 export {

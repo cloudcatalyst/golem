@@ -8,8 +8,9 @@
  * all stay in `runProxyForeground` — this module only builds the objects.
  */
 
+import { join } from "node:path";
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
-import { NativeLosslessCompression } from "../compression/index.js";
+import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { type GolemSettings, policyFromSettings } from "../config/index.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import type { SliderStore } from "../mcp/slider-store.js";
@@ -50,6 +51,15 @@ export function buildProxyFromSettings(
   // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
+  // R2.4 (verification-notes §38): same `.golem/ccr` directory
+  // `NativeLosslessCompression.forProjectDir(dir)` writes to, so a backfilled
+  // Headroom marker is immediately visible to a later `expand` call. Only
+  // built when the sidecar is actually configured — see
+  // GolemPipelineOptions.headroomCcrStore's doc comment.
+  const headroomCcrStore =
+    semantic !== undefined
+      ? new CcrStore(new LocalDirBlobStore(join(dir, ".golem", "ccr")))
+      : undefined;
   const { sliderStore } = build;
   // Shared with onResponseUsage below so a usage sample is tagged with the
   // SAME level-resolution logic the pipeline used for this request's gross
@@ -74,6 +84,7 @@ export function buildProxyFromSettings(
       void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
     },
     ...(semantic !== undefined ? { semantic } : {}),
+    ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),
   });
   const proxy = new GolemProxy({
     upstreamBaseUrl: settings.proxy.upstream_base_url,

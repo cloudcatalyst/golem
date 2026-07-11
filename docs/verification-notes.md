@@ -1839,3 +1839,65 @@ as-is — a negative result here is still the deliverable"), adapted here to
 "mechanism built, live A/B deferred" — the gate defaults to OFF
 (`isCachingUpstream()` still blocks semantic-on-Anthropic by default) until
 that follow-up produces a real number.
+
+## §61 — R2.4: expand↔Headroom-CCR gap closed via hash backfill (2026-07-11)
+
+Closes the caveat §38 flagged ("if Headroom *does* elide something into its
+own CCR, `expand` cannot retrieve it — Golem's expand is wired to the TS CCR
+store, not Headroom's").
+
+**Root cause, confirmed from the pinned `headroom-ai==0.30.0` source (not
+guessed):** every Headroom transform that elides content (`read_lifecycle`,
+`log_compressor`, `search_compressor`, `diff_compressor`, SmartCrusher's Rust
+path) computes a **reproducible truncated digest of the pre-elision content**
+as the marker's `hash=<hex>` — SHA-256[:24] by default
+(`cache/compression_store.py`'s `store()`), SHA-256[:12] for SmartCrusher's
+Rust row-drop path, MD5[:24] for `log_compressor`'s own `explicit_hash`. The
+hash is a key into Headroom's own in-process Python store, which Golem's TS
+`CcrStore`/`expand` never receives — hence `expand <hash>` throwing
+`UnknownRefError`. For **Anthropic-format** messages, elision replaces the
+`content` string of the matched `tool_result` **block** in place (array
+length/order preserved); for **OpenAI-format** `role:"tool"` messages, the
+message's own `content` string is replaced directly.
+
+Also confirmed: Golem's own `CCR_MARKER_RE`
+(`src/compression/native-lossless.ts`) is exported but never consumed
+programmatically anywhere — the real `expand` MCP tool's `ref_id` is an
+unconstrained `z.string().min(1)`, and `CcrStore.putIfAbsent` takes an
+arbitrary string key. So a shorter/differently-computed Headroom hash flows
+through the existing `expand` path with zero changes to marker-parsing code,
+once Golem's own store has an entry under that exact key.
+
+**Fix — `backfillHeadroomCcrRefs`
+(`src/compression/headroom-ccr-bridge.ts`):** diffs the semantic stage's
+pre/post message arrays; for each `tool_result` block (or OpenAI-format tool
+message) whose content changed and whose new content contains a
+`hash=<hex>` marker, verifies the hash is a prefix of SHA-256 **or** MD5 of
+the OLD content (covering every hash convention observed above) and, if
+verified, backfills the OLD content into Golem's own `CcrStore` under that
+exact hash via `putIfAbsent` — no marker-text rewriting. Fails open (a
+store-write failure is swallowed, mirroring Headroom's own
+storage-failure-must-not-break-the-request philosophy). Wired as a new,
+non-frozen `GolemPipelineOptions.headroomCcrStore` option
+(`src/pipeline/pipeline.ts`) rather than a change to the frozen
+`CompressionService` contract, since the option lives outside
+`src/interfaces/`. `src/cli/proxy-runtime.ts` constructs the bridge store
+pointed at the **same** `.golem/ccr` directory
+`NativeLosslessCompression.forProjectDir(dir)` and the MCP server's `expand`
+already share, only when `headroom_sidecar` is configured — so a backfilled
+ref is visible to a later `expand` call with no further plumbing.
+
+**Verified:** `tsc --noEmit` clean; `biome check .` clean (repo-wide, zero
+warnings); full `npx vitest run` — **79 files, 748 tests, all green**
+(18 of them new/extended for this fix: 8 in
+`tests/unit/compression/headroom-ccr-bridge.test.ts` covering all four
+hash-length/algorithm conventions + non-derived-hash rejection +
+idempotency + fail-open, and 2 new cases in
+`tests/unit/pipeline/semantic-stage.test.ts` proving the pipeline-level
+wiring — with `headroomCcrStore` configured, `expand`'s own `getEnvelope()`
+recovers the pre-elision content and the marker text is unchanged; without
+it, `ccrRefsStored` stays 0, the documented pre-fix gap unchanged as the
+default). Also fixed 2 pre-existing unrelated Biome
+`noNonNullAssertion` warnings in `tests/unit/telemetry/usage-report.test.ts`
+(lines 41/44, left over from R2.6) while closing out this task's full-repo
+gate.
