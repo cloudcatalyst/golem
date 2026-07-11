@@ -99,6 +99,27 @@ export async function findNoteByTs(projectDir: string, ts: string): Promise<Note
   return null;
 }
 
+/**
+ * R3.4 — every note captured at or after `sinceIso` (inclusive), newest
+ * first. ISO 8601 timestamps compare correctly as plain strings, so this
+ * needs no date parsing.
+ */
+export async function listNotesSince(projectDir: string, sinceIso: string): Promise<NoteEntry[]> {
+  let raw: string;
+  try {
+    raw = await readFile(notesFilePath(projectDir), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const entries: NoteEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const note = parseNote(line);
+    if (note !== null && note.ts >= sinceIso) entries.push(note);
+  }
+  return entries.reverse();
+}
+
 /** Human-readable rendering (the default, non---json output). */
 export function renderNotes(entries: readonly NoteEntry[]): string {
   if (entries.length === 0) return 'No notes captured yet. Try: golem note "some idea"\n';

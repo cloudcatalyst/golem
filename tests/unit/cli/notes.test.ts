@@ -10,6 +10,7 @@ import {
   appendNote,
   findNoteByTs,
   listNotes,
+  listNotesSince,
   notesFilePath,
   renderNotes,
 } from "../../../src/cli/notes.js";
@@ -100,6 +101,28 @@ describe("findNoteByTs", () => {
   it("returns null when no note has that timestamp", async () => {
     await appendNote(projectDir, "note 0", "2026-07-10T00:00:00.000Z");
     expect(await findNoteByTs(projectDir, "2026-07-10T09:99:99.000Z")).toBeNull();
+  });
+});
+
+describe("listNotesSince", () => {
+  it("returns an empty array when the notes log doesn't exist yet", async () => {
+    expect(await listNotesSince(projectDir, "2026-07-10T00:00:00.000Z")).toEqual([]);
+  });
+
+  it("returns only notes at or after the cutoff, newest first", async () => {
+    for (let i = 0; i < 5; i++) {
+      await appendNote(projectDir, `note ${i}`, `2026-07-10T00:00:0${i}.000Z`);
+    }
+    const since = await listNotesSince(projectDir, "2026-07-10T00:00:02.000Z");
+    expect(since.map((e) => e.text)).toEqual(["note 4", "note 3", "note 2"]);
+  });
+
+  it("skips corrupt trailing lines instead of throwing", async () => {
+    await appendNote(projectDir, "good note", "2026-07-10T00:00:00.000Z");
+    const { appendFile } = await import("node:fs/promises");
+    await appendFile(notesFilePath(projectDir), "not-json\n", "utf8");
+    const entries = await listNotesSince(projectDir, "2026-07-09T00:00:00.000Z");
+    expect(entries.map((e) => e.text)).toEqual(["good note"]);
   });
 });
 

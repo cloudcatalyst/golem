@@ -48,6 +48,25 @@ export interface NoteDraft {
   readonly wikilinks: readonly string[];
 }
 
+/** R3.4 — recent activity to tie into one weekly synthesis draft. */
+export interface SynthesisInput {
+  readonly debriefs: readonly { readonly title: string; readonly body: string }[];
+  readonly notes: readonly { readonly ts: string; readonly text: string }[];
+  /** Existing wiki page titles, for candidate-wikilink matching. */
+  readonly existingTitles: readonly string[];
+}
+
+/** Same shape as {@link DistillDraft} — a synthesis is just another `type` at the storage layer. */
+export interface SynthesisDraft {
+  readonly title: string;
+  readonly slug: string;
+  readonly tags: readonly string[];
+  /** Narrative summary in the model's own words, tying the period's activity together. */
+  readonly summary: string;
+  /** Subset of `existingTitles` (canonical casing) the draft should link to. */
+  readonly wikilinks: readonly string[];
+}
+
 /** The model's JSON response failed to parse or didn't match the expected shape. */
 export class DistillParseError extends Error {
   constructor(
@@ -83,6 +102,31 @@ const DISTILL_JSON_SCHEMA = {
         type: "string",
         description:
           "Facts in your own words, citing the source URL. Do not quote the page at length.",
+      },
+      wikilinks: {
+        type: "array",
+        items: { type: "string" },
+        description: "Zero or more titles copied verbatim from the supplied existing-page list",
+      },
+    },
+    required: ["title", "slug", "tags", "summary", "wikilinks"],
+  },
+} as const;
+
+const SYNTHESIS_JSON_SCHEMA = {
+  name: "synthesis_draft",
+  schema: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      slug: { type: "string", description: "kebab-case, derived from the title" },
+      tags: { type: "array", items: { type: "string" }, description: "2-5 kebab-case tags" },
+      summary: {
+        type: "string",
+        description:
+          "A through-line narrative in your own words tying the period's debriefs and notes " +
+          "together: 1-3 recurring threads, patterns worth reusing, and open follow-ups. Do not " +
+          "just list the inputs back.",
       },
       wikilinks: {
         type: "array",
@@ -179,6 +223,39 @@ function buildNotePrompt(input: NoteDistillInput): ChatMessage[] {
   ];
 }
 
+function buildSynthesisPrompt(input: SynthesisInput): ChatMessage[] {
+  const titleList =
+    input.existingTitles.length > 0
+      ? input.existingTitles.map((t) => `- ${t}`).join("\n")
+      : "(none yet)";
+  const debriefsText =
+    input.debriefs.length > 0
+      ? input.debriefs.map((d) => `### ${d.title}\n${d.body}`).join("\n\n")
+      : "(none this period)";
+  const notesText =
+    input.notes.length > 0
+      ? input.notes.map((n) => `- [${n.ts}] ${n.text}`).join("\n")
+      : "(none this period)";
+  return [
+    {
+      role: "system",
+      content:
+        "You write a weekly synthesis wiki page tying together a period's work debriefs and " +
+        "captured notes into one through-line narrative — not a list of what happened, but what " +
+        "it adds up to. Call out 1-3 recurring threads, patterns worth reusing, and open " +
+        "follow-ups. Write in your own words. Suggest wikilinks ONLY from the existing-page list " +
+        "given to you; never invent a page title that isn't on that list.",
+    },
+    {
+      role: "user",
+      content:
+        `Existing wiki page titles (only these are valid wikilinks):\n${titleList}\n\n` +
+        `Recent debriefs:\n${debriefsText}\n\n` +
+        `Recent notes:\n${notesText}`,
+    },
+  ];
+}
+
 /**
  * Shared response handling for both distill flows: parse JSON, validate
  * against `schema`, kebab-case the slug (falling back to the title), and
@@ -261,6 +338,30 @@ export async function distillNote(
     slug: draft.slug,
     tags: draft.tags,
     type: draft.type,
+    summary: draft.summary,
+    wikilinks: draft.wikilinks,
+  };
+}
+
+/**
+ * R3.4 — draft a weekly synthesis tying a period's debriefs and notes
+ * together (spec Decision 20e's local tier; styled after
+ * `docs/wiki/syntheses/wiki-knowledge-loop-batch.md`). Same JSON-forcing,
+ * parse-error, and wikilink-canonicalization contract as {@link distillPage};
+ * errors from `inference.chat` propagate unchanged.
+ */
+export async function synthesizeWeekly(
+  inference: InferenceService,
+  input: SynthesisInput,
+): Promise<SynthesisDraft> {
+  const result = await inference.chat("summarizer", buildSynthesisPrompt(input), {
+    jsonSchema: SYNTHESIS_JSON_SCHEMA,
+  });
+  const draft = parseDistillResponse(result.text, distillResultSchema, input.existingTitles);
+  return {
+    title: draft.title,
+    slug: draft.slug,
+    tags: draft.tags,
     summary: draft.summary,
     wikilinks: draft.wikilinks,
   };

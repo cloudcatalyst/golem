@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DistillDraft, NoteDraft } from "../../../src/knowledge/distill.js";
+import type { DistillDraft, NoteDraft, SynthesisDraft } from "../../../src/knowledge/distill.js";
 import {
   distillDir,
   findDraftByNoteTs,
@@ -16,6 +16,7 @@ import {
   readDraftFile,
   writeDraftFile,
   writeNoteDraftFile,
+  writeSynthesisDraftFile,
 } from "../../../src/knowledge/distill-store.js";
 
 let projectDir: string;
@@ -166,5 +167,57 @@ describe("writeNoteDraftFile / findDraftByNoteTs", () => {
     );
     // A raw URL never matches a note's `note:<ts>` marker, and vice versa.
     expect(await findDraftByNoteTs(projectDir, url)).toBeNull();
+  });
+});
+
+const synthesisDraft: SynthesisDraft = {
+  title: "Week of 2026-07-07 synthesis",
+  slug: "week-of-2026-07-07-synthesis",
+  tags: ["synthesis"],
+  summary: "This week's thread: chunking quality work paid off.",
+  wikilinks: ["Widget Factory"],
+};
+
+describe("writeSynthesisDraftFile", () => {
+  it("writes a wiki-shaped draft file with type=synthesis and the given sources", async () => {
+    const sources = ["docs/wiki/debriefs/r3-3.md", "note:2026-07-08T10:00:00.000Z"];
+    const file = await writeSynthesisDraftFile(
+      projectDir,
+      sources,
+      synthesisDraft,
+      "2026-07-11T00:00:00.000Z",
+    );
+    expect(file).toBe(path.join(distillDir(projectDir), "week-of-2026-07-07-synthesis.md"));
+
+    const raw = await readFile(file, "utf8");
+    expect(raw).toContain("type: synthesis");
+    expect(raw).toContain("docs/wiki/debriefs/r3-3.md");
+    expect(raw).toContain("note:2026-07-08T10:00:00.000Z");
+    expect(raw).toContain("chunking quality work paid off");
+    expect(raw).toContain("[[Widget Factory]]");
+
+    const read = await readDraftFile(projectDir, "week-of-2026-07-07-synthesis");
+    expect(read?.frontmatter.type).toBe("synthesis");
+    expect(read?.frontmatter.sources).toEqual(sources);
+  });
+
+  it("overwrites the same slug on a second write (idempotent by slug)", async () => {
+    await writeSynthesisDraftFile(
+      projectDir,
+      ["note:a"],
+      synthesisDraft,
+      "2026-07-11T00:00:00.000Z",
+    );
+    const updated: SynthesisDraft = { ...synthesisDraft, summary: "Updated summary." };
+    await writeSynthesisDraftFile(
+      projectDir,
+      ["note:a", "note:b"],
+      updated,
+      "2026-07-11T00:00:01.000Z",
+    );
+    const drafts = await listDraftFiles(projectDir);
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]?.body).toContain("Updated summary.");
+    expect(drafts[0]?.frontmatter.sources).toEqual(["note:a", "note:b"]);
   });
 });

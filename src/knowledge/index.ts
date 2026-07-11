@@ -32,8 +32,15 @@ export {
   MAX_CHUNK_CHARS,
   windowChunks,
 } from "./chunker.js";
-export type { DistillDraft, DistillInput, NoteDistillInput, NoteDraft } from "./distill.js";
-export { DistillParseError, distillNote, distillPage } from "./distill.js";
+export type {
+  DistillDraft,
+  DistillInput,
+  NoteDistillInput,
+  NoteDraft,
+  SynthesisDraft,
+  SynthesisInput,
+} from "./distill.js";
+export { DistillParseError, distillNote, distillPage, synthesizeWeekly } from "./distill.js";
 export type { DraftFile } from "./distill-store.js";
 export {
   distillDir,
@@ -43,6 +50,7 @@ export {
   readDraftFile,
   writeDraftFile,
   writeNoteDraftFile,
+  writeSynthesisDraftFile,
 } from "./distill-store.js";
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
