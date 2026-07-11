@@ -2,7 +2,7 @@
 title: Distillation Pipeline
 type: concept
 tags: [knowledge, distillation, notes]
-sources: [docs/plan/next_batch.md, docs/plan/R3_BATCH.md, src/cli/notes.ts, src/cli/distill-note.ts, src/knowledge/distill.ts, src/knowledge/distill-store.ts]
+sources: [docs/plan/next_batch.md, docs/plan/R3_BATCH.md, src/cli/notes.ts, src/cli/distill-note.ts, src/cli/synthesize.ts, src/knowledge/distill.ts, src/knowledge/distill-store.ts]
 created: 2026-07-10
 updated: 2026-07-12
 ---
@@ -83,6 +83,26 @@ already lists both kinds together with no changes needed.
 Entry point: `golem note distill [ts]` — distill one captured note (the most
 recent, or a specific one by its `ts`). Same "prefer an existing draft unless
 `--force`" rule as `golem wiki distill`.
+
+### Weekly synthesis (built, R3.4)
+
+`synthesizeWeekly` (same file) draws a through-line over a whole period at
+once rather than one capture at a time: it gathers the wiki's `debriefs/`
+zone pages created in the last N days plus `golem note` captures from the
+same window (`listNotesSince`, `src/cli/notes.ts`), and asks the `summarizer`
+role for 1-3 recurring threads, reusable patterns, and open follow-ups — not
+a list of what happened. Same JSON-forcing/parse-error/wikilink-
+canonicalization contract as `distillPage`/`distillNote` (it reuses
+`distillResultSchema` and `parseDistillResponse` directly, since a
+`SynthesisDraft` is structurally identical to a `DistillDraft`). The draft's
+`sources` frontmatter cites every debrief relPath and `note:<ts>` marker it
+drew on, and lands under `.golem/distill/<slug>.md` with `type: synthesis`
+(`writeSynthesisDraftFile`) — the same zone-1 draft convention as every other
+distillation output.
+
+Entry point: `golem wiki synthesize [--days N]` (default 7 days) — errors
+with a clear message rather than a crash when the window has neither
+debriefs nor notes to draw on.
 
 ## Stage 3 — promote (plan-gated, unchanged)
 
