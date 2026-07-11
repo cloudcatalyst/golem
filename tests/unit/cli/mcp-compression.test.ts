@@ -55,6 +55,7 @@ describe("mcpCompressionService", () => {
         requestTokens: { tokensBefore: 1000, tokensAfter: 250 },
         stageSavings: { localFirst: { tokensBefore: 1000, tokensAfter: 250 } },
         ccrRefsStored: 1,
+        avoidedUpstreamInputTokens: 0,
       },
       "2026-07-09T00:00:00.000Z",
     );
@@ -81,6 +82,7 @@ describe("mcpCompressionService", () => {
         requestTokens: { tokensBefore: 500, tokensAfter: 100 },
         stageSavings: {},
         ccrRefsStored: 0,
+        avoidedUpstreamInputTokens: 0,
       },
       "2026-07-09T00:00:00.000Z",
     );

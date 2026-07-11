@@ -85,3 +85,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-R2.1.md — recorded the R2.1 measurement gap + carried the "ship avoidedUpstream telemetry from day one" recommendation into R2.2
 - debriefs/2026-07-11-R2.6.md — R2.6: opt-in `force_semantic_on_caching` bypass + `aggregateUsageBySemanticForced` A/B infra built and tested; the live real-traffic A/B itself deliberately deferred (restarting the dogfooded proxy mid-session was judged too risky to do unilaterally)
 - debriefs/2026-07-11-R2.4.md — closed the §38 expand↔Headroom-CCR gap: `backfillHeadroomCcrRefs` verifies Headroom's `hash=` markers against SHA-256/MD5 of the elided content and backfills Golem's own CCR store, so `expand` recovers it with no marker-text changes
+- debriefs/2026-07-11-R2.2.md — shipped Decision 24 sub-mode 1: proxy-side webcache context substitution (new pipeline stage 4, gated like the semantic stage) + a durable `avoidedUpstream` telemetry bucket

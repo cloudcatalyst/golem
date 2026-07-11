@@ -19,6 +19,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProxyFromSettings } from "../../../src/cli/proxy-runtime.js";
 import { HeadroomSidecar } from "../../../src/compression/headroom-adapter.js";
 import { loadConfig } from "../../../src/config/index.js";
+import { WebCache, webCacheDir } from "../../../src/knowledge/web-cache.js";
+import type { ProxyRequest } from "../../../src/proxy/types.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
 import type { TelemetryStore } from "../../../src/telemetry/types.js";
 
@@ -39,6 +41,58 @@ afterEach(async () => {
   await telemetry.close();
   await rm(projectDir, { recursive: true, force: true });
   await rm(path.dirname(fakeUserDir), { recursive: true, force: true });
+});
+
+/** Poll until a predicate holds, for asserting on a fire-and-forget telemetry write. */
+async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
+  for (let i = 0; i < 50; i += 1) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("waitFor: predicate never became true");
+}
+
+function messagesRequest(messages: unknown): ProxyRequest {
+  return {
+    method: "POST",
+    url: "/v1/messages",
+    headers: { "content-type": "application/json" },
+    body: Buffer.from(JSON.stringify({ model: "claude-x", messages }), "utf8"),
+  };
+}
+
+describe("buildProxyFromSettings — R2.2 context-substitution wiring", () => {
+  it("substitutes a webcache-known page and records an avoidedUpstream telemetry event", async () => {
+    const known = "known webcache content ".repeat(40);
+    const webCache = new WebCache(webCacheDir(projectDir));
+    await webCache.put("https://example.com/known-page", known, "2026-07-11T00:00:00.000Z");
+
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: {
+        slider: { level: 2 },
+        proxy: { upstream_base_url: "https://openrouter.ai/api/v1" },
+      },
+    });
+
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+
+    const out = await build.proxy.config.pipeline.process(
+      messagesRequest([{ role: "user", content: known }]),
+    );
+    const outMessages = JSON.parse((out.body as Buffer).toString("utf8")).messages as Array<{
+      content: unknown;
+    }>;
+    expect(outMessages[0]?.content).not.toBe(known);
+
+    await waitFor(async () => {
+      const stats = await telemetry.aggregateAvoidedUpstream(projectDir);
+      return stats.events === 1;
+    });
+    const stats = await telemetry.aggregateAvoidedUpstream(projectDir);
+    expect(stats.inputTokensAvoided).toBeGreaterThan(0);
+  });
 });
 
 describe("buildProxyFromSettings — compression.headroom_sidecar wiring", () => {

@@ -11,7 +11,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 
@@ -77,4 +77,47 @@ export class WebCache {
     const entry: WebCacheEntry = { url, fetchedAt, content };
     await writeFile(this.#fileFor(url), `${JSON.stringify(entry)}\n`, "utf8");
   }
+
+  /**
+   * All entries currently in the cache (R2.2, verification-notes §62) — used
+   * to build a content-hash index for proxy-side context substitution.
+   * Best-effort: an unreadable directory yields `[]`; a corrupt/unparseable
+   * file is skipped rather than throwing (same tolerance as {@link get}).
+   */
+  async list(): Promise<WebCacheEntry[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.#dir);
+    } catch {
+      return [];
+    }
+    const entries: WebCacheEntry[] = [];
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
+      try {
+        const raw = await readFile(path.join(this.#dir, name), "utf8");
+        const parsed = entrySchema.safeParse(JSON.parse(raw));
+        if (parsed.success) entries.push(parsed.data);
+      } catch {
+        // Corrupt/unreadable — skip, best effort.
+      }
+    }
+    return entries;
+  }
+}
+
+/**
+ * sha256(content) -> url, across every entry currently in the cache. Rebuilt
+ * from scratch on every call (no incremental index) — deliberately, since the
+ * cache grows across requests and the caller (context-substitution.ts) needs
+ * a fresh view every time to stay correct; see its module doc for why that
+ * caller only ever consults this on non-caching upstreams.
+ */
+export async function contentHashIndex(cache: WebCache): Promise<Map<string, string>> {
+  const entries = await cache.list();
+  const index = new Map<string, string>();
+  for (const entry of entries) {
+    index.set(createHash("sha256").update(entry.content, "utf8").digest("hex"), entry.url);
+  }
+  return index;
 }

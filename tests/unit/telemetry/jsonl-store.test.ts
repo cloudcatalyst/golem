@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
   JsonlTelemetryStore,
+  recordAvoidedUpstream,
   recordPipelineEvent,
   recordRetrieval,
   recordUsageEvent,
@@ -122,6 +123,7 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
         requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
         stageSavings: { dedup: { tokensBefore: 500, tokensAfter: 300 } },
         ccrRefsStored: 3,
+        avoidedUpstreamInputTokens: 0,
       },
       "2026-07-04T12:00:00.000Z",
     );
@@ -159,6 +161,7 @@ describe("recordRetrieval (T1, §25)", () => {
         requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
         stageSavings: {},
         ccrRefsStored: 1,
+        avoidedUpstreamInputTokens: 0,
       },
       "2026-07-10T00:00:00.000Z",
     );
@@ -417,6 +420,75 @@ describe("recordUsageEvent + aggregateUsageBySemanticForced (R2.6, §58/§59)", 
     expect(byForced.forced.requests).toBe(0);
     expect(byForced.notForced.requests).toBe(0);
     expect(byForced.projectId).toBeNull();
+    await store.close();
+  });
+});
+
+describe("recordAvoidedUpstream + aggregateAvoidedUpstream (R2.2, §62)", () => {
+  it("rolls up input tokens avoided across avoidedUpstream events", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:00.000Z", 300);
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:01.000Z", 150);
+
+    const stats = await store.aggregateAvoidedUpstream("projA");
+    expect(stats.events).toBe(2);
+    expect(stats.inputTokensAvoided).toBe(450);
+    expect(stats.projectId).toBe("projA");
+    await store.close();
+  });
+
+  it("scopes by projectId, and the global view sees all projects", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:00.000Z", 100);
+    await recordAvoidedUpstream(store, "projB", "2026-07-11T00:00:00.000Z", 200);
+
+    expect((await store.aggregateAvoidedUpstream("projA")).inputTokensAvoided).toBe(100);
+    expect((await store.aggregateAvoidedUpstream("projB")).inputTokensAvoided).toBe(200);
+    const global = await store.aggregateAvoidedUpstream();
+    expect(global.inputTokensAvoided).toBe(300);
+    expect(global.events).toBe(2);
+    expect(global.projectId).toBeNull();
+    await store.close();
+  });
+
+  it("does not count toward aggregate()'s gross request/token headline", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordPipelineEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 2,
+        requestTokens: { tokensBefore: 1000, tokensAfter: 400 },
+        stageSavings: {},
+        ccrRefsStored: 0,
+        avoidedUpstreamInputTokens: 0,
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:01.000Z", 500);
+
+    const stats = await store.aggregate("projA");
+    expect(stats.requests).toBe(1);
+    expect(stats.tokensBefore).toBe(1000);
+    expect(stats.tokensAfter).toBe(400);
+    await store.close();
+  });
+
+  it("returns empty buckets when no telemetry file exists yet", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    const stats = await store.aggregateAvoidedUpstream();
+    expect(stats.events).toBe(0);
+    expect(stats.inputTokensAvoided).toBe(0);
+    expect(stats.projectId).toBeNull();
+    await store.close();
+  });
+
+  it("old lines without kind/avoidedUpstreamInputTokens still parse and are ignored", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev()); // predates avoidedUpstream entirely
+    const stats = await store.aggregateAvoidedUpstream();
+    expect(stats.events).toBe(0);
+    expect(stats.inputTokensAvoided).toBe(0);
     await store.close();
   });
 });
