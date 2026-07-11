@@ -405,6 +405,7 @@ backstop; add rules as needed):**
   Azure connection strings. High-entropy instances are caught by the entropy
   sweep; low-entropy or short ones may pass. Adding provider rules is a
   mechanical follow-up (append to `REDACTION_RULES` + a corpus case).
+  **Fixed 2026-07-11, R1.4 — see §56.**
 - Redaction operates on JSON string values only; a secret split across a
   concatenation the client never assembles is out of scope (so is anything the
   client sends already base64-wrapped without a provider prefix — entropy net
@@ -1504,3 +1505,46 @@ Reconfirms the handling approach already established in §49/R1.1: don't trust
 visual inspection of secret-shaped content in this repo's own session,
 verify via test execution or structure-preserving-but-content-hiding checks
 instead.
+
+## §56 — R1.4: provider-key redaction rule gaps closed (2026-07-11)
+
+Closes the residual gap noted in §24 (repeated at §31's neighborhood): four
+provider secret shapes had no dedicated rule and relied solely on the
+entropy-sweep backstop, which can miss short or low-entropy instances.
+
+**Fix** (`src/pipeline/redaction-rules.ts`), four new `REDACTION_RULES`
+entries:
+
+- `google-api-key` — `AIza` prefix + 35 base64url-ish chars (39 chars total,
+  the fixed real-world shape), placed after `slack-token`.
+- `stripe-key` — `sk_live_` prefix (underscore, not the `sk-` hyphen shape
+  the pre-existing `openai-key` rule matches) + 24-99 alphanumeric chars,
+  placed after `google-api-key`.
+- `gcp-oauth-token` — `ya29.` prefix + 20-120 base64url chars; the shortest
+  real tokens sit near the entropy net's 32-char floor once the 5-char
+  prefix is counted, so relying on the backstop alone risked misses, placed
+  after `stripe-key`.
+- `azure-account-key` — contextual rule matching `AccountKey=<base64,
+  20-100 chars, optional `=`/`==` padding>` up to the next `;` or end of
+  string, `group: 1` so only the key value is redacted and
+  `AccountName=`/`EndpointSuffix=` stay legible — mirrors the existing
+  `connection-password` rule's pattern of preserving surrounding legible
+  context. Placed after `connection-password` and before `credit-card`.
+
+**Corpus additions** (`tests/unit/pipeline/redaction.test.ts`, `CASES`
+array): one positive/negative pair per new rule, inserted between the
+`slack-token` and `jwt` entries. Fixtures use deterministic
+`.repeat()/.slice()` construction (matching the file's existing style, e.g.
+the pre-existing `sk-${"A1b2".repeat(9)}` fixture) rather than hand-typed
+literals, so correctness doesn't depend on visually counting
+secret-shaped characters under the escape hatch described in §55. Full gate
+green: `tsc --noEmit`, lint, format:check clean (one `biome format --write`
+pass needed to reflow the `azure-account-key` negative fixture's long
+line); `npm test` — 730 tests (722 + 8 new), including every pre-existing
+negative case (repo paths, integrity hashes, ASCII byte dumps, git SHAs,
+UUIDs) with no new false positives.
+
+**Scope note:** this closes §24's specific list (Google, Stripe, GCP, Azure).
+Other providers' key shapes remain on the entropy-sweep backstop only,
+consistent with §24/§31's "add rules as needed" stance — not a claim of
+exhaustive provider coverage.

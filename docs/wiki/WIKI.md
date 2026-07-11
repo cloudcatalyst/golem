@@ -77,3 +77,4 @@ updated: YYYY-MM-DD
 - syntheses/r1.2-positioning-universal-preprocessor.md — R1.2 positioning call (Decision 32): Golem commits to Decision 22's universal pre-LLM processor; R5.1/WS-F14 unblocked but not yet scheduled
 - debriefs/2026-07-11-R1.2.md — recorded Decision 32 + revised README.md/CLAUDE.md copy to lead with redaction/local tools/routing/observability
 - debriefs/2026-07-11-R1.3.md — fixed the §50 credit-card redaction false-positive (separator-format guard) + new T-C3 corpus cases
+- debriefs/2026-07-11-R1.4.md — closed the §24 provider-key redaction gaps (Google/Stripe/GCP/Azure) with four new dedicated rules
