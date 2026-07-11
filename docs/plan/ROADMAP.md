@@ -64,7 +64,10 @@ the §31 artifact. **Active batch: `R2_BATCH.md`.**
 | R2.1 | ~~Decision 24 spike: measure real `avoidedUpstream` token volume~~ — **DONE** 2026-07-11 (verification-notes §59): no telemetry exists yet for KB-answer substitution itself (`search`/`fetch`/`ingest`/`wiki_read` uninstrumented); the one real proxy signal (CCR retrieval rate, 0 misses/1051 stores) is encouraging but indirect. R2.2 to ship its own bucket. | 🔬 | Dec 24 |
 | R2.4 | ~~Fix the `expand`↔Headroom-CCR gap~~ — **DONE** 2026-07-11 (verification-notes §61): confirmed Headroom's `hash=` markers are reproducible SHA-256/MD5-prefix digests of the elided content; `backfillHeadroomCcrRefs` backfills Golem's own CCR store under that hash so `expand` recovers it, no marker-text changes. | 🛠️ | §38, §61 |
 | R2.2 | ~~Build context-substitution (conservative sub-mode) behind the compression seam + `avoidedUpstream` telemetry bucket~~ — **DONE** 2026-07-11 (verification-notes §62): shipped as pipeline Stage 4, gated by the existing `semanticCompression !== "off"` slot (Decision 24's "old ≥3" translates to new levels 2-3) + the Decision-31 non-caching-upstream gate; webcache-only v1 scope; new `avoidedUpstream` telemetry bucket (`recordAvoidedUpstream`/`aggregateAvoidedUpstream`). | 🛠️ | §62, Dec 24 |
-| R2.3 | Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder). Note: Decision 31 removed the old `localResponse` seam, so this re-introduces a proxy-response path from scratch (its own contract). | 🛠️🔒 | Dec 24 |
+| R2.3 | ~~Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder)~~ — **DONE** 2026-07-11 (Decision 33, PROPOSED): new frozen `LocalAnswerService` contract + `ProxyRequest.respondDirectly` seam, single-turn/extractive/confidence-gated, decoupled from the slider, opt-in and off by default. Contract/unit/integration tests all green (86 files, 809 tests). Pending human review of a real served answer before flipping to ACCEPTED. | 🛠️🔒 | Dec 24 |
+
+**R2 batch complete** 2026-07-11 (R2.5, R2.6⚠️partial, R2.1, R2.4, R2.2, R2.3
+all landed) — see `R2_BATCH.md`. **Active batch: `R3_BATCH.md`.**
 
 ### R3 — Knowledge depth
 Make the KB/wiki genuinely strong now that the retrieval spine exists.
