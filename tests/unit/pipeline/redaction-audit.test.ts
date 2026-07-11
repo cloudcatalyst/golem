@@ -155,6 +155,36 @@ describe("T-C3: path-like false-positive guard (§49)", () => {
   });
 });
 
+describe("T-C3: credit-card separator-format guard (§50)", () => {
+  it("does not redact a space-separated ASCII byte dump that is Luhn-valid by chance", () => {
+    // Decimal byte values (0-255) joined by a single space, as a raw byte/debug
+    // dump would appear in a log. Group widths are irregular (1-3 digits per
+    // value) — unlike a real card's regular grouping — but the concatenated
+    // digit run happens to pass the bare Luhn checksum (verified independently
+    // via computation, not visual inspection, per verification-notes §50). This
+    // is the exact false positive the separator-format check exists to reject.
+    const bytes = [87, 9, 167, 32, 121, 216, 75, 77];
+    const dump = bytes.join(" ");
+    const out = redact(dump);
+    expect(out).toBe(dump);
+    expect(out).not.toContain("[REDACTED:credit-card");
+  });
+
+  it("still redacts a contiguous Luhn-valid card number (no separators)", () => {
+    const card = "4111111111111111"; // well-known Luhn-valid test card number
+    const out = redact(`card: ${card}`);
+    expect(out).not.toContain(card);
+    expect(out).toContain("[REDACTED:credit-card");
+  });
+
+  it("still redacts a uniformly space-grouped Luhn-valid card number", () => {
+    const card = "5500 0055 5555 5559"; // well-known Luhn-valid test card, grouped 4-4-4-4
+    const out = redact(`card: ${card}`);
+    expect(out).not.toContain("5500005555555559");
+    expect(out).toContain("[REDACTED:credit-card");
+  });
+});
+
 describe("T-C3: depth and idempotence", () => {
   it("redacts a secret nested deep in the request body", () => {
     const body = {

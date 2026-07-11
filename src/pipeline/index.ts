@@ -13,6 +13,7 @@ export { redactRequestBody, redactStandaloneText } from "./redaction.js";
 export type { RedactionRule } from "./redaction-rules.js";
 export {
   ENTROPY_THRESHOLD_BITS,
+  isCreditCardLike,
   isHighEntropyToken,
   luhnValid,
   REDACTION_RULES,

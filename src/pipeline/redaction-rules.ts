@@ -58,6 +58,43 @@ export function luhnValid(target: string): boolean {
 }
 
 /**
+ * Whether `target`'s separators (if any) are a single consistent character —
+ * all spaces or all dashes, never mixed. Real cards are written with one
+ * grouping style; a mix is a sign the digits were never meant to be read as
+ * one number (verification-notes §50).
+ */
+function hasConsistentSeparatorChar(target: string): boolean {
+  const seps = target.match(/[ -]/g);
+  return seps === null || seps.every((s) => s === seps[0]);
+}
+
+/**
+ * Whether every digit group between separators in `target` is the same
+ * length. A contiguous run (no separators at all) trivially passes — there
+ * is nothing to compare. Real card grouping is regular (e.g. 4-4-4-4); an
+ * ASCII/byte dump of space-separated decimal values groups irregularly (1-3
+ * digits per value, verification-notes §50's actual false-positive), so
+ * requiring uniform group length rejects it without needing to hardcode
+ * every real card-network grouping scheme.
+ */
+function hasUniformGrouping(target: string): boolean {
+  const groups = target.split(/[ -]/);
+  const firstLength = groups[0]?.length ?? 0;
+  return groups.every((g) => g.length === firstLength);
+}
+
+/**
+ * Combined credit-card validator: Luhn-valid AND, if separators are present,
+ * formatted like a real card (one consistent separator, uniform grouping).
+ * Tightens the bare Luhn gate, which let sparse/irregularly-separated digit
+ * runs (e.g. space-separated ASCII byte dumps) through by chance
+ * (verification-notes §50).
+ */
+export function isCreditCardLike(target: string): boolean {
+  return luhnValid(target) && hasConsistentSeparatorChar(target) && hasUniformGrouping(target);
+}
+
+/**
  * The rule table. Order is load-bearing and part of the audit surface:
  * multi-line PEM blocks first (their base64 body would otherwise be shredded
  * by narrower rules), provider-specific key shapes next (most specific
@@ -136,9 +173,12 @@ export const REDACTION_RULES: readonly RedactionRule[] = [
     id: "credit-card",
     description:
       "Credit-card-like numbers: 13-19 digits with optional space/dash " +
-      "separators, gated by a Luhn checksum to reject IDs and phone numbers.",
+      "separators, gated by a Luhn checksum (rejects IDs and phone numbers) " +
+      "plus a separator-format check (single consistent character, uniform " +
+      "grouping — rejects sparse/irregular digit runs like ASCII byte dumps " +
+      "that pass Luhn by chance, verification-notes §50).",
     pattern: /(?<![\d.-])\d(?:[ -]?\d){12,18}(?![\d.-])/g,
-    validate: luhnValid,
+    validate: isCreditCardLike,
   },
   {
     id: "email",
