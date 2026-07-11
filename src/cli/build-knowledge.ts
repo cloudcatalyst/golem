@@ -80,6 +80,7 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
     projectDir: options.projectDir,
     // Choose ONE embedder for the whole index (mixing spaces would corrupt it).
     ...(semantic ? { inference } : { embed: hashingEmbedFn() }),
+    syntaxAwareChunking: settings.knowledge.syntax_aware_chunking,
   });
 
   return { knowledge, inference, facts, embedMode };

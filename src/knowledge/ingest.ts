@@ -11,6 +11,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkFile, isChunkableExtension, type RawChunk } from "./chunker.js";
 import { extractHtmlText, extractPdfText } from "./extractors.js";
+import { chunkCodeSyntaxAware } from "./tree-sitter-chunker.js";
 
 /** A chunk ready to embed + store: raw chunk + source path (repo-relative). */
 export interface PreparedChunk extends RawChunk {
@@ -22,6 +23,12 @@ export interface IngestPlan {
   readonly chunks: readonly PreparedChunk[];
   readonly filesSeen: number;
   readonly filesSkipped: number;
+}
+
+/** Shared ingest tuning knobs — every field optional, all default off/unset. */
+export interface IngestOptions {
+  /** R3.3: try `web-tree-sitter` syntax-aware chunking for TS/JS before the heuristic. */
+  readonly syntaxAwareChunking?: boolean;
 }
 
 /** Directories never walked (vendored, build output, VCS, Golem state). */
@@ -62,6 +69,24 @@ async function readChunkableContent(file: string): Promise<string> {
   if (ext === ".pdf") return extractPdfText(await readFile(file));
   const raw = await readFile(file, "utf8");
   return ext === ".html" ? extractHtmlText(raw) : raw;
+}
+
+/**
+ * Chunk one file's content: try syntax-aware chunking first when enabled and
+ * applicable, falling back to the heuristic `chunkFile` otherwise (package
+ * not installed, unsupported extension, or a parse failure).
+ */
+async function chunkFileContent(
+  file: string,
+  content: string,
+  options: IngestOptions,
+): Promise<RawChunk[]> {
+  if (options.syntaxAwareChunking === true) {
+    const ext = path.extname(file).toLowerCase();
+    const syntaxAware = await chunkCodeSyntaxAware(ext, content);
+    if (syntaxAware !== null) return syntaxAware;
+  }
+  return chunkFile(file, content);
 }
 
 /** Recursively collect chunkable file paths under `root` (a dir or a file). */
@@ -112,7 +137,7 @@ async function collectFiles(root: string): Promise<{ seen: string[]; skipped: nu
  * Traverse `root`, chunk every chunkable file, and return prepared chunks with
  * repo-relative source paths. Does not embed or store.
  */
-export async function planIngest(root: string): Promise<IngestPlan> {
+export async function planIngest(root: string, options: IngestOptions = {}): Promise<IngestPlan> {
   const absRoot = path.resolve(root);
   const { seen, skipped } = await collectFiles(absRoot);
   const rootIsFile = (await stat(absRoot)).isFile();
@@ -129,7 +154,7 @@ export async function planIngest(root: string): Promise<IngestPlan> {
       continue;
     }
     const sourcePath = toPosix(path.relative(baseDir, file));
-    for (const raw of chunkFile(file, content)) {
+    for (const raw of await chunkFileContent(file, content, options)) {
       chunks.push({ ...raw, sourcePath });
     }
   }
@@ -190,6 +215,7 @@ export async function scanFiles(root: string): Promise<FileState[]> {
 export async function chunkFilesRelativeTo(
   files: readonly string[],
   baseDir: string,
+  options: IngestOptions = {},
 ): Promise<PreparedChunk[]> {
   const chunks: PreparedChunk[] = [];
   for (const file of files) {
@@ -200,7 +226,9 @@ export async function chunkFilesRelativeTo(
       continue;
     }
     const sourcePath = toPosix(path.relative(baseDir, file));
-    for (const raw of chunkFile(file, content)) chunks.push({ ...raw, sourcePath });
+    for (const raw of await chunkFileContent(file, content, options)) {
+      chunks.push({ ...raw, sourcePath });
+    }
   }
   return chunks;
 }

@@ -64,7 +64,7 @@ function trimTrailingBlank(lines: string[]): string[] {
 }
 
 /** Fixed line windows with overlap; used for plain text and oversized code. */
-function windowChunks(
+export function windowChunks(
   lines: readonly string[],
   baseLine: number,
   kind: "text" | "code",
