@@ -10,6 +10,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { chunkFile, isChunkableExtension, type RawChunk } from "./chunker.js";
+import { extractHtmlText, extractPdfText } from "./extractors.js";
 
 /** A chunk ready to embed + store: raw chunk + source path (repo-relative). */
 export interface PreparedChunk extends RawChunk {
@@ -47,6 +48,20 @@ export const MAX_FILE_BYTES = 1_000_000;
 
 export function toPosix(p: string): string {
   return p.split(path.sep).join("/");
+}
+
+/**
+ * Read a file's content as chunkable plain text: `.pdf` gets its text layer
+ * extracted (binary read), `.html` gets tags/scripts/styles stripped (utf8
+ * read); every other chunkable extension is read as-is. `chunkFile` still
+ * dispatches on the original extension, so extracted `.pdf`/`.html` content
+ * falls through to `chunkText` exactly like today's plain-text files.
+ */
+async function readChunkableContent(file: string): Promise<string> {
+  const ext = path.extname(file).toLowerCase();
+  if (ext === ".pdf") return extractPdfText(await readFile(file));
+  const raw = await readFile(file, "utf8");
+  return ext === ".html" ? extractHtmlText(raw) : raw;
 }
 
 /** Recursively collect chunkable file paths under `root` (a dir or a file). */
@@ -108,7 +123,7 @@ export async function planIngest(root: string): Promise<IngestPlan> {
   for (const file of seen) {
     let content: string;
     try {
-      content = await readFile(file, "utf8");
+      content = await readChunkableContent(file);
     } catch {
       filesSkipped += 1;
       continue;
@@ -180,7 +195,7 @@ export async function chunkFilesRelativeTo(
   for (const file of files) {
     let content: string;
     try {
-      content = await readFile(file, "utf8");
+      content = await readChunkableContent(file);
     } catch {
       continue;
     }

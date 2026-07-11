@@ -44,6 +44,7 @@ export {
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
 export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
+export { extractHtmlText, extractPdfText } from "./extractors.js";
 export { collectionDir, FileVectorDriver } from "./file-driver.js";
 export type { FileChangeBatch, FileWatcher, FileWatcherOptions } from "./file-watcher.js";
 export { watchPath } from "./file-watcher.js";

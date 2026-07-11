@@ -37,6 +37,7 @@
     "commander": "^14.0.0",
     "env-paths": "^3.0.0",
     "undici": "^7.28.0",
+    "unpdf": "^1.6.2",
     "zod": "^3.25.0"
   },
   "devDependencies": {
