@@ -24,7 +24,8 @@ writing code or reaching outside the project."*
    (T-C3); proxy byte-fidelity at level ≤1; cross-platform (node:path,
    argument-array spawning, no /tmp, no POSIX signals).
 2. Restore savings if a prior session left the slider at 0:
-   `golem slider 4` (drafts on) or `5` (local-first). **But note the redaction
+   `golem slider 1` (redaction + byte-faithful, recommended for R1 coding) or
+   `3` (aggressive: local drafts + local-first via opt-in). **But note the redaction
    caveat below for R1.3/R1.4.**
 3. **Wiki-first ladder (from CLAUDE.local.md):** for any "how does X work",
    check `docs/wiki/WIKI.md` + `wiki_read` first, then `search`, then external.
@@ -49,9 +50,9 @@ writing code or reaching outside the project."*
    previously-fetched URL is served from cache automatically.
 4. `delegate` a first draft of the change (code sketch, prose, corpus strings)
    to the local model, then review and finalize it yourself — never ship the
-   draft verbatim. **At slider ≤3 (you'll be at level 1) `delegate` is the only
+   draft verbatim. **At slider ≤2 (you'll be at level 1) `delegate` is the only
    path that engages the local model, so call it explicitly** — the proxy does
-   not auto-draft below level 4.
+   not auto-draft below level 3 (aggressive).
 5. Learned something durable? Propose a wiki page/update (plan-gated) in the
    debrief step rather than letting it evaporate.
 
@@ -85,7 +86,7 @@ number may ship until the NET-of-cache effect is measured live.**
 
 **Deliverable (measurement, not a feature):** a dated `verification-notes.md`
 entry + a `syntheses/` wiki page reporting real billed token accounting from
-live traffic, with and without the Headroom sidecar (slider ≤2 vs ≥3), across
+live traffic, with and without the Headroom sidecar (slider ≤1 vs ≥2), across
 enough requests to be credible. The honest metric is the upstream response's
 `usage` block: `input_tokens`, `cache_creation_input_tokens`,
 `cache_read_input_tokens`, `output_tokens` — compare **total billed cost**, not

@@ -125,7 +125,7 @@ export function readEnvLayer(env: Readonly<Record<string, string | undefined>>):
   return { overrides, warnings };
 }
 
-/** Strip Optional/Default wrappers to find the base type for coercion. */
+/** Strip Optional/Default/Effects wrappers to find the base type for coercion. */
 function baseType(schema: z.ZodTypeAny): z.ZodTypeAny {
   let current = schema;
   for (;;) {
@@ -133,6 +133,10 @@ function baseType(schema: z.ZodTypeAny): z.ZodTypeAny {
       current = current.unwrap() as z.ZodTypeAny;
     } else if (current instanceof z.ZodDefault) {
       current = current.removeDefault() as z.ZodTypeAny;
+    } else if (current instanceof z.ZodEffects) {
+      // e.g. `z.number()...transform(migrateSliderLevel)` — coerce toward the
+      // inner type; the outer transform still runs during safeParse.
+      current = current.innerType() as z.ZodTypeAny;
     } else {
       return current;
     }

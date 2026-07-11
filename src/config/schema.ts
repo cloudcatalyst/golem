@@ -8,9 +8,9 @@
  * one leaf schema + one default + one interface field.
  *
  * Key set (spec-derived where the spec speaks; noted otherwise):
- * - `slider.level` (0–5) — spec §4 / interfaces/policy.ts.
- * - `slider.local_only_opt_in` — per-project opt-in for level-5 local-only
- *   answers (spec §9 decision 7, `SliderPolicy.localOnlyOptIn`).
+ * - `slider.level` (0–3, Decision 30) — spec §4 / interfaces/policy.ts.
+ * - `slider.local_only_opt_in` — per-project opt-in for level-3 (aggressive)
+ *   local-only answers (spec §9 decision 7, `SliderPolicy.localOnlyOptIn`).
  * - `proxy.*` — port, upstream base URL, timeouts. The spec is silent on the
  *   concrete values; defaults chosen here (see DEFAULT_SETTINGS) and recorded
  *   in docs/verification-notes.md §17.
@@ -26,7 +26,7 @@
  */
 
 import { z } from "zod";
-import type { SliderLevel } from "../interfaces/policy.js";
+import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
@@ -37,9 +37,14 @@ const timeoutMsSchema = z.number().int().positive();
  */
 export const SETTINGS_LEAVES = {
   slider: {
-    /** Global quality/savings level 0–5 (interfaces/policy.ts). */
-    level: z.number().int().min(0).max(5),
-    /** Per-project opt-in for level-5 local-only answers. */
+    /**
+     * Global quality/savings level 0–3 (interfaces/policy.ts, Decision 30):
+     * off / lossless / balanced / aggressive. Legacy 0–5 values on disk are
+     * accepted and remapped onto 0–3 via {@link migrateSliderLevel} so old
+     * settings files keep loading (5→3, 4→3, 2→1, …).
+     */
+    level: z.number().int().min(0).max(5).transform(migrateSliderLevel),
+    /** Per-project opt-in for level-3 (aggressive) local-only answers. */
     local_only_opt_in: z.boolean(),
   },
   proxy: {
@@ -58,8 +63,9 @@ export const SETTINGS_LEAVES = {
   },
   compression: {
     /**
-     * OPT-IN: run the Headroom semantic-compression sidecar at slider ≥3
-     * (spec Decision 23). Requires `uv` + `headroom-ai` on the machine; off by
+     * OPT-IN: run the Headroom semantic-compression sidecar at slider ≥2
+     * (balanced/aggressive; spec Decision 23). Requires `uv` + `headroom-ai` on
+     * the machine; off by
      * default because it adds a Python dependency (CLAUDE.md: no heavy deps by
      * default). Fails open if the sidecar can't start.
      */

@@ -171,7 +171,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
-      // Stage 4 — local-first responder (Decision 25 Mode B: level 5, opt-in).
+      // Stage 4 — local-first responder (Decision 25 Mode B: level 3, opt-in).
       // Tries to answer entirely from local inference; on success returns
       // directly and Claude is never called. Escalates (falls through to
       // Stage 5's injection, reusing the same rejected draft) on any error,
@@ -201,7 +201,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       }
 
       // Stage 5 — draft injection (Decision 25 Mode A: level >= 4). When
-      // Stage 4 already ran (level 5), reuse its outcome rather than calling
+      // Stage 4 already ran (level 3), reuse its outcome rather than calling
       // the drafter a second time; otherwise run a fresh draft.
       if (stages.localDrafts && options.inference !== undefined && Array.isArray(body.messages)) {
         const draftText = stages.localOnlyAnswers

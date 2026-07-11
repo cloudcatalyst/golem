@@ -1296,6 +1296,34 @@ behind the same interface, only if this repo's own Linux CI run (or
 dogfooding) shows native watching is unreliable in practice — not
 pre-emptively.
 
+## §52 — Slider simplified 6→4 levels + level-0 full bypass + local+upstream status (2026-07-11)
+
+Implemented spec **Decision 30** (USER decision). The 0–5 slider collapses to
+**0–3**: `0 passthrough`, `1 lossless`, `2 balanced`, `3 aggressive`. Evidence for
+the merges: old 1≡2 in the live path (`toolResultCache` was specced but never
+consumed by `NativeLosslessCompression` — grep confirmed it appears only in
+`policy.ts`, `mcp/stub-compression.ts`, and the contract test), and old 4/5
+differed only by `localOnlyAnswers`, already gated by `local_only_opt_in`.
+
+- **Level 0 now runs nothing, redaction included** — the one sanctioned exception
+  to the redaction hard rule (CLAUDE.md amended). Never default; warned loudly at
+  `golem slider 0`, `status`, `statusline`, and the `level`/`slider`/`bypass` MCP
+  surfaces.
+- **Migration is clamp-based and idempotent** (`migrateSliderLevel`): it runs on
+  every read (config transform + slider store), so a lossless old→new remap is
+  impossible (shared integers, different meanings). 0–3 pass through; legacy 4/5
+  clamp to 3. Real configs migrate right (default 1→1; this repo's 5→3). Env
+  coercion needed a fix — `config/env.ts` `baseType()` now peels `ZodEffects` so a
+  `z.number().transform(...)` leaf still coerces string env values before the
+  transform runs.
+- **Local+upstream status:** a bounded, never-throwing `/api/tags` probe
+  (`src/cli/local-model.ts`, cached ≤60 s for the per-turn status line) drives a
+  "local + upstream" indicator at ANY level in `golem status`, `statusline`, and
+  the VS Code status bar. Below level 3 it means local is *available*, not serving
+  every request.
+- Frozen `src/interfaces/policy.ts` changed (contract tests updated first, flagged
+  per the hard rule). Full gate green: `tsc`, lint, 77 files / 730 tests.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

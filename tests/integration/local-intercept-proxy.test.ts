@@ -1,9 +1,9 @@
 /**
  * Decision 25 (spec v1.8) recorded-shape integration coverage: the
  * local-drafter intercept running end-to-end through the real GolemProxy —
- * Mode A "draft" injection (level 4), Mode B "local_first" serving/escalation
- * (level 5, opt-in), and confirmation that levels <= 3 are entirely untouched
- * (no InferenceService call at all).
+ * Mode A "draft" injection (level 3, no opt-in), Mode B "local_first"
+ * serving/escalation (level 3, opt-in), and confirmation that levels <= 2 are
+ * entirely untouched (no InferenceService call at all).
  */
 
 import { mkdtemp, rm } from "node:fs/promises";
@@ -75,13 +75,13 @@ const REQUEST_BODY = JSON.stringify({
 });
 
 describe("local-drafter intercept through the proxy", () => {
-  it("level <= 3: never calls the InferenceService (drafts/local-first are level-gated off)", async () => {
+  it("level <= 2: never calls the InferenceService (drafts/local-first are level-gated off)", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () => draft("unused"));
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(3),
+      policy: () => sliderPolicyForLevel(2),
       projectId: projectDir,
       inference,
     });
@@ -101,7 +101,7 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 4 (Mode A draft): forwards to upstream with a labeled local draft appended to system", async () => {
+  it("level 3 without opt-in (Mode A draft): forwards to upstream with a labeled local draft appended to system", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () =>
@@ -109,7 +109,7 @@ describe("local-drafter intercept through the proxy", () => {
     );
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(4),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: false }),
       projectId: projectDir,
       inference,
     });
@@ -134,7 +134,7 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 5 without opt-in: behaves like level 4 (draft only, upstream still called, one inference call)", async () => {
+  it("level 3 without opt-in: draft only (Mode B gated off by opt-in, upstream still called, one inference call)", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () =>
@@ -142,7 +142,7 @@ describe("local-drafter intercept through the proxy", () => {
     );
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: false }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: false }),
       projectId: projectDir,
       inference,
     });
@@ -164,7 +164,7 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 5 + opt-in (Mode B local-first): serves a synthetic response directly, never calls upstream", async () => {
+  it("level 3 + opt-in (Mode B local-first): serves a synthetic response directly, never calls upstream", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () =>
@@ -172,7 +172,7 @@ describe("local-drafter intercept through the proxy", () => {
     );
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: true }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: true }),
       projectId: projectDir,
       inference,
     });
@@ -200,13 +200,13 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 5 + opt-in, streaming request: serves a valid SSE stream directly", async () => {
+  it("level 3 + opt-in, streaming request: serves a valid SSE stream directly", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () => draft("a straightforward answer"));
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: true }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: true }),
       projectId: projectDir,
       inference,
     });
@@ -232,7 +232,7 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 5 + opt-in, refusal-shaped draft: escalates to upstream with the rejected draft injected (single inference call)", async () => {
+  it("level 3 + opt-in, refusal-shaped draft: escalates to upstream with the rejected draft injected (single inference call)", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () =>
@@ -240,7 +240,7 @@ describe("local-drafter intercept through the proxy", () => {
     );
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: true }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: true }),
       projectId: projectDir,
       inference,
     });
@@ -263,7 +263,7 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("level 5 + opt-in, inference endpoint down: escalates to upstream with no draft injected, forwards untouched", async () => {
+  it("level 3 + opt-in, inference endpoint down: escalates to upstream with no draft injected, forwards untouched", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const inference = new FakeInferenceService(async () => {
@@ -271,7 +271,7 @@ describe("local-drafter intercept through the proxy", () => {
     });
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: true }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: true }),
       projectId: projectDir,
       inference,
     });
@@ -292,12 +292,12 @@ describe("local-drafter intercept through the proxy", () => {
     }
   });
 
-  it("without an InferenceService configured, level 5 + opt-in is a no-op (fail-open, forwards untouched)", async () => {
+  it("without an InferenceService configured, level 3 + opt-in is a no-op (fail-open, forwards untouched)", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
     const pipeline = createGolemPipeline({
       compression: NativeLosslessCompression.forProjectDir(projectDir),
-      policy: () => sliderPolicyForLevel(5, { localOnlyOptIn: true }),
+      policy: () => sliderPolicyForLevel(3, { localOnlyOptIn: true }),
       projectId: projectDir,
       // no `inference` option supplied
     });

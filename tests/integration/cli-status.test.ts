@@ -63,8 +63,8 @@ describe("collectStatus", () => {
     expect(report.slider.layer).toBe("default");
     expect(report.config["slider.level"]).toEqual({ value: 1, layer: "default" });
     expect(report.config["proxy.port"]).toEqual({ value: 4653, layer: "default" });
-    // Below slider level 5 + opt-in, local-first isn't intended — and collectStatus
-    // must not probe Ollama at all in that case (no real OS/HTTP calls here).
+    // Below slider level 3 + opt-in, local-first isn't intended — and collectStatus
+    // must not probe Ollama for readiness in that case (no real OS/HTTP calls here).
     expect(report.local_first).toEqual({ intended: false, ready: false });
   });
 
@@ -105,7 +105,7 @@ describe("collectStatus", () => {
     });
   });
 
-  it("reports local-first as intended once slider 5 + local_only_opt_in are set, and reflects Ollama readiness", async () => {
+  it("reports local-first as intended once slider 3 + local_only_opt_in are set, and reflects Ollama readiness", async () => {
     const native = new OllamaNativeClient();
     vi.spyOn(native, "isReachable").mockResolvedValue(true);
     vi.spyOn(native, "hasModel").mockResolvedValue(true);
@@ -119,7 +119,7 @@ describe("collectStatus", () => {
       version: VERSION,
       userDir,
       probeTimeoutMs: 200,
-      env: { GOLEM_SLIDER_LEVEL: "5", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
+      env: { GOLEM_SLIDER_LEVEL: "3", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
       ollamaDeps,
     });
 
@@ -144,7 +144,7 @@ describe("collectStatus", () => {
       version: VERSION,
       userDir,
       probeTimeoutMs: 200,
-      env: { GOLEM_SLIDER_LEVEL: "5", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
+      env: { GOLEM_SLIDER_LEVEL: "3", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
       ollamaDeps,
     });
 
@@ -201,6 +201,7 @@ describe("renderStatus", () => {
       "proxy.port": { value: 4653, layer: "default" },
     },
     local_first: { intended: false, ready: false },
+    local_model: { reachable: true },
     warnings: [],
   };
 
@@ -215,12 +216,13 @@ describe("renderStatus", () => {
       golem_settings: false,
     },
     proxy: { port: 4653, url: "http://localhost:4653", reachable: false },
-    slider: { level: 4, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+    slider: { level: 3, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
     config: {
-      "slider.level": { value: 4, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+      "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
     local_first: { intended: false, ready: false },
+    local_model: { reachable: false },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
   };
 
@@ -263,8 +265,8 @@ describe("renderStatus", () => {
     expect(output).toContain(
       "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
     );
-    expect(output).toContain("Slider: level 4 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
-    expect(output).toContain("slider.level = 4 — env (GOLEM_SLIDER_LEVEL)");
+    expect(output).toContain("Slider: level 3 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
+    expect(output).toContain("slider.level = 3 — env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("Warnings:");
     expect(output).toContain(
       "  - config file .golem/settings.json is malformed JSON; using defaults",
@@ -276,7 +278,7 @@ describe("renderStatus", () => {
     const output = renderStatus(localFirstReport);
 
     expect(output).toContain(
-      "Local-first: intended (slider 5 + local_only_opt_in) — not ready (run `golem ollama setup` for qwen2.5-coder:7b)",
+      "Local-first: intended (slider 3 + local_only_opt_in) — not ready (run `golem ollama setup` for qwen2.5-coder:7b)",
     );
   });
 
@@ -287,7 +289,7 @@ describe("renderStatus", () => {
     });
 
     expect(output).toContain(
-      "Local-first: intended (slider 5 + local_only_opt_in) — ready (qwen2.5-coder:7b)",
+      "Local-first: intended (slider 3 + local_only_opt_in) — ready (qwen2.5-coder:7b)",
     );
   });
 

@@ -63,6 +63,7 @@ function buildModel(stats, status) {
     proxyReachable: !!(st.proxy && st.proxy.reachable),
     localFirstIntended: !!(st.local_first && st.local_first.intended),
     localFirstReady: !!(st.local_first && st.local_first.ready),
+    localModelReachable: !!(st.local_model && st.local_model.reachable),
     source: typeof s.source === "string" ? s.source : "live",
   };
 }
@@ -77,13 +78,11 @@ function buildModel(stats, status) {
  * When the proxy is off, the upstream is not shown — nothing is going there, so
  * `→ foundry` would mislead (mirrors the terminal statusline's rule).
  *
- * When local-first is intended (slider 5 + `local_only_opt_in`) AND a local
- * model is actually ready to serve it, `local` is folded into the
- * destination ahead of the upstream provider (`→ local + <provider>`) — this
- * is a policy/readiness snapshot (Decision 25/26), not per-request telemetry.
- * Not-ready is omitted rather than spelled out: the bar is a glance-and-go
- * presence indicator, not a diagnostics readout. The arrow always precedes
- * the destination, whether it's one provider or local-plus-provider.
+ * When a local model is reachable, `local` is folded into the destination
+ * ahead of the upstream provider (`→ local + <provider>`) at ANY slider level —
+ * Golem is then a local+upstream hybrid (`delegate` at every level; auto-draft
+ * / local-first at level 3), Decision 30. The arrow always precedes the
+ * destination, whether it's one provider or local-plus-provider.
  *
  * (Model name is not yet displayed: no source is available to the extension —
  * it would slot in as `→ <provider> (<model>)` once one exists.)
@@ -94,8 +93,9 @@ function statusBarText(model) {
   const levelLabel = model.sliderName
     ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
     : `L${model.slider}`;
-  const localReady = model.localFirstIntended && model.localFirstReady;
-  const destination = localReady ? `local + ${model.upstreamLabel}` : model.upstreamLabel;
+  const destination = model.localModelReachable
+    ? `local + ${model.upstreamLabel}`
+    : model.upstreamLabel;
   return `${glyph} Golem · ${levelLabel} → ${destination}`;
 }
 
@@ -108,7 +108,7 @@ function esc(s) {
 
 /** Full webview HTML. `nonce` gates inline script under the CSP. */
 function renderHtml(model, nonce) {
-  const sliderButtons = [0, 1, 2, 3, 4, 5]
+  const sliderButtons = [0, 1, 2, 3]
     .map(
       (n) =>
         `<button class="lvl ${n === model.slider ? "on" : ""}" data-level="${n}">${n}</button>`,

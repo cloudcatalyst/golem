@@ -88,7 +88,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem: Balanced");
+    expect(line).toContain("⬢ Golem: Aggressive");
     expect(line).toContain("→foundry");
     expect(line).toContain("saved 34% (12.3k→8.1k)");
     expect(line).toContain("ctx 8%");
@@ -111,7 +111,7 @@ describe("renderStatusLine", () => {
 
   it("omits sections whose data is absent", () => {
     const line = renderStatusLine({}, { sliderLevel: 2, upstreamLabel: "anthropic" });
-    expect(line).toContain("⬢ Golem: Conservative");
+    expect(line).toContain("⬢ Golem: Balanced");
     expect(line).not.toContain("saved");
     expect(line).not.toContain("ctx");
     expect(line).not.toContain("5h");
@@ -234,10 +234,13 @@ describe("collectGolemState", () => {
     await mkdir(path.dirname(sessionStatePath(dir)), { recursive: true });
     await writeFile(sessionStatePath(dir), "{bad json", "utf8");
 
-    await expect(collectGolemState(dir)).resolves.toStrictEqual({
+    await expect(
+      collectGolemState(dir, { localReachable: async () => false }),
+    ).resolves.toStrictEqual({
       sliderLevel: 1,
       upstreamLabel: "anthropic",
       proxyRunning: false,
+      localModelReachable: false,
     });
   });
 });

@@ -27,7 +27,7 @@ test("buildModel from real CLI json shapes", () => {
     per_stage: { dedup: { tokens_before: 400, tokens_after: 53, tokens_saved: 347 } },
   };
   const status = {
-    slider: { level: 2, name: "conservative" },
+    slider: { level: 2, name: "balanced" },
     config: { "proxy.upstream_base_url": { value: "https://x.services.ai.azure.com" } },
     proxy: { reachable: true },
   };
@@ -51,7 +51,7 @@ test("buildModel is defensive against null/missing input", () => {
 
 test("buildModel surfaces local_first intended/ready from status --json", () => {
   const status = {
-    slider: { level: 5, name: "local-first" },
+    slider: { level: 3, name: "aggressive" },
     proxy: { reachable: true },
     local_first: { intended: true, ready: true, model: "qwen2.5-coder:7b" },
   };
@@ -70,11 +70,11 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 5,
-      sliderName: "maximum",
+      slider: 3,
+      sliderName: "aggressive",
       upstreamLabel: "anthropic",
     }),
-    "⬢ Golem · Maximum → anthropic",
+    "⬢ Golem · Aggressive → anthropic",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
@@ -88,43 +88,30 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   );
 });
 
-test("statusBarText — local segment only appears when ready, ahead of the upstream provider", () => {
-  // Not intended (below slider 5 + opt-in): no local segment at all.
+test("statusBarText — local segment appears whenever a local model is reachable, at any level", () => {
+  // No local model reachable: no local segment.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry" }),
     "⬢ Golem · L1 → foundry",
   );
-  // Intended but not ready: omitted rather than spelled out — the bar isn't a diagnostics readout.
+  // Local model reachable at ANY level (Decision 30): "local" is folded into the
+  // destination with "+", the arrow before the destination always present.
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 5,
+      slider: 1,
       upstreamLabel: "anthropic",
-      localFirstIntended: true,
-      localFirstReady: false,
+      localModelReachable: true,
     }),
-    "⬢ Golem · L5 → anthropic",
+    "⬢ Golem · L1 → local + anthropic",
   );
-  // Intended and ready: "local" is folded into the destination with "+", but the
-  // arrow before the destination is always there, same as the single-provider case.
-  assert.equal(
-    statusBarText({
-      proxyReachable: true,
-      slider: 5,
-      upstreamLabel: "anthropic",
-      localFirstIntended: true,
-      localFirstReady: true,
-    }),
-    "⬢ Golem · L5 → local + anthropic",
-  );
-  // Proxy off short-circuits before the local-first segment is ever considered.
+  // Proxy off short-circuits before the local segment is ever considered.
   assert.equal(
     statusBarText({
       proxyReachable: false,
-      slider: 5,
+      slider: 3,
       upstreamLabel: "anthropic",
-      localFirstIntended: true,
-      localFirstReady: true,
+      localModelReachable: true,
     }),
     "⬡ Golem · proxy off",
   );

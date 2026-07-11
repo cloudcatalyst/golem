@@ -17,7 +17,7 @@
 - **P1 largely shipped:** zero-setup KB with a pure-TS hashing embedder and a
   durable `FileVectorDriver`, semantic upgrade to `bge-m3` when Ollama is
   present (WS-C); capability detection + Ollama bootstrap + local-drafter
-  intercept, slider levels 0–5 (WS-D); wiki W1–W3 (WS-W); file watcher (T6).
+  intercept, slider levels 0–3 (WS-D, simplified by Decision 30); wiki W1–W3 (WS-W); file watcher (T6).
 - **The prior batch (`NEXT_BATCH.md`, tasks T1–T7) is fully landed** — telemetry
   `ccrRefsRetrieved`, wiki skills, distillation engine, `golem note`,
   graph-first search, file watcher, and the entropy/path redaction fix.
@@ -62,14 +62,14 @@ the §31 artifact.
 | R2.1 | Decision 24 spike: measure real `avoidedUpstream` token volume from proxy-side KB/web-cache answer substitution. | 🔬 | Dec 24 |
 | R2.2 | Build context-substitution (conservative sub-mode) behind the compression seam + `avoidedUpstream` telemetry bucket, if R2.1 clears. | 🛠️ | Dec 24 |
 | R2.3 | Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder), reusing the Decision 25 precedent. | 🛠️🔒 | Dec 24 |
-| R2.4 | Fix the `expand`↔Headroom-CCR gap: content Headroom elides at ≥3 is unrecoverable via `expand`. | 🛠️ | §38 |
+| R2.4 | Fix the `expand`↔Headroom-CCR gap: content Headroom elides at ≥2 is unrecoverable via `expand`. | 🛠️ | §38 |
 
 ### R3 — Knowledge depth
 Make the KB/wiki genuinely strong now that the retrieval spine exists.
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R3.1 | Rerank — cross-encoder or chat-judge rerank at slider ≥3 (needs a new optional reranker surface; frozen `InferenceService` has no `rerank`). | 🧭🛠️ | §29 |
+| R3.1 | Rerank — cross-encoder or chat-judge rerank at slider ≥2 (needs a new optional reranker surface; frozen `InferenceService` has no `rerank`). | 🧭🛠️ | §29 |
 | R3.2 | Real HTML/PDF-text extractor (`.html/.rst/.pdf` currently route through the plain text chunker). | 🛠️ | §27 |
 | R3.3 | tree-sitter (WASM) opt-in syntax-aware code chunker, behind the KB add-on. | 🛠️ | §27 |
 | R3.4 | W4 — user-scope `~/.golem/wiki/` federation + weekly synthesis reports. | 🛠️ | WS-W W4 |

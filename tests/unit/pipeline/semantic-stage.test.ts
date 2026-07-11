@@ -47,7 +47,7 @@ const SAMPLE = [
   { role: "user", content: "second turn" },
 ];
 
-describe("pipeline semantic stage (slider ≥3)", () => {
+describe("pipeline semantic stage (slider ≥2)", () => {
   it("invokes the semantic compressor at level 3 and applies its messages + savings", async () => {
     const compress = vi.fn(
       async (msgs: ReadonlyArray<Readonly<Record<string, unknown>>>, _mode: SemanticMode) => ({
@@ -63,16 +63,26 @@ describe("pipeline semantic stage (slider ≥3)", () => {
     const out = await pipe.process(messagesRequest(SAMPLE));
 
     expect(compress).toHaveBeenCalledTimes(1);
-    expect(compress.mock.calls[0]?.[1]).toBe("stale_turns"); // level-3 mode
+    expect(compress.mock.calls[0]?.[1]).toBe("aggressive"); // level-3 (aggressive) mode
     expect(bodyOf(out).messages).toHaveLength(SAMPLE.length - 1);
     expect(events[0]?.stageSavings.semantic).toStrictEqual({ tokensBefore: 500, tokensAfter: 400 });
   });
 
-  it("does NOT invoke the semantic compressor at level 2 (semanticCompression off)", async () => {
+  it("does NOT invoke the semantic compressor at level 1 (semanticCompression off)", async () => {
     const compress = vi.fn();
-    const pipe = makePipeline(2, { compress });
+    const pipe = makePipeline(1, { compress });
     await pipe.process(messagesRequest(SAMPLE));
     expect(compress).not.toHaveBeenCalled();
+  });
+
+  it("invokes the semantic compressor at level 2 (balanced) with stale_turns mode", async () => {
+    const compress = vi.fn(
+      async (_msgs: ReadonlyArray<Readonly<Record<string, unknown>>>, _mode: SemanticMode) => null,
+    );
+    const pipe = makePipeline(2, { compress });
+    await pipe.process(messagesRequest(SAMPLE));
+    expect(compress).toHaveBeenCalledTimes(1);
+    expect(compress.mock.calls[0]?.[1]).toBe("stale_turns");
   });
 
   it("fails open: a null result leaves the losslessly-compressed messages intact", async () => {

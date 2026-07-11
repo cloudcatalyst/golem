@@ -57,11 +57,11 @@ describe("loadConfig precedence", () => {
   });
 
   it("project overrides user, local overrides project", async () => {
-    await writeJson(userFile(), { slider: { level: 2 }, proxy: { port: 5000 } });
-    await writeJson(projectFile(), { slider: { level: 3 } });
-    await writeJson(localFile(), { slider: { level: 4 } });
+    await writeJson(userFile(), { slider: { level: 0 }, proxy: { port: 5000 } });
+    await writeJson(projectFile(), { slider: { level: 1 } });
+    await writeJson(localFile(), { slider: { level: 2 } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(4);
+    expect(config.settings.slider.level).toBe(2);
     expect(config.provenance["slider.level"]).toEqual({
       layer: "local",
       source: localFile(),
@@ -75,11 +75,12 @@ describe("loadConfig precedence", () => {
   });
 
   it("env overrides local; per-request overrides beat env", async () => {
-    await writeJson(localFile(), { slider: { level: 4 } });
+    await writeJson(localFile(), { slider: { level: 1 } });
+    // Legacy env value 5 is accepted and migrated onto the 0–3 scale (→ 3).
     const env = { GOLEM_SLIDER_LEVEL: "5", GOLEM_TELEMETRY_ENABLED: "false" };
 
     const envOnly = await loadConfig({ projectDir, userDir, env });
-    expect(envOnly.settings.slider.level).toBe(5);
+    expect(envOnly.settings.slider.level).toBe(3);
     expect(envOnly.settings.telemetry.enabled).toBe(false);
     expect(envOnly.provenance["slider.level"]).toEqual({
       layer: "env",
@@ -144,10 +145,11 @@ describe("loadConfig precedence", () => {
   });
 
   it("policyFromSettings maps slider settings onto the frozen contract", async () => {
+    // Legacy 5 migrates to 3 (aggressive) — local-first stages still resolve.
     await writeJson(projectFile(), { slider: { level: 5, local_only_opt_in: true } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
     const policy = policyFromSettings(config.settings);
-    expect(policy.level).toBe(5);
+    expect(policy.level).toBe(3);
     expect(policy.localOnlyOptIn).toBe(true);
     expect(policy.stages.localOnlyAnswers).toBe(true);
   });

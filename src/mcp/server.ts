@@ -46,6 +46,7 @@ import type {
   WikiStore,
 } from "../interfaces/index.js";
 import {
+  migrateSliderLevel,
   UnknownChunkError,
   UnknownRefError,
   UnknownWikiPageError,
@@ -112,10 +113,8 @@ export function createStandaloneDeps(): GolemMcpServerDeps & {
 const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   0: "passthrough",
   1: "lossless",
-  2: "conservative",
-  3: "balanced",
-  4: "aggressive",
-  5: "maximum",
+  2: "balanced",
+  3: "aggressive",
 };
 
 const sliderLevelInput = z
@@ -124,12 +123,13 @@ const sliderLevelInput = z
   .min(0)
   .max(5)
   .describe(
-    "Slider level: 0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 maximum",
+    "Slider level 0–3: 0 passthrough (no redaction — full bypass), 1 lossless, " +
+      "2 balanced, 3 aggressive. Legacy 4/5 are accepted and mapped to 3.",
   );
 
 function asSliderLevel(level: number): SliderLevel {
-  // zod has already enforced int 0..5 at the boundary; this narrows the type.
-  return level as SliderLevel;
+  // Accept a legacy 0–5 value at the boundary and remap onto the 0–3 scale.
+  return migrateSliderLevel(level);
 }
 
 function textResult(text: string): { content: [{ type: "text"; text: string }] } {
@@ -221,7 +221,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       },
       outputSchema: {
         project_id: z.string().nullable(),
-        slider_level: z.number().int().min(0).max(5),
+        slider_level: z.number().int().min(0).max(3),
         slider_level_name: z.string(),
         requests: z.number().int().nonnegative(),
         tokens_before: z.number().int().nonnegative(),
@@ -282,24 +282,30 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
     {
       title: "Set the Golem savings slider",
       description:
-        "Set Golem's global quality/savings slider (0–5). 0 = passthrough " +
-        "(redaction only), 1 = lossless compression, 2 adds tool-result caching, " +
-        "3–5 add increasingly aggressive semantic stages. The level persists " +
-        "across sessions.",
+        "Set Golem's global quality/savings slider (0–3). 0 = passthrough (FULL " +
+        "BYPASS — NO redaction; secrets reach the upstream raw), 1 = lossless (redaction " +
+        "+ byte-faithful compression), 2 = balanced (adds lossy semantic stages), " +
+        "3 = aggressive (adds local drafts + local-first answers). The level " +
+        "persists across sessions.",
       inputSchema: { level: sliderLevelInput },
       outputSchema: {
-        slider_level: z.number().int().min(0).max(5),
+        slider_level: z.number().int().min(0).max(3),
         slider_level_name: z.string(),
       },
     },
     async ({ level }) => {
       const sliderLevel = asSliderLevel(level);
       await deps.sliderStore.set(sliderLevel);
+      const warning =
+        sliderLevel === 0
+          ? " ⚠ Level 0 is a full bypass: redaction is OFF, so secrets/PII reach" +
+            " the upstream unredacted. Use level 1 to keep redaction on."
+          : "";
       return {
         content: [
           {
             type: "text",
-            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).`,
+            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}`,
           },
         ],
         structuredContent: {
@@ -1002,24 +1008,25 @@ function registerPrompts(server: McpServer): void {
     "slider",
     {
       title: "Golem slider",
-      description: "Show or set Golem's quality/savings slider (0–5)",
+      description: "Show or set Golem's quality/savings slider (0–3)",
       argsSchema: {
         level: z
           .string()
           .optional()
-          .describe("New slider level 0–5; omit to show the current level"),
+          .describe("New slider level 0–3; omit to show the current level"),
       },
     },
     ({ level }) =>
       promptMessages(
         level === undefined || level === ""
           ? "Call the stats tool and report the current Golem slider level, " +
-              "then briefly list what each level 0–5 enables " +
-              "(0 passthrough, 1 lossless, 2 conservative, 3 balanced, 4 aggressive, 5 maximum)."
+              "then briefly list what each level 0–3 enables " +
+              "(0 passthrough — full bypass, NO redaction; 1 lossless; 2 balanced; 3 aggressive)."
           : `Set the Golem savings slider to level ${level} using the level ` +
-              "tool (it accepts integers 0–5; if the requested value is not a valid " +
+              "tool (it accepts integers 0–3; if the requested value is not a valid " +
               "level, tell the user instead of guessing). Then confirm the new level " +
-              "and summarize in one sentence what changes at that level.",
+              "and summarize in one sentence what changes at that level. If the level " +
+              "is 0, warn that redaction is disabled at level 0.",
       ),
   );
 
@@ -1070,12 +1077,15 @@ function registerPrompts(server: McpServer): void {
     },
     () =>
       promptMessages(
-        "The user wants to temporarily bypass Golem's compression pipeline. " +
-          "Call level with level 0 (passthrough — redaction still runs, " +
-          "nothing else is transformed) and confirm. Remind the user to restore " +
-          "their previous level afterwards (e.g. /mcp__golem__slider 1), and " +
-          "mention that direct API callers can bypass per-request with the " +
-          "`x-golem-bypass` header instead.",
+        "The user wants to bypass Golem's compression. Explain the two options " +
+          "and pick per intent: (1) a per-request bypass that leaves the " +
+          "persistent slider alone — direct API callers add the `x-golem-bypass` " +
+          "header. (2) a persistent change — `level 1` keeps redaction on while " +
+          "compression stays byte-faithful; `level 0` turns Golem fully OFF but " +
+          "ALSO disables redaction (secrets reach the upstream raw), so only use " +
+          "0 for a deliberate full bypass. Prefer level 1 unless a true full " +
+          "bypass is intended; confirm the choice and remind the user to restore " +
+          "their previous level afterwards.",
       ),
   );
 
