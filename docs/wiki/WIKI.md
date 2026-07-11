@@ -90,3 +90,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-R3.2.md — R3 batch opens: real `.html`/`.pdf` text extraction (`src/knowledge/extractors.ts`) ahead of chunking, via the optional `unpdf` package for PDFs; `.pdf` was previously entirely unchunkable
 - debriefs/2026-07-11-R3.3.md — opt-in `web-tree-sitter` WASM syntax-aware code chunker (`knowledge.syntax_aware_chunking`, default off); grammar packages are devDependencies only, never shipped to `golem-run` consumers
 - debriefs/2026-07-12-R3.5.md — `distillNote`/`golem note distill [ts]`: shapes a captured note into a draft `question`/`artifact` wiki page, reusing the existing `.golem/distill/` draft storage and JSON-forcing distill machinery
+- debriefs/2026-07-12-R3.4.md — user-scope `~/.golem/wiki/` federated read-only into `search`/`fetch` via `FederatedWikiReader`; `golem wiki synthesize` drafts a weekly through-line over recent debriefs + notes

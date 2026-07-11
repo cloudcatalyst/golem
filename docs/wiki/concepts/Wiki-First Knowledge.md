@@ -2,9 +2,9 @@
 title: Wiki-First Knowledge
 type: concept
 tags: [knowledge-base, architecture]
-sources: [docs/plan/proposals/wiki-knowledge-pivot.md]
+sources: [docs/plan/proposals/wiki-knowledge-pivot.md, src/wiki/federated-wiki-reader.ts]
 created: 2026-07-10
-updated: 2026-07-11
+updated: 2026-07-12
 ---
 
 # Wiki-First Knowledge
@@ -65,3 +65,29 @@ Raw capture never enters the wiki directly. The path in:
    proposal, it does not skip the gate.
 
 Full detail on each stage: [[Distillation Pipeline]].
+
+## User-scope wiki tier (built, R3.4)
+
+Spec Decision 20e phases tiered user/workspace/org knowledge starting at
+**local (user) scope in P1**, alongside the project's own wiki; workspace/org
+sync is a P4+ hosted tier, not yet built. The user-scope root lives at
+`~/.golem/wiki/` (one directory per machine user, not project-relative —
+`defaultUserWikiDir()`, `src/cli/wiki.ts`), scaffolded the same way as a
+project wiki via `golem wiki init --user`.
+
+`FederatedWikiReader` (`src/wiki/federated-wiki-reader.ts`) merges the
+project `WikiReader` and the user-scope one into a single read-only surface:
+user-wiki `relPath`s are prefixed `user:` to avoid colliding with project
+paths, a title collision favors the project page, and `backlinks()` is
+computed over the merged page set so a wikilink can cross between the two
+wikis. Writes are never federated — `wiki_upsert` always targets the single
+project `WikiStore`; only `search`/`fetch` see the merged view, via a new
+`wikiSearch` field on `GolemMcpServerDeps` that defaults to the project
+`wiki` when federation is off. Because the graph-first search machinery
+(`graphFirstWikiHits`, `pageToHit`, `isUnderWikiDir`) only depends on the
+generic `WikiReader` interface and treats `relPath` as opaque, federating in
+a second wiki required zero changes to that machinery — only the two wiring
+points (the deps field, and its one call site in `golem mcp serve`) needed
+touching. Opt-out via `knowledge.user_wiki_enabled` (default `true`) for
+anyone who doesn't want personal notes bleeding into a project's search
+results.
