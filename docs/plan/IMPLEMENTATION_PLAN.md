@@ -214,6 +214,6 @@ Each needs a design memo before build; none touch frozen interfaces or P0 scope.
 | WS-F11 | Account switching (21d) | P2/P3 | proxy credential routing, secure store; **ToS review** |
 | WS-F12 | Multi-LLM / multi-model concurrency & quota routing (21e) | P3 | WS-F8, WS-F11; **ToS review**, capability-preserving router |
 | WS-F13 | Cost-governance goals & benchmarks (21f) | continuous | A4 telemetry, B2 hooks, WS-D; benchmark vs. code.claude.com/docs/en/costs |
-| WS-F14 | Provider-agnostic pre-LLM pipeline: front Azure AI Foundry / OpenRouter (22) | P3+ | upstream-adapter layer in WS-A proxy (Anthropic byte-faithful path unchanged), generalized translation; **product-positioning decision first** |
+| WS-F14 | Provider-agnostic pre-LLM pipeline: front Azure AI Foundry / OpenRouter (22) | P3+ | upstream-adapter layer in WS-A proxy (Anthropic byte-faithful path unchanged), generalized translation; product-positioning decision **resolved 2026-07-11, Decision 32 — not yet scheduled, still needs a separate go-ahead per R1_BATCH.md §3 before build starts** |
 
 Note: WS-F5 at user (local) scope can begin alongside WS-C in P1; only workspace/org sync is the P4+ hosted (candidate paid) tier. WS-F9/F11/F12 carry security/ToS gates (spec Risks table) — design memo + review before build.

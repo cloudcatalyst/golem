@@ -74,3 +74,5 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there
 - debriefs/2026-07-11-R1.1.md — shipped `UsageSniffer`/`aggregateUsageByLevel` usage-telemetry infra + the gzip response-decoding fix it required
+- syntheses/r1.2-positioning-universal-preprocessor.md — R1.2 positioning call (Decision 32): Golem commits to Decision 22's universal pre-LLM processor; R5.1/WS-F14 unblocked but not yet scheduled
+- debriefs/2026-07-11-R1.2.md — recorded Decision 32 + revised README.md/CLAUDE.md copy to lead with redaction/local tools/routing/observability

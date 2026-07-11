@@ -94,7 +94,7 @@ The WS-F cluster where dogfooding hurt most (losing in-flight work to limits).
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R5.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Blocked on R1.2. | 🧭🛠️ | Dec 22 |
+| R5.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Unblocked by Decision 32 (R1.2, 2026-07-11) — not yet scheduled; starting the build still needs a separate ask per R1_BATCH.md §3's WS-F* gate. | 🧭🛠️ | Dec 22/32 |
 | R5.2 | Account switching + multi-LLM/quota routing. | 🔒 | 21d/21e |
 | R5.3 | Remote steering / permission-granting (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
 | R5.4 | Cost-governance benchmarks vs Claude's cost doc (continuous). | 🛠️ | 21f |
@@ -105,11 +105,11 @@ The WS-F cluster where dogfooding hurt most (losing in-flight work to limits).
 
 The gates that block downstream work, in priority order:
 
-1. **🧭 Positioning (R1.2)** — golem.run copy and whether R5.1 is worth building both hang on the assistant-vs-universal-processor call.
-2. **🔬 Net-of-cache A/B (R1.1)** — cheap to run (sidecar + real transcript exist); de-risks the whole compression story and unblocks any savings claim.
+1. ~~**🧭 Positioning (R1.2)**~~ — **RESOLVED** 2026-07-11 (Decision 32): universal pre-LLM processor, R5.1 unblocked. golem.run copy revised.
+2. ~~**🔬 Net-of-cache A/B (R1.1)**~~ — **RESOLVED** 2026-07-11 (verification-notes §54): levels 1/3 pipeline-identical on Anthropic today; no live A/B signal there until the §53 cache-safe structural tier lands.
 3. **🔬🧭 Decision 24 (R2.1)** — `avoidedUpstream` is plausibly the only real big-savings lever on cached Anthropic traffic.
 4. **🧭 Rerank surface (R3.1)** — touches the design of an optional inference surface (frozen-interface adjacent).
-5. **🔒 R4.4 + all of R5** — autonomy, account-switching, remote approval each need a written memo + review before code.
+5. **🔒 R4.4 + all of R5** — autonomy, account-switching, remote approval each need a written memo + review before code. R5.1 is positioning-unblocked (Decision 32) but still needs that memo + an explicit go-ahead before build starts.
 
 ## Deferred / not scheduled
 Everything in `IMPLEMENTATION_PLAN.md` §7 not pulled into R4/R5 above stays
