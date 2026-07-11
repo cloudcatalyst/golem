@@ -1196,6 +1196,15 @@ being accepted confirms the request never reached `api.anthropic.com` at all
 closes the previously-blocked "verify end-to-end local drafting" item from
 Decision 25/the Decision 26 plan.
 
+**R1.6 attempt, 2026-07-11 — still blocked, no non-Windows hardware.**
+`docs/plan/R1_BATCH.md`'s R1.6 asked for the macOS/Linux/Windows-without-winget
+rows to be run. This session's environment is Windows-only (`win32`, no macOS
+or Linux box, no CI runner access from here) — none of the three remaining
+rows are actually executable from this session. Per R1_BATCH.md §1's
+log-and-move-on guidance, logging this as blocked rather than guessing at
+behavior on hardware this session doesn't have; the three rows stay NOT YET
+RUN. See also [[R1.6 — macOS/Linux Ollama verification blocked]].
+
 ## §49 — Live finding: high-entropy redaction false-positives on repo paths (2026-07-10)
 
 Observed live while dogfooding at slider level 0 (redaction-only): the entropy
