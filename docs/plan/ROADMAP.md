@@ -76,7 +76,7 @@ Make the KB/wiki genuinely strong now that the retrieval spine exists.
 |---|---|---|---|
 | R3.1 | Rerank — cross-encoder or chat-judge rerank at slider ≥2 (needs a new optional reranker surface; frozen `InferenceService` has no `rerank`). | 🧭🛠️ | §29 |
 | R3.2 | ~~Real HTML/PDF-text extractor (`.html/.rst/.pdf` currently route through the plain text chunker)~~ — **DONE** 2026-07-11: `src/knowledge/extractors.ts` (dependency-free HTML tag/comment/entity handling; `.pdf` via the optional `unpdf` package — `.pdf` wasn't chunkable at all before). Wired into `ingest.ts`; `chunker.ts` stays pure-TS/zero-dependency. 818/818 tests green. | 🛠️ | §27 |
-| R3.3 | tree-sitter (WASM) opt-in syntax-aware code chunker, behind the KB add-on. | 🛠️ | §27 |
+| R3.3 | ~~tree-sitter (WASM) opt-in syntax-aware code chunker, behind the KB add-on.~~ — **DONE** 2026-07-11: `src/knowledge/tree-sitter-chunker.ts` (`web-tree-sitter` + TS/JS grammar packages as devDependencies only, never shipped to `golem-run` consumers); `knowledge.syntax_aware_chunking` config leaf, default off, threaded through ingest → knowledge-base → index → build-knowledge. Degrades to `null`/heuristic chunker on any failure. 825/825 tests green. | 🛠️ | §27 |
 | R3.4 | W4 — user-scope `~/.golem/wiki/` federation + weekly synthesis reports. | 🛠️ | WS-W W4 |
 | R3.5 | note→distill shaping — shape `golem note` captures into draft `questions/artifacts/` pages. | 🛠️ | T3 debrief |
 | R3.6 | C4 — MEMORY-scope federated search (requires the P2 Headroom Python sidecar). | 🛠️ | C4 |
