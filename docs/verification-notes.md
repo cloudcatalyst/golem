@@ -1617,3 +1617,92 @@ actual multi-run CI history could not be inspected to look for real-world
 flakiness beyond what a single local `npm test` run shows (77 files / 730
 tests passing on Windows this session). ADR-0001's status is left as
 `accepted` — no new finding changes it.
+
+## §58 — R2.5: Headroom `read_lifecycle` CAN be disabled, but not through the
+surface Golem uses — and the library's real cache-safe answer is
+proxy-only (2026-07-11)
+
+§53 left one open verification gating R2.6: can Headroom's `read_lifecycle`
+be turned off, keeping only deterministic structural compression, so a
+cache-safe tier becomes buildable on Anthropic? `CompressConfig`'s
+introspected signature (§34) has no such field, but that only proves the
+*public convenience wrapper* lacks the knob — not whether the underlying
+library supports it. Resolved by reading the actual pinned package source
+(`headroom-ai==0.30.0`, matching `src/compression/index.ts`'s
+`HEADROOM_SIDECAR_PYPI_PIN`), not docs or introspection alone: `uvx` install
+of the `[proxy]` extra failed here (Windows Defender quarantined a
+transitively-pulled `ast-grep-cli` binary — unrelated to Golem, not worked
+around), so the wheel was fetched with `pip download --no-deps` (no install,
+no script execution) and read directly. It is a pure-Python wheel
+(`cp310-abi3`, no compiled extension in the relevant modules) — full source
+available.
+
+**Finding, precisely:**
+
+1. **`compress()`/`CompressConfig` (the surface Golem's worker calls) has no
+   read_lifecycle switch, confirmed at the source**: `_get_pipeline()`
+   (`headroom/compress.py`) builds a **module-level singleton**
+   `TransformPipeline()` with bare defaults — `_build_default_transforms()`
+   (`headroom/transforms/pipeline.py`) only ever appends an opt-in
+   tool-result interceptor, `CacheAligner`, and `ContentRouter`; there is no
+   config path from `compress(config=CompressConfig(...))` down to
+   `ContentRouter`'s `read_lifecycle` field. §53's finding stands for this
+   call path.
+2. **But `read_lifecycle` (Mechanism A) IS a public, independently
+   constructible toggle one layer down.** `ContentRouterConfig` (exported
+   from `headroom.transforms`) has a `read_lifecycle: ReadLifecycleConfig`
+   field (`content_router.py:995`), consulted at `content_router.py:2917`
+   (`if self.config.read_lifecycle.enabled: ...`). Disabling it means
+   bypassing `compress()` entirely and driving `TransformPipeline(transforms=
+   [CacheAligner(...), ContentRouter(ContentRouterConfig(read_lifecycle=
+   ReadLifecycleConfig(enabled=False)))]).apply(...)` ourselves — a real
+   integration change to `headroom-worker.py`, not a config flag.
+3. **Mechanism A already splits into two independently-gated behaviors, and
+   Headroom's own authors already reasoned about cache safety here**
+   (`headroom/config.py:261`, `ReadLifecycleConfig`):
+   `compress_stale: bool = True` (replace reads of files *later edited* —
+   content is factually wrong, on by default) vs. `compress_superseded: bool
+   = False` (replace reads of files *later re-read unchanged* — redundant but
+   NOT byte-different — **off by default, with the dataclass comment reading
+   verbatim "Disabled: busts Anthropic prompt cache prefix"**). So the
+   default `compress()` call Golem's worker already makes is not the naive
+   "rewrite arbitrary mid-history content" the pipeline gate assumed in §53 —
+   it's already restricted to the stale-only subset, and the redundant-reread
+   pattern (§32's original pattern, and the one §34 attributed most of the
+   measured 53 elisions to) is the part the library itself already keeps out
+   for cache-prefix reasons.
+4. **The library's actual cache-safe mechanism for the redundant-reread case
+   is a separate, more sophisticated design (Mechanism B, "read maturation":
+   `headroom/transforms/read_maturation.py`) — and it is wired ONLY into the
+   stateful `headroom proxy` server**, not into `compress()`/`ContentRouter`
+   (confirmed by grep: `ReadMaturation*` appears only in
+   `headroom/proxy/*`, `headroom/cache/prefix_tracker.py`,
+   `headroom/cli/proxy.py`, `headroom/audit/*` — never in
+   `transforms/pipeline.py` or `transforms/content_router.py`). Its
+   docstring: "No cached byte is ever mutated... the trailing cache
+   breakpoint is relocated to just before [a fresh Read] while its file is
+   active... [until it matures and] only that final, small form ever enters
+   the cache." This requires **persistent per-session state** (which reads
+   are held back, per-file quiesce-turn counters) that a stateless
+   per-request `compress(messages)` call has no way to carry — it is
+   fundamentally a proxy-topology feature, and verification-notes §34
+   already established Golem does not chain a second Anthropic-facing proxy
+   (`headroom proxy` conflicts with Golem's own `/v1/messages` route).
+
+**What this settles for R2.6:** disabling `read_lifecycle` outright is
+*possible* but is not obviously the right lever — the part of it that
+actually risked the cache (`compress_superseded`) is already off by
+default, and the library's own answer to doing better (Mechanism B) is
+architecturally out of reach without replicating Headroom's own
+session-state tracking inside Golem — a materially bigger build than "flip
+a config flag," and arguably out of scope for a first cache-safe tier.
+**Recommended R2.6 shape, not yet built:** re-enable exactly the current
+default `compress()` behavior (stale-only Mechanism A + `CacheAligner` +
+`ContentRouter`, i.e. today's slider-≥2 pipeline *as it already runs on
+non-caching upstreams*) on Anthropic too, behind a new opt-in tier, and
+prove it net-cache-safe with R1.1's already-built `UsageSniffer`/
+`aggregateUsageByLevel` infra before flipping `isCachingUpstream()`'s gate
+for it — turning R1.1's shelved infrastructure into the actual R2.6
+measurement, rather than building new telemetry. Not implemented this
+session; this is a design recommendation for whoever picks up R2.6, not a
+completed build.
