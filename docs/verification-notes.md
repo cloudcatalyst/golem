@@ -1706,3 +1706,77 @@ for it — turning R1.1's shelved infrastructure into the actual R2.6
 measurement, rather than building new telemetry. Not implemented this
 session; this is a design recommendation for whoever picks up R2.6, not a
 completed build.
+
+## §59 — R2.1: Decision 24 spike — no real telemetry exists yet for KB-answer
+substitution; the one instrumented proxy signal (CCR retrieval rate) is
+0 misses in 1051 real swaps (2026-07-11)
+
+R2.1's deliverable (R2_BATCH.md): a dated measurement of how many upstream
+prompt+completion tokens would plausibly have been avoidable if the proxy
+could substitute a local KB/web-cache answer for part or all of a turn,
+using real telemetry (`ccrRefsRetrieved`, search hit rates) plus a manual
+session sample. Read this project's actual `.golem/telemetry/events.jsonl`
+(5644 lines) and the MCP tool source directly rather than estimating.
+
+**What the telemetry actually contains:**
+
+1. **Pipeline events** (`kind` absent, 5319 lines): per-request
+   `stageSavings`/`ccrRefsStored` — Golem's own tool-output CCR swap
+   (`CLAUDE.local.md`'s digest mechanism), not Decision-24 KB substitution.
+   Sum of `ccrRefsStored` across all of them: **1051**, spread over **847**
+   requests that stored at least one ref.
+2. **Retrieval events** (`kind:"retrieval"`, written by `recordRetrieval` in
+   `src/telemetry/index.ts:62`, called from the `expand` MCP tool's handler
+   at `src/cli/mcp-compression.ts:51` — confirmed this path is genuinely
+   wired, not dead code): **0 lines match `"kind":"retrieval"` anywhere in
+   the file.** `expand` has never been invoked in this repo's whole recorded
+   telemetry history.
+3. **Usage events** (`kind:"usage"`, R1.1's infra): 313 lines, unrelated to
+   this question (net-of-cache billed-usage sampling, already covered by
+   §54).
+4. **No telemetry exists for `search`/`fetch`/`ingest`/`wiki_read` MCP tool
+   invocations at all** — grepped every call site in `src/mcp/server.ts`
+   (tool registrations at lines 506/584/662/770) for a `record`/`telemetry`
+   call nearby: none. These tools are not instrumented, so there is no
+   durable signal for "how often did a `search`/`fetch` call return
+   something that could have short-circuited an upstream round-trip" — the
+   literal question Decision 24 sub-mode 1/2 needs answered. This is a real
+   gap, not a null result to read past.
+
+**The one honest number available:** of the 1051 times Golem's existing CCR
+mechanism swapped bulky tool output for a compact, `expand`-able reference,
+the model asked for the original back **zero** times. That's an indirect
+but real signal: when Golem substitutes a reference for content, in every
+observed real case in this project the excerpt was sufficient and no
+upstream re-fetch was needed to recover it. It is evidence *for* the shape
+of Decision 24 sub-mode 1 (context substitution — replace a span with an
+`expand`/`fetch`-able reference) being viable in principle, but it measures
+a different mechanism (already-produced tool output, already local) than
+Decision 24's actual target (KB/web-cache content substituting for what
+would otherwise be sent to or asked of the *upstream model*).
+
+**Manual session sample:** `.golem/knowledge` holds two non-trivial local
+indices (`a4d74063ac10cc1f/chunks.jsonl` 2223 lines / 6.4M,
+`b86b4aadb151fcd9/chunks.jsonl` 1743 lines / 5.1M) — a real, sizeable local
+KB exists to substitute from. But `.golem/webcache` has only 10 entries
+(248K total) — WebFetch re-fetch is rare in this project specifically, so
+the URL-cache-hit angle is a small lever *here*, though that's a
+repo-specific fact, not a general one.
+
+**What this means for R2.1 / R2.2 / R2.3:** Decision 24 is correctly scoped
+as "design memo only, not built" — there is no existing instrumentation to
+produce the token-volume number the task asked for, because nothing
+upstream of the model has ever substituted a KB answer. The closest real
+signal (CCR retrieval rate) is encouraging but indirect, and supports
+starting with **R2.2's conservative context-substitution sub-mode** (same
+shape as the already-proven CCR pattern, just triggered by KB/wiki hits
+instead of tool-output size) with its own new `avoidedUpstream` telemetry
+bucket built in from the start — so R2.2, once shipped, becomes the actual
+measurement instrument this spike couldn't be. **R2.3's aggressive
+local-answer sub-mode has zero telemetry basis in this repo today** — no
+data exists on how often a `search`/`fetch` hit was good enough to have
+replaced a whole turn — which reinforces R2_BATCH's own sequencing
+(R2.3 gated behind both R2.1 and R2.2, done last, own new frozen contract).
+Not implemented this session; recommends instrumenting `search`/`fetch`
+call sites with the same durable-telemetry pattern as `recordRetrieval` as
+a prerequisite of R2.2, so the bucket isn't retrofitted later.

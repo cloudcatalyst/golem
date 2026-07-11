@@ -81,3 +81,5 @@ updated: YYYY-MM-DD
 - questions/r1.6-ollama-verification-blocked.md — R1.6 macOS/Linux/no-winget Ollama checklist rows still NOT YET RUN, no non-Windows hardware in this session
 - debriefs/2026-07-11-R1.7.md — R1.7's cross-OS e2e smoke + Linux fs.watch matrix was already shipped (T-C2/T6); recorded the Ollama/uv CI-stub decision that was only ever implicit
 - debriefs/2026-07-11-R2.5.md — Headroom `read_lifecycle` disable verified from pinned package source: possible but not the right lever; the cache-risky half is already off by default, real cache-safe mechanism is proxy-only and out of reach; recommends R2.6's actual shape
+- syntheses/r2.1-avoidedupstream-spike.md — R2.1 spike: no telemetry exists yet for KB-answer substitution (`search`/`fetch`/`ingest`/`wiki_read` uninstrumented); the one real signal (CCR retrieval rate) is 0 misses in 1051 swaps — encouraging but indirect
+- debriefs/2026-07-11-R2.1.md — recorded the R2.1 measurement gap + carried the "ship avoidedUpstream telemetry from day one" recommendation into R2.2
