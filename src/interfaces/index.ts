@@ -44,7 +44,6 @@ export type {
   StageConfig,
 } from "./policy.js";
 export {
-  effectiveStages,
   MAX_SLIDER_LEVEL,
   migrateSliderLevel,
   SliderLevel,

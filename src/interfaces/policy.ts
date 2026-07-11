@@ -79,8 +79,6 @@ export interface StageConfig {
   readonly toolResultCache: boolean;
   readonly semanticCompression: SemanticCompression;
   readonly semanticCache: SemanticCache;
-  readonly localDrafts: boolean;
-  readonly localOnlyAnswers: boolean;
 }
 
 const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
@@ -92,8 +90,6 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
     toolResultCache: false,
     semanticCompression: "off",
     semanticCache: "off",
-    localDrafts: false,
-    localOnlyAnswers: false,
   } as const),
   // 1 "lossless": redaction + byte-faithful lossless compression.
   1: Object.freeze({
@@ -102,8 +98,6 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
     toolResultCache: false,
     semanticCompression: "off",
     semanticCache: "off",
-    localDrafts: false,
-    localOnlyAnswers: false,
   } as const),
   // 2 "balanced": + lossy semantic compression (stale-turn drop) + semantic cache.
   2: Object.freeze({
@@ -112,19 +106,16 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
     toolResultCache: true,
     semanticCompression: "stale_turns",
     semanticCache: "strict",
-    localDrafts: false,
-    localOnlyAnswers: false,
   } as const),
-  // 3 "aggressive": + max semantic + local drafts + local-first (opt-in gated).
+  // 3 "aggressive": + max semantic compression + loose semantic cache. Purely a
+  // Headroom-aggressiveness dial (Decision 31) — the local model is invoked only
+  // via the explicit `delegate` MCP tool, never auto-triggered by the slider.
   3: Object.freeze({
     redaction: true,
     losslessCompression: true,
     toolResultCache: true,
     semanticCompression: "aggressive",
     semanticCache: "loose",
-    localDrafts: true,
-    // Gated again by SliderPolicy.localOnlyOptIn — see effectiveStages().
-    localOnlyAnswers: true,
   } as const),
 });
 
@@ -138,30 +129,18 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
 export interface SliderPolicy {
   readonly level: SliderLevel;
   readonly stages: StageConfig;
-  /** Per-project opt-in for level-3 (aggressive) local-only answers (spec §9 decision 7). */
-  readonly localOnlyOptIn: boolean;
   readonly overrides: Readonly<Record<string, unknown>>;
 }
 
 export function sliderPolicyForLevel(
   level: SliderLevel,
   opts: {
-    readonly localOnlyOptIn?: boolean;
     readonly overrides?: Readonly<Record<string, unknown>>;
   } = {},
 ): SliderPolicy {
   return Object.freeze({
     level,
     stages: LEVEL_TABLE[level],
-    localOnlyOptIn: opts.localOnlyOptIn ?? false,
     overrides: Object.freeze({ ...(opts.overrides ?? {}) }),
   });
-}
-
-/** Stages with `localOnlyAnswers` masked off unless the project opted in. */
-export function effectiveStages(policy: SliderPolicy): StageConfig {
-  if (policy.stages.localOnlyAnswers && !policy.localOnlyOptIn) {
-    return Object.freeze({ ...policy.stages, localOnlyAnswers: false });
-  }
-  return policy.stages;
 }

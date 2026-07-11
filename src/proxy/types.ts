@@ -8,13 +8,9 @@
  *
  * Response bodies have NO seam by design: SSE streams and tool-use blocks
  * must pass through byte-faithful (CLAUDE.md hard rule), so the response
- * path is always a raw stream pipe.
- *
- * ONE narrow, deliberate exception (Decision 25, spec v1.8): the pipeline may
- * set {@link ProxyRequest.localResponse} to serve a fully-formed answer from
- * local inference instead of forwarding upstream — "local-first" mode, level
- * 5 opt-in only. When set, {@link GolemProxy} writes it directly and skips
- * the upstream call entirely; it never touches a real upstream response.
+ * path is always a raw stream pipe. (Decision 25's local-first `localResponse`
+ * exception was removed in Decision 31 — the local model is now invoked only via
+ * the explicit `delegate` MCP tool, never as an automatic proxy response.)
  */
 
 /** Header that forces pure passthrough. Stripped before forwarding upstream. */
@@ -37,19 +33,6 @@ export interface ProxyRequest {
   readonly headers: Readonly<Record<string, string | string[]>>;
   /** Raw request body bytes, or null when the request has no body. */
   readonly body: Buffer | null;
-  /**
-   * Set by the pipeline (Decision 25 "local-first" mode) to serve a
-   * fully-formed response directly instead of forwarding upstream. The proxy
-   * writes it verbatim and skips the upstream call when present.
-   */
-  readonly localResponse?: LocalResponse;
-}
-
-/** A complete HTTP response the proxy writes directly, bypassing upstream. */
-export interface LocalResponse {
-  readonly statusCode: number;
-  readonly headers: Readonly<Record<string, string>>;
-  readonly body: Buffer;
 }
 
 /**

@@ -36,6 +36,9 @@ function makePipeline(
     compression,
     policy: () => sliderPolicyForLevel(level),
     projectId: "proj",
+    // A non-caching upstream so the (lossy) semantic stage is allowed to run —
+    // it is gated OFF on Anthropic-style caching upstreams (Decision 31).
+    upstreamBaseUrl: "https://openrouter.ai/api/v1",
     ...(semantic !== undefined ? { semantic } : {}),
     ...(onEvent !== undefined ? { onEvent } : {}),
   });

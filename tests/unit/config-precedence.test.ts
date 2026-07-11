@@ -51,9 +51,9 @@ describe("loadConfig precedence", () => {
       layer: "user",
       source: userFile(),
     });
-    // Untouched sibling key keeps its default + provenance.
-    expect(config.settings.slider.local_only_opt_in).toBe(false);
-    expect(config.provenance["slider.local_only_opt_in"]).toEqual({ layer: "default" });
+    // Untouched sibling section keeps its default + provenance.
+    expect(config.settings.proxy.port).toBe(4653);
+    expect(config.provenance["proxy.port"]).toEqual({ layer: "default" });
   });
 
   it("project overrides user, local overrides project", async () => {
@@ -145,12 +145,11 @@ describe("loadConfig precedence", () => {
   });
 
   it("policyFromSettings maps slider settings onto the frozen contract", async () => {
-    // Legacy 5 migrates to 3 (aggressive) — local-first stages still resolve.
-    await writeJson(projectFile(), { slider: { level: 5, local_only_opt_in: true } });
+    // Legacy 5 migrates to 3 (aggressive).
+    await writeJson(projectFile(), { slider: { level: 5 } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
     const policy = policyFromSettings(config.settings);
     expect(policy.level).toBe(3);
-    expect(policy.localOnlyOptIn).toBe(true);
-    expect(policy.stages.localOnlyAnswers).toBe(true);
+    expect(policy.stages.semanticCompression).toBe("aggressive");
   });
 });

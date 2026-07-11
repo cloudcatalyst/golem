@@ -57,7 +57,5 @@ export { writeSetting } from "./write-setting.js";
  * (interfaces/policy.ts is the frozen contract; this just feeds it).
  */
 export function policyFromSettings(settings: GolemSettings): SliderPolicy {
-  return sliderPolicyForLevel(settings.slider.level, {
-    localOnlyOptIn: settings.slider.local_only_opt_in,
-  });
+  return sliderPolicyForLevel(settings.slider.level);
 }

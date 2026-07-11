@@ -11,7 +11,6 @@
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
 import { type GolemSettings, policyFromSettings } from "../config/index.js";
-import type { InferenceService } from "../interfaces/inference.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
@@ -21,7 +20,7 @@ import type { TelemetryStore } from "../telemetry/types.js";
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
-  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, slider ≥3). */
+  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, slider ≥2). */
   readonly semantic?: HeadroomSidecar;
 }
 
@@ -29,12 +28,9 @@ export interface BuildProxyOptions {
   /**
    * When present, the level is re-read from this store on EVERY request
    * instead of frozen at construction time — makes `level` /
-   * `golem slider` double as the live per-task toggle (Decision 25).
-   * `local_only_opt_in` always comes from the `settings` snapshot.
+   * `golem slider` double as the live per-task toggle (Decision 25/30).
    */
   readonly sliderStore?: SliderStore;
-  /** Local inference (Decision 25 Mode A/B). Absent disables both modes, fail-open. */
-  readonly inference?: InferenceService;
 }
 
 /**
@@ -54,20 +50,20 @@ export function buildProxyFromSettings(
   // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
-  const { sliderStore, inference } = build;
+  const { sliderStore } = build;
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: async () => {
       if (sliderStore === undefined) return policyFromSettings(settings);
       const level = await sliderStore.get();
-      return sliderPolicyForLevel(level, { localOnlyOptIn: settings.slider.local_only_opt_in });
+      return sliderPolicyForLevel(level);
     },
     projectId: dir,
+    upstreamBaseUrl: settings.proxy.upstream_base_url,
     onEvent: (event) => {
       void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
     },
     ...(semantic !== undefined ? { semantic } : {}),
-    ...(inference !== undefined ? { inference } : {}),
   });
   const proxy = new GolemProxy({
     upstreamBaseUrl: settings.proxy.upstream_base_url,

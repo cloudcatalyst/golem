@@ -11,7 +11,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit } from "../../src/cli/init.js";
 import {
   collectStatus,
@@ -19,7 +19,6 @@ import {
   renderStatus,
   type StatusReport,
 } from "../../src/cli/status.js";
-import { createOllamaBootstrapDeps, OllamaNativeClient } from "../../src/inference/index.js";
 
 const VERSION = "0.1.0-test";
 
@@ -63,9 +62,6 @@ describe("collectStatus", () => {
     expect(report.slider.layer).toBe("default");
     expect(report.config["slider.level"]).toEqual({ value: 1, layer: "default" });
     expect(report.config["proxy.port"]).toEqual({ value: 4653, layer: "default" });
-    // Below slider level 3 + opt-in, local-first isn't intended — and collectStatus
-    // must not probe Ollama for readiness in that case (no real OS/HTTP calls here).
-    expect(report.local_first).toEqual({ intended: false, ready: false });
   });
 
   it("reports an initialized project and project-layer provenance", async () => {
@@ -105,54 +101,15 @@ describe("collectStatus", () => {
     });
   });
 
-  it("reports local-first as intended once slider 3 + local_only_opt_in are set, and reflects Ollama readiness", async () => {
-    const native = new OllamaNativeClient();
-    vi.spyOn(native, "isReachable").mockResolvedValue(true);
-    vi.spyOn(native, "hasModel").mockResolvedValue(true);
-    const ollamaDeps = createOllamaBootstrapDeps({
-      probe: () => Promise.resolve({ ok: false, stdout: "" }),
-      native,
-    });
-
+  it("reports a reachable local model as local+upstream (Decision 30/31)", async () => {
     const report = await collectStatus({
       projectDir,
       version: VERSION,
       userDir,
       probeTimeoutMs: 200,
-      env: { GOLEM_SLIDER_LEVEL: "3", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
-      ollamaDeps,
+      localProbe: async () => true,
     });
-
-    // The fake probe reports no GPU, so detectCapability degrades to the CPU
-    // tier — its drafter model, not the P_MID "qwen2.5-coder:7b" from other
-    // fixtures in this file.
-    expect(report.local_first.intended).toBe(true);
-    expect(report.local_first.ready).toBe(true);
-    expect(report.local_first.model).toBe("qwen2.5-coder:1.5b");
-  });
-
-  it("reports local-first as intended but not ready when Ollama isn't reachable", async () => {
-    const native = new OllamaNativeClient();
-    vi.spyOn(native, "isReachable").mockResolvedValue(false);
-    const ollamaDeps = createOllamaBootstrapDeps({
-      probe: () => Promise.resolve({ ok: false, stdout: "" }),
-      native,
-    });
-
-    const report = await collectStatus({
-      projectDir,
-      version: VERSION,
-      userDir,
-      probeTimeoutMs: 200,
-      env: { GOLEM_SLIDER_LEVEL: "3", GOLEM_SLIDER_LOCAL_ONLY_OPT_IN: "true" },
-      ollamaDeps,
-    });
-
-    expect(report.local_first).toEqual({
-      intended: true,
-      ready: false,
-      model: "qwen2.5-coder:1.5b",
-    });
+    expect(report.local_model.reachable).toBe(true);
   });
 });
 
@@ -200,7 +157,6 @@ describe("renderStatus", () => {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_first: { intended: false, ready: false },
     local_model: { reachable: true },
     warnings: [],
   };
@@ -221,14 +177,8 @@ describe("renderStatus", () => {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_first: { intended: false, ready: false },
     local_model: { reachable: false },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
-  };
-
-  const localFirstReport: StatusReport = {
-    ...unhealthyReport,
-    local_first: { intended: true, ready: false, model: "qwen2.5-coder:7b" },
   };
 
   it("renders an all-healthy report with [ok] checkboxes, reachable proxy, and no warnings section", () => {
@@ -248,7 +198,7 @@ describe("renderStatus", () => {
     expect(output).toContain("proxy.port = 4653 — default");
     expect(output).not.toContain("proxy.port = 4653 — default (");
     expect(output).not.toContain("Warnings:");
-    expect(output).not.toContain("Local-first:");
+    expect(output).toContain("Inference: local + upstream");
     expect(output.endsWith("\n")).toBe(true);
   });
 
@@ -271,26 +221,7 @@ describe("renderStatus", () => {
     expect(output).toContain(
       "  - config file .golem/settings.json is malformed JSON; using defaults",
     );
-    expect(output).not.toContain("Local-first:");
-  });
-
-  it("renders a not-ready local-first line when intended but Ollama isn't ready", () => {
-    const output = renderStatus(localFirstReport);
-
-    expect(output).toContain(
-      "Local-first: intended (slider 3 + local_only_opt_in) — not ready (run `golem ollama setup` for qwen2.5-coder:7b)",
-    );
-  });
-
-  it("renders a ready local-first line when intended and Ollama is ready", () => {
-    const output = renderStatus({
-      ...localFirstReport,
-      local_first: { intended: true, ready: true, model: "qwen2.5-coder:7b" },
-    });
-
-    expect(output).toContain(
-      "Local-first: intended (slider 3 + local_only_opt_in) — ready (qwen2.5-coder:7b)",
-    );
+    expect(output).toContain("Inference: upstream only");
   });
 
   it("renders collectStatus's real output for an uninitialized project (no source suffixes, no warnings)", async () => {

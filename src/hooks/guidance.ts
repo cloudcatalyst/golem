@@ -73,10 +73,10 @@ export function golemGuidanceSection(): string {
     "first — a local model — then review and refine the result yourself rather",
     "than writing from scratch. This leaves the paid model's tokens for the",
     "judgment calls the local model can't make: review, integration, and",
-    "anything genuinely hard. `delegate` works at EVERY slider level, and at",
-    "level 3 (aggressive) the proxy also auto-drafts; below level 3, `delegate`",
-    "is the only path that engages the local model, so call it explicitly. Skip",
-    "it only when the task is too small for the round trip to pay off.",
+    "anything genuinely hard. `delegate` is the ONLY thing that engages the",
+    "local model (the slider is a compression dial only — it never auto-drafts),",
+    "so call it explicitly at every level. Skip it only when the task is too",
+    "small for the round trip to pay off.",
     GUIDANCE_END_MARKER,
   ].join("\n");
 }

@@ -131,14 +131,6 @@ export class GolemProxy {
       }
     }
 
-    // Decision 25 "local-first" mode: the pipeline already produced a
-    // complete answer locally — write it directly, never touch upstream.
-    if (forward.localResponse !== undefined) {
-      res.writeHead(forward.localResponse.statusCode, forward.localResponse.headers);
-      res.end(forward.localResponse.body);
-      return;
-    }
-
     let upstream: Dispatcher.ResponseData;
     try {
       upstream = await this.pool.request({

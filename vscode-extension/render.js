@@ -61,8 +61,6 @@ function buildModel(stats, status) {
     upstream,
     upstreamLabel: upstreamLabel(upstream),
     proxyReachable: !!(st.proxy && st.proxy.reachable),
-    localFirstIntended: !!(st.local_first && st.local_first.intended),
-    localFirstReady: !!(st.local_first && st.local_first.ready),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
     source: typeof s.source === "string" ? s.source : "live",
   };

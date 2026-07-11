@@ -13,24 +13,40 @@
  * is returned unchanged (same object, original bytes), so streaming and
  * tool-use traffic and secret-free level-0 requests stay byte-identical.
  *
- * Prefix stability (verification-notes §14): at levels ≤2, redaction is a pure
+ * Prefix stability (verification-notes §14): at levels ≤1, redaction is a pure
  * function of the text and the lossless compression stage is deterministic per
  * A2's contract, so re-processing a previously-sent prefix reproduces identical
  * bytes and Anthropic prompt-cache hits survive. The OPTIONAL semantic stage
- * (slider ≥3, {@link SemanticCompressor}) is lossy and NOT guaranteed
- * prefix-stable — an accepted trade-off at those levels (spec §4;
- * verification-notes §34) — and it always fails open (a null result leaves the
+ * (slider ≥2, {@link SemanticCompressor}) is lossy and NOT prefix-stable, so it
+ * is gated OFF on Anthropic-style caching upstreams (Decision 31) and only runs
+ * against non-caching gateways; it always fails open (a null result leaves the
  * losslessly-compressed body untouched).
  */
 
 import { estimateTokens } from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
-import type { InferenceService } from "../interfaces/inference.js";
-import { effectiveStages, type SliderPolicy } from "../interfaces/policy.js";
+import type { SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
-import { appendSystemBlock, runDraftStage, runLocalFirstStage } from "./local-intercept.js";
 import { redactRequestBody } from "./redaction.js";
+
+/**
+ * Whether an upstream is known to do Anthropic-style prompt caching (byte-
+ * identical-prefix). Semantic compression rewrites/drops mid-history content,
+ * which changes the cached prefix and turns a 0.1× cache read into a 1.0× miss
+ * on the whole suffix — net-negative on such upstreams (verification-notes
+ * §14/§32/§34). So the lossy semantic stage is gated OFF on caching upstreams
+ * (Decision 31); it engages only on non-caching gateways (e.g. some Foundry /
+ * OpenRouter deployments) where resent history is re-billed at full price.
+ */
+function isCachingUpstream(upstreamBaseUrl: string | undefined): boolean {
+  if (upstreamBaseUrl === undefined) return true; // default upstream is Anthropic — assume caching
+  try {
+    return new URL(upstreamBaseUrl).host.toLowerCase().includes("anthropic.com");
+  } catch {
+    return true; // unparseable → be conservative (assume caching, skip lossy compression)
+  }
+}
 
 /** A telemetry record emitted once per processed request (A4 consumes it). */
 export interface PipelineEvent {
@@ -63,11 +79,11 @@ export interface GolemPipelineOptions {
    */
   readonly semantic?: SemanticCompressor;
   /**
-   * OPTIONAL local inference (Decision 25). When present, drives Mode A
-   * "draft" injection (level >= 4) and Mode B "local_first" responses (level
-   * 5, opt-in). Absent by default — both modes are then no-ops, fail-open.
+   * Upstream base URL, used ONLY to decide whether the lossy semantic stage may
+   * run: it is gated OFF on Anthropic-style caching upstreams (Decision 31, see
+   * {@link isCachingUpstream}). Absent → treated as the caching default.
    */
-  readonly inference?: InferenceService;
+  readonly upstreamBaseUrl?: string;
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -112,7 +128,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       }
 
       const policy = await options.policy();
-      const stages = effectiveStages(policy);
+      const stages = policy.stages;
       const stageSavings: Record<string, TokenDelta> = {};
       let body: Record<string, unknown> = parsed;
       let changed = false;
@@ -149,12 +165,16 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
-      // Stage 3 — semantic compression (level ≥3, optional, lossy, fail-open).
-      // Runs on the already-losslessly-compressed messages. Any failure resolves
-      // null and leaves the body as-is, preserving the level-≤2 guarantees.
+      // Stage 3 — semantic compression (level ≥2, optional, lossy, fail-open).
+      // Runs on the already-losslessly-compressed messages. GATED OFF on
+      // Anthropic-style caching upstreams (Decision 31): rewriting mid-history
+      // content breaks the byte-identical cached prefix, so it engages only on
+      // non-caching gateways. Any failure resolves null and leaves the body
+      // as-is, preserving the level-≤1 guarantees.
       if (
         stages.semanticCompression !== "off" &&
         options.semantic !== undefined &&
+        !isCachingUpstream(options.upstreamBaseUrl) &&
         Array.isArray(body.messages)
       ) {
         const semantic = await options.semantic.compress(
@@ -167,48 +187,6 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
             tokensBefore: semantic.tokensBefore,
             tokensAfter: semantic.tokensAfter,
           };
-          changed = true;
-        }
-      }
-
-      // Stage 4 — local-first responder (Decision 25 Mode B: level 3, opt-in).
-      // Tries to answer entirely from local inference; on success returns
-      // directly and Claude is never called. Escalates (falls through to
-      // Stage 5's injection, reusing the same rejected draft) on any error,
-      // timeout, empty draft, or refusal/uncertainty-shaped text.
-      let escalatedDraftText: string | null = null;
-      if (
-        stages.localOnlyAnswers &&
-        options.inference !== undefined &&
-        Array.isArray(body.messages)
-      ) {
-        const outcome = await runLocalFirstStage(options.inference, body, body.stream === true);
-        if (outcome.kind === "served") {
-          const requestTokens: TokenDelta = {
-            tokensBefore: estimateTokens(JSON.stringify(parsed)),
-            tokensAfter: 0,
-          };
-          emit({
-            projectId: options.projectId,
-            level: policy.level,
-            requestTokens,
-            stageSavings: { ...stageSavings, localFirst: requestTokens },
-            ccrRefsStored,
-          });
-          return { ...request, localResponse: outcome.response };
-        }
-        escalatedDraftText = outcome.draftText;
-      }
-
-      // Stage 5 — draft injection (Decision 25 Mode A: level >= 4). When
-      // Stage 4 already ran (level 3), reuse its outcome rather than calling
-      // the drafter a second time; otherwise run a fresh draft.
-      if (stages.localDrafts && options.inference !== undefined && Array.isArray(body.messages)) {
-        const draftText = stages.localOnlyAnswers
-          ? escalatedDraftText
-          : await runDraftStage(options.inference, body);
-        if (draftText !== null) {
-          body = { ...body, system: appendSystemBlock(body.system, draftText) };
           changed = true;
         }
       }

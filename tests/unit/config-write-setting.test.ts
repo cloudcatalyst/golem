@@ -84,18 +84,18 @@ describe("writeSetting", () => {
     await expect(readFile(userFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("removes a key when value is undefined", async () => {
-    await writeSetting("project", "slider.level", 4, dirs());
-    await writeSetting("project", "slider.local_only_opt_in", true, dirs());
-    await writeSetting("project", "slider.level", undefined, dirs());
+  it("removes a key when value is undefined (preserving sibling keys)", async () => {
+    await writeSetting("project", "proxy.port", 5000, dirs());
+    await writeSetting("project", "proxy.connect_timeout_ms", 5000, dirs());
+    await writeSetting("project", "proxy.port", undefined, dirs());
 
     const parsed = JSON.parse(await readFile(projectFile(), "utf8")) as {
-      slider: Record<string, unknown>;
+      proxy: Record<string, unknown>;
     };
-    expect(parsed.slider).toEqual({ local_only_opt_in: true });
+    expect(parsed.proxy).toEqual({ connect_timeout_ms: 5000 });
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(1); // back to default
-    expect(config.provenance["slider.level"]).toEqual({ layer: "default" });
+    expect(config.settings.proxy.port).toBe(4653); // back to default
+    expect(config.provenance["proxy.port"]).toEqual({ layer: "default" });
   });
 
   it("refuses to overwrite a malformed settings file", async () => {
