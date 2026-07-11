@@ -93,27 +93,22 @@ gate bypass rather than a `policy.ts`/`SliderPolicy` change — confirm before
 starting; if it does need a `policy.ts` change, that's contract-tests-first.
 **Local model:** draft the A/B results write-up.
 
-### R2.1 (🔬) — Decision 24 spike: measure real `avoidedUpstream` volume
+### R2.1 (🔬) — Decision 24 spike: measure real `avoidedUpstream` volume — ✅ DONE 2026-07-11
 
-**Why:** the #1 candidate for a real, honest, big-savings lever on cached
-Anthropic traffic (spec Decision 24) — proxy-side KB/web-cache answer
-substitution counts tokens that never had to round-trip at all, a different
-metric from compression's request-shrink. Nothing is built yet; Decision 24
-is explicitly "design memo only, not built" pending this spike.
-
-**Deliverable (measurement, not a feature):** a dated verification-notes
-entry answering: across this repo's real Claude Code / `search`/`fetch`/KB
-usage, how many upstream prompt+completion tokens would plausibly have been
-avoidable if the proxy could substitute a local KB/web-cache answer for
-part or all of a turn? Use real telemetry (JSONL event log, `ccrRefsRetrieved`,
-search hit rates) plus a manual sample of recent sessions — not a guess.
-
-**Read first:** spec Decision 24 (`docs/edge-offload-spec.md` line ~339-345);
-verification-notes §14/§34/§54; `src/telemetry/`, `src/knowledge/` search/fetch
-call sites. Wiki: `search "avoidedUpstream KB substitution"`.
-**Wiki writes:** debrief; a `syntheses/` page with the measurement.
-**Size:** medium (telemetry archaeology + one clear number, not new code).
-**Local model:** draft the results-table prose.
+Resolved, but not with a clean go/no-go: `search`/`fetch`/`ingest`/
+`wiki_read` MCP tool calls carry **no telemetry at all** today, so the
+direct number R2_BATCH asked for can't be produced from real data yet. The
+one real instrumented proxy signal — the CCR reference-swap/`expand`
+mechanism — shows **0 retrievals against 1051 stored refs** across this
+repo's whole telemetry history: encouraging, but it measures tool-output
+dedup, not KB-answer substitution. See verification-notes §59,
+`debriefs/2026-07-11-R2.1.md`, `syntheses/r2.1-avoidedupstream-spike.md`.
+**This reshapes R2.2**: it should ship its own `avoidedUpstream` telemetry
+bucket from day one (see below) rather than treating R2.1 as a prior
+green-light gate — R2.1 found the *instrument* doesn't exist yet, not that
+the opportunity doesn't. R2.3 stays gated behind R2.2, now for a confirmed
+reason (zero telemetry basis for the aggressive sub-mode), not just
+sequencing convention.
 
 ### R2.4 (🛠️) — Fix the `expand`↔Headroom-CCR gap
 
@@ -136,14 +131,17 @@ store lives — confirm via `search`).
 
 ### R2.2 (🛠️) — Context-substitution (conservative sub-mode)
 
-**Gated on R2.1 clearing** — i.e. R2.1's measured `avoidedUpstream` volume
-must show this is worth building before starting. Do not start until R2.1's
-number is in and reviewed.
+**R2.1 cleared** (with the reshaped finding above) — proceed. Since R2.1
+found the CCR-adjacent signal encouraging but no direct telemetry for
+KB-answer substitution, treat the new `avoidedUpstream` bucket below as
+part of this task's deliverable, not an afterthought — it's the
+measurement instrument R2.1 couldn't build standalone.
 
 **What to build (per spec Decision 24, sub-mode 1):** when a request
 references material already in the KB/web-cache, replace that span with a
 compact reference the model can `expand`/`fetch`, behind the compression
-seam + a new `avoidedUpstream` telemetry bucket. Must obey byte-stability/
+seam + a new `avoidedUpstream` telemetry bucket (same durable-JSONL pattern
+as `recordRetrieval` in `src/telemetry/index.ts`). Must obey byte-stability/
 cache rules (§14) — only elide spans NOT in the stable cached prefix, or
 accept a miss only when the net saving beats it.
 
@@ -157,8 +155,11 @@ confirm before assuming no contract-test work is needed.
 
 ### R2.3 (🛠️🔒) — Local-answer sub-mode contract + recorded-shape tests
 
-**Gated on R2.1 AND R2.2 landing first** — this is the aggressive, opt-in,
-highest-risk sub-mode (proxy-as-responder, skips the upstream entirely).
+**Gated on R2.2 landing first** (R2.1 cleared, with a reshaped finding: see
+above) — this is the aggressive, opt-in, highest-risk sub-mode
+(proxy-as-responder, skips the upstream entirely), and there is currently
+zero telemetry basis for it (verification-notes §59) until R2.2's
+`avoidedUpstream` bucket has real data to look at.
 Decision 31 removed the old `localResponse` seam (Decision 25's mechanism),
 so this **re-introduces a proxy-response path from scratch as its own new
 contract** — not a revival of the deleted code.
