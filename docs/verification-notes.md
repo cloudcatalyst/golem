@@ -1901,3 +1901,75 @@ default). Also fixed 2 pre-existing unrelated Biome
 `noNonNullAssertion` warnings in `tests/unit/telemetry/usage-report.test.ts`
 (lines 41/44, left over from R2.6) while closing out this task's full-repo
 gate.
+
+## §62 — R2.2: context-substitution sub-mode shipped (2026-07-11)
+
+Decision 24 sub-mode 1 ("context substitution": elide a request span already
+known from the KB/web-cache, replace with an `expand`-able reference).
+
+**Old-scale → new-scale gate translation.** Decision 24 was written
+(2026-07-06) against the OLD 0-5 slider scale and says the sub-mode applies at
+"slider ≥3". Decision 30 (2026-07-09) collapsed the scale to 0-3; the old→new
+mapping is old 1+2 → new `lossless`(1), old 3 → new `balanced`(2), old 4+5 →
+new `aggressive`(3). So "old ≥3" = old {3,4,5} = new **levels 2 and 3** —
+exactly `stages.semanticCompression !== "off"` per `LEVEL_TABLE`
+(`src/interfaces/policy.ts`). This let R2.2 reuse that existing frozen-table
+field as its gate slot with **no change to `src/interfaces/policy.ts`** —
+avoiding the contract-tests-first + cross-workstream-flagging hard rule a
+`StageConfig` change would trigger.
+
+**Caching-upstream gate, reusing the Decision-31/R2.6 precedent.** Golem has
+no machinery that parses Anthropic's actual `cache_control` breakpoints
+(confirmed: `grep "cache_control" src/` — zero matches). Rather than build
+that, this stage is gated off entirely on caching (Anthropic-style) upstreams,
+identical to how the semantic stage is gated
+(`isCachingUpstream()` in `src/pipeline/pipeline.ts`). Rationale, spelled out
+in `context-substitution.ts`'s module doc: `native-lossless.ts`'s dedup stage
+is safe unconditionally because it's a PURE function of the current request's
+own prefix (rebuilds its `seen` set fresh every call); the web-cache lookup
+this stage consults is NOT — it grows across requests, so the same prefix
+could substitute differently on a later call, changing bytes inside what was
+previously a stable cached prefix (§14). On a non-caching upstream there's no
+stable prefix to break, so any substitution there is unconditionally
+cache-safe by construction.
+
+**Scope: webcache only, v1.** Covers `src/knowledge/web-cache.ts`'s
+exact-URL cache (pages fetched via WebFetch), not the full vector KB's
+chunks — a deliberate narrowing (no hypothetical future requirements built
+in); full KB-chunk substitution is a documented follow-up, not built now.
+
+**What was built:**
+- `WebCache.list()` + `contentHashIndex()` (`src/knowledge/web-cache.ts`):
+  rebuilds a `sha256(content) -> url` map fresh on every call (no incremental
+  index — the cache grows across requests, so a stale index would be wrong,
+  and rebuilding is cheap at realistic project webcache sizes).
+- `src/compression/context-substitution.ts` (new): `substituteKnownContent`
+  walks user-role messages and `tool_result` blocks (mirroring
+  `native-lossless.ts`'s exact scope for proxy-fidelity), replaces any span
+  ≥512 chars (`DEFAULT_MIN_SUBSTITUTION_CHARS`) whose hash the lookup
+  recognizes with a compact marker, and persists the original into the CCR
+  store (fail-open) under that hash — the same `expand`-recovers-it
+  reversibility precedent R2.4 established for Headroom's markers.
+- Pipeline Stage 4 (`src/pipeline/pipeline.ts`), gated as above, wired via a
+  new non-frozen `GolemPipelineOptions.contextSubstitution` option (not a
+  `src/interfaces/` change).
+- A new `avoidedUpstream` telemetry event kind
+  (`src/telemetry/types.ts`/`jsonl-store.ts`/`index.ts`): `recordAvoidedUpstream`
+  + `TelemetryStore.aggregateAvoidedUpstream()`, following the exact
+  `recordRetrieval`/`recordUsageEvent` template — added only to the
+  non-frozen `TelemetryStore` interface (same precedent as R2.6's
+  `aggregateUsageBySemanticForced`), NOT to the frozen `CompressionStats`.
+- Composition-root wiring in `src/cli/proxy-runtime.ts`: a `WebCache` rooted
+  at the project dir, re-hashed via a thunk on every request (so newly
+  fetched pages are recognized without a restart), sharing the same
+  `.golem/ccr` `CcrStore` the Headroom backfill uses.
+
+**Verified:** `tsc --noEmit` clean; `biome check .` / `format:check` clean
+(repo-wide); full `npx vitest run` — **82 files, 780 tests, all green** (32
+new for this task: 7 in `tests/unit/knowledge/web-cache.test.ts`, 13 in
+`tests/unit/compression/context-substitution.test.ts`, 6 in
+`tests/unit/pipeline/context-substitution-stage.test.ts`, 5 in
+`tests/unit/telemetry/jsonl-store.test.ts`'s new `recordAvoidedUpstream`
+block, and 1 end-to-end wiring test in `tests/unit/cli/proxy-runtime.test.ts`
+that puts a known page in the webcache and asserts substitution + a durable
+`avoidedUpstream` telemetry record through the real composition root).

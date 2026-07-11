@@ -139,37 +139,39 @@ share. `tsc`/Biome/vitest all green (79 files, 748 tests — 18 new/extended
 for this fix). See verification-notes §61, §38,
 `debriefs/2026-07-11-R2.4.md`.
 
-### R2.2 (🛠️) — Context-substitution (conservative sub-mode)
+### R2.2 (🛠️) — Context-substitution (conservative sub-mode) — ✅ DONE 2026-07-11
 
-**R2.1 cleared** (with the reshaped finding above) — proceed. Since R2.1
-found the CCR-adjacent signal encouraging but no direct telemetry for
-KB-answer substitution, treat the new `avoidedUpstream` bucket below as
-part of this task's deliverable, not an afterthought — it's the
-measurement instrument R2.1 couldn't build standalone.
+Shipped as a new pipeline Stage 4 (`src/compression/context-substitution.ts`
++ wiring in `src/pipeline/pipeline.ts`), gated by the SAME slot the batch
+already had: Decision 24's "old scale ≥3" translates through Decision 30's
+scale collapse to new levels 2-3, i.e. exactly `stages.semanticCompression
+!== "off"` in the existing `LEVEL_TABLE` — no `src/interfaces/policy.ts`
+change needed. Also gated off on caching (Anthropic-style) upstreams, reusing
+the Decision-31/R2.6 `isCachingUpstream()` precedent (the web-cache lookup
+grows across requests, unlike `native-lossless.ts`'s pure in-request dedup,
+so it can't safely run where a cached prefix must stay stable — §14). Scope:
+webcache only for v1 (`src/knowledge/web-cache.ts`'s exact-URL cache), not
+the full vector KB — full KB-chunk substitution is a documented follow-up.
 
-**What to build (per spec Decision 24, sub-mode 1):** when a request
-references material already in the KB/web-cache, replace that span with a
-compact reference the model can `expand`/`fetch`, behind the compression
-seam + a new `avoidedUpstream` telemetry bucket (same durable-JSONL pattern
-as `recordRetrieval` in `src/telemetry/index.ts`). Must obey byte-stability/
-cache rules (§14) — only elide spans NOT in the stable cached prefix, or
-accept a miss only when the net saving beats it.
-
-**Read first:** spec Decision 24 sub-mode 1; R2.1's findings;
-`src/interfaces/compression.ts` (confirm this fits the existing
-`CompressionService` contract as the spec expects, or flag if it doesn't).
-**Wiki writes:** debrief.
-**Size:** medium-large. **Interfaces:** likely fits behind the existing
-frozen `CompressionService` contract per Decision 24's own scope note —
-confirm before assuming no contract-test work is needed.
+Shipped the `avoidedUpstream` telemetry bucket R2.1 flagged as missing:
+`recordAvoidedUpstream` + `TelemetryStore.aggregateAvoidedUpstream()`
+(`src/telemetry/`), following the `recordRetrieval`/`recordUsageEvent`
+template — added only to the non-frozen `TelemetryStore` interface, not
+`CompressionStats`. `src/cli/proxy-runtime.ts` wires a project-rooted
+`WebCache`, re-hashed on every request, sharing the Headroom backfill's
+`.golem/ccr` store. `tsc`/Biome/vitest all green (82 files, 780 tests — 32
+new/extended for this task). See verification-notes §62,
+`debriefs/2026-07-11-R2.2.md`.
 
 ### R2.3 (🛠️🔒) — Local-answer sub-mode contract + recorded-shape tests
 
-**Gated on R2.2 landing first** (R2.1 cleared, with a reshaped finding: see
-above) — this is the aggressive, opt-in, highest-risk sub-mode
-(proxy-as-responder, skips the upstream entirely), and there is currently
-zero telemetry basis for it (verification-notes §59) until R2.2's
-`avoidedUpstream` bucket has real data to look at.
+**R2.2 has landed** (✅ above) — the `avoidedUpstream` bucket now exists, but
+has not yet accumulated real dogfooded traffic (this repo's own webcache
+substitutions haven't run through a live proxy session since the change
+shipped). This is the aggressive, opt-in, highest-risk sub-mode
+(proxy-as-responder, skips the upstream entirely) — starting it without
+first checking whether `avoidedUpstream` has real signal yet risks building
+against the same zero-data situation R2.1 found (verification-notes §59).
 Decision 31 removed the old `localResponse` seam (Decision 25's mechanism),
 so this **re-introduces a proxy-response path from scratch as its own new
 contract** — not a revival of the deleted code.

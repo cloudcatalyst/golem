@@ -50,14 +50,17 @@ export interface UsageBySemanticForced {
 /**
  * One durably-recorded event: a pipeline run (redaction → compression, the
  * historical/default shape), a CCR retrieval (an `expand` call,
- * verification-notes §25), or an upstream `usage` sample (R1.1).
+ * verification-notes §25), an upstream `usage` sample (R1.1), or an
+ * `avoidedUpstream` sample (R2.2 — context-substitution input tokens elided
+ * because they were already recognized from the project's web-cache).
  *
  * `kind` is optional and absent on every event written before it existed —
  * absent MUST parse as `"request"` so old JSONL lines keep counting as
  * requests (aggregate()'s backward-compatibility contract). Only
- * {@link recordRetrieval} sets `kind: "retrieval"` and {@link recordUsageEvent}
- * sets `kind: "usage"`; `recordPipelineEvent` deliberately omits the field to
- * keep pipeline-event bytes unchanged.
+ * {@link recordRetrieval} sets `kind: "retrieval"`, {@link recordUsageEvent}
+ * sets `kind: "usage"`, and {@link recordAvoidedUpstream} sets
+ * `kind: "avoidedUpstream"`; `recordPipelineEvent` deliberately omits the
+ * field to keep pipeline-event bytes unchanged.
  */
 export interface TelemetryEvent {
   /** ISO-8601 timestamp (caller-supplied — the store never reads the clock). */
@@ -65,8 +68,8 @@ export interface TelemetryEvent {
   readonly projectId: string;
   /** Slider level in effect for this request. Unused (0) for a retrieval. */
   readonly level: number;
-  /** Discriminator; absent === "request". A retrieval/usage sample is never a request. */
-  readonly kind?: "request" | "retrieval" | "usage";
+  /** Discriminator; absent === "request". A retrieval/usage/avoidedUpstream sample is never a request. */
+  readonly kind?: "request" | "retrieval" | "usage" | "avoidedUpstream";
   /**
    * Whole-request before/after — the honest headline savings. Optional for
    * backward compatibility with events written before this field existed;
@@ -97,6 +100,21 @@ export interface TelemetryEvent {
    * this field existed.
    */
   readonly semanticForced?: boolean;
+  /**
+   * R2.2 (spec Decision 24 sub-mode 1, verification-notes §62): input tokens
+   * avoided by proxy-side context substitution for this sample. Only set
+   * (kind: "avoidedUpstream") by {@link recordAvoidedUpstream}; absent
+   * elsewhere. A future local-answer sub-mode (R2.3) would add an analogous
+   * output-token field to this same event kind rather than a new one.
+   */
+  readonly avoidedUpstreamInputTokens?: number;
+}
+
+/** R2.2 rollup: total input tokens avoided via context substitution. */
+export interface AvoidedUpstreamStats {
+  readonly projectId: string | null;
+  readonly events: number;
+  readonly inputTokensAvoided: number;
 }
 
 export interface TelemetryStore {
@@ -121,6 +139,14 @@ export interface TelemetryStore {
    * to one project; omit for the global view.
    */
   aggregateUsageBySemanticForced(projectId?: string): Promise<UsageBySemanticForced>;
+  /**
+   * Roll up recorded `avoidedUpstream` (kind: "avoidedUpstream") events (R2.2,
+   * verification-notes §59/§62) — the direct KB-substitution signal R2.1
+   * found no telemetry existed for. `projectId` scopes to one project; omit
+   * for the global view. Independent of {@link aggregate}: these events never
+   * count toward `CompressionStats` (same treatment as `usage` events).
+   */
+  aggregateAvoidedUpstream(projectId?: string): Promise<AvoidedUpstreamStats>;
   /** Flush and release resources. Safe to call more than once. */
   close(): Promise<void>;
 }

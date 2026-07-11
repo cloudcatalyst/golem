@@ -17,6 +17,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CompressionStats, TokenDelta } from "../interfaces/compression.js";
 import type {
+  AvoidedUpstreamStats,
   TelemetryEvent,
   TelemetryStore,
   UsageByLevel,
@@ -66,17 +67,28 @@ function parseEvent(line: string): TelemetryEvent | null {
         stageSavings[k] = { tokensBefore: v.tokensBefore, tokensAfter: v.tokensAfter };
     }
   }
+  const kind =
+    parsed.kind === "retrieval"
+      ? "retrieval"
+      : parsed.kind === "usage"
+        ? "usage"
+        : parsed.kind === "avoidedUpstream"
+          ? "avoidedUpstream"
+          : "request";
   return {
     ts: parsed.ts,
     projectId: parsed.projectId,
     level: typeof parsed.level === "number" ? parsed.level : 0,
-    kind: parsed.kind === "retrieval" ? "retrieval" : parsed.kind === "usage" ? "usage" : "request",
+    kind,
     ...(isTokenDelta(parsed.requestTokens) ? { requestTokens: parsed.requestTokens } : {}),
     stageSavings,
     ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
     ccrRefsRetrieved: typeof parsed.ccrRefsRetrieved === "number" ? parsed.ccrRefsRetrieved : 0,
     ...(isUsageTotals(parsed.usage) ? { usage: parsed.usage } : {}),
     semanticForced: parsed.semanticForced === true,
+    ...(typeof parsed.avoidedUpstreamInputTokens === "number"
+      ? { avoidedUpstreamInputTokens: parsed.avoidedUpstreamInputTokens }
+      : {}),
   };
 }
 
@@ -141,6 +153,11 @@ export class JsonlTelemetryStore implements TelemetryStore {
       if (ev.kind === "usage") {
         // Not a pipeline run either — rolled up separately by
         // aggregateUsageByLevel (R1.1), never into the gross-token headline.
+        continue;
+      }
+      if (ev.kind === "avoidedUpstream") {
+        // Not a pipeline run either — rolled up separately by
+        // aggregateAvoidedUpstream (R2.2), never into the gross-token headline.
         continue;
       }
 
@@ -253,6 +270,29 @@ export class JsonlTelemetryStore implements TelemetryStore {
       else notForced = next;
     }
     return { projectId: projectId ?? null, forced, notForced };
+  }
+
+  async aggregateAvoidedUpstream(projectId?: string): Promise<AvoidedUpstreamStats> {
+    let raw: string;
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { projectId: projectId ?? null, events: 0, inputTokensAvoided: 0 };
+      }
+      throw err;
+    }
+
+    let events = 0;
+    let inputTokensAvoided = 0;
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null || ev.kind !== "avoidedUpstream") continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+      events += 1;
+      inputTokensAvoided += ev.avoidedUpstreamInputTokens ?? 0;
+    }
+    return { projectId: projectId ?? null, events, inputTokensAvoided };
   }
 
   async close(): Promise<void> {

@@ -13,10 +13,15 @@ import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { type GolemSettings, policyFromSettings } from "../config/index.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
+import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import { GolemProxy } from "../proxy/index.js";
-import { recordPipelineEvent, recordUsageEvent } from "../telemetry/index.js";
+import {
+  recordAvoidedUpstream,
+  recordPipelineEvent,
+  recordUsageEvent,
+} from "../telemetry/index.js";
 import type { TelemetryStore } from "../telemetry/types.js";
 
 export interface ProxyBuild {
@@ -51,15 +56,20 @@ export function buildProxyFromSettings(
   // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
-  // R2.4 (verification-notes §38): same `.golem/ccr` directory
-  // `NativeLosslessCompression.forProjectDir(dir)` writes to, so a backfilled
-  // Headroom marker is immediately visible to a later `expand` call. Only
-  // built when the sidecar is actually configured — see
+  // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
+  // writes to, shared by both the R2.4 Headroom backfill and R2.2 context
+  // substitution below, so `expand` recovers either kind of marker uniformly.
+  const ccrStore = new CcrStore(new LocalDirBlobStore(join(dir, ".golem", "ccr")));
+  // R2.4 (verification-notes §38): only wired into the pipeline when the
+  // Headroom sidecar is actually configured — see
   // GolemPipelineOptions.headroomCcrStore's doc comment.
-  const headroomCcrStore =
-    semantic !== undefined
-      ? new CcrStore(new LocalDirBlobStore(join(dir, ".golem", "ccr")))
-      : undefined;
+  const headroomCcrStore = semantic !== undefined ? ccrStore : undefined;
+  // R2.2 (verification-notes §62): webcache-only v1 scope — see
+  // context-substitution.ts's module doc for the caching-upstream gate this
+  // feeds, and the pipeline wiring below. Rebuilt fresh on every request
+  // (the thunk, not a cached value) so newly-fetched pages are recognized
+  // without a restart; acceptable cost at realistic project webcache sizes.
+  const webCache = new WebCache(webCacheDir(dir));
   const { sliderStore } = build;
   // Shared with onResponseUsage below so a usage sample is tagged with the
   // SAME level-resolution logic the pipeline used for this request's gross
@@ -80,8 +90,24 @@ export function buildProxyFromSettings(
     projectId: dir,
     upstreamBaseUrl: settings.proxy.upstream_base_url,
     forceSemanticOnCaching,
+    contextSubstitution: {
+      ccrStore,
+      lookup: async () => {
+        const index = await contentHashIndex(webCache);
+        return (hash: string) => index.get(hash);
+      },
+    },
     onEvent: (event) => {
-      void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
+      const nowIso = new Date().toISOString();
+      void recordPipelineEvent(telemetry, event, nowIso).catch(() => {});
+      if (event.avoidedUpstreamInputTokens > 0) {
+        void recordAvoidedUpstream(
+          telemetry,
+          event.projectId,
+          nowIso,
+          event.avoidedUpstreamInputTokens,
+        ).catch(() => {});
+      }
     },
     ...(semantic !== undefined ? { semantic } : {}),
     ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),

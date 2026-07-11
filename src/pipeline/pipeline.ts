@@ -24,7 +24,12 @@
  */
 
 import type { CcrStore } from "../compression/ccr-store.js";
-import { backfillHeadroomCcrRefs, estimateTokens } from "../compression/index.js";
+import type { KnownContentLookup } from "../compression/context-substitution.js";
+import {
+  backfillHeadroomCcrRefs,
+  estimateTokens,
+  substituteKnownContent,
+} from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { SliderPolicy } from "../interfaces/policy.js";
@@ -58,6 +63,17 @@ export interface PipelineEvent {
   /** Per-stage deltas (breakdown only; mixed scopes — do not sum). */
   readonly stageSavings: Readonly<Record<string, TokenDelta>>;
   readonly ccrRefsStored: number;
+  /**
+   * R2.2 (spec Decision 24 sub-mode 1): input tokens avoided this request by
+   * context substitution — content elided because it was already recognized
+   * from the project's web-cache, not because it repeated within THIS
+   * request (that's `stageSavings.dedup`). 0 when the stage didn't run or
+   * found nothing. Also reflected in `stageSavings.contextSubstitution` and
+   * the whole-request `requestTokens` delta; this field exists so the
+   * `avoidedUpstream` telemetry bucket can track it as its own metric
+   * (verification-notes §59's finding: the gross headline mixes stages).
+   */
+  readonly avoidedUpstreamInputTokens: number;
 }
 
 export interface GolemPipelineOptions {
@@ -109,6 +125,25 @@ export interface GolemPipelineOptions {
    * behavior; the gap verification-notes §38 documents).
    */
   readonly headroomCcrStore?: CcrStore;
+  /**
+   * R2.2 (spec Decision 24 sub-mode 1, verification-notes §62): when present,
+   * a stage runs after semantic compression that substitutes any span whose
+   * content `lookup` recognizes (e.g. a page already in the project's
+   * web-cache) with a compact reference, persisting the original into
+   * `ccrStore` so `expand` can recover it. Gated IDENTICALLY to the semantic
+   * stage — `stages.semanticCompression !== "off"` AND non-caching upstream
+   * — independent of whether a Headroom sidecar (`semantic`) is configured.
+   * `lookup` is a thunk rather than a fixed value so the caller can rebuild
+   * it fresh per request as the web-cache grows (see
+   * context-substitution.ts's module doc for why that's required, not just
+   * convenient). Absent → stage does not run (today's behavior).
+   */
+  readonly contextSubstitution?: {
+    readonly ccrStore: CcrStore;
+    readonly lookup: () => KnownContentLookup | Promise<KnownContentLookup>;
+    /** Overrides DEFAULT_MIN_SUBSTITUTION_CHARS (affects emitted bytes). */
+    readonly minChars?: number;
+  };
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -158,6 +193,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       let body: Record<string, unknown> = parsed;
       let changed = false;
       let ccrRefsStored = 0;
+      let avoidedUpstreamInputTokens = 0;
 
       // Stage 1 — redaction (always first; runs at every level per the table).
       if (stages.redaction) {
@@ -228,6 +264,37 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
+      // Stage 4 — context substitution (R2.2, spec Decision 24 sub-mode 1,
+      // verification-notes §62). Runs on the already-semantically-compressed
+      // messages. Gated IDENTICALLY to the semantic stage's non-caching-
+      // upstream rule (see context-substitution.ts's module doc for why) —
+      // but independent of whether a Headroom sidecar is configured.
+      if (
+        stages.semanticCompression !== "off" &&
+        options.contextSubstitution !== undefined &&
+        !isCachingUpstream(options.upstreamBaseUrl) &&
+        Array.isArray(body.messages)
+      ) {
+        const messagesInSub = body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
+        const lookup = await options.contextSubstitution.lookup();
+        const substituted = await substituteKnownContent(
+          messagesInSub,
+          lookup,
+          options.contextSubstitution.ccrStore,
+          options.contextSubstitution.minChars,
+        );
+        if (substituted.substitutions > 0) {
+          body = { ...body, messages: [...substituted.messages] };
+          stageSavings.contextSubstitution = {
+            tokensBefore: substituted.tokensBefore,
+            tokensAfter: substituted.tokensAfter,
+          };
+          avoidedUpstreamInputTokens = substituted.tokensBefore - substituted.tokensAfter;
+          ccrRefsStored += substituted.substitutions;
+          changed = true;
+        }
+      }
+
       if (!changed) {
         // Nothing to do — preserve original bytes exactly.
         return request;
@@ -250,6 +317,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         requestTokens,
         stageSavings,
         ccrRefsStored,
+        avoidedUpstreamInputTokens,
       });
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },

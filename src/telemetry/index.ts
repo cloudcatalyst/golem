@@ -16,6 +16,7 @@ import type { TelemetryEvent, TelemetryStore, UsageTotals } from "./types.js";
 
 export { JsonlTelemetryStore, telemetryFilePath } from "./jsonl-store.js";
 export type {
+  AvoidedUpstreamStats,
   TelemetryEvent,
   TelemetryStore,
   UsageByLevel,
@@ -123,6 +124,34 @@ export function recordUsageEvent(
     ccrRefsStored: 0,
     usage,
     semanticForced: event.semanticForced ?? false,
+  };
+  return store.record(telemetryEvent);
+}
+
+/**
+ * Persist one `avoidedUpstream` sample (R2.2, spec Decision 24 sub-mode 1,
+ * verification-notes §62): input tokens avoided this request by proxy-side
+ * context substitution. `nowIso` is injected like {@link recordPipelineEvent}.
+ * Not a pipeline run (`kind: "avoidedUpstream"` keeps it out of
+ * aggregate()'s `requests`/gross-token counts, same as `recordRetrieval` and
+ * `recordUsageEvent`); rolled up separately by
+ * `TelemetryStore.aggregateAvoidedUpstream`. Callers should skip this call
+ * entirely when `inputTokensAvoided` is 0 (nothing to record).
+ */
+export function recordAvoidedUpstream(
+  store: TelemetryStore,
+  projectId: string,
+  nowIso: string,
+  inputTokensAvoided: number,
+): Promise<void> {
+  const telemetryEvent: TelemetryEvent = {
+    ts: nowIso,
+    projectId,
+    level: 0,
+    kind: "avoidedUpstream",
+    stageSavings: {},
+    ccrRefsStored: 0,
+    avoidedUpstreamInputTokens: inputTokensAvoided,
   };
   return store.record(telemetryEvent);
 }
