@@ -59,6 +59,7 @@ updated: YYYY-MM-DD
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)
+- syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
   originating article
 - `questions/` — open questions carried over from the Decision 28 proposal
