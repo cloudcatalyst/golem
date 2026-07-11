@@ -32,6 +32,7 @@ import { FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
+import { distillNoteCapture } from "./distill-note.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "./notes.js";
@@ -702,6 +703,32 @@ noteCmd
       const entries = await listNotes(opts.dir, limit);
       process.stdout.write(
         opts.json ? `${JSON.stringify(entries, null, 2)}\n` : renderNotes(entries),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+noteCmd
+  .command("distill")
+  .description("Distill a captured note into a zone-1 question/artifact draft (local model, R3.5)")
+  .argument(
+    "[ts]",
+    "timestamp of the note to distill (defaults to the most recently captured note)",
+  )
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--force", "re-distill even if a draft already exists for this note", false)
+  .action(async (ts: string | undefined, opts: { dir: string; force: boolean }) => {
+    try {
+      const result = await distillNoteCapture({
+        projectDir: opts.dir,
+        ...(ts !== undefined && { ts }),
+        force: opts.force,
+      });
+      process.stdout.write(
+        result.kind === "exists"
+          ? `draft already exists: ${result.path} (pass --force to re-distill)\n`
+          : `distilled: ${result.path}\n`,
       );
     } catch (err) {
       fail(err);

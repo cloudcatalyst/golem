@@ -14,7 +14,7 @@ import type {
   Vector,
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
-import { DistillParseError, distillPage } from "../../../src/knowledge/distill.js";
+import { DistillParseError, distillNote, distillPage } from "../../../src/knowledge/distill.js";
 
 class FakeInferenceService implements InferenceService {
   lastRole: Role | undefined;
@@ -128,5 +128,62 @@ describe("distillPage", () => {
   it("throws DistillParseError when required fields are missing", async () => {
     const fake = new FakeInferenceService(JSON.stringify({ title: "Only a title" }));
     await expect(distillPage(fake, input)).rejects.toThrow(DistillParseError);
+  });
+});
+
+const noteInput = {
+  text: "Should the slider ever auto-engage the local model? Probably not — Decision 31 says no.",
+  existingTitles: ["Widget Factory", "Prompt Caching"],
+};
+
+describe("distillNote", () => {
+  it("calls chat with role summarizer and a jsonSchema, embedding the note text (no URL) in the prompt", async () => {
+    const draft = {
+      title: "Should the slider auto-engage the local model?",
+      slug: "should-the-slider-auto-engage-the-local-model",
+      tags: ["slider"],
+      type: "question",
+      summary: "No — Decision 31 keeps the slider a pure compression dial.",
+      wikilinks: [],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    const result = await distillNote(fake, noteInput);
+
+    expect(fake.lastRole).toBe("summarizer");
+    expect(fake.lastOpts?.jsonSchema).toBeDefined();
+    const promptText = JSON.stringify(fake.lastMessages);
+    expect(promptText).toContain("Decision 31");
+    expect(promptText).not.toContain("Source URL");
+
+    expect(result.title).toBe("Should the slider auto-engage the local model?");
+    expect(result.slug).toBe("should-the-slider-auto-engage-the-local-model");
+    expect(result.type).toBe("question");
+  });
+
+  it("reuses the shared wikilink-canonicalization logic", async () => {
+    const draft = {
+      title: "Widget note",
+      slug: "widget-note",
+      tags: ["widgets"],
+      type: "artifact",
+      summary: "summary text",
+      wikilinks: ["widget FACTORY", "Nonexistent Page"],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    const result = await distillNote(fake, noteInput);
+    expect(result.wikilinks).toEqual(["Widget Factory"]);
+  });
+
+  it("throws DistillParseError when type isn't question/artifact", async () => {
+    const draft = {
+      title: "Widget note",
+      slug: "widget-note",
+      tags: ["widgets"],
+      type: "source",
+      summary: "summary text",
+      wikilinks: [],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    await expect(distillNote(fake, noteInput)).rejects.toThrow(DistillParseError);
   });
 });
