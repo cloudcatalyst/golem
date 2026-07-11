@@ -1249,6 +1249,8 @@ redaction is T-C3-gated. Needs its own task: likely tightening the separator
 run length or requiring separator consistency (all-space or all-dash, not
 mixed) before the Luhn check. No task ID assigned yet.
 
+**Fixed 2026-07-11, R1.3 — see §55.**
+
 ## §51 — T6 decision memo: `node:fs.watch` vs `chokidar` for file watching (2026-07-11)
 
 Required before starting T6 (plan §6 known unknown, flagged in §27 as a
@@ -1453,3 +1455,52 @@ reproduced/fixed as part of R1.1.
 Full gate green: `tsc --noEmit`, lint, format:check, `npm test` (all suites)
 clean after the gzip fix; rebuilt and restarted the live proxy to verify on
 real traffic (verification-notes DoD, R1_BATCH.md §1).
+
+## §55 — R1.3: credit-card false-positive fix — separator-format guard (2026-07-11)
+
+Fixes §50. The bare Luhn gate accepted any 13-19 digit window regardless of
+how it was grouped, so a space-separated ASCII byte dump (irregular 1-3-digit
+groups) could pass Luhn by chance and get redacted as a card number.
+
+**Fix** (`src/pipeline/redaction-rules.ts`): new `isCreditCardLike(target)`
+validator, `luhnValid(target) && hasConsistentSeparatorChar(target) &&
+hasUniformGrouping(target)`. `hasConsistentSeparatorChar` rejects mixed
+space/dash separators; `hasUniformGrouping` splits on the separator and
+requires every group to be the same digit length — this is the check that
+actually defeats §50's repro, since a bare "single consistent character"
+requirement (the plan's literal suggestion) would still accept an all-space,
+irregularly-grouped byte dump. `luhnValid` itself is unchanged and still
+exported as a standalone primitive. The `credit-card` rule's `validate` now
+points at `isCreditCardLike`.
+
+**Corpus additions** (`tests/unit/pipeline/redaction-audit.test.ts`, new
+`describe("T-C3: credit-card separator-format guard (§50)")`): a negative
+case reproducing §50 exactly (a 8-value decimal byte dump, group lengths
+2,1,3,2,3,3,2,2, concatenated digits independently verified Luhn-valid via a
+throwaway Node script, not by eye — see the note below); two positive
+regression cases (a contiguous 16-digit Luhn-valid test card, and the same
+card grouped 4-4-4-4 with consistent single-space separators) proving real
+card shapes still redact. Full gate green: `tsc --noEmit`, lint,
+format:check, `npm test` — 722 tests (719 + 3 new), including the
+pre-existing `redaction.test.ts` and `redaction-audit.test.ts` credit-card
+cases, all pass.
+
+**Escape-hatch note (methodological, not a bug):** this repo's own Claude
+Code session runs through Golem's own redacting proxy (CLAUDE.local.md
+dogfooding), and Claude Code resends full history each turn — so secret- or
+card-shaped literals I authored myself in this same conversation (test
+fixture strings, an Edit tool call's `new_string`) rendered back to me on the
+next turn as `[REDACTED:credit-card:N]`-style placeholders, even though nothing
+was wrong with the actual file on disk. Confirmed the on-disk content was
+correct two ways that don't depend on trusting the rendered text: (1) a
+structural view with digits masked to `D` (`str.replace(/[0-9]/g, "D")`,
+printed via a throwaway Node script) shows the real literal lengths and
+grouping without printing sensitive-shaped digits themselves; (2) `npm test`
+pass/fail is computed by the real vitest subprocess against real on-disk
+bytes, unaffected by the chat-context redaction. Both confirmed the fix and
+fixtures are correct; the placeholder text was purely an artifact of viewing
+my own prior tool call through the proxy on resend, not a data-loss bug.
+Reconfirms the handling approach already established in §49/R1.1: don't trust
+visual inspection of secret-shaped content in this repo's own session,
+verify via test execution or structure-preserving-but-content-hiding checks
+instead.

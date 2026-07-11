@@ -2,9 +2,9 @@
 title: Redaction Stage
 type: concept
 tags: [security, pipeline, redaction]
-sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/verification-notes.md]
+sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/verification-notes.md, docs/verification-notes.md#§55]
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-11
 ---
 
 # Redaction Stage
@@ -74,3 +74,28 @@ debugging visual tool-output redaction, not yet logged with a
 verification-notes entry or scheduled.
 
 See also [[Wiki-First Knowledge]].
+
+---
+
+## Resolved: credit-card separator-format guard (§50/§55, 2026-07-11)
+
+The "Open, not yet fixed" credit-card item above is now fixed (R1.3). Adding
+it to the **Known false-positive classes** list, in the same style as §31/§37/§49:
+
+- **§50/§55 — credit-card Luhn-only gate.** The bare `luhnValid` check let any
+  13-19 digit window through regardless of grouping, so a space-separated
+  ASCII byte dump (irregular 1-3-digit groups) could pass Luhn by chance and
+  get redacted as a card number. Fixed by `isCreditCardLike`
+  (`luhnValid && hasConsistentSeparatorChar && hasUniformGrouping`):
+  separators must be a single consistent character (all-space or all-dash,
+  never mixed) AND every digit group between separators must be the same
+  length. Consistent-separator-character alone would *not* have fixed the
+  repro — an all-space, irregularly-grouped byte dump is already "consistent"
+  under that narrower reading; uniform grouping is the check that actually
+  defeats it. `luhnValid` itself is unchanged, still exported standalone.
+  Regression cases (contiguous and 4-4-4-4-grouped Luhn-valid test cards)
+  confirm real card shapes still redact
+  (`tests/unit/pipeline/redaction-audit.test.ts`).
+
+See also [[Wiki-First Knowledge]] and docs/verification-notes.md §55.
+
