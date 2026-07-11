@@ -1,8 +1,8 @@
 ---
 title: Redaction Stage
 type: concept
-tags: [security, pipeline, redaction]
-sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/verification-notes.md, docs/verification-notes.md#§55]
+tags: [security, pipeline, redaction, t-c3, r1-batch]
+sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/verification-notes.md, docs/verification-notes.md#§55, docs/verification-notes.md#§56]
 created: 2026-07-10
 updated: 2026-07-11
 ---
@@ -99,3 +99,27 @@ it to the **Known false-positive classes** list, in the same style as §31/§37/
 
 See also [[Wiki-First Knowledge]] and docs/verification-notes.md §55.
 
+---
+
+## Resolved: provider-key rule gaps closed (§24/§56, 2026-07-11, R1.4)
+
+Four provider secret shapes previously relied only on the entropy-sweep
+backstop (which can miss short or low-entropy instances) and now have
+dedicated `REDACTION_RULES` entries in `src/pipeline/redaction-rules.ts`:
+
+- `google-api-key` — `AIza` prefix + 35 base64url-ish chars (39 chars total).
+- `stripe-key` — `sk_live_` prefix (underscore, distinct from the existing
+  `sk-` `openai-key` rule) + 24-99 alphanumeric chars.
+- `gcp-oauth-token` — `ya29.` prefix + 20-120 base64url chars.
+- `azure-account-key` — contextual, redacts only the `AccountKey=` value
+  (base64, optional `=`/`==` padding) up to the next `;` or end of string,
+  leaving `AccountName=`/`EndpointSuffix=` legible — same pattern as the
+  existing `connection-password` rule.
+
+Corpus cases for all four live in `tests/unit/pipeline/redaction.test.ts`'s
+`CASES` array. This closes the specific provider list named in §24; other
+providers' key shapes remain on the entropy-sweep backstop only, per §24's
+original "add rules as needed" stance — not a claim of exhaustive coverage.
+
+See [[R1.4 — provider-key redaction rule gaps closed (T-C3)]] and
+docs/verification-notes.md#§56.

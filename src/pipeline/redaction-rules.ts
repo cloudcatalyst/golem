@@ -154,6 +154,32 @@ export const REDACTION_RULES: readonly RedactionRule[] = [
     pattern: /\bxox[baprse]-[A-Za-z0-9-]{10,}\b/g,
   },
   {
+    id: "google-api-key",
+    description:
+      "Google API keys: AIza prefix + 35 base64url-ish chars (39 chars total, " +
+      "the fixed real-world shape). Comfortably above the entropy net's 32-char " +
+      "floor, but a dedicated rule labels it correctly instead of falling " +
+      "through as generic high-entropy (verification-notes §24).",
+    pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  },
+  {
+    id: "stripe-key",
+    description:
+      "Stripe live secret keys: sk_live_ prefix (underscore, not the sk- " +
+      "hyphen shape the openai-key rule matches) + 24-99 alphanumeric chars " +
+      "(verification-notes §24).",
+    pattern: /\bsk_live_[A-Za-z0-9]{24,99}\b/g,
+  },
+  {
+    id: "gcp-oauth-token",
+    description:
+      "GCP OAuth2 access tokens: ya29. prefix + 20-120 base64url chars. The " +
+      "shortest real tokens sit near the entropy net's 32-char floor once the " +
+      "5-char prefix is included, so a dedicated rule is needed to not miss " +
+      "them (verification-notes §24).",
+    pattern: /\bya29\.[A-Za-z0-9_-]{20,120}\b/g,
+  },
+  {
     id: "jwt",
     description:
       "JSON Web Tokens: three dot-separated base64url segments where the " +
@@ -167,6 +193,16 @@ export const REDACTION_RULES: readonly RedactionRule[] = [
       "(scheme://user:password@host). Only the password is redacted so the " +
       "scheme, user, and host stay legible to the model.",
     pattern: /\b[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s:@/]+:([^\s@/]+)@/g,
+    group: 1,
+  },
+  {
+    id: "azure-account-key",
+    description:
+      "Azure Storage account connection strings: only the AccountKey= value " +
+      "is redacted (base64, 20-100 chars incl. optional = padding), leaving " +
+      "AccountName/EndpointSuffix legible — same pattern as connection-password " +
+      "(verification-notes §24).",
+    pattern: /\bAccountKey=([A-Za-z0-9+/]{20,100}={0,2})(?=;|$)/g,
     group: 1,
   },
   {

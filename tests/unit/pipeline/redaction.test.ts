@@ -53,6 +53,27 @@ const CASES: readonly Case[] = [
     negative: "xoxb-short",
   },
   {
+    rule: "google-api-key",
+    positive: `AIza${"A1b2C3d4E5".repeat(4).slice(0, 35)}`,
+    negative: "AIzaShort",
+  },
+  {
+    rule: "stripe-key",
+    positive: `sk_live_${"A1b2C3d4E5".repeat(3)}`,
+    negative: "sk_live_short",
+  },
+  {
+    rule: "gcp-oauth-token",
+    positive: `ya29.${"A1b2C3d4E5".repeat(4)}`,
+    negative: "ya29.short",
+  },
+  {
+    rule: "azure-account-key",
+    positive: `DefaultEndpointsProtocol=https;AccountName=fakeacct;AccountKey=${"A1b2C3d4E5".repeat(9)}==;EndpointSuffix=core.windows.net`,
+    negative:
+      "DefaultEndpointsProtocol=https;AccountName=fakeacct;AccountKey=short;EndpointSuffix=core.windows.net",
+  },
+  {
     rule: "jwt",
     positive:
       "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
