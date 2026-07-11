@@ -121,6 +121,27 @@ trailer
     expect(text).toContain("Deploy notes");
     expect(plan.filesSeen).toBe(1);
   });
+
+  it("R3.3: syntax-aware chunking (opt-in) splits .ts by declaration, tagging nodeType", async () => {
+    await writeFile(
+      path.join(dir, "util.ts"),
+      "export function add(a: number, b: number): number {\n  return a + b;\n}\n\nexport function sub(a: number, b: number): number {\n  return a - b;\n}\n",
+    );
+    const plan = await planIngest(dir, { syntaxAwareChunking: true });
+    expect(plan.chunks.length).toBe(2);
+    expect(plan.chunks[0]?.metadata.nodeType).toBeDefined();
+    expect(plan.chunks[0]?.text).toContain("add");
+    expect(plan.chunks[1]?.text).toContain("sub");
+  });
+
+  it("R3.3: syntax-aware chunking off by default (heuristic chunker used)", async () => {
+    await writeFile(
+      path.join(dir, "util.ts"),
+      "export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+    );
+    const plan = await planIngest(dir);
+    expect(plan.chunks[0]?.metadata.nodeType).toBeUndefined();
+  });
 });
 
 describe("KnowledgeBase.ingest → search (end to end)", () => {

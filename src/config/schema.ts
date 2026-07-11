@@ -105,6 +105,15 @@ export const SETTINGS_LEAVES = {
      * `DEFAULT_MIN_CONFIDENCE` doc comment.
      */
     local_answer_min_confidence: z.number().min(0).max(1),
+    /**
+     * OPT-IN (R3.3): syntax-aware code chunking via `web-tree-sitter` (WASM,
+     * TS/JS/TSX grammars). Off by default because the runtime + grammars are
+     * a separate, user-installed opt-in — never a `golem-run` dependency
+     * (CLAUDE.md: no heavyweight deps in the default install; verification-
+     * notes §27 rejects native tree-sitter bindings for the default). Falls
+     * back to the heuristic `chunkCode` when the packages aren't installed.
+     */
+    syntax_aware_chunking: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -166,6 +175,7 @@ export interface KnowledgeSettings {
   readonly wiki_dir: string;
   readonly local_answer_enabled: boolean;
   readonly local_answer_min_confidence: number;
+  readonly syntax_aware_chunking: boolean;
 }
 
 export interface TelemetrySettings {
@@ -212,6 +222,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     wiki_dir: "docs/wiki",
     local_answer_enabled: false,
     local_answer_min_confidence: 0.6,
+    syntax_aware_chunking: false,
   },
   telemetry: {
     enabled: true,

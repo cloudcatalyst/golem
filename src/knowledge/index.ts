@@ -30,6 +30,7 @@ export {
   chunkText,
   isChunkableExtension,
   MAX_CHUNK_CHARS,
+  windowChunks,
 } from "./chunker.js";
 export type { DistillDraft, DistillInput } from "./distill.js";
 export { DistillParseError, distillPage } from "./distill.js";
@@ -66,6 +67,7 @@ export {
   NotImplementedYetError,
   supportsIncremental,
 } from "./knowledge-base.js";
+export { chunkCodeSyntaxAware } from "./tree-sitter-chunker.js";
 export type { WebCacheEntry } from "./web-cache.js";
 export { isFresh, WebCache, webCacheDir, webCacheKey } from "./web-cache.js";
 
@@ -86,6 +88,8 @@ export interface OpenKnowledgeBaseOptions extends KnowledgeBaseOptions {
    * raise NotImplementedYetError.
    */
   readonly inference?: InferenceService;
+  /** R3.3: try `web-tree-sitter` syntax-aware chunking for TS/JS before the heuristic. */
+  readonly syntaxAwareChunking?: boolean;
 }
 
 /**
@@ -99,7 +103,10 @@ export function openKnowledgeBase(options: OpenKnowledgeBaseOptions): KnowledgeB
   const driver = selectDriver(options);
   const embed =
     options.embed ?? (options.inference ? inferenceEmbedFn(options.inference) : hashingEmbedFn());
-  const kbOptions: KnowledgeBaseOptions = { embed };
+  const kbOptions: KnowledgeBaseOptions = {
+    embed,
+    syntaxAwareChunking: options.syntaxAwareChunking ?? false,
+  };
   return new GolemKnowledgeBase(driver, kbOptions);
 }
 

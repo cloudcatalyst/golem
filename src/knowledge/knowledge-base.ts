@@ -87,16 +87,20 @@ export interface KnowledgeBaseOptions {
    * and throws NotImplementedYetError — wired in C3.
    */
   readonly embed?: EmbedFn;
+  /** R3.3: try `web-tree-sitter` syntax-aware chunking for TS/JS before the heuristic. */
+  readonly syntaxAwareChunking?: boolean;
 }
 
 export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
   readonly #driver: VectorDriver;
   readonly #embed: EmbedFn | undefined;
+  readonly #syntaxAwareChunking: boolean;
   readonly #watchers: FileWatcher[] = [];
 
   constructor(driver: VectorDriver, options: KnowledgeBaseOptions = {}) {
     this.#driver = driver;
     this.#embed = options.embed;
+    this.#syntaxAwareChunking = options.syntaxAwareChunking ?? false;
   }
 
   async search(
@@ -142,7 +146,7 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
       throw new NotImplementedYetError("file watching", "driver");
     }
 
-    const plan = await planIngest(pathArg);
+    const plan = await planIngest(pathArg, { syntaxAwareChunking: this.#syntaxAwareChunking });
     await this.#driver.openCollection(projectId);
     const chunksIndexed = await this.#embedAndStore(projectId, plan.chunks);
 
@@ -206,7 +210,9 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
       throw new NotImplementedYetError("incremental re-index", "driver");
     }
     await this.#driver.openCollection(projectId);
-    const chunks = await chunkFilesRelativeTo(absFiles, baseDir);
+    const chunks = await chunkFilesRelativeTo(absFiles, baseDir, {
+      syntaxAwareChunking: this.#syntaxAwareChunking,
+    });
     // Clear the touched files' old chunks first (content-based ids would
     // orphan) — one batch call so persisted drivers flush once, not per file.
     const sourcePaths = new Set(chunks.map((c) => c.sourcePath));
