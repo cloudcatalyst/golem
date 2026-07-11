@@ -1,0 +1,191 @@
+# R2 batch — Real savings, evidence-gated
+
+> **Written 2026-07-11**, spun up per `ROADMAP.md`'s post-batch instruction
+> ("spin R2 into its own batch brief only after R1.1's A/B numbers are
+> recorded") once R1 (R1.1–R1.7) landed. Self-contained — read top to bottom
+> before picking a task. `ROADMAP.md` is the multi-release view;
+> `IMPLEMENTATION_PLAN.md` is the workstream/interface reference; the spec
+> Decisions Log (`docs/edge-offload-spec.md`) is authoritative.
+
+R2's theme: **every build here is gated on R1.1's measurement, no repeat of
+the §31 artifact** (ROADMAP). R1.1 landed with a null result on Anthropic
+(verification-notes §54: levels 1/3 are pipeline-identical there today), so
+R2's real work is finding where a live A/B signal *can* exist and proving it
+before building anything that claims savings.
+
+**Kickoff prompt** (paste when you start a session): *"Read
+docs/plan/R2_BATCH.md and continue with the next unblocked task. For every
+task follow the Opening moves in §1 — wiki + knowledge-base + local-model
+(`delegate`) first — before writing code or reaching outside the project."*
+
+## 0. Session setup (once, before the first task)
+
+1. Read `CLAUDE.md` and `CLAUDE.local.md` — hard rules override this file.
+   Key ones for R2: **frozen interfaces need contract tests + cross-workstream
+   flagging before changes** (R2.3 explicitly needs a new one); proxy
+   byte-fidelity at level ≤1 never regresses; cross-platform always.
+2. `golem slider 1` if a prior session left it elsewhere.
+3. Wiki-first ladder: `wiki_read "WIKI"` → `search` → external, same as R1.
+4. `delegate`-first for code/prose drafts, same as R1.
+
+## 1. Batch-wide definition of done (every task)
+
+Identical to `R1_BATCH.md` §1 — wiki/KB/delegate opening moves, full
+`tsc`/`lint`/`format:check`/`test` gate, hard rules honored, drive the real
+flow (not just tests — R1.1's gzip bug was invisible to fixtures by
+construction, the same risk applies here), conventional commit(s) per task
+ID, wiki debrief + `WIKI.md` index line (standing approval for THIS batch,
+same terms), log-and-move-on if blocked.
+
+**One R2-specific addition:** any task that touches `src/interfaces/` (R2.3
+is the likely one) needs contract tests written FIRST and the PR description
+must flag every dependent workstream, per CLAUDE.md's hard rule — don't skip
+straight to the implementation because the batch brief describes the shape.
+
+## 2. Tasks, in dependency order
+
+### R2.5 (🔬) — Verify Headroom `read_lifecycle` disable — ✅ DONE 2026-07-11
+
+Resolved: disabling it is possible but not the right lever (the cache-risky
+half is already off by default; the library's real cache-safe mechanism is
+proxy-only and architecturally out of reach for Golem's sidecar topology).
+See verification-notes §58, `debriefs/2026-07-11-R2.5.md`. **This unblocks
+R2.6's shape**, which is now specified below, not "build if R2.5 clears" —
+it cleared, with a different answer than either branch ROADMAP anticipated.
+
+### R2.6 (🛠️) — Cache-safe structural tier: re-enable default `compress()` on Anthropic, prove it net-safe
+
+**Why:** R2.5 found the current default Headroom `compress()` call (stale-Read
+replacement + `CacheAligner` + `ContentRouter`, `compress_superseded` already
+off) is Headroom's own conservative, cache-aware configuration — the thing
+Decision 31 blanket-disabled on Anthropic via `isCachingUpstream()` was a
+coarser gate than the risk actually requires. R1.1 already built the exact
+measurement infra (`UsageSniffer`, `aggregateUsageByLevel`) this needs and
+found nothing to point it at yet — this is where it points.
+
+**What to build:**
+1. A new opt-in path that runs the existing `semanticCompression` stage on
+   Anthropic hosts too (bypass — not remove — `isCachingUpstream()`'s gate
+   for this specific configuration), gated behind its own flag so it can be
+   A/B'd against the current gate-off behavior without a permanent slider
+   change yet.
+2. Run real Claude Code traffic both ways (gate-on vs gate-off-for-this-tier)
+   and compare **billed** `cache_read_input_tokens` totals via the existing
+   `UsageSniffer`/`aggregateUsageByLevel` machinery — the honest metric R1.1
+   established, not gross tokens.
+3. If net-positive (or at least not net-negative) across enough requests to
+   be credible: propose flipping the gate for this configuration specifically
+   (spec Decisions Log entry — this modifies Decision 31's gate, needs a
+   decision memo, not a silent code change) and update the slider's level
+   table docs/status output accordingly.
+4. If net-negative or inconclusive: document why and leave Decision 31's gate
+   as-is — a negative result here is still the deliverable.
+
+**Read first:** verification-notes §58 (this task's own gate), §54 (R1.1 —
+the infra to reuse), §14/§32/§34 (cache economics); `src/pipeline/pipeline.ts`
+(`isCachingUpstream`), `src/proxy/usage-sniffer.ts`,
+`src/telemetry/usage-report.ts`, `src/compression/headroom-worker.py`.
+**Wiki writes:** debrief; update the R1.1 synthesis page or add a new one
+with the A/B result (plan-gated, propose first).
+**Size:** medium — mostly a scoped flag + real-traffic measurement, not new
+architecture. **Interfaces:** none frozen touched if done as an internal
+gate bypass rather than a `policy.ts`/`SliderPolicy` change — confirm before
+starting; if it does need a `policy.ts` change, that's contract-tests-first.
+**Local model:** draft the A/B results write-up.
+
+### R2.1 (🔬) — Decision 24 spike: measure real `avoidedUpstream` volume
+
+**Why:** the #1 candidate for a real, honest, big-savings lever on cached
+Anthropic traffic (spec Decision 24) — proxy-side KB/web-cache answer
+substitution counts tokens that never had to round-trip at all, a different
+metric from compression's request-shrink. Nothing is built yet; Decision 24
+is explicitly "design memo only, not built" pending this spike.
+
+**Deliverable (measurement, not a feature):** a dated verification-notes
+entry answering: across this repo's real Claude Code / `search`/`fetch`/KB
+usage, how many upstream prompt+completion tokens would plausibly have been
+avoidable if the proxy could substitute a local KB/web-cache answer for
+part or all of a turn? Use real telemetry (JSONL event log, `ccrRefsRetrieved`,
+search hit rates) plus a manual sample of recent sessions — not a guess.
+
+**Read first:** spec Decision 24 (`docs/edge-offload-spec.md` line ~339-345);
+verification-notes §14/§34/§54; `src/telemetry/`, `src/knowledge/` search/fetch
+call sites. Wiki: `search "avoidedUpstream KB substitution"`.
+**Wiki writes:** debrief; a `syntheses/` page with the measurement.
+**Size:** medium (telemetry archaeology + one clear number, not new code).
+**Local model:** draft the results-table prose.
+
+### R2.4 (🛠️) — Fix the `expand`↔Headroom-CCR gap
+
+**Why:** independent, contained bug — content Headroom elides at
+semantic-compression levels is unrecoverable via the `expand` MCP tool
+(verification-notes §38). No dependency on R2.1/R2.5/R2.6; can be picked up
+any time.
+
+**What to build:** confirm the gap still exists post-Decision-31 (semantic
+now only runs on non-caching upstreams, so re-check the repro on that path),
+then wire whatever CCR-store write Headroom's compressed output is missing
+so `expand <ref>` recovers the original elided content, matching the
+lossless-compaction path's existing recoverability guarantee.
+
+**Read first:** verification-notes §38; `src/compression/headroom-adapter.ts`,
+`src/mcp/` (`expand` tool), CCR store (`src/telemetry/` or wherever the ref
+store lives — confirm via `search`).
+**Wiki writes:** debrief.
+**Size:** small-medium. **Local model:** draft the fix + regression test.
+
+### R2.2 (🛠️) — Context-substitution (conservative sub-mode)
+
+**Gated on R2.1 clearing** — i.e. R2.1's measured `avoidedUpstream` volume
+must show this is worth building before starting. Do not start until R2.1's
+number is in and reviewed.
+
+**What to build (per spec Decision 24, sub-mode 1):** when a request
+references material already in the KB/web-cache, replace that span with a
+compact reference the model can `expand`/`fetch`, behind the compression
+seam + a new `avoidedUpstream` telemetry bucket. Must obey byte-stability/
+cache rules (§14) — only elide spans NOT in the stable cached prefix, or
+accept a miss only when the net saving beats it.
+
+**Read first:** spec Decision 24 sub-mode 1; R2.1's findings;
+`src/interfaces/compression.ts` (confirm this fits the existing
+`CompressionService` contract as the spec expects, or flag if it doesn't).
+**Wiki writes:** debrief.
+**Size:** medium-large. **Interfaces:** likely fits behind the existing
+frozen `CompressionService` contract per Decision 24's own scope note —
+confirm before assuming no contract-test work is needed.
+
+### R2.3 (🛠️🔒) — Local-answer sub-mode contract + recorded-shape tests
+
+**Gated on R2.1 AND R2.2 landing first** — this is the aggressive, opt-in,
+highest-risk sub-mode (proxy-as-responder, skips the upstream entirely).
+Decision 31 removed the old `localResponse` seam (Decision 25's mechanism),
+so this **re-introduces a proxy-response path from scratch as its own new
+contract** — not a revival of the deleted code.
+
+**What to build:** a new frozen interface/contract (contract tests FIRST,
+per CLAUDE.md) for a proxy-as-responder path: confidence-gated KB-composed
+answers for retrieval-shaped turns, never fabricated, clearly labeled in the
+transcript (mirroring Decision 25's old labeling convention:
+*"**Golem** Used \<model\> locally — verify independently."*), never the
+default, opt-in only. Full recorded-shape test coverage before this ships
+even behind a flag.
+
+**Read first:** spec Decision 24 sub-mode 2, Decision 25 (the retired
+precedent — read for the labeling/escalation pattern, not the removed code),
+Decision 31 (why it was removed); `src/proxy/types.ts`,
+`tests/integration/helpers/anthropic-fixtures.ts`.
+**Wiki writes:** debrief; a decision memo if this changes spec scope.
+**Size:** large; do last. **Interfaces:** NEW frozen contract — flag every
+dependent workstream in the PR description per the hard rule.
+
+## 3. Deferred (do NOT start without asking the user)
+
+- R3, R4, R5 and everything they contain (already indexed to WS-F/C4/W4 —
+  see `IMPLEMENTATION_PLAN.md` §7's crosswalk).
+
+## 4. Post-batch
+
+When R2 lands (or stalls on a gate): mark tasks done in `ROADMAP.md`, fold
+R2.6's A/B result into golem.run copy if it changes the situational-savings
+claim, and only then consider spinning R3 into its own batch brief.
