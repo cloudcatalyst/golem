@@ -88,3 +88,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-R2.2.md — shipped Decision 24 sub-mode 1: proxy-side webcache context substitution (new pipeline stage 4, gated like the semantic stage) + a durable `avoidedUpstream` telemetry bucket
 - debriefs/2026-07-11-R2.3.md — shipped Decision 24 sub-mode 2 (Decision 33): opt-in, off-by-default local-answer proxy-as-responder — new frozen `LocalAnswerService` contract + `ProxyRequest.respondDirectly` seam, decoupled from the slider, PROPOSED pending human review of a real served answer
 - debriefs/2026-07-11-R3.2.md — R3 batch opens: real `.html`/`.pdf` text extraction (`src/knowledge/extractors.ts`) ahead of chunking, via the optional `unpdf` package for PDFs; `.pdf` was previously entirely unchunkable
+- debriefs/2026-07-11-R3.3.md — opt-in `web-tree-sitter` WASM syntax-aware code chunker (`knowledge.syntax_aware_chunking`, default off); grammar packages are devDependencies only, never shipped to `golem-run` consumers
