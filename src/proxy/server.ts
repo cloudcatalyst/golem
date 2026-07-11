@@ -132,6 +132,16 @@ export class GolemProxy {
       }
     }
 
+    // R2.3 (Decision 33): the pipeline may have resolved a confident,
+    // KB-composed answer for an eligible single-turn request. When it did,
+    // serve it directly and skip the upstream call entirely.
+    if (forward.respondDirectly !== undefined) {
+      const direct = forward.respondDirectly;
+      res.writeHead(direct.status, direct.headers);
+      res.end(direct.body);
+      return;
+    }
+
     let upstream: Dispatcher.ResponseData;
     try {
       upstream = await this.pool.request({

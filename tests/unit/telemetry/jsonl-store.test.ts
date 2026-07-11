@@ -124,6 +124,7 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
         stageSavings: { dedup: { tokensBefore: 500, tokensAfter: 300 } },
         ccrRefsStored: 3,
         avoidedUpstreamInputTokens: 0,
+        avoidedUpstreamOutputTokens: 0,
       },
       "2026-07-04T12:00:00.000Z",
     );
@@ -162,6 +163,7 @@ describe("recordRetrieval (T1, §25)", () => {
         stageSavings: {},
         ccrRefsStored: 1,
         avoidedUpstreamInputTokens: 0,
+        avoidedUpstreamOutputTokens: 0,
       },
       "2026-07-10T00:00:00.000Z",
     );
@@ -437,6 +439,18 @@ describe("recordAvoidedUpstream + aggregateAvoidedUpstream (R2.2, §62)", () => 
     await store.close();
   });
 
+  it("rolls up output tokens avoided by the R2.3 local-answer sub-mode", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:00.000Z", 300, 120);
+    await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:01.000Z", 150, 40);
+
+    const stats = await store.aggregateAvoidedUpstream("projA");
+    expect(stats.events).toBe(2);
+    expect(stats.inputTokensAvoided).toBe(450);
+    expect(stats.outputTokensAvoided).toBe(160);
+    await store.close();
+  });
+
   it("scopes by projectId, and the global view sees all projects", async () => {
     const store = new JsonlTelemetryStore(dir);
     await recordAvoidedUpstream(store, "projA", "2026-07-11T00:00:00.000Z", 100);
@@ -462,6 +476,7 @@ describe("recordAvoidedUpstream + aggregateAvoidedUpstream (R2.2, §62)", () => 
         stageSavings: {},
         ccrRefsStored: 0,
         avoidedUpstreamInputTokens: 0,
+        avoidedUpstreamOutputTokens: 0,
       },
       "2026-07-11T00:00:00.000Z",
     );

@@ -6,11 +6,18 @@
  * which task A3 will implement as redaction -> compression -> forward.
  * At A1 the pipeline is the identity.
  *
- * Response bodies have NO seam by design: SSE streams and tool-use blocks
- * must pass through byte-faithful (CLAUDE.md hard rule), so the response
- * path is always a raw stream pipe. (Decision 25's local-first `localResponse`
- * exception was removed in Decision 31 — the local model is now invoked only via
- * the explicit `delegate` MCP tool, never as an automatic proxy response.)
+ * Response bodies otherwise have NO seam by design: SSE streams and tool-use
+ * blocks must pass through byte-faithful (CLAUDE.md hard rule), so the
+ * response path is always a raw stream pipe. (Decision 25's local-first
+ * `localResponse` exception was removed in Decision 31 — the local model is
+ * invoked automatically only via the narrower R2.3 mechanism below, never as
+ * a slider-triggered draft.)
+ *
+ * R2.3 (Decision 33) adds ONE additive, opt-in exception:
+ * {@link ProxyRequest.respondDirectly}, set by the pipeline only when the
+ * local-answer sub-mode is enabled, the request is eligible (single-turn,
+ * plain-text), and a confident KB-composed answer was found. Deliberately a
+ * new field/name — never confused with the removed `localResponse` seam.
  */
 
 /** Header that forces pure passthrough. Stripped before forwarding upstream. */
@@ -47,6 +54,17 @@ export interface ProxyRequest {
   readonly headers: Readonly<Record<string, string | string[]>>;
   /** Raw request body bytes, or null when the request has no body. */
   readonly body: Buffer | null;
+  /**
+   * R2.3 (Decision 33): when set by the pipeline, the proxy serves this
+   * response directly and skips the upstream call entirely. Additive and
+   * opt-in only — absent for every request unless the local-answer sub-mode
+   * is enabled, eligible, and confident. Never set by the identity pipeline.
+   */
+  readonly respondDirectly?: {
+    readonly status: number;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body: Buffer;
+  };
 }
 
 /**
