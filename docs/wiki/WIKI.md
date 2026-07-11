@@ -4,7 +4,7 @@ type: schema
 tags: [meta]
 sources: []
 created: 2026-07-10
-updated: 2026-07-11
+updated: 2026-07-12
 ---
 
 # Golem project wiki — schema (Zone 0)
@@ -91,3 +91,5 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-R3.3.md — opt-in `web-tree-sitter` WASM syntax-aware code chunker (`knowledge.syntax_aware_chunking`, default off); grammar packages are devDependencies only, never shipped to `golem-run` consumers
 - debriefs/2026-07-12-R3.5.md — `distillNote`/`golem note distill [ts]`: shapes a captured note into a draft `question`/`artifact` wiki page, reusing the existing `.golem/distill/` draft storage and JSON-forcing distill machinery
 - debriefs/2026-07-12-R3.4.md — user-scope `~/.golem/wiki/` federated read-only into `search`/`fetch` via `FederatedWikiReader`; `golem wiki synthesize` drafts a weekly through-line over recent debriefs + notes
+- syntheses/r3.7-lancedb-scale-spike.md — `FileVectorDriver` benchmark: search stays fast to 30k chunks, but `#flush()`'s whole-collection `Array.join` hard-crashes between 30k-50k chunks (earlier than ROADMAP's assumed 10⁵); no-go on LanceDB today, recommends a cheap stream-write fix instead
+- debriefs/2026-07-12-R3.7.md — recorded the LanceDB scale spike finding + go/no-go
