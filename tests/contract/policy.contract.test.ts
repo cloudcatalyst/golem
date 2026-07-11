@@ -5,12 +5,12 @@
  * the interface is changing — flag all workstreams.
  *
  * Scale simplified to 0–3 by Decision 30 (2026-07-11): off / lossless /
- * balanced / aggressive.
+ * balanced / aggressive. Local drafts / local-first removed from the slider by
+ * Decision 31 — levels are now purely a compression-aggressiveness dial.
  */
 
 import { describe, expect, it } from "vitest";
 import {
-  effectiveStages,
   MAX_SLIDER_LEVEL,
   migrateSliderLevel,
   SliderLevel,
@@ -34,8 +34,6 @@ describe("SliderPolicy level table", () => {
     expect(stages.toolResultCache).toBe(false);
     expect(stages.semanticCompression).toBe("off");
     expect(stages.semanticCache).toBe("off");
-    expect(stages.localDrafts).toBe(false);
-    expect(stages.localOnlyAnswers).toBe(false);
   });
 
   it("level 1 is lossless only (byte-faithful)", () => {
@@ -43,7 +41,6 @@ describe("SliderPolicy level table", () => {
     expect(stages.redaction).toBe(true);
     expect(stages.losslessCompression).toBe(true);
     expect(stages.semanticCompression).toBe("off");
-    expect(stages.localDrafts).toBe(false);
   });
 
   it("level 2 (balanced) adds stale-turn semantic compression + strict semantic cache", () => {
@@ -51,25 +48,15 @@ describe("SliderPolicy level table", () => {
     expect(stages.losslessCompression).toBe(true);
     expect(stages.semanticCompression).toBe("stale_turns");
     expect(stages.semanticCache).toBe("strict");
-    expect(stages.localDrafts).toBe(false);
-    expect(stages.localOnlyAnswers).toBe(false);
   });
 
-  it("level 3 (aggressive) enables max semantic + local drafts + local-first", () => {
+  it("level 3 (aggressive) enables max semantic compression (no local drafts — Decision 31)", () => {
     const stages = sliderPolicyForLevel(SliderLevel.Aggressive).stages;
     expect(stages.semanticCompression).toBe("aggressive");
     expect(stages.semanticCache).toBe("loose");
-    expect(stages.localDrafts).toBe(true);
-    expect(stages.localOnlyAnswers).toBe(true);
-  });
-
-  it("level-3 local-only answers require per-project opt-in (spec §9.7)", () => {
-    const byDefault = sliderPolicyForLevel(SliderLevel.Aggressive);
-    expect(byDefault.stages.localOnlyAnswers).toBe(true);
-    expect(effectiveStages(byDefault).localOnlyAnswers).toBe(false);
-
-    const opted = sliderPolicyForLevel(SliderLevel.Aggressive, { localOnlyOptIn: true });
-    expect(effectiveStages(opted).localOnlyAnswers).toBe(true);
+    // The slider is a pure compression dial now — no local-model fields exist.
+    expect("localDrafts" in stages).toBe(false);
+    expect("localOnlyAnswers" in stages).toBe(false);
   });
 
   it("raising the slider never turns a savings stage off, above level 1 (monotonicity)", () => {
@@ -82,7 +69,6 @@ describe("SliderPolicy level table", () => {
         Number(lower.losslessCompression),
       );
       expect(Number(higher.toolResultCache)).toBeGreaterThanOrEqual(Number(lower.toolResultCache));
-      expect(Number(higher.localDrafts)).toBeGreaterThanOrEqual(Number(lower.localDrafts));
     }
   });
 

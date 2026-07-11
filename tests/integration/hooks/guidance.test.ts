@@ -63,7 +63,7 @@ describe("upsertGuidance (pure)", () => {
     const out = upsertGuidance(null);
     expect(out).toContain("prefer the local model for coding drafts");
     expect(out).toContain("`delegate`");
-    expect(out).toContain("level 3");
+    expect(out).toContain("every level");
     // Deliberately no repo-specific hardware/GPU-pacing rules in the generic template.
     expect(out.toLowerCase()).not.toContain("gpu");
   });

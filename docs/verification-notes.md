@@ -1324,6 +1324,35 @@ differed only by `localOnlyAnswers`, already gated by `local_only_opt_in`.
 - Frozen `src/interfaces/policy.ts` changed (contract tests updated first, flagged
   per the hard rule). Full gate green: `tsc`, lint, 77 files / 730 tests.
 
+## §53 — Slider is a pure compression dial; semantic gated off caching upstreams (2026-07-11)
+
+Implemented spec **Decision 31** (USER decision), two coupled changes:
+
+- **Local drafts / local-first removed from the slider** (supersedes Decision
+  25's *automatic* proxy intercept). Deleted `src/pipeline/local-intercept.ts`,
+  pipeline stages 4/5, `ProxyRequest.localResponse`, `StageConfig.localDrafts`/
+  `localOnlyAnswers`, `SliderPolicy.localOnlyOptIn`, `effectiveStages`, the
+  `slider.local_only_opt_in` config key, and the `golem status` `local_first`
+  block. Frozen `policy.ts` changed (contract tests first, flagged). The local
+  model is now invoked ONLY via the explicit `delegate` MCP tool; Decision 26's
+  Ollama bootstrap is unchanged. Removed 2 test files (~36 tests).
+- **Semantic compression gated off caching upstreams.** `isCachingUpstream()`
+  in `pipeline.ts` (host contains `anthropic.com`, or unknown → assume caching)
+  disables the lossy stage on Anthropic and runs it only on non-caching
+  gateways — because `read_lifecycle` rewrites mid-history content and breaks the
+  byte-identical cached prefix (§14/§32/§34). This is the Decision 22/23
+  "situational compression" positioning in code.
+- Gate green: `tsc`, lint, 75 files / 694 vitest tests, 14 VS Code tests.
+
+**OPEN (verify before building the R2 cache-safe structural tier):** can Headroom
+be configured to **disable `read_lifecycle`** (keep only deterministic per-turn
+structural/`router` compression)? The current worker
+(`src/compression/headroom-worker.py`) runs `read_lifecycle` at every mode and
+`CompressConfig` exposes no obvious switch for it. If it can be disabled, the
+"both" design (cache-safe structural compression on Anthropic + a prefix guard)
+becomes buildable; if not, semantic stays non-caching-upstream-only. Needs a
+live-doc/source check per CLAUDE.md before R2 work.
+
 ## Open questions (plan §6 leftovers — owners assigned in workstream briefs)
 
 | Question | Owner | Notes |

@@ -103,16 +103,16 @@ interface FederatedSearch {
 ```
 
 ### 2.4 SliderPolicy (`interfaces/policy.ts`)
-Level 0–3 → per-stage config (**simplified from 0–5 by Decision 30, 2026-07-11**):
+Level 0–3 → per-stage config (**simplified from 0–5 by Decision 30; local drafts/local-first removed by Decision 31, 2026-07-11**). The slider is now a pure compression-aggressiveness dial:
 
-| Level | name | redaction | lossless (dedup/compaction/cache-align) | tool-result cache | semantic compression | semantic cache | local drafts | local-only answers |
-|---|---|---|---|---|---|---|---|---|
-| 0 | passthrough | ❌ **full bypass** | off | off | off | off | off | off |
-| 1 | lossless | ✅ | ✅ | off | off | off | off | off |
-| 2 | balanced | ✅ | ✅ | ✅ | stale turns only | strict | off | off |
-| 3 | aggressive | ✅ | ✅ | ✅ | aggressive | loose | ✅ | per-project opt-in |
+| Level | name | redaction | lossless (dedup/compaction/cache-align) | tool-result cache | semantic compression | semantic cache |
+|---|---|---|---|---|---|---|
+| 0 | passthrough | ❌ **full bypass** | off | off | off | off |
+| 1 | lossless | ✅ | ✅ | off | off | off |
+| 2 | balanced | ✅ | ✅ | ✅ | stale turns only | strict |
+| 3 | aggressive | ✅ | ✅ | ✅ | aggressive | loose |
 
-> **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30, USER decision), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). A reachable local model makes every level "local + upstream" in the status surfaces.
+> **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams (Decision 31) to preserve prompt-cache prefixes — they run only on non-caching gateways. The local model is invoked only via the explicit `delegate` MCP tool; a reachable local model shows "local + upstream" in the status surfaces.
 
 ### 2.5 MCP surface (WS-B owns; names frozen)
 Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `delegate`, `devices`.

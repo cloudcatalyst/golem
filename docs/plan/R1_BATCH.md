@@ -24,8 +24,9 @@ writing code or reaching outside the project."*
    (T-C3); proxy byte-fidelity at level ≤1; cross-platform (node:path,
    argument-array spawning, no /tmp, no POSIX signals).
 2. Restore savings if a prior session left the slider at 0:
-   `golem slider 1` (redaction + byte-faithful, recommended for R1 coding) or
-   `3` (aggressive: local drafts + local-first via opt-in). **But note the redaction
+   `golem slider 1` (redaction + byte-faithful, recommended for R1 coding). Note:
+   levels ≥2 (semantic compression) only do anything on a non-caching upstream —
+   on Anthropic they fall back to lossless (Decision 31). **But note the redaction
    caveat below for R1.3/R1.4.**
 3. **Wiki-first ladder (from CLAUDE.local.md):** for any "how does X work",
    check `docs/wiki/WIKI.md` + `wiki_read` first, then `search`, then external.
@@ -50,9 +51,9 @@ writing code or reaching outside the project."*
    previously-fetched URL is served from cache automatically.
 4. `delegate` a first draft of the change (code sketch, prose, corpus strings)
    to the local model, then review and finalize it yourself — never ship the
-   draft verbatim. **At slider ≤2 (you'll be at level 1) `delegate` is the only
-   path that engages the local model, so call it explicitly** — the proxy does
-   not auto-draft below level 3 (aggressive).
+   draft verbatim. **`delegate` is the only path that engages the local model at
+   any level, so call it explicitly** — the slider is a compression dial only
+   and never auto-drafts (Decision 31).
 5. Learned something durable? Propose a wiki page/update (plan-gated) in the
    debrief step rather than letting it evaporate.
 

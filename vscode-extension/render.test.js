@@ -45,19 +45,17 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.slider, 1);
   assert.equal(m.upstreamLabel, "anthropic");
   assert.equal(m.proxyReachable, false);
-  assert.equal(m.localFirstIntended, false);
-  assert.equal(m.localFirstReady, false);
+  assert.equal(m.localModelReachable, false);
 });
 
-test("buildModel surfaces local_first intended/ready from status --json", () => {
+test("buildModel surfaces local_model reachability from status --json", () => {
   const status = {
     slider: { level: 3, name: "aggressive" },
     proxy: { reachable: true },
-    local_first: { intended: true, ready: true, model: "qwen2.5-coder:7b" },
+    local_model: { reachable: true },
   };
   const m = buildModel({}, status);
-  assert.equal(m.localFirstIntended, true);
-  assert.equal(m.localFirstReady, true);
+  assert.equal(m.localModelReachable, true);
 });
 
 test("statusBarText — compact, provider-focused, no savings", () => {

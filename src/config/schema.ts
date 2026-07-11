@@ -9,8 +9,6 @@
  *
  * Key set (spec-derived where the spec speaks; noted otherwise):
  * - `slider.level` (0–3, Decision 30) — spec §4 / interfaces/policy.ts.
- * - `slider.local_only_opt_in` — per-project opt-in for level-3 (aggressive)
- *   local-only answers (spec §9 decision 7, `SliderPolicy.localOnlyOptIn`).
  * - `proxy.*` — port, upstream base URL, timeouts. The spec is silent on the
  *   concrete values; defaults chosen here (see DEFAULT_SETTINGS) and recorded
  *   in docs/verification-notes.md §17.
@@ -44,8 +42,6 @@ export const SETTINGS_LEAVES = {
      * settings files keep loading (5→3, 4→3, 2→1, …).
      */
     level: z.number().int().min(0).max(5).transform(migrateSliderLevel),
-    /** Per-project opt-in for level-3 (aggressive) local-only answers. */
-    local_only_opt_in: z.boolean(),
   },
   proxy: {
     /** Local port the Anthropic-compatible proxy listens on. */
@@ -120,7 +116,6 @@ export function allLeafPaths(): readonly string[] {
 
 export interface SliderSettings {
   readonly level: SliderLevel;
-  readonly local_only_opt_in: boolean;
 }
 
 export interface ProxySettings {
@@ -169,7 +164,6 @@ export interface GolemSettings {
 export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   slider: {
     level: 1,
-    local_only_opt_in: false,
   },
   proxy: {
     port: 4653,

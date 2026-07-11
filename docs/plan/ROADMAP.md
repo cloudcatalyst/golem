@@ -61,8 +61,10 @@ the §31 artifact.
 |---|---|---|---|
 | R2.1 | Decision 24 spike: measure real `avoidedUpstream` token volume from proxy-side KB/web-cache answer substitution. | 🔬 | Dec 24 |
 | R2.2 | Build context-substitution (conservative sub-mode) behind the compression seam + `avoidedUpstream` telemetry bucket, if R2.1 clears. | 🛠️ | Dec 24 |
-| R2.3 | Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder), reusing the Decision 25 precedent. | 🛠️🔒 | Dec 24 |
+| R2.3 | Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder). Note: Decision 31 removed the old `localResponse` seam, so this re-introduces a proxy-response path from scratch (its own contract). | 🛠️🔒 | Dec 24 |
 | R2.4 | Fix the `expand`↔Headroom-CCR gap: content Headroom elides at ≥2 is unrecoverable via `expand`. | 🛠️ | §38 |
+| R2.5 | **Verify** whether Headroom can disable `read_lifecycle` (keep only deterministic per-turn structural compression) — the prerequisite for a cache-safe tier on Anthropic. | 🔬 | §53, Dec 31 |
+| R2.6 | If R2.5 clears: build the **cache-safe structural tier** — run deterministic per-turn transforms on Anthropic (drop `read_lifecycle`) + a prefix-stability guard, so levels 2/3 save without breaking the cache. Else keep semantic non-caching-upstream-only. | 🛠️ | §53, Dec 31 |
 
 ### R3 — Knowledge depth
 Make the KB/wiki genuinely strong now that the retrieval spine exists.
