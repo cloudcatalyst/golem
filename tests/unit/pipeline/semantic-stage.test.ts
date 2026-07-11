@@ -30,6 +30,7 @@ function makePipeline(
   level: SliderLevel,
   semantic: SemanticCompressor | undefined,
   onEvent?: (e: PipelineEvent) => void,
+  opts: { upstreamBaseUrl?: string; forceSemanticOnCaching?: boolean } = {},
 ) {
   const compression = new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr"));
   return createGolemPipeline({
@@ -38,7 +39,10 @@ function makePipeline(
     projectId: "proj",
     // A non-caching upstream so the (lossy) semantic stage is allowed to run —
     // it is gated OFF on Anthropic-style caching upstreams (Decision 31).
-    upstreamBaseUrl: "https://openrouter.ai/api/v1",
+    upstreamBaseUrl: opts.upstreamBaseUrl ?? "https://openrouter.ai/api/v1",
+    ...(opts.forceSemanticOnCaching !== undefined
+      ? { forceSemanticOnCaching: opts.forceSemanticOnCaching }
+      : {}),
     ...(semantic !== undefined ? { semantic } : {}),
     ...(onEvent !== undefined ? { onEvent } : {}),
   });
@@ -101,5 +105,41 @@ describe("pipeline semantic stage (slider ≥2)", () => {
     const pipe = makePipeline(3, undefined);
     const out = await pipe.process(messagesRequest(SAMPLE));
     expect(bodyOf(out).messages).toHaveLength(SAMPLE.length);
+  });
+
+  describe("Decision-31 caching-upstream gate + R2.6 forceSemanticOnCaching bypass", () => {
+    it("does NOT invoke the semantic compressor on an Anthropic-style upstream by default", async () => {
+      const compress = vi.fn(async () => null);
+      const pipe = makePipeline(3, { compress }, undefined, {
+        upstreamBaseUrl: "https://api.anthropic.com",
+      });
+      await pipe.process(messagesRequest(SAMPLE));
+      expect(compress).not.toHaveBeenCalled();
+    });
+
+    it("invokes the semantic compressor on an Anthropic-style upstream when forceSemanticOnCaching is true", async () => {
+      const compress = vi.fn(async (msgs: ReadonlyArray<Readonly<Record<string, unknown>>>) => ({
+        messages: msgs,
+        tokensBefore: 100,
+        tokensAfter: 90,
+        transformsApplied: [],
+      }));
+      const pipe = makePipeline(3, { compress }, undefined, {
+        upstreamBaseUrl: "https://api.anthropic.com",
+        forceSemanticOnCaching: true,
+      });
+      await pipe.process(messagesRequest(SAMPLE));
+      expect(compress).toHaveBeenCalledTimes(1);
+    });
+
+    it("forceSemanticOnCaching has no effect when the level doesn't enable semantic compression", async () => {
+      const compress = vi.fn();
+      const pipe = makePipeline(1, { compress }, undefined, {
+        upstreamBaseUrl: "https://api.anthropic.com",
+        forceSemanticOnCaching: true,
+      });
+      await pipe.process(messagesRequest(SAMPLE));
+      expect(compress).not.toHaveBeenCalled();
+    });
   });
 });

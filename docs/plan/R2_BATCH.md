@@ -53,7 +53,19 @@ See verification-notes §58, `debriefs/2026-07-11-R2.5.md`. **This unblocks
 R2.6's shape**, which is now specified below, not "build if R2.5 clears" —
 it cleared, with a different answer than either branch ROADMAP anticipated.
 
-### R2.6 (🛠️) — Cache-safe structural tier: re-enable default `compress()` on Anthropic, prove it net-safe
+### R2.6 (🛠️) — Cache-safe structural tier: re-enable default `compress()` on Anthropic, prove it net-safe — ⚠️ PARTIAL 2026-07-11
+
+Mechanism + measurement infra shipped: opt-in `compression.force_semantic_on_caching`
+settings leaf, an `isCachingUpstream()` bypass scoped to the semantic pipeline
+stage only (the gate function itself is untouched), a `semanticForced`
+telemetry tag, and `aggregateUsageBySemanticForced`/`semanticForcedReportRows`
+reusing R1.1's exact `effectiveInputTokens` formula. Full gate green (`tsc`,
+Biome, 738/738 vitest). **The live real-traffic A/B (step 2 below) was
+deliberately NOT run** — it requires restarting the golem proxy this
+session's own Claude Code traffic depends on, a live change to shared
+infrastructure judged too risky to make unilaterally mid-session. Gate
+defaults OFF until that follow-up produces a real number. See
+verification-notes §60, `debriefs/2026-07-11-R2.6.md`.
 
 **Why:** R2.5 found the current default Headroom `compress()` call (stale-Read
 replacement + `CacheAligner` + `ContentRouter`, `compress_superseded` already

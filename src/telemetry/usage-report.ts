@@ -9,7 +9,7 @@
  * headline.
  */
 
-import type { UsageByLevel, UsageTotals } from "./types.js";
+import type { UsageByLevel, UsageBySemanticForced, UsageTotals } from "./types.js";
 
 /** Anthropic cache pricing multipliers relative to a full-price input token (verification-notes §14). */
 export const CACHE_WRITE_MULTIPLIER = 1.25; // 5-minute-TTL cache write
@@ -53,4 +53,42 @@ export function usageReportRows(byLevel: UsageByLevel): readonly LevelReportRow[
       };
     })
     .sort((a, b) => a.level - b.level);
+}
+
+export interface SemanticForcedReportRow extends UsageTotals {
+  readonly semanticForced: boolean;
+  readonly requests: number;
+  readonly effectiveInputTokens: number;
+  readonly effectiveInputTokensPerRequest: number;
+}
+
+/**
+ * R2.6 (verification-notes §58/§59): turn a {@link UsageBySemanticForced}
+ * aggregate into a two-row gate-on/gate-off comparison table, using the same
+ * honest effective-cost metric as {@link usageReportRows}. A net-safe result
+ * is `forced.effectiveInputTokensPerRequest` not materially higher than
+ * `notForced`'s — the bar `isCachingUpstream()`'s gate change would need to
+ * clear before flipping it (spec Decisions Log entry required either way).
+ */
+export function semanticForcedReportRows(
+  byForced: UsageBySemanticForced,
+): readonly SemanticForcedReportRow[] {
+  return (
+    [
+      ["notForced", byForced.notForced],
+      ["forced", byForced.forced],
+    ] as const
+  ).map(([key, totals]) => {
+    const eff = effectiveInputTokens(totals);
+    return {
+      semanticForced: key === "forced",
+      requests: totals.requests,
+      inputTokens: totals.inputTokens,
+      cacheCreationInputTokens: totals.cacheCreationInputTokens,
+      cacheReadInputTokens: totals.cacheReadInputTokens,
+      outputTokens: totals.outputTokens,
+      effectiveInputTokens: eff,
+      effectiveInputTokensPerRequest: totals.requests > 0 ? eff / totals.requests : 0,
+    };
+  });
 }

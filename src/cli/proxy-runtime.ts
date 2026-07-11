@@ -61,11 +61,15 @@ export function buildProxyFromSettings(
     const level = await sliderStore.get();
     return sliderPolicyForLevel(level);
   };
+  // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
+  // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.
+  const forceSemanticOnCaching = settings.compression.force_semantic_on_caching;
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: resolvePolicy,
     projectId: dir,
     upstreamBaseUrl: settings.proxy.upstream_base_url,
+    forceSemanticOnCaching,
     onEvent: (event) => {
       void recordPipelineEvent(telemetry, event, new Date().toISOString()).catch(() => {});
     },
@@ -90,7 +94,7 @@ export function buildProxyFromSettings(
         const level = (await resolvePolicy()).level;
         await recordUsageEvent(
           telemetry,
-          { projectId: dir, level, usage },
+          { projectId: dir, level, usage, semanticForced: forceSemanticOnCaching },
           new Date().toISOString(),
         );
       })().catch(() => {});
