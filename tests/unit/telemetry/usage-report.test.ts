@@ -38,10 +38,13 @@ describe("semanticForcedReportRows", () => {
 
     // effectiveInputTokens = input*1 + cacheCreation*1.25 + cacheRead*0.1
     expect(forced?.effectiveInputTokens).toBeCloseTo(100 + 40 * 1.25 + 2000 * 0.1, 6);
-    expect(forced?.effectiveInputTokensPerRequest).toBeCloseTo(forced!.effectiveInputTokens / 2, 6);
+    expect(forced?.effectiveInputTokensPerRequest).toBeCloseTo(
+      (forced?.effectiveInputTokens ?? Number.NaN) / 2,
+      6,
+    );
     expect(notForced?.effectiveInputTokens).toBeCloseTo(200 + 0 * 1.25 + 8000 * 0.1, 6);
     expect(notForced?.effectiveInputTokensPerRequest).toBeCloseTo(
-      notForced!.effectiveInputTokens / 4,
+      (notForced?.effectiveInputTokens ?? Number.NaN) / 4,
       6,
     );
   });
