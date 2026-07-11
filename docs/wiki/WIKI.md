@@ -93,3 +93,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-12-R3.4.md — user-scope `~/.golem/wiki/` federated read-only into `search`/`fetch` via `FederatedWikiReader`; `golem wiki synthesize` drafts a weekly through-line over recent debriefs + notes
 - syntheses/r3.7-lancedb-scale-spike.md — `FileVectorDriver` benchmark: search stays fast to 30k chunks, but `#flush()`'s whole-collection `Array.join` hard-crashes between 30k-50k chunks (earlier than ROADMAP's assumed 10⁵); no-go on LanceDB today, recommends a cheap stream-write fix instead
 - debriefs/2026-07-12-R3.7.md — recorded the LanceDB scale spike finding + go/no-go
+- debriefs/2026-07-12-R3.1.md — Decision 34: chat-judge rerank via the existing "judge" role + `jsonSchema` on the frozen `InferenceService.chat()` (no interface change), opt-in `knowledge.rerank_enabled` decoupled from the slider per Decision 31
