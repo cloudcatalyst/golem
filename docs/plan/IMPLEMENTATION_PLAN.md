@@ -4,6 +4,12 @@
 
 Companion to `edge-offload-spec.md`. Structured for **multi-agent Claude Code development**: workstreams are parallelizable, interfaces are frozen contracts, and every workstream lists its dependencies so agents don't collide.
 
+> **Status (2026-07-11):** P0 and most of P1 are shipped and the test baseline is
+> green (77 files / 728 tests). The forward-looking, release-grouped view now
+> lives in `ROADMAP.md`; this document remains the workstream/interface
+> reference. The `NEXT_BATCH.md` wiki-loop batch (T1–T7) fully landed — see the
+> per-workstream ✅ notes below.
+
 > **REVISED v1.1 (2026-07-03): implementation language is TypeScript** (spec Decisions 16–18, user decision). Layout, tooling, and interface signatures below are updated accordingly; the frozen interfaces now live as TypeScript in `src/interfaces/` and those files are authoritative over any snippet in this document.
 
 ---
@@ -132,20 +138,20 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 
 ### WS-C — Knowledge base (P1 headline)
 - C1: Embedded vector store setup (spec Decision 17: LanceDB candidate, spike + decision memo required; Qdrant server mode via URL config); per-project collections; schema/migrations.
-- C2: Ingestion: doc chunking (heading-aware md/html/pdf-text), code chunking (tree-sitter WASM vs native prebuilds — and **first evaluate reusing Headroom `--code-graph`**, decision memo required); file watchers (chokidar/fs.watch, Windows-correct).
+- C2: Ingestion: doc chunking (heading-aware md/html/pdf-text), code chunking (tree-sitter WASM vs native prebuilds — and **first evaluate reusing Headroom `--code-graph`**, decision memo required); file watchers (chokidar/fs.watch, Windows-correct). **✅ shipped:** heuristic pure-TS chunkers (notes §27); file watcher landed 2026-07-11 (T6, ADR-0001). *Follow-ups → ROADMAP R3: real HTML/PDF-text extractor, tree-sitter WASM opt-in.*
 - C3: Embedding + rerank via InferenceService; CPU fallback.
 - C4: Federated search: knowledge + Headroom memory (**via optional P2 sidecar only — Python-only subsystem, spec Decisions 13/18**), merged rerank; graceful KNOWLEDGE-only degradation.
 
-### WS-W — Wiki knowledge store (spec Decision 28; W1 done, W2 done 2026-07-10)
+### WS-W — Wiki knowledge store (spec Decision 28; W1 done, W2 done 2026-07-10, W3 done 2026-07-11)
 Pages are canonical, vectors are a derived rebuildable index. Design: `docs/plan/proposals/wiki-knowledge-pivot.md`. Consumes WS-C machinery; `src/interfaces/knowledge.ts` untouched.
 - W1: Make the wiki exist and be found first (config + scaffold, no new interfaces):
   - W1a: `wiki_dir` project-settings key (default `docs/wiki`), env `GOLEM_KNOWLEDGE_WIKI_DIR`.
   - W1b: `golem wiki init` — scaffold `wiki_dir` (WIKI.md zone-0 schema, `concepts/ entities/ sources/ syntheses/ decisions/ debriefs/ questions/ artifacts/`), idempotent like `golem init`.
   - W1c: search-rank boost for hits whose `sourcePath` is under `wiki_dir` (wiki pages beat raw chunks at equal similarity).
   - W1d: wiki-first retrieval guidance in the generated Claude Code surfaces (CLAUDE.local.md template / skills): wiki lookup → `search` → outside world.
-- W2: Authoring surface (contract-first): NEW frozen `src/interfaces/wiki.ts` (readPage/upsertPage/resolveLink/backlinks) + contract tests; `wiki_read` + `wiki_upsert` MCP tools (plan-gated writes); `/golem/wiki-ingest <url>` + `/golem/wiki-query` skills; `golem wiki check` link/frontmatter lint.
-- W3 (post WS-D): local-model distillation queue (fetch → source note draft), `golem note` capture (Decision 20f), webcache backfill distillation, graph-first lookup step ahead of vector search.
-- W4: user-scope `~/.golem/wiki/` federation (Decision 20e local tier); weekly synthesis reports.
+- W2: Authoring surface (contract-first): NEW frozen `src/interfaces/wiki.ts` (readPage/upsertPage/resolveLink/backlinks) + contract tests; `wiki_read` + `wiki_upsert` MCP tools (plan-gated writes); `/golem/wiki-ingest <url>` + `/golem/wiki-query` skills; `golem wiki check` link/frontmatter lint. **✅ done** (skills shipped 2026-07-11, T2).
+- W3 (post WS-D): local-model distillation queue (fetch → source note draft), `golem note` capture (Decision 20f), webcache backfill distillation, graph-first lookup step ahead of vector search. **✅ done 2026-07-11** (T3 distill engine, T4 `golem note`, T5 graph-first search). *Follow-up → ROADMAP R3.5: shape captured notes into draft pages.*
+- W4: user-scope `~/.golem/wiki/` federation (Decision 20e local tier); weekly synthesis reports. *→ ROADMAP R3.4 (not started).*
 
 ### WS-D — Inference & hardware (P1/P2)
 - D1: Capability detection (GPU/VRAM/unified memory, all 3 OS) → tier.
