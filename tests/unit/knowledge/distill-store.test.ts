@@ -7,13 +7,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { DistillDraft } from "../../../src/knowledge/distill.js";
+import type { DistillDraft, NoteDraft } from "../../../src/knowledge/distill.js";
 import {
   distillDir,
+  findDraftByNoteTs,
   findDraftByUrl,
   listDraftFiles,
   readDraftFile,
   writeDraftFile,
+  writeNoteDraftFile,
 } from "../../../src/knowledge/distill-store.js";
 
 let projectDir: string;
@@ -113,5 +115,56 @@ describe("findDraftByUrl", () => {
   it("returns null when no draft cites the URL", async () => {
     await writeDraftFile(projectDir, url, draft, "2026-07-11T00:00:00.000Z");
     expect(await findDraftByUrl(projectDir, "https://example.com/other")).toBeNull();
+  });
+});
+
+const noteTs = "2026-07-12T00:00:00.000Z";
+const noteDraft: NoteDraft = {
+  title: "Should notes support tagging?",
+  slug: "should-notes-support-tagging",
+  tags: ["notes"],
+  type: "question",
+  summary: "Whether captured notes should support inline #tags.",
+  wikilinks: [],
+};
+
+describe("writeNoteDraftFile / findDraftByNoteTs", () => {
+  it("writes a wiki-shaped draft file with the note's type and a note: provenance marker", async () => {
+    const file = await writeNoteDraftFile(projectDir, noteTs, noteDraft, noteTs);
+    expect(file).toBe(path.join(distillDir(projectDir), "should-notes-support-tagging.md"));
+
+    const raw = await readFile(file, "utf8");
+    expect(raw).toContain("type: question");
+    expect(raw).toContain(`sources: [note:${noteTs}]`);
+    expect(raw).toContain("Whether captured notes should support inline #tags.");
+    expect(raw).not.toContain("Source:");
+
+    const read = await readDraftFile(projectDir, "should-notes-support-tagging");
+    expect(read?.frontmatter.type).toBe("question");
+    expect(read?.frontmatter.sources).toEqual([`note:${noteTs}`]);
+  });
+
+  it("finds a draft shaped from the given note timestamp", async () => {
+    await writeNoteDraftFile(projectDir, noteTs, noteDraft, noteTs);
+    const found = await findDraftByNoteTs(projectDir, noteTs);
+    expect(found?.slug).toBe("should-notes-support-tagging");
+  });
+
+  it("returns null when no draft cites the note timestamp", async () => {
+    await writeNoteDraftFile(projectDir, noteTs, noteDraft, noteTs);
+    expect(await findDraftByNoteTs(projectDir, "2026-07-12T01:00:00.000Z")).toBeNull();
+  });
+
+  it("keeps note-derived and url-derived drafts distinguishable by provenance marker", async () => {
+    await writeDraftFile(projectDir, url, draft, "2026-07-11T00:00:00.000Z");
+    await writeNoteDraftFile(projectDir, noteTs, noteDraft, noteTs);
+    expect(await findDraftByUrl(projectDir, url)).not.toBeNull();
+    expect((await findDraftByUrl(projectDir, url))?.slug).toBe("widget-factory-basics");
+    expect(await findDraftByNoteTs(projectDir, noteTs)).not.toBeNull();
+    expect((await findDraftByNoteTs(projectDir, noteTs))?.slug).toBe(
+      "should-notes-support-tagging",
+    );
+    // A raw URL never matches a note's `note:<ts>` marker, and vice versa.
+    expect(await findDraftByNoteTs(projectDir, url)).toBeNull();
   });
 });

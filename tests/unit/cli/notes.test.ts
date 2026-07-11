@@ -6,7 +6,13 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendNote, listNotes, notesFilePath, renderNotes } from "../../../src/cli/notes.js";
+import {
+  appendNote,
+  findNoteByTs,
+  listNotes,
+  notesFilePath,
+  renderNotes,
+} from "../../../src/cli/notes.js";
 
 let projectDir: string;
 beforeEach(async () => {
@@ -74,6 +80,26 @@ describe("listNotes", () => {
     await appendFile(notesFilePath(projectDir), "not-json\n", "utf8");
     const entries = await listNotes(projectDir);
     expect(entries.map((e) => e.text)).toEqual(["good note"]);
+  });
+});
+
+describe("findNoteByTs", () => {
+  it("returns null when the notes log doesn't exist yet", async () => {
+    expect(await findNoteByTs(projectDir, "2026-07-10T00:00:00.000Z")).toBeNull();
+  });
+
+  it("finds the note with the exact matching timestamp", async () => {
+    await appendNote(projectDir, "note 0", "2026-07-10T00:00:00.000Z");
+    await appendNote(projectDir, "note 1", "2026-07-10T00:00:01.000Z");
+    expect(await findNoteByTs(projectDir, "2026-07-10T00:00:01.000Z")).toEqual({
+      ts: "2026-07-10T00:00:01.000Z",
+      text: "note 1",
+    });
+  });
+
+  it("returns null when no note has that timestamp", async () => {
+    await appendNote(projectDir, "note 0", "2026-07-10T00:00:00.000Z");
+    expect(await findNoteByTs(projectDir, "2026-07-10T09:99:99.000Z")).toBeNull();
   });
 });
 

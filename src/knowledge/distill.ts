@@ -29,6 +29,25 @@ export interface DistillDraft {
   readonly wikilinks: readonly string[];
 }
 
+/** R3.5 — a `golem note` capture, shaped for distillation (no source URL). */
+export interface NoteDistillInput {
+  readonly text: string;
+  /** Existing wiki page titles, for candidate-wikilink matching. */
+  readonly existingTitles: readonly string[];
+}
+
+export interface NoteDraft {
+  readonly title: string;
+  readonly slug: string;
+  readonly tags: readonly string[];
+  /** Which zone-2 page shape this note becomes: an open question, or a keepable artifact/decision. */
+  readonly type: "question" | "artifact";
+  /** Distilled summary in the model's own words. */
+  readonly summary: string;
+  /** Subset of `existingTitles` (canonical casing) the draft should link to. */
+  readonly wikilinks: readonly string[];
+}
+
 /** The model's JSON response failed to parse or didn't match the expected shape. */
 export class DistillParseError extends Error {
   constructor(
@@ -46,6 +65,10 @@ const distillResultSchema = z.object({
   tags: z.array(z.string()),
   summary: z.string().min(1),
   wikilinks: z.array(z.string()),
+});
+
+const noteDistillResultSchema = distillResultSchema.extend({
+  type: z.enum(["question", "artifact"]),
 });
 
 const DISTILL_JSON_SCHEMA = {
@@ -68,6 +91,35 @@ const DISTILL_JSON_SCHEMA = {
       },
     },
     required: ["title", "slug", "tags", "summary", "wikilinks"],
+  },
+} as const;
+
+const NOTE_DISTILL_JSON_SCHEMA = {
+  name: "note_distill_draft",
+  schema: {
+    type: "object",
+    properties: {
+      title: { type: "string" },
+      slug: { type: "string", description: "kebab-case, derived from the title" },
+      tags: { type: "array", items: { type: "string" }, description: "2-5 kebab-case tags" },
+      type: {
+        type: "string",
+        enum: ["question", "artifact"],
+        description:
+          "'question' if the note poses something open/unresolved to investigate; " +
+          "'artifact' if it records a decision, snippet, or design note worth keeping as-is.",
+      },
+      summary: {
+        type: "string",
+        description: "The note's content in your own words. Do not quote it verbatim at length.",
+      },
+      wikilinks: {
+        type: "array",
+        items: { type: "string" },
+        description: "Zero or more titles copied verbatim from the supplied existing-page list",
+      },
+    },
+    required: ["title", "slug", "tags", "type", "summary", "wikilinks"],
   },
 } as const;
 
@@ -103,6 +155,70 @@ function buildPrompt(input: DistillInput): ChatMessage[] {
   ];
 }
 
+function buildNotePrompt(input: NoteDistillInput): ChatMessage[] {
+  const titleList =
+    input.existingTitles.length > 0
+      ? input.existingTitles.map((t) => `- ${t}`).join("\n")
+      : "(none yet)";
+  return [
+    {
+      role: "system",
+      content:
+        "You shape a quickly-captured personal note into a short wiki page draft. First " +
+        "classify it: 'question' if it poses something open/unresolved worth investigating " +
+        "later, 'artifact' if it records a decision, snippet, or design note worth keeping " +
+        "as-is. Write the summary in your own words. Suggest wikilinks ONLY from the " +
+        "existing-page list given to you; never invent a page title that isn't on that list.",
+    },
+    {
+      role: "user",
+      content:
+        `Existing wiki page titles (only these are valid wikilinks):\n${titleList}\n\n` +
+        `Captured note:\n${input.text}`,
+    },
+  ];
+}
+
+/**
+ * Shared response handling for both distill flows: parse JSON, validate
+ * against `schema`, kebab-case the slug (falling back to the title), and
+ * canonicalize wikilinks to `existingTitles`' casing, dropping any that don't
+ * match. Throws {@link DistillParseError} for a malformed or non-JSON response.
+ */
+function parseDistillResponse<T extends { title: string; slug: string; wikilinks: string[] }>(
+  rawText: string,
+  schema: z.ZodType<T>,
+  existingTitles: readonly string[],
+): T & { slug: string; wikilinks: string[] } {
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(rawText);
+  } catch {
+    throw new DistillParseError("model response was not valid JSON", rawText);
+  }
+  const parsed = schema.safeParse(parsedJson);
+  if (!parsed.success) {
+    throw new DistillParseError(
+      `model response did not match the expected shape: ${parsed.error.message}`,
+      rawText,
+    );
+  }
+  const draft = parsed.data;
+  const slug = kebabCase(draft.slug) || kebabCase(draft.title);
+
+  // Canonicalize casing to the caller's title, not the model's — the wiki's
+  // titles are the source of truth for how a link should read.
+  const canonicalByLower = new Map(existingTitles.map((t) => [t.toLowerCase(), t]));
+  const wikilinks = [
+    ...new Set(
+      draft.wikilinks
+        .map((link) => canonicalByLower.get(link.toLowerCase()))
+        .filter((title): title is string => title !== undefined),
+    ),
+  ];
+  return { ...draft, slug, wikilinks };
+}
+
 /**
  * Distill one raw page into a source-note draft. Errors from `inference.chat`
  * (endpoint unreachable, model missing, capability unavailable) propagate
@@ -116,40 +232,36 @@ export async function distillPage(
   const result = await inference.chat("summarizer", buildPrompt(input), {
     jsonSchema: DISTILL_JSON_SCHEMA,
   });
-
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(result.text);
-  } catch {
-    throw new DistillParseError("model response was not valid JSON", result.text);
-  }
-  const parsed = distillResultSchema.safeParse(parsedJson);
-  if (!parsed.success) {
-    throw new DistillParseError(
-      `model response did not match the expected shape: ${parsed.error.message}`,
-      result.text,
-    );
-  }
-  const draft = parsed.data;
-
-  const slug = kebabCase(draft.slug) || kebabCase(draft.title);
-
-  // Canonicalize casing to the caller's title, not the model's — the wiki's
-  // titles are the source of truth for how a link should read.
-  const canonicalByLower = new Map(input.existingTitles.map((t) => [t.toLowerCase(), t]));
-  const wikilinks = [
-    ...new Set(
-      draft.wikilinks
-        .map((link) => canonicalByLower.get(link.toLowerCase()))
-        .filter((title): title is string => title !== undefined),
-    ),
-  ];
-
+  const draft = parseDistillResponse(result.text, distillResultSchema, input.existingTitles);
   return {
     title: draft.title,
-    slug,
+    slug: draft.slug,
     tags: draft.tags,
     summary: draft.summary,
-    wikilinks,
+    wikilinks: draft.wikilinks,
+  };
+}
+
+/**
+ * R3.5 — shape a `golem note` capture into a draft `questions/` or
+ * `artifacts/` wiki page (see {@link NoteDraft.type}). Same JSON-forcing,
+ * parse-error, and wikilink-canonicalization contract as {@link distillPage};
+ * errors from `inference.chat` propagate unchanged.
+ */
+export async function distillNote(
+  inference: InferenceService,
+  input: NoteDistillInput,
+): Promise<NoteDraft> {
+  const result = await inference.chat("summarizer", buildNotePrompt(input), {
+    jsonSchema: NOTE_DISTILL_JSON_SCHEMA,
+  });
+  const draft = parseDistillResponse(result.text, noteDistillResultSchema, input.existingTitles);
+  return {
+    title: draft.title,
+    slug: draft.slug,
+    tags: draft.tags,
+    type: draft.type,
+    summary: draft.summary,
+    wikilinks: draft.wikilinks,
   };
 }

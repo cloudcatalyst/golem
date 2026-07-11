@@ -80,6 +80,25 @@ export async function listNotes(projectDir: string, limit = 20): Promise<NoteEnt
   return entries.slice(-limit).reverse();
 }
 
+/**
+ * R3.5 — find one captured note by its exact `ts` (its unique key). Null if
+ * no note has that timestamp, or the log doesn't exist yet.
+ */
+export async function findNoteByTs(projectDir: string, ts: string): Promise<NoteEntry | null> {
+  let raw: string;
+  try {
+    raw = await readFile(notesFilePath(projectDir), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  for (const line of raw.split("\n")) {
+    const note = parseNote(line);
+    if (note !== null && note.ts === ts) return note;
+  }
+  return null;
+}
+
 /** Human-readable rendering (the default, non---json output). */
 export function renderNotes(entries: readonly NoteEntry[]): string {
   if (entries.length === 0) return 'No notes captured yet. Try: golem note "some idea"\n';
