@@ -95,9 +95,17 @@ export interface GolemMcpServerDeps {
   /**
    * WS-W W2 wiki authoring surface. When present, the `wiki_read` /
    * `wiki_upsert` tools are registered (spec Decisions 28/29). Omitted when
-   * the knowledge base — and so the wiki — is disabled.
+   * the knowledge base — and so the wiki — is disabled. Writes always target
+   * this single (project) store, never {@link wikiSearch}.
    */
   readonly wiki?: WikiStore;
+  /**
+   * R3.4 (spec Decision 20e's local/P1 tier) — the read-only surface `search`/
+   * `fetch` query, e.g. a `FederatedWikiReader` merging the project wiki with
+   * the user-scope `~/.golem/wiki/`. Defaults to {@link wiki} when omitted, so
+   * existing callers that only ever had one wiki need no changes.
+   */
+  readonly wikiSearch?: WikiReader;
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -327,7 +335,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       // Historical fallback: the CLI has always wired the project dir as the
       // project id, so it doubles as the ingest root when none is given.
       deps.projectRootDir ?? deps.defaultProjectId,
-      deps.wiki,
+      deps.wikiSearch ?? deps.wiki,
     );
   }
 

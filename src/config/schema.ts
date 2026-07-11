@@ -114,6 +114,13 @@ export const SETTINGS_LEAVES = {
      * back to the heuristic `chunkCode` when the packages aren't installed.
      */
     syntax_aware_chunking: z.boolean(),
+    /**
+     * OPT-OUT (R3.4, spec Decision 20e's local/P1 tier): federate the
+     * user-scope wiki (`~/.golem/wiki/`) into `search`/`fetch` alongside this
+     * project's own wiki, read-only. On by default — set false if a user
+     * doesn't want personal notes bleeding into a project's search results.
+     */
+    user_wiki_enabled: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -176,6 +183,7 @@ export interface KnowledgeSettings {
   readonly local_answer_enabled: boolean;
   readonly local_answer_min_confidence: number;
   readonly syntax_aware_chunking: boolean;
+  readonly user_wiki_enabled: boolean;
 }
 
 export interface TelemetrySettings {
@@ -223,6 +231,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     local_answer_enabled: false,
     local_answer_min_confidence: 0.6,
     syntax_aware_chunking: false,
+    user_wiki_enabled: true,
   },
   telemetry: {
     enabled: true,

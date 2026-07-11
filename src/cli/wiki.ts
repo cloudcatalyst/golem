@@ -10,6 +10,7 @@
 
 import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { defaultUserDir } from "../config/paths.js";
 import type { WikiPageType } from "../interfaces/index.js";
 import { extractWikilinks, parseFrontmatter } from "../wiki/index.js";
 import type { InitAction } from "./init.js";
@@ -94,6 +95,17 @@ function wikiSchemaTemplate(date: string): string {
 /** Resolve the configured `wiki_dir` against a project root (relative → project-rooted). */
 export function resolveWikiDir(projectDir: string, wikiDirSetting: string): string {
   return path.isAbsolute(wikiDirSetting) ? wikiDirSetting : path.join(projectDir, wikiDirSetting);
+}
+
+/**
+ * R3.4 (spec Decision 20e's local/P1 tier) — the user-scope wiki root,
+ * `~/.golem/wiki/`, alongside every project's own `docs/wiki/`. Not
+ * project-relative and not configurable per-project: it's one directory per
+ * machine user, federated read-only into every project's `search`/`fetch`
+ * (see `FederatedWikiReader`).
+ */
+export function defaultUserWikiDir(): string {
+  return path.join(defaultUserDir(), "wiki");
 }
 
 /**

@@ -14,7 +14,12 @@ import type {
   Vector,
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
-import { DistillParseError, distillNote, distillPage } from "../../../src/knowledge/distill.js";
+import {
+  DistillParseError,
+  distillNote,
+  distillPage,
+  synthesizeWeekly,
+} from "../../../src/knowledge/distill.js";
 
 class FakeInferenceService implements InferenceService {
   lastRole: Role | undefined;
@@ -185,5 +190,71 @@ describe("distillNote", () => {
     };
     const fake = new FakeInferenceService(JSON.stringify(draft));
     await expect(distillNote(fake, noteInput)).rejects.toThrow(DistillParseError);
+  });
+});
+
+const synthesisInput = {
+  debriefs: [{ title: "R3.3 debrief", text: "Shipped tree-sitter chunking." }].map((d) => ({
+    title: d.title,
+    body: d.text,
+  })),
+  notes: [{ ts: "2026-07-08T10:00:00.000Z", text: "Should widgets rotate faster?" }],
+  existingTitles: ["Widget Factory", "Prompt Caching"],
+};
+
+describe("synthesizeWeekly", () => {
+  it("calls chat with role summarizer and a jsonSchema, embedding debriefs and notes in the prompt", async () => {
+    const draft = {
+      title: "Week of 2026-07-07 synthesis",
+      slug: "week-of-2026-07-07-synthesis",
+      tags: ["synthesis"],
+      summary: "This week's thread: chunking quality work paid off.",
+      wikilinks: ["Widget Factory"],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    const result = await synthesizeWeekly(fake, synthesisInput);
+
+    expect(fake.lastRole).toBe("summarizer");
+    expect(fake.lastOpts?.jsonSchema).toBeDefined();
+    const promptText = JSON.stringify(fake.lastMessages);
+    expect(promptText).toContain("tree-sitter chunking");
+    expect(promptText).toContain("rotate faster");
+
+    expect(result.title).toBe("Week of 2026-07-07 synthesis");
+    expect(result.slug).toBe("week-of-2026-07-07-synthesis");
+    expect(result.wikilinks).toEqual(["Widget Factory"]);
+  });
+
+  it("reuses the shared wikilink-canonicalization and slug logic", async () => {
+    const draft = {
+      title: "Synthesis",
+      slug: "!!!",
+      tags: [],
+      summary: "summary text",
+      wikilinks: ["widget FACTORY", "Nonexistent Page"],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    const result = await synthesizeWeekly(fake, synthesisInput);
+    expect(result.slug).toBe("synthesis");
+    expect(result.wikilinks).toEqual(["Widget Factory"]);
+  });
+
+  it("renders '(none this period)' placeholders when debriefs/notes are empty", async () => {
+    const draft = {
+      title: "Quiet week",
+      slug: "quiet-week",
+      tags: [],
+      summary: "Nothing happened.",
+      wikilinks: [],
+    };
+    const fake = new FakeInferenceService(JSON.stringify(draft));
+    await synthesizeWeekly(fake, { debriefs: [], notes: [], existingTitles: [] });
+    const promptText = JSON.stringify(fake.lastMessages);
+    expect(promptText).toContain("none this period");
+  });
+
+  it("throws DistillParseError on invalid JSON", async () => {
+    const fake = new FakeInferenceService("not json at all");
+    await expect(synthesizeWeekly(fake, synthesisInput)).rejects.toThrow(DistillParseError);
   });
 });

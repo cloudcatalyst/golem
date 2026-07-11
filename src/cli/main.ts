@@ -28,7 +28,7 @@ import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
-import { FileWikiStore } from "../wiki/index.js";
+import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
@@ -58,8 +58,10 @@ import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
+import { synthesizeWeeklyReport } from "./synthesize.js";
 import {
   checkWiki,
+  defaultUserWikiDir,
   golemWikiInit,
   resolveWikiDir,
   type WikiCheckReport,
@@ -221,12 +223,24 @@ wiki
   .description("Scaffold the project wiki (WIKI.md schema + zone directories)")
   .option("--dir <path>", "project directory", process.cwd())
   .option("--dry-run", "show what would change without writing", false)
-  .action(async (opts: { dir: string; dryRun: boolean }) => {
+  .option(
+    "--user",
+    "scaffold the user-scope wiki (~/.golem/wiki/, spec Decision 20e) instead of the project wiki",
+    false,
+  )
+  .action(async (opts: { dir: string; dryRun: boolean; user: boolean }) => {
     try {
-      const { settings } = await loadConfig({ projectDir: opts.dir });
-      const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+      let wikiDir: string;
+      if (opts.user) {
+        wikiDir = defaultUserWikiDir();
+      } else {
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+      }
+      // For the user wiki, report paths relative to itself (there's no
+      // enclosing project) rather than to --dir.
       const report = await golemWikiInit({
-        projectDir: opts.dir,
+        projectDir: opts.user ? wikiDir : opts.dir,
         wikiDir,
         dryRun: opts.dryRun,
       });
@@ -302,6 +316,28 @@ wiki
       }
     },
   );
+
+wiki
+  .command("synthesize")
+  .description(
+    "Draft a weekly synthesis of recent debriefs + notes into a zone-1 draft (local model, R3.4)",
+  )
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--days <n>", "how many days back to gather from", "7")
+  .action(async (opts: { dir: string; days: string }) => {
+    try {
+      const days = Number(opts.days);
+      if (!Number.isInteger(days) || days <= 0) {
+        throw new InitError(`invalid --days "${opts.days}"`);
+      }
+      const result = await synthesizeWeeklyReport({ projectDir: opts.dir, days });
+      process.stdout.write(
+        `synthesized: ${result.path} (${result.debriefCount} debrief(s), ${result.noteCount} note(s))\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
 
 async function resolvePort(
   dir: string,
@@ -551,7 +587,20 @@ mcp
             }
           : {}),
         ...(inference !== undefined ? { inference } : {}),
-        ...(wiki !== undefined ? { wiki } : {}),
+        // R3.4 (spec Decision 20e's local tier): federate the user-scope wiki
+        // (~/.golem/wiki/) into search/fetch, read-only — writes still only
+        // ever go to the project `wiki` via wiki_upsert.
+        ...(wiki !== undefined
+          ? {
+              wiki,
+              wikiSearch: settings.knowledge.user_wiki_enabled
+                ? new FederatedWikiReader(
+                    wiki,
+                    new FileWikiStore({ wikiDir: defaultUserWikiDir() }),
+                  )
+                : wiki,
+            }
+          : {}),
       });
     } catch (err) {
       fail(err);

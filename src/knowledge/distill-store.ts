@@ -13,7 +13,7 @@ import path from "node:path";
 import { stripKnownSecrets } from "../hooks/redact.js";
 import type { WikiFrontmatter } from "../interfaces/index.js";
 import { parseFrontmatter, serializeFrontmatter } from "../wiki/frontmatter.js";
-import type { DistillDraft, NoteDraft } from "./distill.js";
+import type { DistillDraft, NoteDraft, SynthesisDraft } from "./distill.js";
 
 /** Provenance marker stored in `sources` for a note-derived draft (R3.5). */
 function noteSourceMarker(noteTs: string): string {
@@ -98,6 +98,47 @@ export async function writeNoteDraftFile(
   const file = draftPath(projectDir, draft.slug);
   await mkdir(distillDir(projectDir), { recursive: true });
   await writeFile(file, `${serializeFrontmatter(frontmatter)}\n\n${noteDraftBody(draft)}`, "utf8");
+  return file;
+}
+
+function synthesisDraftBody(draft: SynthesisDraft): string {
+  const summary = stripKnownSecrets(draft.summary);
+  const lines = [`# ${draft.title}`, "", summary];
+  if (draft.wikilinks.length > 0) {
+    lines.push("", "## Candidate wikilinks", "", ...draft.wikilinks.map((t) => `- [[${t}]]`));
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * R3.4 — write (or overwrite) the draft file for a weekly synthesis shaped
+ * by {@link synthesizeWeekly}, keyed by slug like {@link writeDraftFile}.
+ * `sources` cites the debrief/note provenance the caller drew on (debrief
+ * wiki-relative paths, `note:<ts>` markers) — there's no single URL to cite.
+ * Returns the file path written.
+ */
+export async function writeSynthesisDraftFile(
+  projectDir: string,
+  sources: readonly string[],
+  draft: SynthesisDraft,
+  nowIso: string,
+): Promise<string> {
+  const date = nowIso.slice(0, 10);
+  const frontmatter: WikiFrontmatter = {
+    title: draft.title,
+    type: "synthesis",
+    tags: draft.tags,
+    sources: [...sources],
+    created: date,
+    updated: date,
+  };
+  const file = draftPath(projectDir, draft.slug);
+  await mkdir(distillDir(projectDir), { recursive: true });
+  await writeFile(
+    file,
+    `${serializeFrontmatter(frontmatter)}\n\n${synthesisDraftBody(draft)}`,
+    "utf8",
+  );
   return file;
 }
 
