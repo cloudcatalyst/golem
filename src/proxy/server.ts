@@ -32,6 +32,7 @@ import {
   type ProxyServerOptions,
   resolveProxyConfig,
 } from "./types.js";
+import { UsageSniffer } from "./usage-sniffer.js";
 
 function readBody(req: IncomingMessage): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
@@ -155,15 +156,40 @@ export class GolemProxy {
     // before the first event arrives.
     res.flushHeaders();
 
+    // R1.1: optional read-only usage sniffer (verification-notes §30-37) —
+    // only constructed when a consumer is listening, so the byte pipe stays
+    // the plain two-stream case by default.
+    const onResponseUsage = this.config.onResponseUsage;
+
     try {
-      // Raw byte pipe — the streaming path is never parsed or transformed.
-      await pipeline(upstream.body, res);
+      if (onResponseUsage !== undefined) {
+        // Still a raw byte pipe end-to-end — the sniffer forwards every
+        // chunk unmodified (see usage-sniffer.ts); it never parses/transforms
+        // what reaches the client.
+        const sniffer = new UsageSniffer(
+          this.header(upstream.headers, "content-type"),
+          this.header(upstream.headers, "content-encoding"),
+        );
+        await pipeline(upstream.body, sniffer, res);
+        onResponseUsage(sniffer.usage, forward);
+      } else {
+        // Raw byte pipe — the streaming path is never parsed or transformed.
+        await pipeline(upstream.body, res);
+      }
     } catch {
       // Mid-stream failure (upstream died or client hung up): we cannot
       // change the status any more, so surface truncation to the client.
       res.destroy();
       upstream.body.destroy();
     }
+  }
+
+  private header(
+    headers: Record<string, string | string[] | undefined>,
+    name: string,
+  ): string | undefined {
+    const value = headers[name];
+    return Array.isArray(value) ? value[0] : value;
   }
 
   private respondProxyError(

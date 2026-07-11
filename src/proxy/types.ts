@@ -16,6 +16,20 @@
 /** Header that forces pure passthrough. Stripped before forwarding upstream. */
 export const BYPASS_HEADER = "x-golem-bypass";
 
+/**
+ * The Anthropic Messages API `usage` block (R1.1 — net-of-cache measurement,
+ * verification-notes §30-37). Sniffed read-only from the response bytes the
+ * proxy is already forwarding; never used to alter what is sent to the
+ * client (CLAUDE.md proxy-fidelity hard rule — response bodies have no
+ * transform seam, only observation).
+ */
+export interface ResponseUsage {
+  readonly inputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly outputTokens: number;
+}
+
 /** Default upstream when none is configured. */
 export const DEFAULT_UPSTREAM_BASE_URL = "https://api.anthropic.com";
 
@@ -84,6 +98,14 @@ export interface ProxyServerOptions {
    * it must not rethrow. Default: none.
    */
   readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
+  /**
+   * Called once per response, after the body finished streaming to the
+   * client, with any `usage` block sniffed from it (null if none was found —
+   * malformed body, non-messages response, or the body exceeded the sniff
+   * cap). Observability only: never affects what was forwarded, must not
+   * rethrow. Default: none (sniffing is skipped entirely when absent).
+   */
+  readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -94,6 +116,7 @@ export interface ProxyConfig {
   readonly bodyTimeoutMs: number;
   readonly pipeline: RequestPipeline;
   readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
+  readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -104,5 +127,6 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     bodyTimeoutMs: options.bodyTimeoutMs ?? 300_000,
     pipeline: options.pipeline ?? identityPipeline,
     ...(options.onPipelineError !== undefined ? { onPipelineError: options.onPipelineError } : {}),
+    ...(options.onResponseUsage !== undefined ? { onResponseUsage: options.onResponseUsage } : {}),
   };
 }

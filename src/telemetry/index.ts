@@ -10,11 +10,19 @@
 
 import type { CompressionStats } from "../interfaces/compression.js";
 import type { PipelineEvent } from "../pipeline/index.js";
+import type { ResponseUsage } from "../proxy/types.js";
 import { JsonlTelemetryStore } from "./jsonl-store.js";
-import type { TelemetryEvent, TelemetryStore } from "./types.js";
+import type { TelemetryEvent, TelemetryStore, UsageTotals } from "./types.js";
 
 export { JsonlTelemetryStore, telemetryFilePath } from "./jsonl-store.js";
-export type { TelemetryEvent, TelemetryStore } from "./types.js";
+export type { TelemetryEvent, TelemetryStore, UsageByLevel, UsageTotals } from "./types.js";
+export {
+  CACHE_READ_MULTIPLIER,
+  CACHE_WRITE_MULTIPLIER,
+  effectiveInputTokens,
+  type LevelReportRow,
+  usageReportRows,
+} from "./usage-report.js";
 
 /** The durable telemetry store for a project (JSONL backend at P0). */
 export function openTelemetryStore(projectDir: string): TelemetryStore {
@@ -65,6 +73,37 @@ export function recordRetrieval(
     stageSavings: {},
     ccrRefsStored: 0,
     ccrRefsRetrieved: count,
+  };
+  return store.record(telemetryEvent);
+}
+
+/**
+ * Persist one sampled upstream `usage` block (R1.1 — net-of-cache A/B input,
+ * verification-notes §30-37). `nowIso` is injected like
+ * {@link recordPipelineEvent}. Not a pipeline run (`kind: "usage"` keeps it
+ * out of aggregate()'s `requests`/gross-token counts, same as `recordRetrieval`
+ * does for `kind: "retrieval"`); rolled up separately by
+ * `TelemetryStore.aggregateUsageByLevel`.
+ */
+export function recordUsageEvent(
+  store: TelemetryStore,
+  event: { readonly projectId: string; readonly level: number; readonly usage: ResponseUsage },
+  nowIso: string,
+): Promise<void> {
+  const usage: UsageTotals = {
+    inputTokens: event.usage.inputTokens,
+    cacheCreationInputTokens: event.usage.cacheCreationInputTokens,
+    cacheReadInputTokens: event.usage.cacheReadInputTokens,
+    outputTokens: event.usage.outputTokens,
+  };
+  const telemetryEvent: TelemetryEvent = {
+    ts: nowIso,
+    projectId: event.projectId,
+    level: event.level,
+    kind: "usage",
+    stageSavings: {},
+    ccrRefsStored: 0,
+    usage,
   };
   return store.record(telemetryEvent);
 }

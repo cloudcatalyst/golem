@@ -15,7 +15,7 @@ import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import { GolemProxy } from "../proxy/index.js";
-import { recordPipelineEvent } from "../telemetry/index.js";
+import { recordPipelineEvent, recordUsageEvent } from "../telemetry/index.js";
 import type { TelemetryStore } from "../telemetry/types.js";
 
 export interface ProxyBuild {
@@ -51,13 +51,19 @@ export function buildProxyFromSettings(
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
   const { sliderStore } = build;
+  // Shared with onResponseUsage below so a usage sample is tagged with the
+  // SAME level-resolution logic the pipeline used for this request's gross
+  // savings (R1.1). Re-read rather than threaded through per-request, so
+  // there is a (rare, documented) race if the level changes between a
+  // request and its response — acceptable for a batch/alternating A/B.
+  const resolvePolicy = async () => {
+    if (sliderStore === undefined) return policyFromSettings(settings);
+    const level = await sliderStore.get();
+    return sliderPolicyForLevel(level);
+  };
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
-    policy: async () => {
-      if (sliderStore === undefined) return policyFromSettings(settings);
-      const level = await sliderStore.get();
-      return sliderPolicyForLevel(level);
-    },
+    policy: resolvePolicy,
     projectId: dir,
     upstreamBaseUrl: settings.proxy.upstream_base_url,
     onEvent: (event) => {
@@ -77,6 +83,17 @@ export function buildProxyFromSettings(
           err instanceof Error ? err.message : String(err)
         }\n`,
       );
+    },
+    onResponseUsage: (usage) => {
+      if (usage === null) return;
+      void (async () => {
+        const level = (await resolvePolicy()).level;
+        await recordUsageEvent(
+          telemetry,
+          { projectId: dir, level, usage },
+          new Date().toISOString(),
+        );
+      })().catch(() => {});
     },
   });
   return semantic !== undefined ? { proxy, semantic } : { proxy };
