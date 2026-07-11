@@ -18,5 +18,7 @@ export {
   type ProxyRequest,
   type ProxyServerOptions,
   type RequestPipeline,
+  type ResponseUsage,
   resolveProxyConfig,
 } from "./types.js";
+export { UsageSniffer } from "./usage-sniffer.js";

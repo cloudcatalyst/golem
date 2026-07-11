@@ -12,6 +12,7 @@ import {
   JsonlTelemetryStore,
   recordPipelineEvent,
   recordRetrieval,
+  recordUsageEvent,
   telemetryFilePath,
   telemetryStatsSource,
 } from "../../../src/telemetry/index.js";
@@ -189,6 +190,148 @@ describe("recordRetrieval (T1, §25)", () => {
     const stats = await store.aggregate();
     expect(stats.requests).toBe(1); // absent kind must still parse as "request"
     expect(stats.ccrRefsRetrieved).toBe(0);
+    await store.close();
+  });
+});
+
+describe("recordUsageEvent + aggregateUsageByLevel (R1.1, §30-37)", () => {
+  it("rolls up usage totals and request counts per slider level", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 1,
+        usage: {
+          inputTokens: 2095,
+          cacheCreationInputTokens: 1024,
+          cacheReadInputTokens: 1024,
+          outputTokens: 89,
+        },
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 1,
+        usage: {
+          inputTokens: 100,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 500,
+          outputTokens: 20,
+        },
+      },
+      "2026-07-11T00:00:01.000Z",
+    );
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 3,
+        usage: {
+          inputTokens: 472,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 448,
+          outputTokens: 189,
+        },
+      },
+      "2026-07-11T00:00:02.000Z",
+    );
+
+    const byLevel = await store.aggregateUsageByLevel("projA");
+    expect(byLevel.projectId).toBe("projA");
+    expect(byLevel.byLevel[1]).toStrictEqual({
+      requests: 2,
+      inputTokens: 2195,
+      cacheCreationInputTokens: 1024,
+      cacheReadInputTokens: 1524,
+      outputTokens: 109,
+    });
+    expect(byLevel.byLevel[3]).toStrictEqual({
+      requests: 1,
+      inputTokens: 472,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 448,
+      outputTokens: 189,
+    });
+    await store.close();
+  });
+
+  it("keeps usage events out of the gross-token aggregate() headline", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev()); // one ordinary pipeline request
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 1,
+        usage: {
+          inputTokens: 2095,
+          cacheCreationInputTokens: 1024,
+          cacheReadInputTokens: 1024,
+          outputTokens: 89,
+        },
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    const stats = await store.aggregate("projA");
+    expect(stats.requests).toBe(1); // usage event does not count as a request
+    await store.close();
+  });
+
+  it("scopes aggregateUsageByLevel by projectId, and global sees all", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 1,
+        usage: {
+          inputTokens: 10,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          outputTokens: 1,
+        },
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projB",
+        level: 1,
+        usage: {
+          inputTokens: 20,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          outputTokens: 2,
+        },
+      },
+      "2026-07-11T00:00:01.000Z",
+    );
+    expect((await store.aggregateUsageByLevel("projA")).byLevel[1]?.requests).toBe(1);
+    expect((await store.aggregateUsageByLevel("projB")).byLevel[1]?.requests).toBe(1);
+    expect((await store.aggregateUsageByLevel()).byLevel[1]?.requests).toBe(2);
+    await store.close();
+  });
+
+  it("returns an empty byLevel map when no telemetry file exists yet", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    const byLevel = await store.aggregateUsageByLevel();
+    expect(byLevel.byLevel).toStrictEqual({});
+    expect(byLevel.projectId).toBeNull();
+    await store.close();
+  });
+
+  it("old lines without kind/usage still parse and are ignored by aggregateUsageByLevel", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev()); // no `kind`, no `usage` field at all
+    const byLevel = await store.aggregateUsageByLevel();
+    expect(byLevel.byLevel).toStrictEqual({});
+    const stats = await store.aggregate();
+    expect(stats.requests).toBe(1); // unaffected — still parses as an ordinary request
     await store.close();
   });
 });

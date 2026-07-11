@@ -1364,3 +1364,92 @@ live-doc/source check per CLAUDE.md before R2 work.
 | Headroom sidecar version handshake (npm client 0.22.4 ↔ Python 0.28/0.29) | WS-A (P2 sidecar task) | No published compatibility matrix; pin both sides + handshake check |
 | LanceDB vs sqlite-vec as embedded default (native-dep weight, Arrow peer dep) | WS-C (C1 memo) | @lancedb/lancedb 0.31.0 healthy but napi-native; decide with a spike |
 | tree-sitter in TS: web-tree-sitter (WASM) vs native prebuilds | WS-C (C2) | Cross-platform prebuild coverage is the deciding constraint |
+
+## §54 — R1.1: live net-of-cache billed-`usage` A/B, level 1 vs level 3 (2026-07-11)
+
+**Deliverable per `docs/plan/R1_BATCH.md` R1.1:** capture the real upstream `usage`
+block (not gross forwarded tokens — Decision 23/§30-37) from live Claude Code
+traffic through this repo's own proxy, at slider level 1 and level 3, and
+compare billed-cost-equivalent input tokens.
+
+**Bug found and fixed first (blocked the whole measurement):** real Anthropic
+responses proxied through Golem arrive `content-encoding: gzip` (`src/proxy/
+headers.ts` forwards the client's `accept-encoding` transparently — confirmed
+via a manual `curl -D-` against the live local proxy). The original
+`UsageSniffer` (`src/proxy/usage-sniffer.ts`) sniffed raw bytes assuming
+plaintext JSON/SSE, so it silently found zero `usage` events on all real
+traffic despite every fixture-based unit/integration test passing (fixtures
+were never gzip-encoded). Fixed by feeding sniffing a side `node:zlib`
+decompression stream (gunzip/brotli/inflate keyed off `content-encoding`) while
+the bytes forwarded to the client remain the original, untouched, possibly-
+compressed chunk — preserving the CLAUDE.md byte-fidelity hard rule. Caught
+only because R1_BATCH.md's Definition of Done requires driving the real flow,
+not just green tests (5 new unit + 1 new integration test added for the
+compressed-body path).
+
+**Measurement (this session's own dogfooding traffic, `.golem/telemetry/events.jsonl`,
+`aggregateUsageByLevel`/`usageReportRows` from `src/telemetry/usage-report.ts`):**
+
+| Level | Requests | inputTokens | cacheCreationInputTokens | cacheReadInputTokens | outputTokens | effectiveInputTokens/request |
+|---|---|---|---|---|---|---|
+| 1 (all) | 23 | 26,762 | 72,720 | 2,576,281 | 35,014 | ~16,317 |
+| 1 (excl. 1 compaction-reset outlier) | 22 | 3,717 | 52,918 | 2,537,463 | 34,805 | ~14,710 |
+| 3 (all) | 9 | 585 | 15,136 | 792,154 | 2,777 | ~10,969 |
+
+(`effectiveInputTokens = inputTokens + cacheCreationInputTokens×1.25 + cacheReadInputTokens×0.1`,
+per §14's Anthropic cache-pricing multipliers.)
+
+**Conclusion: the ~30% level-1-vs-level-3 gap above is NOT a slider effect —
+it's noise, and this repo's dogfooding setup cannot currently produce a
+meaningful level 1 vs 3 A/B at all.** Two independent lines of evidence:
+
+1. **Code proof.** `src/interfaces/policy.ts`'s `LEVEL_TABLE` gives levels 1
+   and 3 identical `redaction`/`losslessCompression` config; the only stage
+   that differs (`semanticCompression`: `"off"` vs `"aggressive"`) is
+   unconditionally gated off by `isCachingUpstream()` in
+   `src/pipeline/pipeline.ts` whenever the upstream host contains
+   `anthropic.com` (Decision 31) — which this repo's real traffic always
+   does. So the request bytes actually forwarded to Anthropic are provably
+   byte-identical between level 1 and level 3 here; there is no pipeline
+   difference left to measure.
+2. **Telemetry confirms it.** Per-turn `cacheCreationInputTokens` is nonzero
+   and similarly-scaled (hundreds–low-thousands) in *both* the level-1 and
+   level-3 windows — the ordinary cost of a growing conversation's new tail
+   needing a fresh cache write each turn, present regardless of level. The
+   one outsized event (a single request whose `cacheReadInputTokens` fell
+   163,225 → 38,818 while writing 19,802 cache-creation tokens, immediately
+   preceded by a `cacheCreationInputTokens` of 794 with no drop) lines up
+   with this very conversation's own context-compaction/summarization event,
+   not with any slider change — it happened several turns *before* the level
+   1→3 switch. Excluding it barely moves the level-1 average (16,317 →
+   14,710), and the remaining gap vs level 3's 10,969 is well within the
+   per-request variance already visible in the raw data (single-request
+   `outputTokens` alone ranges from 77 to 14,834 — output length dominates
+   over anything level-driven).
+
+**What this means for the roadmap:** Decision 31's caching-upstream gate
+already eliminated the net-of-cache risk that motivated R1.1 — on Anthropic,
+there is currently nothing for level 2/3 to cost *beyond* level 1, because
+semantic compression never runs there. The real open question is the one
+already flagged in §53: whether Headroom's `read_lifecycle` can be disabled to
+build a cache-safe **structural** compression tier for levels ≥2 on Anthropic.
+*That* comparison (structural-only vs pure-lossless, both cache-safe) is where
+a future net-of-cache A/B would carry signal; level 1 vs 3 as currently wired
+does not.
+
+**Side discovery (not fixed here — logged for later):** while composing a bash
+command referencing this session's scratchpad path (which embeds a UUID,
+`<...>/fa06e9c0-.../scratchpad/...`), the UUID segment was replaced by Golem's
+own redaction entropy sweep with a `[REDACTED:high-entropy:N]` placeholder in
+the conversation history resent for this turn — so the assistant literally
+recalled and re-issued the corrupted path, and the command failed. `T7`
+(2026-07-10 debrief) already fixed the entropy sweep eating *repo* paths via
+`isPathLikeToken`; this is a related but distinct false-positive on a bare UUID
+path segment outside that fix's coverage. Filed as a candidate alongside the
+existing credit-card/Luhn false positive (ROADMAP R1.3) — same class of
+problem (entropy heuristic vs structured-but-random-looking tokens), not
+reproduced/fixed as part of R1.1.
+
+Full gate green: `tsc --noEmit`, lint, format:check, `npm test` (all suites)
+clean after the gzip fix; rebuilt and restarted the live proxy to verify on
+real traffic (verification-notes DoD, R1_BATCH.md §1).

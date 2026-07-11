@@ -16,7 +16,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CompressionStats, TokenDelta } from "../interfaces/compression.js";
-import type { TelemetryEvent, TelemetryStore } from "./types.js";
+import type { TelemetryEvent, TelemetryStore, UsageByLevel, UsageTotals } from "./types.js";
 
 /** Telemetry file location for a project. */
 export function telemetryFilePath(projectDir: string): string {
@@ -29,6 +29,16 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 function isTokenDelta(v: unknown): v is TokenDelta {
   return isRecord(v) && typeof v.tokensBefore === "number" && typeof v.tokensAfter === "number";
+}
+
+function isUsageTotals(v: unknown): v is UsageTotals {
+  return (
+    isRecord(v) &&
+    typeof v.inputTokens === "number" &&
+    typeof v.cacheCreationInputTokens === "number" &&
+    typeof v.cacheReadInputTokens === "number" &&
+    typeof v.outputTokens === "number"
+  );
 }
 
 /** Parse one JSONL line into a TelemetryEvent, or null if malformed. */
@@ -54,11 +64,12 @@ function parseEvent(line: string): TelemetryEvent | null {
     ts: parsed.ts,
     projectId: parsed.projectId,
     level: typeof parsed.level === "number" ? parsed.level : 0,
-    kind: parsed.kind === "retrieval" ? "retrieval" : "request",
+    kind: parsed.kind === "retrieval" ? "retrieval" : parsed.kind === "usage" ? "usage" : "request",
     ...(isTokenDelta(parsed.requestTokens) ? { requestTokens: parsed.requestTokens } : {}),
     stageSavings,
     ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
     ccrRefsRetrieved: typeof parsed.ccrRefsRetrieved === "number" ? parsed.ccrRefsRetrieved : 0,
+    ...(isUsageTotals(parsed.usage) ? { usage: parsed.usage } : {}),
   };
 }
 
@@ -120,6 +131,11 @@ export class JsonlTelemetryStore implements TelemetryStore {
         ccrRefsRetrieved += ev.ccrRefsRetrieved ?? 0;
         continue;
       }
+      if (ev.kind === "usage") {
+        // Not a pipeline run either — rolled up separately by
+        // aggregateUsageByLevel (R1.1), never into the gross-token headline.
+        continue;
+      }
 
       requests += 1;
       ccrRefsStored += ev.ccrRefsStored;
@@ -156,6 +172,41 @@ export class JsonlTelemetryStore implements TelemetryStore {
       ccrRefsStored,
       ccrRefsRetrieved,
     };
+  }
+
+  async aggregateUsageByLevel(projectId?: string): Promise<UsageByLevel> {
+    let raw: string;
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { projectId: projectId ?? null, byLevel: {} };
+      }
+      throw err;
+    }
+
+    const byLevel: Record<number, UsageTotals & { requests: number }> = {};
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null || ev.kind !== "usage" || ev.usage === undefined) continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+
+      const acc = byLevel[ev.level] ?? {
+        requests: 0,
+        inputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        outputTokens: 0,
+      };
+      byLevel[ev.level] = {
+        requests: acc.requests + 1,
+        inputTokens: acc.inputTokens + ev.usage.inputTokens,
+        cacheCreationInputTokens: acc.cacheCreationInputTokens + ev.usage.cacheCreationInputTokens,
+        cacheReadInputTokens: acc.cacheReadInputTokens + ev.usage.cacheReadInputTokens,
+        outputTokens: acc.outputTokens + ev.usage.outputTokens,
+      };
+    }
+    return { projectId: projectId ?? null, byLevel };
   }
 
   async close(): Promise<void> {
