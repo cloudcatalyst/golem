@@ -236,7 +236,9 @@ the smoke-test script.
 ## 3. Deferred (do NOT start without asking the user)
 
 - All of ROADMAP R2–R5 (R2 is gated on R1.1's measurement landing first).
-- W4, C4, and anything in `IMPLEMENTATION_PLAN.md` §7 (WS-F*).
+  This **subsumes** W4, C4, and every `IMPLEMENTATION_PLAN.md` §7 WS-F
+  workstream — all are now scheduled as R3–R5 tasks (see §7's WS-F↔ROADMAP
+  crosswalk), so there is no separate "WS-F backlog" to start.
 
 ## 4. Post-batch
 
