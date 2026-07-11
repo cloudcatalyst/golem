@@ -1,7 +1,6 @@
 {
   "slider": {
-    "level": 5,
-    "local_only_opt_in": true
+    "level": 1
   },
   "compression": {
     "headroom_sidecar": true
