@@ -335,3 +335,88 @@ describe("recordUsageEvent + aggregateUsageByLevel (R1.1, §30-37)", () => {
     await store.close();
   });
 });
+
+describe("recordUsageEvent + aggregateUsageBySemanticForced (R2.6, §58/§59)", () => {
+  it("buckets usage totals by the semanticForced tag, independent of level", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 3,
+        usage: {
+          inputTokens: 10,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 1000,
+          outputTokens: 5,
+        },
+        semanticForced: true,
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 3,
+        usage: {
+          inputTokens: 20,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 100,
+          outputTokens: 8,
+        },
+        semanticForced: false,
+      },
+      "2026-07-11T00:00:01.000Z",
+    );
+
+    const byForced = await store.aggregateUsageBySemanticForced("projA");
+    expect(byForced.projectId).toBe("projA");
+    expect(byForced.forced).toStrictEqual({
+      requests: 1,
+      inputTokens: 10,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 1000,
+      outputTokens: 5,
+    });
+    expect(byForced.notForced).toStrictEqual({
+      requests: 1,
+      inputTokens: 20,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 100,
+      outputTokens: 8,
+    });
+    await store.close();
+  });
+
+  it("defaults semanticForced to false when omitted", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordUsageEvent(
+      store,
+      {
+        projectId: "projA",
+        level: 1,
+        usage: {
+          inputTokens: 1,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          outputTokens: 1,
+        },
+      },
+      "2026-07-11T00:00:00.000Z",
+    );
+    const byForced = await store.aggregateUsageBySemanticForced("projA");
+    expect(byForced.forced.requests).toBe(0);
+    expect(byForced.notForced.requests).toBe(1);
+    await store.close();
+  });
+
+  it("returns empty buckets when no telemetry file exists yet", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    const byForced = await store.aggregateUsageBySemanticForced();
+    expect(byForced.forced.requests).toBe(0);
+    expect(byForced.notForced.requests).toBe(0);
+    expect(byForced.projectId).toBeNull();
+    await store.close();
+  });
+});

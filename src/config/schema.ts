@@ -66,6 +66,16 @@ export const SETTINGS_LEAVES = {
      * default). Fails open if the sidecar can't start.
      */
     headroom_sidecar: z.boolean(),
+    /**
+     * OPT-IN, research-only (R2.6, verification-notes §58/§59): bypass the
+     * Decision-31 gate that keeps the lossy semantic stage off Anthropic-style
+     * caching upstreams, so it can be A/B'd there instead of assumed
+     * net-negative. Has no effect unless `headroom_sidecar` is also on and the
+     * slider is ≥2. Off by default — flipping it risks the cached-prefix cost
+     * cliff (verification-notes §14) until proven net-safe by a real
+     * `aggregateUsageBySemanticForced` comparison.
+     */
+    force_semantic_on_caching: z.boolean(),
   },
   knowledge: {
     /** Master toggle for the vector knowledge base. */
@@ -131,6 +141,7 @@ export interface InferenceSettings {
 
 export interface CompressionSettings {
   readonly headroom_sidecar: boolean;
+  readonly force_semantic_on_caching: boolean;
 }
 
 export interface KnowledgeSettings {
@@ -176,6 +187,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   compression: {
     headroom_sidecar: false,
+    force_semantic_on_caching: false,
   },
   knowledge: {
     enabled: true,

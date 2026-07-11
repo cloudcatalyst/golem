@@ -36,6 +36,18 @@ export interface UsageByLevel {
 }
 
 /**
+ * R2.6 (verification-notes §58/§59) A/B rollup: usage samples split by
+ * whether `compression.force_semantic_on_caching` was on for that sample,
+ * independent of level (the gate is a static per-run setting, not a
+ * per-request decision — see {@link recordUsageEvent}).
+ */
+export interface UsageBySemanticForced {
+  readonly projectId: string | null;
+  readonly forced: UsageTotals & { readonly requests: number };
+  readonly notForced: UsageTotals & { readonly requests: number };
+}
+
+/**
  * One durably-recorded event: a pipeline run (redaction → compression, the
  * historical/default shape), a CCR retrieval (an `expand` call,
  * verification-notes §25), or an upstream `usage` sample (R1.1).
@@ -77,6 +89,14 @@ export interface TelemetryEvent {
    * events.
    */
   readonly usage?: UsageTotals;
+  /**
+   * R2.6: whether `compression.force_semantic_on_caching` was on when this
+   * usage sample was recorded (a static per-run setting, not a per-request
+   * pipeline decision — see {@link recordUsageEvent}). Only set on `kind:
+   * "usage"` events; absent/false elsewhere and on events written before
+   * this field existed.
+   */
+  readonly semanticForced?: boolean;
 }
 
 export interface TelemetryStore {
@@ -94,6 +114,13 @@ export interface TelemetryStore {
    * count toward `CompressionStats` (that stays the gross-token headline).
    */
   aggregateUsageByLevel(projectId?: string): Promise<UsageByLevel>;
+  /**
+   * Roll up recorded `usage` events by the R2.6 `semanticForced` tag
+   * (verification-notes §58/§59) — the gate-on vs gate-off-for-this-tier A/B
+   * `isCachingUpstream()`'s bypass needs to be judged on. `projectId` scopes
+   * to one project; omit for the global view.
+   */
+  aggregateUsageBySemanticForced(projectId?: string): Promise<UsageBySemanticForced>;
   /** Flush and release resources. Safe to call more than once. */
   close(): Promise<void>;
 }

@@ -1780,3 +1780,62 @@ replaced a whole turn — which reinforces R2_BATCH's own sequencing
 Not implemented this session; recommends instrumenting `search`/`fetch`
 call sites with the same durable-telemetry pattern as `recordRetrieval` as
 a prerequisite of R2.2, so the bucket isn't retrofitted later.
+
+## §60 — R2.6: opt-in bypass + A/B measurement infra built; live real-traffic
+A/B deferred (mechanism ships, deliverable is partial) (2026-07-11)
+
+R2_BATCH.md's R2.6 asks to re-enable Headroom's already-conservative default
+`compress()` behavior on Anthropic-style caching upstreams too, behind a new
+opt-in gate, and prove it net-cache-safe via a real billed-usage A/B (§58's
+reshaped finding: the risky part of `read_lifecycle`, `compress_superseded`,
+is already off by default in the library itself — R2.6's actual job is
+re-enabling the safe default there, not building something novel).
+
+**What was built (mechanism, fully tested, `tsc`/lint/format/vitest all
+green — 738 tests, 78 files):**
+
+- `compression.force_semantic_on_caching` (new settings leaf, off by
+  default, snake_case, `GOLEM_COMPRESSION_FORCE_SEMANTIC_ON_CACHING` env
+  override auto-derived) — only has any effect when `headroom_sidecar` is
+  also on and slider level ≥2.
+- `GolemPipelineOptions.forceSemanticOnCaching` bypasses
+  `isCachingUpstream()` for the semantic stage specifically
+  (`src/pipeline/pipeline.ts`). **`isCachingUpstream()` itself is
+  unchanged** — Decision 31's gate is bypassed opt-in, not weakened.
+- A `semanticForced` tag on `kind:"usage"` telemetry events (static
+  per-run, set from the settings flag at proxy-build time — not
+  per-request; there is no correlation id linking `onResponseUsage` back to
+  the pipeline's internal stage-3 decision, and building one would be a
+  bigger change than this task's "medium — mostly a scoped flag" sizing) +
+  `aggregateUsageBySemanticForced`/`semanticForcedReportRows`
+  (`src/telemetry/{types,jsonl-store,usage-report,index}.ts`), reusing
+  R1.1's exact `effectiveInputTokens` formula (§54) so a gate-on vs
+  gate-off comparison is judged on the same honest metric, not a new one.
+  Neither function is wired into a CLI command yet — same precedent R1.1's
+  `usageReportRows`/`aggregateUsageByLevel` set (verified unused by any CLI
+  command before following it) — they're tested library functions, ready
+  for whoever runs the A/B to call.
+
+**What was NOT done — the live A/B itself.** R2_BATCH.md's own task
+description asks to *prove* net-cache-safety via real billed-usage
+comparison. Running that for real means flipping
+`force_semantic_on_caching` on and restarting the golem proxy that this
+very session's own Claude Code traffic is dogfooding through — a live
+operational change to shared infrastructure this session depends on, mid-
+session, unilaterally. That's a real risk (a broken pipeline mid-session
+degrades this conversation's own proxying), not a hypothetical one, so it
+was deliberately not done without flagging it first — the same treatment
+R1.6 gave an Ollama-verification block: document the gap honestly rather
+than fabricate a result or silently claim the task complete.
+
+**Honest status: R2.6 ships the mechanism + measurement infrastructure,
+not the net-cache-safety proof.** The live A/B is a manual follow-up:
+enable `force_semantic_on_caching` for a real session, let normal traffic
+run a while at slider ≥2 against `api.anthropic.com`, then compare
+`semanticForcedReportRows(await store.aggregateUsageBySemanticForced())`
+gate-on vs gate-off. Per R2_BATCH.md's own contingency language ("if
+net-negative or inconclusive: document why and leave Decision 31's gate
+as-is — a negative result here is still the deliverable"), adapted here to
+"mechanism built, live A/B deferred" — the gate defaults to OFF
+(`isCachingUpstream()` still blocks semantic-on-Anthropic by default) until
+that follow-up produces a real number.

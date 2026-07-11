@@ -16,7 +16,13 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CompressionStats, TokenDelta } from "../interfaces/compression.js";
-import type { TelemetryEvent, TelemetryStore, UsageByLevel, UsageTotals } from "./types.js";
+import type {
+  TelemetryEvent,
+  TelemetryStore,
+  UsageByLevel,
+  UsageBySemanticForced,
+  UsageTotals,
+} from "./types.js";
 
 /** Telemetry file location for a project. */
 export function telemetryFilePath(projectDir: string): string {
@@ -70,6 +76,7 @@ function parseEvent(line: string): TelemetryEvent | null {
     ccrRefsStored: typeof parsed.ccrRefsStored === "number" ? parsed.ccrRefsStored : 0,
     ccrRefsRetrieved: typeof parsed.ccrRefsRetrieved === "number" ? parsed.ccrRefsRetrieved : 0,
     ...(isUsageTotals(parsed.usage) ? { usage: parsed.usage } : {}),
+    semanticForced: parsed.semanticForced === true,
   };
 }
 
@@ -207,6 +214,45 @@ export class JsonlTelemetryStore implements TelemetryStore {
       };
     }
     return { projectId: projectId ?? null, byLevel };
+  }
+
+  async aggregateUsageBySemanticForced(projectId?: string): Promise<UsageBySemanticForced> {
+    let raw: string;
+    const empty = (): UsageTotals & { requests: number } => ({
+      requests: 0,
+      inputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      outputTokens: 0,
+    });
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { projectId: projectId ?? null, forced: empty(), notForced: empty() };
+      }
+      throw err;
+    }
+
+    let forced = empty();
+    let notForced = empty();
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null || ev.kind !== "usage" || ev.usage === undefined) continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+
+      const acc = ev.semanticForced === true ? forced : notForced;
+      const next = {
+        requests: acc.requests + 1,
+        inputTokens: acc.inputTokens + ev.usage.inputTokens,
+        cacheCreationInputTokens: acc.cacheCreationInputTokens + ev.usage.cacheCreationInputTokens,
+        cacheReadInputTokens: acc.cacheReadInputTokens + ev.usage.cacheReadInputTokens,
+        outputTokens: acc.outputTokens + ev.usage.outputTokens,
+      };
+      if (ev.semanticForced === true) forced = next;
+      else notForced = next;
+    }
+    return { projectId: projectId ?? null, forced, notForced };
   }
 
   async close(): Promise<void> {

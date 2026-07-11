@@ -15,12 +15,20 @@ import { JsonlTelemetryStore } from "./jsonl-store.js";
 import type { TelemetryEvent, TelemetryStore, UsageTotals } from "./types.js";
 
 export { JsonlTelemetryStore, telemetryFilePath } from "./jsonl-store.js";
-export type { TelemetryEvent, TelemetryStore, UsageByLevel, UsageTotals } from "./types.js";
+export type {
+  TelemetryEvent,
+  TelemetryStore,
+  UsageByLevel,
+  UsageBySemanticForced,
+  UsageTotals,
+} from "./types.js";
 export {
   CACHE_READ_MULTIPLIER,
   CACHE_WRITE_MULTIPLIER,
   effectiveInputTokens,
   type LevelReportRow,
+  type SemanticForcedReportRow,
+  semanticForcedReportRows,
   usageReportRows,
 } from "./usage-report.js";
 
@@ -87,7 +95,17 @@ export function recordRetrieval(
  */
 export function recordUsageEvent(
   store: TelemetryStore,
-  event: { readonly projectId: string; readonly level: number; readonly usage: ResponseUsage },
+  event: {
+    readonly projectId: string;
+    readonly level: number;
+    readonly usage: ResponseUsage;
+    /**
+     * R2.6: whether `compression.force_semantic_on_caching` was on for this
+     * proxy run. Static per-run, not per-request — see
+     * {@link TelemetryEvent.semanticForced}. Defaults to `false`.
+     */
+    readonly semanticForced?: boolean;
+  },
   nowIso: string,
 ): Promise<void> {
   const usage: UsageTotals = {
@@ -104,6 +122,7 @@ export function recordUsageEvent(
     stageSavings: {},
     ccrRefsStored: 0,
     usage,
+    semanticForced: event.semanticForced ?? false,
   };
   return store.record(telemetryEvent);
 }

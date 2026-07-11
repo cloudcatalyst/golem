@@ -84,6 +84,16 @@ export interface GolemPipelineOptions {
    * {@link isCachingUpstream}). Absent → treated as the caching default.
    */
   readonly upstreamBaseUrl?: string;
+  /**
+   * OPT-IN research flag (R2.6, verification-notes §58/§59): bypass the
+   * {@link isCachingUpstream} gate for the semantic stage specifically, so it
+   * can be A/B'd on Anthropic instead of assumed net-negative. Does not
+   * change what the stage does — only whether it runs there. Off by default;
+   * the caller (proxy-runtime) also tags every usage sample recorded while
+   * this is on, so `aggregateUsageBySemanticForced` can compare gate-on vs
+   * gate-off billed cache-read totals.
+   */
+  readonly forceSemanticOnCaching?: boolean;
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -170,11 +180,13 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       // Anthropic-style caching upstreams (Decision 31): rewriting mid-history
       // content breaks the byte-identical cached prefix, so it engages only on
       // non-caching gateways. Any failure resolves null and leaves the body
-      // as-is, preserving the level-≤1 guarantees.
+      // as-is, preserving the level-≤1 guarantees. `forceSemanticOnCaching`
+      // (R2.6) bypasses this specific gate, opt-in, for A/B measurement —
+      // see the option's doc comment.
       if (
         stages.semanticCompression !== "off" &&
         options.semantic !== undefined &&
-        !isCachingUpstream(options.upstreamBaseUrl) &&
+        (!isCachingUpstream(options.upstreamBaseUrl) || options.forceSemanticOnCaching === true) &&
         Array.isArray(body.messages)
       ) {
         const semantic = await options.semantic.compress(
