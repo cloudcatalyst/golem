@@ -27,3 +27,37 @@ describe("wiki skills (T2, W2 leftover)", () => {
     expect(skill.indexOf("golem wiki distill")).toBeLessThan(skill.indexOf("approval"));
   });
 });
+
+describe("plan skill (R4.1 — planning-collaboration surface)", () => {
+  const skill = P0_SKILLS.plan;
+
+  it("is installed as a user-invoked skill", () => {
+    if (skill === undefined) throw new Error("expected a plan skill");
+    expect(skill).toContain("invocationMode: user");
+    expect(skill).toMatch(/\$ARGUMENTS/);
+  });
+
+  it("reads every second-brain source before proposing tasks", () => {
+    if (skill === undefined) throw new Error("expected a plan skill");
+    // Notes, open questions, distill drafts, the backlog, and the roadmap.
+    expect(skill).toContain("golem note list");
+    expect(skill).toContain("questions/");
+    expect(skill).toContain(".golem/distill/");
+    expect(skill).toContain("BACKLOG.md");
+    expect(skill).toContain("ROADMAP.md");
+  });
+
+  it("plan-gates writes: gather (read) comes before any approved edit", () => {
+    if (skill === undefined) throw new Error("expected a plan skill");
+    expect(skill.toLowerCase()).toContain("approval");
+    // The read-only gather step must precede the plan-gated write step.
+    expect(skill.indexOf("read-only")).toBeLessThan(skill.indexOf("Plan-gate every write"));
+  });
+
+  it("states the planning contract: cite sources, flag inference, admit gaps", () => {
+    if (skill === undefined) throw new Error("expected a plan skill");
+    expect(skill.toLowerCase()).toContain("cite");
+    expect(skill.toLowerCase()).toContain("inference");
+    expect(skill.toLowerCase()).toContain("admit gaps");
+  });
+});

@@ -144,13 +144,33 @@ describe("golem init", () => {
     await golemInit({ projectDir, probe: okProbe });
 
     const settings = await readJson(".claude/settings.json");
-    expect(settings.permissions).toStrictEqual({ allow: ["Bash(ls:*)"] });
+    // The unrelated allow rule is preserved (merged, not replaced); init adds its
+    // own Golem MCP rules alongside it.
+    expect(settings.permissions).toStrictEqual({
+      allow: ["Bash(ls:*)", "mcp__golem__*"],
+      ask: ["mcp__golem__wiki_upsert"],
+    });
     expect((settings.env as Record<string, unknown>).FOO).toBe("bar");
     const mcp = await readJson(".mcp.json");
     expect((mcp.mcpServers as Record<string, unknown>).other).toStrictEqual({
       type: "http",
       url: "http://x/mcp",
     });
+  });
+
+  it("pre-approves Golem's MCP tools (all but wiki_upsert), and uninit removes them", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".claude/settings.json");
+    const perms = settings.permissions as { allow?: string[]; ask?: string[] };
+    // All Golem tools auto-approved via the anchored glob; wiki_upsert kept on ask.
+    expect(perms.allow).toContain("mcp__golem__*");
+    expect(perms.ask).toContain("mcp__golem__wiki_upsert");
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".claude/settings.json");
+    // The rules are gone; on a project init created (no other permission rules),
+    // the now-empty permissions object is cleaned up entirely.
+    expect(after.permissions).toBeUndefined();
   });
 
   it("dry-run reports actions but writes nothing", async () => {

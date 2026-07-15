@@ -27,7 +27,7 @@ import type { HardwareTier, InferenceService } from "../interfaces/inference.js"
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
-import { openTelemetryStore } from "../telemetry/index.js";
+import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
@@ -43,6 +43,12 @@ import {
   runOllamaSetup,
   SetupRefusedError,
 } from "./ollama.js";
+import {
+  draftTargetRelPath,
+  listPendingPromotions,
+  renderPendingPromotions,
+  runPromote,
+} from "./promote.js";
 import {
   portInUse,
   proxyStatus,
@@ -342,6 +348,69 @@ wiki
     }
   });
 
+wiki
+  .command("promote")
+  .description(
+    "Review and apply a pending distill draft as a wiki page (Decision 29 append-and-refine)",
+  )
+  .argument("[id]", "draft id (slug) to promote; omit (or use --list) to list pending drafts")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--list", "list pending drafts instead of promoting", false)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .option("--json", "machine-readable output (with --list)", false)
+  .action(
+    async (
+      id: string | undefined,
+      opts: { dir: string; list: boolean; yes: boolean; json: boolean },
+    ) => {
+      try {
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+        const nowIso = new Date().toISOString();
+
+        // No id (or --list): show what's pending, don't write anything.
+        if (id === undefined || opts.list) {
+          const drafts = await listPendingPromotions(opts.dir);
+          if (opts.json) {
+            process.stdout.write(
+              `${JSON.stringify(
+                drafts.map((d) => ({
+                  id: d.slug,
+                  type: d.frontmatter.type,
+                  target: draftTargetRelPath(d),
+                  sources: d.frontmatter.sources,
+                  created: d.frontmatter.created,
+                })),
+                null,
+                2,
+              )}\n`,
+            );
+          } else {
+            process.stdout.write(renderPendingPromotions(drafts, nowIso));
+          }
+          return;
+        }
+
+        const outcome = await runPromote({
+          projectDir: opts.dir,
+          wikiDir,
+          slug: id,
+          nowIso,
+          yes: opts.yes,
+        });
+        if (outcome.kind === "cancelled") {
+          process.stdout.write("aborted — draft left in place.\n");
+          return;
+        }
+        process.stdout.write(
+          `${outcome.created ? "created" : "updated"}: ${outcome.relPath} (draft ${outcome.slug} consumed)\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
 async function resolvePort(
   dir: string,
   portOpt?: string,
@@ -573,8 +642,12 @@ mcp
           );
         }
       }
+      // R4.3 — one telemetry store shared by the compression wrapper (retrieval
+      // events) and deps.telemetry (per-call tool events + the stats summary).
+      const telemetry = openTelemetryStore(opts.dir);
       await serveStdio({
-        compression: mcpCompressionService(opts.dir),
+        compression: mcpCompressionService(opts.dir, telemetry),
+        telemetry,
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
@@ -723,7 +796,15 @@ program
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; project?: string; json: boolean }) => {
     try {
-      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project);
+      // R4.3 — fold durable per-tool usage into the report (best-effort: a
+      // telemetry read failure just omits the section, never fails `stats`).
+      let toolUsage: ToolUsageStats | undefined;
+      try {
+        toolUsage = await openTelemetryStore(opts.dir).aggregateToolUsage(opts.project);
+      } catch {
+        toolUsage = undefined;
+      }
+      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
       );

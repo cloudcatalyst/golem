@@ -15,6 +15,7 @@
 
 import { NativeLosslessCompression } from "../compression/index.js";
 import type { CompressionStats } from "../interfaces/compression.js";
+import type { ToolUsageStats } from "../telemetry/index.js";
 
 /** Pluggable savings-stats provider (A4 telemetry implements this later). */
 export interface StatsSource {
@@ -56,6 +57,14 @@ export interface StageReport {
   readonly tokens_saved: number;
 }
 
+/** R4.3 — one tool's local-usage line (snake_case for --json output). */
+export interface ToolUsageReport {
+  readonly calls: number;
+  readonly total_duration_ms: number;
+  readonly total_result_bytes: number;
+  readonly draft_chars: number;
+}
+
 export interface StatsReport {
   readonly source: string;
   readonly project_id: string | null;
@@ -66,10 +75,16 @@ export interface StatsReport {
   readonly per_stage: Readonly<Record<string, StageReport>>;
   readonly ccr_refs_stored: number;
   readonly ccr_refs_retrieved: number;
+  /** R4.3 — per-tool local-tool usage; absent when nothing was recorded. */
+  readonly tool_usage?: Readonly<Record<string, ToolUsageReport>> | undefined;
   readonly note: string;
 }
 
-export async function collectStats(source: StatsSource, projectId?: string): Promise<StatsReport> {
+export async function collectStats(
+  source: StatsSource,
+  projectId?: string,
+  toolUsage?: ToolUsageStats,
+): Promise<StatsReport> {
   const stats = await source.stats(projectId);
   const perStage: Record<string, StageReport> = {};
   for (const [stage, delta] of Object.entries(stats.perStage)) {
@@ -89,8 +104,31 @@ export async function collectStats(source: StatsSource, projectId?: string): Pro
     per_stage: perStage,
     ccr_refs_stored: stats.ccrRefsStored,
     ccr_refs_retrieved: stats.ccrRefsRetrieved,
+    ...(toolUsageToReport(toolUsage) !== undefined
+      ? { tool_usage: toolUsageToReport(toolUsage) }
+      : {}),
     note: source.note,
   };
+}
+
+/** Convert telemetry {@link ToolUsageStats} to the snake_case report shape (undefined if empty). */
+function toolUsageToReport(
+  usage: ToolUsageStats | undefined,
+): Record<string, ToolUsageReport> | undefined {
+  if (usage === undefined) return undefined;
+  const entries = Object.entries(usage.byTool);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(
+    entries.map(([tool, u]) => [
+      tool,
+      {
+        calls: u.calls,
+        total_duration_ms: u.totalDurationMs,
+        total_result_bytes: u.totalResultBytes,
+        draft_chars: u.draftChars,
+      },
+    ]),
+  );
 }
 
 /** Human-readable rendering (the default, non---json output). */
@@ -113,6 +151,15 @@ export function renderStats(report: StatsReport): string {
         `    ${stage.padEnd(12)} ${delta.tokens_before} -> ${delta.tokens_after} ` +
           `(saved ${delta.tokens_saved})`,
       );
+    }
+  }
+  const tools = report.tool_usage === undefined ? [] : Object.entries(report.tool_usage);
+  if (tools.length > 0) {
+    lines.push("  local tools:");
+    for (const [tool, u] of tools) {
+      const avgMs = u.calls > 0 ? Math.round(u.total_duration_ms / u.calls) : 0;
+      const drafted = u.draft_chars > 0 ? `, ~${Math.round(u.draft_chars / 4)} tokens drafted` : "";
+      lines.push(`    ${tool.padEnd(12)} ${u.calls} call(s), avg ${avgMs}ms${drafted}`);
     }
   }
   lines.push("");

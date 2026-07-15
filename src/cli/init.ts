@@ -161,6 +161,17 @@ const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
 const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
 const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 const MCP_SERVER_KEY = "golem";
+/**
+ * Pre-approve Golem's own MCP tools so they don't prompt on first use. The
+ * anchored allow glob covers every current and future Golem tool (Claude Code
+ * permissions docs: allow globs are valid only after a literal `mcp__<server>__`
+ * prefix). `wiki_upsert` is held on `ask` — it writes committed wiki files, and
+ * an `ask` rule prompts even when an `allow` rule also matches (deny → ask →
+ * allow precedence). Note: allow rules in a committed `.claude/settings.json`
+ * activate only after the one-time Claude Code workspace-trust accept.
+ */
+const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
+const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /** Golem's guidance lives here — gitignored personal instructions (docs: CLAUDE.local.md). */
 const GUIDANCE_FILENAME = "CLAUDE.local.md";
 
@@ -277,6 +288,15 @@ function objectEntry(obj: JsonObject, key: string): JsonObject {
     return existing as JsonObject;
   }
   const fresh: JsonObject = {};
+  obj[key] = fresh;
+  return fresh;
+}
+
+/** Like {@link objectEntry} but for a string[] value (permission allow/ask lists). */
+function stringArrayEntry(obj: JsonObject, key: string): string[] {
+  const existing = obj[key];
+  if (Array.isArray(existing)) return existing as string[];
+  const fresh: string[] = [];
   obj[key] = fresh;
   return fresh;
 }
@@ -468,6 +488,37 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
       [ENV_BASE_URL]: baseUrl,
     });
     if (envChanged && !dryRun) await writeJsonObject(settingsPath, settings);
+  }
+
+  // 1c. .claude/settings.json — pre-approve Golem's own MCP tools so they don't
+  // prompt on first use (all except wiki_upsert, which writes committed files).
+  {
+    const permissions = objectEntry(settings, "permissions");
+    const allow = stringArrayEntry(permissions, "allow");
+    const ask = stringArrayEntry(permissions, "ask");
+    let permsChanged = false;
+    if (!allow.includes(MCP_ALLOW_RULE)) {
+      allow.push(MCP_ALLOW_RULE);
+      permsChanged = true;
+    }
+    if (!ask.includes(MCP_ASK_RULE)) {
+      ask.push(MCP_ASK_RULE);
+      permsChanged = true;
+    }
+    actions.push(
+      permsChanged
+        ? {
+            kind: settingsExisted ? "modify" : "create",
+            path: rel(projectDir, settingsPath),
+            detail: `permissions.allow += ${MCP_ALLOW_RULE}, permissions.ask += ${MCP_ASK_RULE}`,
+          }
+        : {
+            kind: "skip",
+            path: rel(projectDir, settingsPath),
+            detail: "MCP tool permissions set",
+          },
+    );
+    if (permsChanged && !dryRun) await writeJsonObject(settingsPath, settings);
   }
 
   // 1b. Proxy upstream (front Foundry / a generic gateway) — .golem/settings.local.json.
@@ -811,6 +862,36 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
         kind: "modify",
         path: rel(projectDir, settingsPath),
         detail: "removed Golem env entries",
+      });
+      if (!dryRun) await writeJsonObject(settingsPath, settings);
+    }
+  }
+
+  // 1b. Remove only the MCP permission rules init added (exact rules only).
+  const perms = settings?.permissions;
+  if (settings && typeof perms === "object" && perms !== null && !Array.isArray(perms)) {
+    const permsObj = perms as JsonObject;
+    let changed = false;
+    for (const [key, rule] of [
+      ["allow", MCP_ALLOW_RULE],
+      ["ask", MCP_ASK_RULE],
+    ] as const) {
+      const arr = permsObj[key];
+      if (Array.isArray(arr)) {
+        const idx = arr.indexOf(rule);
+        if (idx !== -1) {
+          arr.splice(idx, 1);
+          changed = true;
+        }
+        if (arr.length === 0) delete permsObj[key];
+      }
+    }
+    if (Object.keys(permsObj).length === 0) delete settings.permissions;
+    if (changed) {
+      actions.push({
+        kind: "modify",
+        path: rel(projectDir, settingsPath),
+        detail: "removed Golem MCP permission rules",
       });
       if (!dryRun) await writeJsonObject(settingsPath, settings);
     }
