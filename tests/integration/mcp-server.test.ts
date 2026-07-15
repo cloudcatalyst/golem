@@ -42,7 +42,7 @@ const ALL_PROMPTS = [
   "expand",
   "bypass",
   "devices",
-  "delegate",
+  "coder",
 ] as const;
 
 type Deps = ReturnType<typeof createStandaloneDeps>;
@@ -434,11 +434,11 @@ describe("golem knowledge tools — backendUnavailableMessage mapping (B3)", () 
 });
 
 /**
- * `delegate` (src/mcp/server.ts `registerDelegateTool`) is registered
- * only when `deps.inference` is supplied, and hands the task off to the
- * "drafter" role of an injected InferenceService.
+ * `coder` (src/mcp/server.ts `registerCoderTool`, formerly `delegate`) is
+ * registered only when `deps.inference` is supplied, and hands the task off
+ * to the "drafter" role of an injected InferenceService.
  */
-describe("delegate tool", () => {
+describe("coder tool", () => {
   class FakeInferenceService implements InferenceService {
     lastRole: Role | undefined;
     lastMessages: readonly ChatMessage[] | undefined;
@@ -480,10 +480,10 @@ describe("delegate tool", () => {
   it("is not listed when deps.inference is omitted", async () => {
     const client = await connectInMemory(createStandaloneDeps());
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).not.toContain("delegate");
+    expect(tools.map((t) => t.name)).not.toContain("coder");
   });
 
-  it("delegates a task-only call and reports the local model in text and structuredContent", async () => {
+  it("drafts a task-only call and reports the local model in text and structuredContent", async () => {
     const fake = new FakeInferenceService(async (role) => ({
       text: "draft code here",
       model: "qwen2.5-coder:7b",
@@ -495,7 +495,7 @@ describe("delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "delegate",
+      name: "coder",
       arguments: { task: "write a hello world function" },
     });
 
@@ -521,7 +521,7 @@ describe("delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     await client.callTool({
-      name: "delegate",
+      name: "coder",
       arguments: {
         task: "refactor this function",
         context: "function foo() { return 1; }",
@@ -541,7 +541,7 @@ describe("delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "delegate",
+      name: "coder",
       arguments: { task: "write a hello world function" },
     });
 
@@ -560,7 +560,7 @@ describe("delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "delegate",
+      name: "coder",
       arguments: { task: "write a hello world function" },
     });
 
@@ -583,7 +583,7 @@ describe("delegate tool", () => {
     const client = await connectInMemory(depsWithInference(fake));
 
     const result = await client.callTool({
-      name: "delegate",
+      name: "coder",
       arguments: { task: "write a hello world function" },
     });
 

@@ -5,13 +5,20 @@
  * read the same value from the same file.
  */
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { golemInitStatus, type InitProbe } from "../../src/cli/init.js";
 import { getSliderInfo, setSliderLevel } from "../../src/cli/slider.js";
 import { loadConfig, settingsFilePaths } from "../../src/config/index.js";
 import { JsonFileSliderStore } from "../../src/mcp/slider-store.js";
+
+// Fake probe (as in cli-init.test.ts): no real ~/.claude / ~/.vscode touched.
+const okProbe: InitProbe = {
+  claudeCodeInstalled: () => Promise.resolve(true),
+  headroomWrapActive: () => Promise.resolve(false),
+};
 
 describe("golem slider", () => {
   let projectDir: string;
@@ -37,7 +44,7 @@ describe("golem slider", () => {
   });
 
   it("round-trips a set through getSliderInfo with project provenance", async () => {
-    const result = await setSliderLevel(3, { projectDir, userDir });
+    const result = await setSliderLevel(3, { projectDir, userDir, probe: okProbe });
     expect(result.effective.level).toBe(3);
     expect(result.effective.layer).toBe("project");
     expect(result.overriddenBy).toBeUndefined();
@@ -48,7 +55,7 @@ describe("golem slider", () => {
   });
 
   it("reconciles the config loader and the MCP slider store on ONE value", async () => {
-    await setSliderLevel(3, { projectDir, userDir });
+    await setSliderLevel(3, { projectDir, userDir, probe: okProbe });
 
     // 1. The config loader sees slider.level = 3.
     const { settings } = await loadConfig({ projectDir, userDir });
@@ -70,6 +77,7 @@ describe("golem slider", () => {
     const result = await setSliderLevel(1, {
       projectDir,
       userDir,
+      probe: okProbe,
       // Legacy env value 5 is accepted and migrated onto the 0–3 scale (→ 3).
       env: { GOLEM_SLIDER_LEVEL: "5" },
     });
@@ -78,5 +86,37 @@ describe("golem slider", () => {
     expect(result.effective.layer).toBe("env");
     expect(result.overriddenBy).toBeDefined();
     expect(result.overriddenBy?.level).toBe(3);
+  });
+
+  describe("activation gating", () => {
+    it("does not create .golem/ or wire MCP/skills until a level is chosen", async () => {
+      await expect(access(join(projectDir, ".golem"))).rejects.toThrow();
+      await expect(access(join(projectDir, ".mcp.json"))).rejects.toThrow();
+    });
+
+    it("activates a not-yet-initialized project on the first setSliderLevel call", async () => {
+      const before = await golemInitStatus(projectDir);
+      expect(before.initialized).toBe(false);
+
+      const result = await setSliderLevel(2, { projectDir, userDir, probe: okProbe });
+      expect(result.justInitialized).toBe(true);
+      expect(result.effective.level).toBe(2);
+
+      const { settings } = await loadConfig({ projectDir, userDir });
+      const after = await golemInitStatus(projectDir, settings.proxy.port);
+      expect(after.initialized).toBe(true);
+      await expect(access(join(projectDir, ".mcp.json"))).resolves.toBeUndefined();
+      await expect(
+        access(join(projectDir, ".claude", "skills", "golem", "slider", "SKILL.md")),
+      ).resolves.toBeUndefined();
+      await expect(access(join(projectDir, "CLAUDE.local.md"))).resolves.toBeUndefined();
+    });
+
+    it("does not re-run activation on an already-initialized project", async () => {
+      await setSliderLevel(1, { projectDir, userDir, probe: okProbe });
+      const result = await setSliderLevel(2, { projectDir, userDir, probe: okProbe });
+      expect(result.justInitialized).toBeUndefined();
+      expect(result.effective.level).toBe(2);
+    });
   });
 });

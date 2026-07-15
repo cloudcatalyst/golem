@@ -59,10 +59,10 @@ describe("upsertGuidance (pure)", () => {
     expect(out).toContain("add real `[[wikilinks]]`");
   });
 
-  it("directs coding work to the local model via delegate once the level allows it", () => {
+  it("directs coding work to the local model via coder once the level allows it", () => {
     const out = upsertGuidance(null);
     expect(out).toContain("prefer the local model for coding drafts");
-    expect(out).toContain("`delegate`");
+    expect(out).toContain("`coder`");
     expect(out).toContain("every level");
     // Deliberately no repo-specific hardware/GPU-pacing rules in the generic template.
     expect(out.toLowerCase()).not.toContain("gpu");

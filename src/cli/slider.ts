@@ -10,6 +10,7 @@
 
 import { type LayerName, loadConfig, writeSetting } from "../config/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
+import { golemInit, golemInitStatus, type InitProbe } from "./init.js";
 
 /** Human names for the four levels (spec §4 / interfaces/policy.ts, Decision 30). */
 export const SLIDER_LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
@@ -34,6 +35,8 @@ export interface SliderOptions {
   readonly projectDir: string;
   readonly userDir?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** External-state probe forwarded to `golemInit` on first activation (tests). */
+  readonly probe?: InitProbe;
 }
 
 function loadOpts(options: SliderOptions): {
@@ -68,13 +71,42 @@ export interface SetSliderResult {
   readonly effective: SliderInfo;
   /** Set when a higher-precedence layer overrides the value just written. */
   readonly overriddenBy?: SliderInfo;
+  /**
+   * Set when this call activated a not-yet-initialized project (ran the full
+   * `golemInit` wiring — MCP registration, skills, CLAUDE.local.md guidance —
+   * instead of just persisting a lone setting). Golem never creates `.golem/`
+   * or wires MCP/skills until a level is first chosen.
+   */
+  readonly justInitialized?: true;
 }
 
-/** Persist `slider.level` at project scope, then report the effective value. */
+/**
+ * Persist `slider.level` at project scope, then report the effective value.
+ *
+ * Choosing a level is what activates Golem in a project: if it hasn't been
+ * initialized yet (no `.golem/settings.json`, no MCP/skills wiring), this runs
+ * the full `golemInit` flow at the chosen level first, rather than writing an
+ * orphaned `.golem/settings.json` with none of the rest of the wiring.
+ */
 export async function setSliderLevel(
   level: SliderLevel,
   options: SliderOptions,
 ): Promise<SetSliderResult> {
+  // Resolve the real per-project proxy port before checking init status — a
+  // fresh project's config default (4653) matches DEFAULT_PROXY_PORT, but an
+  // already-initialized project persists its own `defaultProjectPort()` value
+  // in `.golem/settings.json`, which `loadConfig` then surfaces. Checking
+  // against the wrong port makes `claudeSettingsWired` (and thus `initialized`)
+  // misreport `false` for real, already-active projects (mirrors status.ts).
+  const { settings } = await loadConfig(loadOpts(options));
+  const status = await golemInitStatus(options.projectDir, settings.proxy.port);
+  if (!status.initialized) {
+    await golemInit({
+      projectDir: options.projectDir,
+      initialLevel: level,
+      ...(options.probe !== undefined && { probe: options.probe }),
+    });
+  }
   const file = await writeSetting("project", "slider.level", level, loadOpts(options));
   const effective = await getSliderInfo(options);
   const overridden = effective.layer !== "project" || effective.level !== level;
@@ -82,5 +114,6 @@ export async function setSliderLevel(
     file,
     effective,
     ...(overridden && { overriddenBy: effective }),
+    ...(!status.initialized && { justInitialized: true }),
   };
 }

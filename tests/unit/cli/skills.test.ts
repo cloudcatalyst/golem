@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { P0_SKILLS } from "../../../src/cli/skills.js";
 
 describe("wiki skills (T2, W2 leftover)", () => {
-  it("wiki-query reads the wiki before falling back to search", () => {
-    const skill = P0_SKILLS["wiki-query"];
-    if (skill === undefined) throw new Error("expected a wiki-query skill");
+  it("research reads the wiki before falling back to search", () => {
+    const skill = P0_SKILLS.research;
+    if (skill === undefined) throw new Error("expected a research skill");
     expect(skill).toContain("wiki_read");
     expect(skill).toContain("search");
     expect(skill).toMatch(/\$ARGUMENTS/);

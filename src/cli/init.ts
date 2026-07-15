@@ -48,6 +48,7 @@ import {
   writeGuidanceSection,
   writeStatusLine,
 } from "../hooks/index.js";
+import type { SliderLevel } from "../interfaces/index.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 import { P0_SKILLS } from "./skills.js";
 
@@ -108,6 +109,13 @@ export interface InitOptions {
   readonly dryRun?: boolean;
   /** Proxy port the base URL should point at (from Golem config; default 4653). */
   readonly proxyPort?: number;
+  /**
+   * Slider level to persist on first activation (when `.golem/settings.json`
+   * doesn't exist yet). Default 1 (lossless). Lets a level-setting entry point
+   * (e.g. `golem slider <n>`) activate the project at the chosen level instead
+   * of always defaulting to 1 and then immediately overwriting it.
+   */
+  readonly initialLevel?: SliderLevel;
   /**
    * Front an Azure AI Foundry resource: wires Claude Code's Foundry env
    * (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`)
@@ -501,13 +509,14 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
 
   // 4. .golem/settings.json — defaults when absent, plus the assigned proxy port.
   if (existingGolem === null) {
+    const initialLevel = options.initialLevel ?? 1;
     actions.push({
       kind: "create",
       path: rel(projectDir, golemSettingsPath),
-      detail: `slider.level=1, proxy.port=${port}`,
+      detail: `slider.level=${initialLevel}, proxy.port=${port}`,
     });
     if (!dryRun) {
-      await writeSetting("project", "slider.level", 1, { projectDir });
+      await writeSetting("project", "slider.level", initialLevel, { projectDir });
       await writeSetting("project", "proxy.port", port, { projectDir });
     }
   } else if (portAssigned) {

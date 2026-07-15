@@ -554,7 +554,7 @@ mcp
           );
         }
       }
-      // delegate doesn't need the knowledge base — build a standalone
+      // coder doesn't need the knowledge base — build a standalone
       // InferenceService when the KB path above didn't already produce one
       // (KB disabled, or its own construction failed before reaching this far).
       if (inference === undefined) {
@@ -564,7 +564,7 @@ mcp
           inference = new OllamaInferenceService(client, facts);
         } catch (err) {
           process.stderr.write(
-            `golem: local inference unavailable, delegate will be disabled (${
+            `golem: local inference unavailable, coder will be disabled (${
               err instanceof Error ? err.message : String(err)
             })\n`,
           );
@@ -684,6 +684,11 @@ program
       if (opts.json) {
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
         return;
+      }
+      if (result.justInitialized === true) {
+        process.stdout.write(
+          "golem initialized in this project (MCP + skills wired, CLAUDE.local.md updated)\n",
+        );
       }
       process.stdout.write(
         `slider level set to ${level} (${SLIDER_LEVEL_NAMES[level]}) in ${result.file}\n`,

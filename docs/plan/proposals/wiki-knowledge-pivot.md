@@ -124,7 +124,7 @@ WebFetch ──PostToolUse hook──▶ redact ──▶ webcache (raw, exact-U
                                    └────▶ vector index (raw scope)        [exists]
                                    └────▶ distill queue                   [NEW]
 
-distill queue ──local model (delegate/WS-D) or Claude skill──▶
+distill queue ──local model (coder/WS-D) or Claude skill──▶
     draft: source note + concept-page diffs + proposed wikilinks
     ──plan approval──▶ wiki/ pages written ──watcher──▶ vector index      [NEW]
 
@@ -144,7 +144,7 @@ fetched page is stored twice, at two refinement levels: raw full-text in the web
 Claude tokens for ingestion. Golem's WS-D tiered Ollama inference runs extraction and
 drafting (summarizer/extractor roles, P2) locally at ~zero marginal cost, with Claude
 reviewing at plan-approval. Wiki maintenance becomes the flagship consumer of the
-`delegate` tool.
+`coder` tool.
 
 ## 5. Claude's first port of call
 
@@ -153,9 +153,9 @@ reviewing at plan-approval. Wiki maintenance becomes the flagship consumer of th
   with results that are pages a human can open, verify, and correct.
 - MCP surface: `search`/`fetch`/`ingest` unchanged. Add (P2, after spike):
   `wiki_read` (page by title/link, follows aliases), `wiki_upsert` (plan-gated
-  create/append), and skills `/golem/wiki-ingest <url>`, `/golem/wiki-query`,
+  create/append), and skills `/golem/wiki-ingest <url>`, `/golem/research`,
   `/golem/note`.
-- The `/wiki-query` behavior contract from the article carries over: cite pages via
+- The `/wiki-query` (now `/golem/research`) behavior contract from the article carries over: cite pages via
   wikilinks, flag inference vs. sourced fact, admit gaps rather than fabricate.
 
 ## 6. What this does NOT change

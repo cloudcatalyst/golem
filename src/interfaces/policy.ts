@@ -109,7 +109,7 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
   } as const),
   // 3 "aggressive": + max semantic compression + loose semantic cache. Purely a
   // Headroom-aggressiveness dial (Decision 31) — the local model is invoked only
-  // via the explicit `delegate` MCP tool, never auto-triggered by the slider.
+  // via the explicit `coder` MCP tool, never auto-triggered by the slider.
   3: Object.freeze({
     redaction: true,
     losslessCompression: true,

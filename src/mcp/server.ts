@@ -9,11 +9,11 @@
  *   service, just the always-available hardware-probe functions.
  * - P1 knowledge tools (task B3): `search`, `fetch`, `ingest` (formerly
  *   `golem_search`, `golem_get_chunk`, `golem_index_path`) — registered only
- *   when a KnowledgeBase is injected (`deps.knowledge`). `delegate`
- *   (formerly `golem_delegate`) is registered only when an InferenceService
- *   is injected (`deps.inference`).
+ *   when a KnowledgeBase is injected (`deps.knowledge`). `coder`
+ *   (formerly `golem_delegate`, then `delegate` — Decision 35) is registered
+ *   only when an InferenceService is injected (`deps.inference`).
  * - Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`,
- *   `devices`, `delegate` — surfaced by Claude Code as `/mcp__golem__<name>`
+ *   `devices`, `coder` — surfaced by Claude Code as `/mcp__golem__<name>`
  *   (verification-notes.md §10). Prompt names are unchanged; a tool and a
  *   prompt sharing a name (e.g. tool `search` + prompt `search`) is fine —
  *   MCP tools and prompts are separate namespaces.
@@ -73,7 +73,7 @@ export interface GolemMcpServerDeps {
    */
   readonly knowledge?: KnowledgeBase;
   /**
-   * WS-D tiered inference (task B3). When present, the `delegate` tool
+   * WS-D tiered inference (task B3). When present, the `coder` tool
    * is registered, letting Claude offload a task to a local model (the
    * "drafter" role). Omitted when local inference is unavailable or disabled.
    */
@@ -351,7 +351,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   }
 
   if (deps.inference !== undefined) {
-    registerDelegateTool(server, deps.inference);
+    registerCoderTool(server, deps.inference);
   }
 
   if (deps.wiki !== undefined) {
@@ -925,11 +925,11 @@ function registerWikiTools(server: McpServer, wiki: WikiStore): void {
   );
 }
 
-function registerDelegateTool(server: McpServer, inference: InferenceService): void {
+function registerCoderTool(server: McpServer, inference: InferenceService): void {
   server.registerTool(
-    "delegate",
+    "coder",
     {
-      title: "Delegate a task to a local model",
+      title: "Draft code or tests with a local model",
       description:
         'Delegate a task to Golem\'s local tiered Ollama inference (the "drafter" ' +
         "role — currently backed by a qwen2.5-coder-family model tuned for cheap " +
@@ -1173,10 +1173,11 @@ function registerPrompts(server: McpServer): void {
   );
 
   server.registerPrompt(
-    "delegate",
+    "coder",
     {
-      title: "Delegate to a local model",
-      description: "Delegate a task to a local model via Golem's tiered inference",
+      title: "Draft code or tests with a local model",
+      description:
+        "Delegate a code/test drafting task to a local model via Golem's tiered inference",
       argsSchema: {
         task: z.string().optional().describe("The task to delegate to a local model"),
       },
@@ -1185,7 +1186,7 @@ function registerPrompts(server: McpServer): void {
       promptMessages(
         `Delegate ${
           task === undefined || task === "" ? "the user's current task" : `this task: "${task}"`
-        } to a local model using the delegate tool and relay the result, ` +
+        } to a local model using the coder tool and relay the result, ` +
           `noting it was produced locally. ${P1_TOOL_FALLBACK}`,
       ),
   );
