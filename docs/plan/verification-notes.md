@@ -1974,3 +1974,63 @@ new for this task: 7 in `tests/unit/knowledge/web-cache.test.ts`, 13 in
 block, and 1 end-to-end wiring test in `tests/unit/cli/proxy-runtime.test.ts`
 that puts a known page in the webcache and asserts substitution + a durable
 `avoidedUpstream` telemetry record through the real composition root).
+
+## §63 — R4.7: drafter model re-verification (advisory catalog, Decision 6) (2026-07-16)
+
+Re-verified the per-tier coder catalog (`src/inference/catalog.ts`) against
+live sources, per Decision 6 ("models per tier — advisory, re-verify current
+best at build time"). The catalog was last set around the qwen2.5-coder
+generation.
+
+**Sources (fetched 2026-07-16):**
+- WebSearch "best small local coding LLM Ollama 2026 Qwen3 coder vs
+  Qwen2.5-coder benchmarks" — consensus of several 2026 ranking pages
+  (localaimaster, morphllm, insiderllm, runlocalmodel, promptquorum).
+- https://ollama.com/library/qwen3-coder — the authoritative tag list.
+
+**Findings:**
+- Qwen3 is the current successor generation; **Qwen3-Coder** is the 2026
+  default recommendation for agentic/multi-file coding (MoE, 256K context).
+- BUT for **single-function / single-file** code quality — which is exactly
+  the `drafter` role's job (cheap first draft, then Claude refines) —
+  Qwen2.5-Coder still narrowly *leads* (e.g. HumanEval 92.7% at 32B; noted
+  "cleanest, most idiomatic single-file code of any local model tested").
+- Decisive constraint: **`qwen3-coder` on Ollama only ships in `30b` and
+  `480b`** — there are NO small tags (no 7b/3b/1.5b). Golem's small tiers
+  (P_CPU 1.5b, P_MIN 3b, P_MID 7b) have no drop-in qwen3-coder replacement.
+
+**Decision: no catalog change.** qwen2.5-coder (1.5b/3b/7b/14b) remains the
+current best fit for the drafter's narrow single-draft role at Golem's tiers,
+and there is no small qwen3-coder to switch to anyway. Optional future note:
+P_MAX (24GB+ hardware) could offer `qwen3-coder:30b` as an opt-in upgrade for
+larger-context/agentic drafting, and the non-coder roles (summarizer/judge)
+could move to the qwen3 dense line (qwen3:4b/8b/14b/32b) — but neither is
+changed now: unmeasured model swaps mid-batch are exactly what Decision 23's
+evidence-first rule warns against, and the drafter is the role this batch
+measured.
+
+**Draft-quality baseline (ungrounded, n=5).** Ran representative repo tasks
+through `coder` (the running MCP server predates R4.2 grounding / R4.4
+refinement, so these are the *ungrounded, one-shot* baseline R4.3 telemetry
+will track over time):
+
+| # | task | verdict |
+|---|---|---|
+| 1 | `/golem/plan` SKILL.md (R4.1) | revise — hallucinated "open browser" steps, mangled frontmatter, wrong CLI subcommand (`note --list` vs `note list`) |
+| 2 | `gatherGrounding` helper (R4.2) | revise — `console.error`, unguarded `startLine`, broke loop instead of truncating to budget |
+| 3 | `coder-refine.ts` module (R4.4) | revise — conflated JSON Schema with a zod schema, `console.error` |
+| 4 | `clampSliderLevel` pure fn | accept — correct logic; only trim demo `console.log`s |
+| 5 | `union` vitest suite | accept — correct cases; only fix the placeholder import path |
+
+**Baseline: 2/5 accept, 3/5 revise, 0/5 reject.** Clear pattern — coder drafts
+are **accept-quality for small self-contained functions/tests** but
+**revise-quality for anything touching project conventions/APIs** (invents
+plausible-but-wrong integration details). This is exactly why R4.2 grounding +
+R4.4 refinement exist, and why CLAUDE.local.md says skip `coder` for trivial
+edits and treat every draft as a starting point. Grounded/refined accept-rate
+awaits an MCP reconnect (the session's `golem mcp serve` must respawn to pick
+up the R4.2/R4.4 build) — tracked as follow-up, measurable via R4.3's
+`tool_usage` drafted-locally bucket.
+
+**R1.6 cross-OS checklist:** still blocked — no macOS/Linux hardware this
+session (Windows only). `questions/r1.6-ollama-verification-blocked.md` stands.

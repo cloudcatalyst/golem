@@ -1,5 +1,11 @@
 # R4 batch — Co-developer core
 
+> **✅ COMPLETE (2026-07-16).** All seven tasks (R4.1–R4.7) landed; see the
+> retrospective `docs/wiki/syntheses/r4-co-developer-core-batch.md` and the ✅
+> rows in `ROADMAP.md`. R5/R6 remain ON HOLD (Decision 36) pending an explicit
+> user call. This brief is kept for reference until a successor batch supersedes
+> it.
+
 > **Written 2026-07-16** by the Decision 36 refocus session, replacing the
 > completed `R3_BATCH.md` (retired; git history has it). This is the current
 > actionable batch and is **self-contained** — read it top to bottom before

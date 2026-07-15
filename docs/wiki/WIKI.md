@@ -62,6 +62,7 @@ updated: YYYY-MM-DD
 - syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
   originating article
+- sources/local-coder-models-2026.md — distilled landscape of small local coder models (Qwen3-Coder vs Qwen2.5-Coder; Ollama tag availability), captured during R4.7
 - `questions/` — open questions carried over from the Decision 28 proposal
 - debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix
 - debriefs/2026-07-10-T1.md — wired durable `ccrRefsRetrieved` telemetry
@@ -97,3 +98,13 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-15-R3.6.md — C4: MEMORY-scope federated search via the optional Headroom `[memory]` sidecar (`HeadroomMemorySidecar`); verified the real `easy.Memory` API (docs' `MemoryCategory` doesn't exist in source); search-only (no write path exists yet), opt-in `knowledge.memory_federation_enabled` decoupled from `headroom_sidecar`
 - [[Dogfooding Golem]] — two-proxy stable/dev split, daemon lifecycle, promote flow, Headroom sidecar setup (relocated from docs/DEVELOPMENT.md by Decision 36)
 - debriefs/2026-07-16-decision-36-refocus.md — Decision 36: roadmap refocused on the co-developer core (R4), old R4/R5 → R5/R6 ON HOLD; spec renamed golem-spec.md, EOL scrubbed, batch briefs retired
+- debriefs/2026-07-16-R4.1.md — R4.1: `docs/plan/BACKLOG.md` ideas inbox + `/golem/plan` skill close the second-brain loop into tasks (plan-gated); the last leg of capture → distill → plan
+- debriefs/2026-07-16-R4.2.md — R4.2: coder grounding — extracted shared `assembleHits`, `gatherGrounding` size-capped RAG injection into the local drafter (`ground` opt-out), degrades to ungrounded on any failure
+- debriefs/2026-07-16-R4.3.md — R4.3: honest tool telemetry — `kind:"tool"` events for search/fetch/ingest/wiki_read/coder (coder tracks drafted-locally chars), surfaced in `stats` MCP tool + `golem stats`
+- debriefs/2026-07-16-R4.4.md — R4.4: coder iteration loop — `refineDraft` (judge→revise, opt-in `refine`, best-effort fallback); `/golem/develop` hardened around grounding + refinement
+- debriefs/2026-07-16-R4.5.md — R4.5: `golem wiki promote` closes capture→distill→promote (append-and-refine, Decision 26 consent); wiki-lint debt cleared (18→0), checker ignores code-fenced links, `wiki check` in CI
+- debriefs/2026-07-16-R4.6.md — R4.6: `FileVectorDriver.#flush()` streams JSON lines (backpressure-aware) instead of one `Array.join` string — removes the ~30k–50k-chunk `RangeError` crash wall
+- debriefs/2026-07-16-R4.7.md — R4.7: drafter catalog re-verified (no change — no small qwen3-coder tags); ungrounded draft-quality baseline 2 accept / 3 revise / 0 reject
+- syntheses/r4.7-drafter-quality-baseline.md — R4.7 spike: catalog re-verification + measured coder accept-rate baseline (accept for self-contained code, revise for project-integrated)
+- syntheses/r4-co-developer-core-batch.md — R4 batch retrospective: all 7 tasks (planning surface, coder grounding/telemetry/refinement, promote+lint, flush fix, re-verification); through-lines + open follow-ups
+- debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs
