@@ -12,6 +12,7 @@
  * sessions (§26 refinement).
  */
 
+import { HeadroomMemorySidecar } from "../compression/headroom-adapter.js";
 import { loadConfig } from "../config/index.js";
 import {
   type CapabilityFacts,
@@ -76,11 +77,21 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   const semantic = await ollamaHasModel(baseUrl, textEmbedModel);
   const embedMode: EmbedMode = semantic ? "semantic" : "lexical";
 
+  // R3.6 (Decisions 13/18): opt-in MEMORY-scope federation via the Headroom
+  // `[memory]` sidecar — a separate, heavier install than `headroom_sidecar`
+  // (verification-notes §4), so it gets its own settings leaf and its own
+  // sidecar process. Fails open (HeadroomMemorySidecar.search resolves null)
+  // if the sidecar can't start, same as HeadroomSidecar's compress().
+  const memorySearch = settings.knowledge.memory_federation_enabled
+    ? new HeadroomMemorySidecar()
+    : undefined;
+
   const knowledge = openKnowledgeBase({
     projectDir: options.projectDir,
     // Choose ONE embedder for the whole index (mixing spaces would corrupt it).
     ...(semantic ? { inference } : { embed: hashingEmbedFn() }),
     syntaxAwareChunking: settings.knowledge.syntax_aware_chunking,
+    ...(memorySearch !== undefined ? { memorySearch } : {}),
   });
 
   return { knowledge, inference, facts, embedMode };

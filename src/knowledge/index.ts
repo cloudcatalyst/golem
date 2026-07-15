@@ -74,6 +74,7 @@ export type { EmbedFn, IncrementalIngest, KnowledgeBaseOptions } from "./knowled
 export {
   asFederatedSearch,
   GolemKnowledgeBase,
+  isMemoryChunkId,
   NotImplementedYetError,
   supportsIncremental,
 } from "./knowledge-base.js";
@@ -117,6 +118,7 @@ export function openKnowledgeBase(options: OpenKnowledgeBaseOptions): KnowledgeB
   const kbOptions: KnowledgeBaseOptions = {
     embed,
     syntaxAwareChunking: options.syntaxAwareChunking ?? false,
+    ...(options.memorySearch !== undefined ? { memorySearch: options.memorySearch } : {}),
   };
   return new GolemKnowledgeBase(driver, kbOptions);
 }

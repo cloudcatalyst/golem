@@ -37,6 +37,10 @@ export {
 } from "./context-substitution.js";
 export { backfillHeadroomCcrRefs } from "./headroom-ccr-bridge.js";
 export { LocalDirBlobStore } from "./local-blob-store.js";
+// The neutral MEMORY-scope federated-search seam (R3.6). HeadroomMemorySidecar
+// is imported directly from ./headroom-adapter.js by the CLI, never re-exported
+// here — same discipline as SemanticCompressor below.
+export type { MemoryFact, MemorySearchProvider } from "./memory-search.js";
 export type { NativeLosslessOptions } from "./native-lossless.js";
 export {
   CCR_MARKER_RE,

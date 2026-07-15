@@ -13,6 +13,7 @@
 
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import type { MemorySearchProvider } from "../compression/memory-search.js";
 import {
   type Chunk,
   DEFAULT_SCOPES,
@@ -33,6 +34,19 @@ import {
   planIngest,
   toPosix,
 } from "./ingest.js";
+
+/** Prefix for a memory-scope hit's synthetic chunk id (never stored by the vector driver). */
+const MEMORY_CHUNK_PREFIX = "memory:";
+
+/**
+ * True for a synthetic memory-scope chunk id built by {@link GolemKnowledgeBase.search}.
+ * Headroom's verified `Memory` API (R3.6) has no point-lookup-by-id — only
+ * search/save/clear/delete — so callers (e.g. the MCP `fetch` tool) must
+ * recognize this prefix themselves rather than routing it through getChunk().
+ */
+export function isMemoryChunkId(chunkId: string): boolean {
+  return chunkId.startsWith(MEMORY_CHUNK_PREFIX);
+}
 
 /** Turns text into embedding vectors. Supplied by WS-D InferenceService (C3). */
 export type EmbedFn = (texts: readonly string[], kind: "text" | "code") => Promise<number[][]>;
@@ -89,18 +103,26 @@ export interface KnowledgeBaseOptions {
   readonly embed?: EmbedFn;
   /** R3.3: try `web-tree-sitter` syntax-aware chunking for TS/JS before the heuristic. */
   readonly syntaxAwareChunking?: boolean;
+  /**
+   * R3.6: optional MEMORY-scope federation (Headroom sidecar, Decisions 13/18).
+   * Without it, `search()` degrades to KNOWLEDGE-only even when the caller asks
+   * for both scopes.
+   */
+  readonly memorySearch?: MemorySearchProvider;
 }
 
 export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
   readonly #driver: VectorDriver;
   readonly #embed: EmbedFn | undefined;
   readonly #syntaxAwareChunking: boolean;
+  readonly #memorySearch: MemorySearchProvider | undefined;
   readonly #watchers: FileWatcher[] = [];
 
   constructor(driver: VectorDriver, options: KnowledgeBaseOptions = {}) {
     this.#driver = driver;
     this.#embed = options.embed;
     this.#syntaxAwareChunking = options.syntaxAwareChunking ?? false;
+    this.#memorySearch = options.memorySearch;
   }
 
   async search(
@@ -109,23 +131,46 @@ export class GolemKnowledgeBase implements KnowledgeBase, IncrementalIngest {
     k = 8,
     scopes: ReadonlySet<Scope> = DEFAULT_SCOPES,
   ): Promise<Hit[]> {
+    const wantsKnowledge = scopes.has("knowledge");
+    const wantsMemory = scopes.has("memory");
+
+    const knowledgeHits: Hit[] = [];
+    if (wantsKnowledge) {
+      if (this.#embed === undefined) {
+        throw new NotImplementedYetError("text search (query embedding)", "C3");
+      }
+      const [queryVector] = await this.#embed([query], "text");
+      if (queryVector !== undefined) {
+        const matches = await this.#driver.search(projectId, queryVector, k);
+        for (const m of matches) {
+          const chunk = await this.#driver.getChunk(m.chunkId);
+          if (chunk !== null) knowledgeHits.push({ chunk, score: m.score, scope: "knowledge" });
+        }
+      }
+    }
+
     // MEMORY scope requires the Headroom sidecar (Python-only, Decisions 13/18).
-    // It is not available in the default install → degrade to KNOWLEDGE only.
-    if (!scopes.has("knowledge")) {
-      return []; // memory-only request with no sidecar: nothing to serve
+    // Without it (the default install), this half silently contributes nothing.
+    let memoryHits: Hit[] = [];
+    if (wantsMemory && this.#memorySearch !== undefined) {
+      const facts = await this.#memorySearch.search(query, projectId, k);
+      if (facts !== null) {
+        memoryHits = facts.map((f) => ({
+          chunk: {
+            chunkId: `${MEMORY_CHUNK_PREFIX}${f.id}`,
+            projectId,
+            text: f.content,
+            metadata: f.metadata,
+          },
+          score: f.score,
+          scope: "memory" as const,
+        }));
+      }
     }
-    if (this.#embed === undefined) {
-      throw new NotImplementedYetError("text search (query embedding)", "C3");
-    }
-    const [queryVector] = await this.#embed([query], "text");
-    if (queryVector === undefined) return [];
-    const matches = await this.#driver.search(projectId, queryVector, k);
-    const hits: Hit[] = [];
-    for (const m of matches) {
-      const chunk = await this.#driver.getChunk(m.chunkId);
-      if (chunk !== null) hits.push({ chunk, score: m.score, scope: "knowledge" });
-    }
-    return hits;
+
+    if (knowledgeHits.length === 0) return memoryHits.slice(0, k);
+    if (memoryHits.length === 0) return knowledgeHits.slice(0, k);
+    return [...knowledgeHits, ...memoryHits].sort((a, b) => b.score - a.score).slice(0, k);
   }
 
   async getChunk(chunkId: string): Promise<Chunk> {
