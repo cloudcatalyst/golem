@@ -4,7 +4,7 @@ type: schema
 tags: [meta]
 sources: []
 created: 2026-07-10
-updated: 2026-07-12
+updated: 2026-07-16
 ---
 
 # Golem project wiki — schema (Zone 0)
@@ -27,7 +27,7 @@ Hard rules for every write, agent or human:
 1. **Redaction before storage** — no secrets/PII ever land here (repo hard rule).
 2. **Link, don't restate.** The wiki never duplicates what the code, `docs/`, or git
    history already record — link to the file/spec section instead. For this repo,
-   `docs/edge-offload-spec.md` stays authoritative for decisions.
+   `docs/golem-spec.md` stays authoritative for decisions.
 3. **No raw fetched full-text.** Fetched pages live in the webcache (zone 1); what
    goes here is a distilled source note in our own words, citing the URL.
 4. **Contradictions are reported to the human, never auto-resolved.**
@@ -95,3 +95,5 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-12-R3.7.md — recorded the LanceDB scale spike finding + go/no-go
 - debriefs/2026-07-12-R3.1.md — Decision 34: chat-judge rerank via the existing "judge" role + `jsonSchema` on the frozen `InferenceService.chat()` (no interface change), opt-in `knowledge.rerank_enabled` decoupled from the slider per Decision 31
 - debriefs/2026-07-15-R3.6.md — C4: MEMORY-scope federated search via the optional Headroom `[memory]` sidecar (`HeadroomMemorySidecar`); verified the real `easy.Memory` API (docs' `MemoryCategory` doesn't exist in source); search-only (no write path exists yet), opt-in `knowledge.memory_federation_enabled` decoupled from `headroom_sidecar`
+- [[Dogfooding Golem]] — two-proxy stable/dev split, daemon lifecycle, promote flow, Headroom sidecar setup (relocated from docs/DEVELOPMENT.md by Decision 36)
+- debriefs/2026-07-16-decision-36-refocus.md — Decision 36: roadmap refocused on the co-developer core (R4), old R4/R5 → R5/R6 ON HOLD; spec renamed golem-spec.md, EOL scrubbed, batch briefs retired

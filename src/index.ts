@@ -1,4 +1,4 @@
-/** Golem (golem.run) — edge offload layer for Claude. */
+/** Golem (golem.run) — universal pre-LLM processing layer. */
 
 export const VERSION = "0.1.0";
 

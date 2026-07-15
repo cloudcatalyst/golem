@@ -1,9 +1,20 @@
+---
+title: Dogfooding Golem
+type: concept
+tags: [dogfooding, proxy, dev-workflow, headroom]
+sources: ["docs/DEVELOPMENT.md (relocated here by Decision 36, 2026-07-16)"]
+created: 2026-07-16
+updated: 2026-07-16
+---
+
 # Developing Golem while using Golem
 
 Dogfooding Golem means the proxy that carries your Claude Code traffic is the
 same software you're changing. To avoid a dev bug or a rebuild breaking your
 live session, run **two proxies**: a frozen **stable** one you actually use, and
-a throwaway **dev** one you test against.
+a throwaway **dev** one you test against. (The stable proxy runs the full
+pipeline including the [[Redaction Stage]]; see also [[Wiki-First Knowledge]]
+for how sessions find project knowledge.)
 
 ## The split
 

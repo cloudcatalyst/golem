@@ -4,7 +4,7 @@
  * Spec §5.1 / Decision 19 pin the user scope to the literal `~/.golem/`
  * directory (mirroring Claude Code's `~/.claude/`), so the user dir is
  * resolved via os.homedir() rather than env-paths platform config dirs —
- * recorded in docs/verification-notes.md §17. env-paths remains the tool for
+ * recorded in docs/plan/verification-notes.md §17. env-paths remains the tool for
  * cache/data/log dirs elsewhere in WS-E.
  */
 

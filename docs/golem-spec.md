@@ -1,34 +1,34 @@
-# Project Spec: Golem — edge offload for Claude
+# Project Spec: Golem — universal pre-LLM processing layer
 
-**Status:** **v1.16 — P0/P1 largely built; compression thesis re-based on evidence; Golem-managed Ollama bootstrap + `coder` (renamed from `delegate`, Decision 35) shipped; slider is a pure 0–3 compression dial (level-0 full bypass, local drafts/local-first removed, semantic gated off caching upstreams) with always-on local+upstream status (Decisions 30–31)** (see IMPLEMENTATION_PLAN.md, ROADMAP.md, CLAUDE.md)
-**Date:** 2026-07-10 (v1.11 adds Decision 28; v1.10 Decision 27; v1.9 Decision 26; v1.8 Decision 25; v1.7 Decision 23; v1.6 Decision 22; v1.5 Decision 21; v1.4 Decision 20; v1.3 2026-07-03)
+**Status:** **v1.17 — P0/P1 built and R1–R3 landed; roadmap refocused on the co-developer core (Decision 36); compression thesis re-based on evidence; slider is a pure 0–3 compression dial (level-0 full bypass, semantic gated off caching upstreams) with always-on local+upstream status (Decisions 30–31)** (see docs/plan/IMPLEMENTATION_PLAN.md, docs/plan/ROADMAP.md, CLAUDE.md)
+**Date:** 2026-07-16 (v1.17 adds Decision 36; v1.16 Decision 35; v1.11 Decision 28; v1.10 Decision 27; v1.9 Decision 26; v1.8 Decision 25; v1.7 Decision 23; v1.6 Decision 22; v1.5 Decision 21; v1.4 Decision 20; v1.3 2026-07-03)
 
-> **RENAMED (v1.3, Decision 19): the project is "Golem"** (domain **golem.run**; npm `golem-run`; CLI `golem`). Every "EOL" in this document reads as "Golem"; concrete renamed identifiers are listed in Decision 19. The working title "Edge Offload Layer" survives only in this file's name and historical notes.
+> **Naming (v1.3, Decision 19; housekeeping v1.17, Decision 36):** the project is **"Golem"** (domain **golem.run**; npm `golem-run`; CLI `golem`), renamed from the working title "Golem / Edge Offload Layer" on 2026-07-03. This file was `edge-offload-spec.md` until Decision 36 renamed it `golem-spec.md` and scrubbed the dead name from living prose; "Golem" survives only inside dated Decisions Log entries where the wording is itself the historical record.
 
 ---
 
 ## 1. Vision & Goals
 
-**EOL is an agentic developer assistant layer for Claude** — a local-first service that gives Claude instructable tools backed by the developer's own hardware (GPU, storage, vector DB, local LLMs), keeps secrets on-machine via redaction, and can front any LLM gateway. Its durable pillars are **privacy (redaction), local tools (search/coder/execute/remember), routing, and honest observability**; Claude acts as a materially better coding assistant because it can search, delegate, execute, and remember locally instead of consuming context. **Token savings are situational, not the headline** (Decision 23, 2026-07-05): measured against real *cached* Claude Code traffic the native lossless stage saves ~0% (verification-notes §31–§32), so the token-reduction thesis now rests on **lossy/semantic compression at slider ≥3 via the Headroom sidecar** — gated on measured benefit — and on **non-caching upstreams** where resent history is re-billed at full price.
+**Golem is an agentic developer assistant layer for Claude** — a local-first service that gives Claude instructable tools backed by the developer's own hardware (GPU, storage, vector DB, local LLMs), keeps secrets on-machine via redaction, and can front any LLM gateway. Its durable pillars are **privacy (redaction), local tools (search/coder/execute/remember), routing, and honest observability**; Claude acts as a materially better coding assistant because it can search, delegate, execute, and remember locally instead of consuming context. **Token savings are situational, not the headline** (Decision 23, 2026-07-05): measured against real *cached* Claude Code traffic the native lossless stage saves ~0% (verification-notes §31–§32), so the token-reduction thesis now rests on **lossy/semantic compression at slider ≥3 via the Headroom sidecar** — gated on measured benefit — and on **non-caching upstreams** where resent history is re-billed at full price.
 
 1. **Fewer tokens** sent to and received from Claude models, reducing cost and latency.
 2. **Quality impact is minimal**, and where quality is traded for savings, the trade is explicit and user-controlled via a **quality/savings slider**.
 3. Claude is **taught to delegate**: retrieval, summarization, extraction, cheap generation, test execution, and memory all become local MCP tools Claude prefers over raw context consumption.
 4. Targets **typical developer-grade edge compute**: a single dev laptop or desktop with a mainstream GPU (8–16GB NVIDIA) or Apple Silicon (16–64GB unified memory). Larger GPUs (24GB) and additional LAN machines are exploited when present but never required; a CPU-only machine still gets the full lossless pipeline.
 5. **Cross-platform as a hard requirement:** native Windows, macOS, and Linux from P0 — no WSL dependency. Enforced by a 3-OS CI matrix; every dependency choice must have native support on all three (the decided stack already does: Python/uvx, Ollama native Windows builds, Qdrant embedded client, ONNX/tree-sitter Windows wheels, and `headroom-ai` explicitly supports Windows). Platform-specific paths/config via `platformdirs`.
-6. **Familiar Claude-style UX:** configuration and interaction mirror Claude Code conventions — slash commands (`/eol:...`), a settings.json hierarchy (user → project), and CLAUDE.md-style guidance files — so adoption feels like an extension of the tool developers already know.
+6. **Familiar Claude-style UX:** configuration and interaction mirror Claude Code conventions — slash commands (`/golem/...`), a settings.json hierarchy (user → project), and CLAUDE.md-style guidance files — so adoption feels like an extension of the tool developers already know.
 
 ### 1.1 Relationship to Headroom (DECIDED v0.3: embed, don't rebuild)
 
 Headroom (`headroom-ai`, Apache 2.0, Python + TypeScript) already ships the compression layer this spec originally described: an Anthropic-compatible proxy, an MCP server (`headroom_compress`, `headroom_retrieve`, `headroom_stats`), content-aware compressors (AST-based code compression via tree-sitter, statistical JSON compression, log/diff/text compression via a small HF model), reversible Compress-Cache-Retrieve (CCR), cache alignment, per-project SQLite+HNSW memory, `headroom wrap claude` one-command integration, failure learning, and output-token reduction.
 
-**EOL therefore depends on `headroom-ai` as its compression stage** and differentiates on everything agentic:
+**Golem therefore depends on `headroom-ai` as its compression stage** and differentiates on everything agentic:
 
-| Capability | Headroom | EOL adds |
+| Capability | Headroom | Golem adds |
 |---|---|---|
 | Compression, CCR, cache alignment | ✅ core | Slider gating, redaction pre-stage, savings telemetry |
-| Proxy / MCP / agent wrap | ✅ | Unified with EOL's tools in one MCP server & one init command |
-| Memory | ✅ Conversational fact memory: inline extraction, scoping, supersession, hybrid retrieval, **Qdrant backend** | Adopted as-is on shared Qdrant. EOL adds the **document knowledge base**: ingestion of guides/wikis/codebases, GPU embeddings, tree-sitter chunking, reranking, file watchers, federated search across memory + knowledge |
+| Proxy / MCP / agent wrap | ✅ | Unified with Golem's tools in one MCP server & one init command |
+| Memory | ✅ Conversational fact memory: inline extraction, scoping, supersession, hybrid retrieval, **Qdrant backend** | Adopted as-is on shared Qdrant. Golem adds the **document knowledge base**: ingestion of guides/wikis/codebases, GPU embeddings, tree-sitter chunking, reranking, file watchers, federated search across memory + knowledge |
 | Local models | One HF compression model | **Tiered local-LLM delegation** (Ollama): summarize, extract, classify, route, draft, judge |
 | Developer-assistant tools | — | Local test/lint execution → failure digests; git-aware context; Whisper/OCR media preprocessing; speculative prefetch |
 | Hardware awareness | — | Capability tiers, model auto-selection, optional LAN workers |
@@ -39,17 +39,17 @@ Risk note: Headroom's scope is expanding (it recently added memory and learning)
 
 Evidence from the codebase (v0.28.0, Apache 2.0, Rust-accelerated core via maturin): the base package is lightweight (tiktoken, pydantic, click, ast-grep), with `[proxy]`, `[code]`, and `[ml]` extras and lazy, ImportError-guarded imports. It is already factored for embedding — **no fork or service extraction needed.**
 
-**Integration mode:** EOL owns the single HTTP proxy process and calls Headroom **as a library** (`compress(messages)` / CCR retrieve) inside its pipeline: `redaction → headroom.compress(slider-mapped config) → forward to Anthropic`. Rejected alternatives: proxy-chaining (`EOL proxy → headroom proxy → API`) doubles processes and latency and splits config; MCP-to-MCP is only suitable for explicit tools, not the transparent path.
+**Integration mode:** Golem owns the single HTTP proxy process and calls Headroom **as a library** (`compress(messages)` / CCR retrieve) inside its pipeline: `redaction → headroom.compress(slider-mapped config) → forward to Anthropic`. Rejected alternatives: proxy-chaining (`golem proxy → headroom proxy → API`) doubles processes and latency and splits config; MCP-to-MCP is only suitable for explicit tools, not the transparent path.
 
 **Isolation:** Headroom sits behind an internal `CompressionService` interface (`compress(messages, policy) → (messages', refs)`, `retrieve(ref) → original`, `stats()`), version-pinned, with contract tests run on every upgrade — it's a beta-velocity dependency (0.x with documented breaking pins).
 
 **Config-level reworks (no code changes):**
-- **Adopt Headroom's memory for conversational facts** (REVERSES v0.4's "disable" decision after source review): it provides inline fact extraction (preferences, decisions, entities, insights) with zero added latency, hierarchical scoping (user/session/agent/turn), temporal supersession chains, hybrid vector+FTS retrieval, LoCoMo-benchmarked evals, and Claude Code sync writers. ~~Critically it supports a **native Qdrant backend** (`HEADROOM_QDRANT_*`), so it shares EOL's Qdrant instance in dedicated collections.~~ **[CORRECTED v1.1 — refuted by T0.1 verification: no Qdrant backend exists; memory stays on Headroom's embedded SQLite+HNSW+FTS5 store and federation spans two stores. See Decision 13.]**
-- **Memory/knowledge division of labor:** Headroom memory = *learned from conversations*; EOL knowledge base = *ingested from documents* (guides, style guides, wikis, codebases). EOL's `search_local` federates both (query memory + knowledge collections, rerank merged results) so Claude gets one retrieval call.
-- **Coordinate `headroom learn`** and memory's CLAUDE.md sync writers with EOL's guidance writer — one merged guidance file, no conflicting instructions.
-- **Kompress vs. local LLM:** Kompress (ONNX INT8, no torch) stays the default text compressor; slider ≥4 may route text compression to EOL's tiered local LLM for higher-quality abstractive summaries.
-- **Unified MCP surface:** EOL's MCP server re-exports Headroom's retrieve/stats/memory tools under the EOL namespace alongside its own tools — Claude sees one coherent toolset.
-- **Evaluate Headroom's `--code-graph`** (file-watching code index for compression) in P1 before building EOL's tree-sitter indexer from scratch — reuse or extend if suitable.
+- **Adopt Headroom's memory for conversational facts** (REVERSES v0.4's "disable" decision after source review): it provides inline fact extraction (preferences, decisions, entities, insights) with zero added latency, hierarchical scoping (user/session/agent/turn), temporal supersession chains, hybrid vector+FTS retrieval, LoCoMo-benchmarked evals, and Claude Code sync writers. ~~Critically it supports a **native Qdrant backend** (`HEADROOM_QDRANT_*`), so it shares Golem's Qdrant instance in dedicated collections.~~ **[CORRECTED v1.1 — refuted by T0.1 verification: no Qdrant backend exists; memory stays on Headroom's embedded SQLite+HNSW+FTS5 store and federation spans two stores. See Decision 13.]**
+- **Memory/knowledge division of labor:** Headroom memory = *learned from conversations*; Golem knowledge base = *ingested from documents* (guides, style guides, wikis, codebases). Golem's `search_local` federates both (query memory + knowledge collections, rerank merged results) so Claude gets one retrieval call.
+- **Coordinate `headroom learn`** and memory's CLAUDE.md sync writers with Golem's guidance writer — one merged guidance file, no conflicting instructions.
+- **Kompress vs. local LLM:** Kompress (ONNX INT8, no torch) stays the default text compressor; slider ≥4 may route text compression to Golem's tiered local LLM for higher-quality abstractive summaries.
+- **Unified MCP surface:** Golem's MCP server re-exports Headroom's retrieve/stats/memory tools under the Golem namespace alongside its own tools — Claude sees one coherent toolset.
+- **Evaluate Headroom's `--code-graph`** (file-watching code index for compression) in P1 before building Golem's tree-sitter indexer from scratch — reuse or extend if suitable.
 
 ### Non-goals (v1)
 - Cloud-hosted deployment (local/LAN only)
@@ -81,7 +81,7 @@ A **hub-and-worker** design with three integration surfaces sharing one core eng
 └──────┬──────────────┬──────────────────┬────────────────┘
        │ (proxy)      │ (MCP)            │ (SDK)
 ┌──────▼──────────────▼──────────────────▼────────────────┐
-│  EOL HUB (one machine, always on)                       │
+│  GOLEM HUB (one machine, always on)                     │
 │  ┌────────────┐ ┌───────────┐ ┌──────────────────────┐  │
 │  │ API Proxy  │ │ MCP Server│ │ Python/TS SDK        │  │
 │  └─────┬──────┘ └─────┬─────┘ └─────────┬────────────┘  │
@@ -111,18 +111,18 @@ A **hub-and-worker** design with three integration surfaces sharing one core eng
 
 ### 2.1 Integration surfaces
 
-**DECIDED (v0.2): single process, two doors, one-command install.** EOL ships as one local service exposing the proxy and the MCP server simultaneously, sharing one engine/cache/index. Install and adoption flow:
+**DECIDED (v0.2): single process, two doors, one-command install.** Golem ships as one local service exposing the proxy and the MCP server simultaneously, sharing one engine/cache/index. Install and adoption flow:
 
-1. `uvx eol init` (MVP; later: single static binary / `brew install eol`)
-2. Init auto-detects Claude Code, sets `ANTHROPIC_BASE_URL=http://localhost:<port>`, runs `claude mcp add eol` — done.
+1. `npx golem-run init` (MVP; later: single static binary / `brew install golem-run`)
+2. Init auto-detects Claude Code, sets `ANTHROPIC_BASE_URL=http://localhost:<port>`, runs `claude mcp add golem` — done.
 3. P0 lossless savings begin immediately, **no GPU and no model download required**.
-4. On first GPU-gated feature use, EOL detects Ollama (or offers to install it) and pulls the tier-appropriate models.
+4. On first GPU-gated feature use, Golem detects Ollama (or offers to install it) and pulls the tier-appropriate models.
 
 Rationale: the proxy is the only mechanism that sees *every* request (Claude Code hooks only intercept tool I/O, not the model request stream), giving Headroom-style savings with zero client changes; MCP is the standard, documented way to give Claude instructable tools. The two compose: the proxy compresses, and Claude can call `get_original(ref)` via MCP to reverse it when needed.
 
 | Surface | Mechanism | Primary use |
 |---|---|---|
-| **Transparent proxy** | `ANTHROPIC_BASE_URL` pointed at EOL hub; hub forwards to `api.anthropic.com` | Automatic pre/post-processing for *any* client that honors the env var (Claude Code, all Anthropic SDKs). Claude Desktop/app cannot repoint its base URL → it gets MCP-only, which is acceptable: token pain concentrates in agentic workflows |
+| **Transparent proxy** | `ANTHROPIC_BASE_URL` pointed at GOLEM HUB; hub forwards to `api.anthropic.com` | Automatic pre/post-processing for *any* client that honors the env var (Claude Code, all Anthropic SDKs). Claude Desktop/app cannot repoint its base URL → it gets MCP-only, which is acceptable: token pain concentrates in agentic workflows |
 | **MCP server** | stdio (local) + streamable HTTP (LAN) | Claude explicitly calls tools: `search_local`, `summarize_local`, `cache_lookup`, `delegate_task`, `index_path` |
 | **SDK** | Thin wrapper over Anthropic SDK | Your own apps get pipeline + tools programmatically |
 
@@ -143,7 +143,7 @@ The proxy handles *implicit* savings (compression, dedup, caching). MCP handles 
 
 ## 3. Offload Capabilities
 
-### 3.1 RAG / local vector search — the EOL knowledge base
+### 3.1 RAG / local vector search — the Golem knowledge base
 Scope: **documents the developer chooses to ingest** — codebases, developer guides, style guides, wikis, ADRs, API docs. Complements (does not replace) Headroom's conversational memory; both live in the same Qdrant instance, and `search_local` federates across memory + knowledge collections with a shared reranker.
 - **Vector DB — DECIDED (v0.3): Qdrant.** Default deployment uses qdrant-client's **embedded local mode** (on-disk, no server process — keeps install friction at zero); users can point config at a Qdrant server/Docker instance for bigger indexes or LAN sharing. **One collection per project** (mirrors Headroom's no-cross-project-bleed principle), plus an opt-in shared "knowledge" collection for cross-project docs.
 - **Embeddings:** GPU-accelerated local models (e.g., bge-m3 or nomic-embed) — code-aware and text models.
@@ -152,11 +152,11 @@ Scope: **documents the developer chooses to ingest** — codebases, developer gu
 - **Token effect:** Claude retrieves k relevant chunks (~2–5K tokens) instead of whole-directory reads (~50–500K tokens).
 
 ### 3.2 Context compression & summarization (powered by `headroom-ai`)
-EOL wraps Headroom's pipeline (CacheAligner → ContentRouter → per-type compressors → CCR store) rather than reimplementing it, and adds:
+Golem wraps Headroom's pipeline (CacheAligner → ContentRouter → per-type compressors → CCR store) rather than reimplementing it, and adds:
 1. **Redaction pre-stage** — strip secrets/PII before anything leaves the machine (runs before Headroom).
-2. **Slider gating** — maps EOL slider levels to Headroom aggressiveness/config per content type.
-3. **Semantic compression** (slider ≥3) — EOL's tiered local LLM summarizes stale conversation turns and low-relevance sections, a heavier step than Headroom's compressors; originals go into the same CCR store so `headroom_retrieve` / EOL `get_original(ref)` reverses everything uniformly.
-4. **Savings telemetry** — per-stage attribution surfaced in the EOL dashboard (extends `headroom_stats`).
+2. **Slider gating** — maps Golem slider levels to Headroom aggressiveness/config per content type.
+3. **Semantic compression** (slider ≥3) — Golem's tiered local LLM summarizes stale conversation turns and low-relevance sections, a heavier step than Headroom's compressors; originals go into the same CCR store so `headroom_retrieve` / Golem `get_original(ref)` reverses everything uniformly.
+4. **Savings telemetry** — per-stage attribution surfaced in the Golem dashboard (extends `headroom_stats`).
 
 ### 3.3 Local LLM subtasks
 Roles for local models (routed by tier):
@@ -166,7 +166,7 @@ Roles for local models (routed by tier):
 - **Draft/Critic** — generate cheap first drafts locally; Claude refines (slider-gated)
 - **Reranker** — cross-encoder rerank of RAG hits before sending to Claude
 
-Runtime — **DECIDED (v0.2): Ollama-first behind an OpenAI-compatible interface.** EOL talks to local models via the OpenAI-compatible chat/embeddings protocol; Ollama is the blessed default backend (dev-familiar, one-line install, manages model pulls and quantization, CUDA + Apple Metal). Anything speaking the same protocol — llama.cpp server, LM Studio, vLLM — is a drop-in swap via config. Bundled llama.cpp is a v2 fallback for zero-dependency installs; vLLM is opt-in only (Linux/CUDA, serving-scale benefits irrelevant to a single dev). Model catalog auto-selected per node: ~3–4B on P-min, 7–8B on P-mid, 14B on P-max, all quantized (Q4–Q5 default).
+Runtime — **DECIDED (v0.2): Ollama-first behind an OpenAI-compatible interface.** Golem talks to local models via the OpenAI-compatible chat/embeddings protocol; Ollama is the blessed default backend (dev-familiar, one-line install, manages model pulls and quantization, CUDA + Apple Metal). Anything speaking the same protocol — llama.cpp server, LM Studio, vLLM — is a drop-in swap via config. Bundled llama.cpp is a v2 fallback for zero-dependency installs; vLLM is opt-in only (Linux/CUDA, serving-scale benefits irrelevant to a single dev). Model catalog auto-selected per node: ~3–4B on P-min, 7–8B on P-mid, 14B on P-max, all quantized (Q4–Q5 default).
 
 ### 3.4 Caching & dedup
 - **Exact response cache** — hash(request) → response, TTL-configurable.
@@ -202,45 +202,45 @@ Global setting **0–3** (simplified from 0–5 by **Decision 30**, 2026-07-11) 
 ### Quality guardrails
 - **Eval harness:** replay a recorded task suite at each slider level; score with an LLM judge (Claude, sampled) + task success metrics; publish tokens-saved vs. quality-delta curves.
 - **Canary mode:** N% of requests sent both compressed and raw; responses compared to detect regressions.
-- **Per-request escape hatch:** header/flag `x-eol-bypass: true`.
+- **Per-request escape hatch:** header/flag `x-golem-bypass: true`.
 
 ---
 
 ## 5. Telemetry & UX
 - Dashboard (local web UI): tokens saved/spent, cache hit rates, cost estimate, per-stage savings attribution, per-device utilization, quality-delta from canary runs.
-- CLI: `eol status`, `eol devices`, `eol index <path>`, `eol slider 3`, `eol replay-eval`.
+- CLI: `golem status`, `golem devices`, `golem index <path>`, `golem slider 3`, `golem replay-eval`.
 
 ### 5.1 Claude-style slash commands & configuration (v0.6)
-`eol init` installs EOL commands into Claude Code following its native conventions, so control never requires leaving the session:
+`golem init` installs Golem commands into Claude Code following its native conventions, so control never requires leaving the session:
 
 | Command | Action |
 |---|---|
-| `/eol:slider <0-5>` | Set quality/savings level (session-scoped) |
-| `/eol:index <path>` | Ingest a directory/file into the knowledge base |
-| `/eol:search <query>` | Explicit federated search (knowledge + memory) |
-| `/eol:stats` | Tokens saved, cache hits, per-stage attribution |
-| `/eol:expand <ref>` | Retrieve an original from the CCR store |
-| `/eol:bypass` | Disable all lossy stages for the next request(s) |
-| `/eol:devices` | Show local + LAN worker capability/status |
-| `/eol:delegate <task>` | Route a subtask to a local model explicitly |
+| `/golem/slider <0-3>` | Set quality/savings level (session-scoped; 0–3 per Decision 30) |
+| `/golem/index <path>` | Ingest a directory/file into the knowledge base |
+| `/golem/search <query>` | Explicit federated search (knowledge + memory) |
+| `/golem/stats` | Tokens saved, cache hits, per-stage attribution |
+| `/golem/expand <ref>` | Retrieve an original from the CCR store |
+| `/golem/bypass` | Disable all lossy stages for the next request(s) |
+| `/golem/devices` | Show local + LAN worker capability/status |
+| `/golem/coder <task>` | Route a subtask to a local model explicitly (renamed from `delegate`, Decision 35) |
 
-Mechanism: MCP prompts (surfaced by Claude Code as `/mcp__eol__...` slash commands) plus project command files installed under `.claude/commands/` for ergonomic short names. **Verify against current Claude Code docs at build time** — command file format and MCP-prompt surfacing have evolved across releases. **[VERIFIED v1.1 (T0.1, 2026-07-03): colon names like `/eol:slider` are not supported; short names install as directory-namespaced skills `.claude/skills/eol/<cmd>/SKILL.md` → `/eol/<cmd>`. Read every `/eol:<cmd>` in this spec as `/eol/<cmd>`. See Decision 14 and verification-notes.md §10–11.]**
+Mechanism: directory-namespaced skills `.claude/skills/golem/<cmd>/SKILL.md` → `/golem/<cmd>`, plus MCP prompts surfacing as `/mcp__golem__<cmd>` (verified T0.1, 2026-07-03 — colon-namespaced command names are not supported; see Decision 14 and verification-notes §10–11). Later additions to this surface: `/golem/research`, `/golem/wiki-ingest`, `/golem/note`, `/golem/develop` (Decisions 28/35).
 
-Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) → `<project>/.eol/settings.json` (project, committable) → `<project>/.eol/settings.local.json` (personal, gitignored) → env vars → per-request headers. `eol init` also appends EOL usage guidance to the project's CLAUDE.md (coordinated with `headroom learn`'s writers, per §1.2).
+Configuration mirrors Claude Code's hierarchy: `~/.golem/settings.json` (user) → `<project>/.golem/settings.json` (project, committable) → `<project>/.golem/settings.local.json` (personal, gitignored) → env vars → per-request headers. `golem init` also appends Golem usage guidance to the project's CLAUDE.md (coordinated with `headroom learn`'s writers, per §1.2).
 
 ## 6. Tech Stack (decided — REVISED v1.2 per Decisions 16–18)
-- **Language:** **TypeScript** (Node ≥ 22, ESM; Fastify or equivalent for the proxy HTTP layer) — user decision, see Decision 16. Distributed via npm (`npx eol init`); single-binary packaging (`bun build --compile`) is a later optimization. ~~Python (FastAPI), uvx/pipx~~
-- **Compression:** **EOL-native TS lossless stage** (dedup, compaction, cache alignment, CCR) behind the `CompressionService` adapter for P0; optional pinned Headroom **Python sidecar** for ML-heavy stages at slider ≥3 (Decision 18). EOL owns the proxy process
+- **Language:** **TypeScript** (Node ≥ 22, ESM; Fastify or equivalent for the proxy HTTP layer) — user decision, see Decision 16. Distributed via npm (`npx golem-run init`); single-binary packaging (`bun build --compile`) is a later optimization. ~~Python (FastAPI), uvx/pipx~~
+- **Compression:** **Golem-native TS lossless stage** (dedup, compaction, cache alignment, CCR) behind the `CompressionService` adapter for P0; optional pinned Headroom **Python sidecar** for ML-heavy stages at slider ≥3 (Decision 18). Golem owns the proxy process
 - **Vector DB:** embedded TS-native store by default (**LanceDB candidate**, Decision 17); Qdrant server mode optional via config URL; one collection/table per project
 - **Inference:** Ollama default backend behind an OpenAI-compatible interface (llama.cpp server / LM Studio / vLLM drop-in via config) — unchanged
 - **Embeddings/rerank:** served via Ollama where available; ONNX-runtime (node) or transformers.js as CPU fallback; cross-encoder reranker on GPU — WS-C/WS-D validate
-- **MCP:** official **TypeScript** MCP SDK (`@modelcontextprotocol/sdk`) — stdio + streamable HTTP transports; one EOL server exposing both EOL tools and re-exported Headroom tools
+- **MCP:** official **TypeScript** MCP SDK (`@modelcontextprotocol/sdk`) — stdio + streamable HTTP transports; one Golem server exposing both Golem tools and re-exported Headroom tools
 - **Cache/metadata store:** SQLite (`node:sqlite` / better-sqlite3) + content-addressed blob dir (aligned with Headroom's CCR store)
 - **Code parsing:** tree-sitter via WASM bindings (web-tree-sitter) or native prebuilds — WS-C picks in C2 (cross-platform prebuilds are the constraint)
 
 ## 7. Phased Roadmap
-- **P0 — Foundation:** `eol init` installs the EOL service (proxy owning the request path, Headroom as embedded library) for Claude Code + registers the unified MCP server and `/eol:*` commands; redaction pre-stage, slider levels 0–2, savings dashboard, 3-OS CI. *Mostly integration work, not compression R&D.*
-- **P1 — RAG (first big differentiator):** Qdrant indexing (tree-sitter code chunks + docs), GPU embeddings, reranking, MCP tools `index_path` / `search_local` / `get_chunk`, file watchers; teach Claude via CLAUDE.md guidance that `eol init` installs ("prefer search_local over bulk file reads").
+- **P0 — Foundation:** `golem init` installs the Golem service (proxy owning the request path, Headroom as embedded library) for Claude Code + registers the unified MCP server and `/golem/*` commands; redaction pre-stage, slider levels 0–2, savings dashboard, 3-OS CI. *Mostly integration work, not compression R&D.*
+- **P1 — RAG (first big differentiator):** Qdrant indexing (tree-sitter code chunks + docs), GPU embeddings, reranking, MCP tools `index_path` / `search_local` / `get_chunk`, file watchers; teach Claude via CLAUDE.md guidance that `golem init` installs ("prefer search_local over bulk file reads").
 - **P2 — Local LLM delegation:** Ollama detection + tiered model catalog; summarizer/extractor/classifier tools; semantic compression; slider levels 3–4; local test/lint execution → failure digests. **Adds:** durable task queue & auto-resume (Decision 20a), task/question queue + local conversation multiplexing (20b), idea/note capture into the KB (20f, foundation).
 - **P3 — Assistant depth:** git-aware context tools, Whisper/OCR preprocessing, speculative prefetch, session memory beyond Headroom's, level 5 (per-project opt-in). **Adds:** cruise-control autonomy modes (Decision 20d), writing-style adaptation & prompt translation (20g), remote session access foundations (20c).
 - **P4 — Fleet (optional module):** device registry, scheduler, LAN workers for devs with a spare GPU box; canary quality evals. **Adds:** self-hosted remote session relay (Decision 20c), hosted workspace/org shared standards & knowledge tier (20e) — the leading paid-feature candidate on golem.run.
@@ -362,7 +362,7 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - **Per-OS install plans:** Windows — `winget install -e --id Ollama.Ollama --accept-package-agreements --accept-source-agreements` (argument array) if winget is present, else a manual pointer to `https://ollama.com/download`. macOS — `brew install ollama` if Homebrew is present, else the same manual pointer. Linux — download `https://ollama.com/install.sh` to `os.tmpdir()` and execute that file directly via `spawn("sh", [scriptPath])`, an **argument array**, not a piped `curl | sh` shell string; the downloaded artifact genuinely is a shell script, so invoking `sh` on it is not shell-string command *construction* from untrusted input — the one documented, deliberate exception to "argument arrays, not shell strings" in this module. The temp file is always removed in a `finally`.
     - **New CLI surface, consent-gated:** `golem ollama status` (read-only: installed/reachable/tier/target-model/pulled) and `golem ollama setup` — the **only** call site in the codebase that installs software or pulls a model. `golem init` and proxy auto-start never import `ollama-bootstrap.ts`. Consent gate, in order: `--yes` proceeds without prompting; an interactive TTY is shown the install plan + that a multi-GB download is included and prompted, a decline returns a clean `{kind:"cancelled"}` (not an error); a non-TTY session without `--yes` **refuses immediately** (`SetupRefusedError`) without ever constructing a prompt — refuse, don't hang.
     - **No frozen-interface change; no settings-schema change.** `inference.ollama_base_url` already existed and is all the native client needs; the target model is derived (`chatModelFor`), not configured, so there is no new "which model" setting, and consent is per-invocation rather than a persisted toggle.
-    - **Testing mirrors the `HeadroomSidecar` precedent:** DI seams (`ollama-native.ts`'s HTTP calls against a local fake server, `ollama-bootstrap.ts`'s orchestration against a fully faked `OllamaBootstrapDeps`, `cli/ollama.ts`'s consent/TTY/`--yes` gating) get full unit/integration coverage; `install-runner.ts`'s real spawn/download path gets none, matching `headroom-adapter.ts`'s own convention — a real end-to-end `winget`/`brew`/`install.sh` run and a real multi-GB `/api/pull` are manual-verification checklist items (`docs/verification-notes.md`), never run in CI.
+    - **Testing mirrors the `HeadroomSidecar` precedent:** DI seams (`ollama-native.ts`'s HTTP calls against a local fake server, `ollama-bootstrap.ts`'s orchestration against a fully faked `OllamaBootstrapDeps`, `cli/ollama.ts`'s consent/TTY/`--yes` gating) get full unit/integration coverage; `install-runner.ts`'s real spawn/download path gets none, matching `headroom-adapter.ts`'s own convention — a real end-to-end `winget`/`brew`/`install.sh` run and a real multi-GB `/api/pull` are manual-verification checklist items (`docs/plan/verification-notes.md`), never run in CI.
     - **Status:** ACCEPTED, implementing now. Interfaces touched: none in `src/interfaces/`.
 27. **ACCEPTED — MCP tool names shortened to verbs (v1.10, 2026-07-09, USER DECISION).** Claude Code renders MCP tool-call step labels using the raw registered tool name (e.g. `[golem_search]`), and since the server is already namespaced as `golem` (every call surfaces as `mcp__golem__<tool>` regardless of the tool's own name), the `golem_`-prefix on each tool name was pure redundancy that made step labels needlessly long. The user asked for terser labels — `[search]`, `[fetch]`, etc. — so the 7 MCP tool registration names in `src/mcp/server.ts` are shortened to bare verbs: `golem_search` → `search`, `golem_get_chunk` → `fetch`, `golem_expand` → `expand`, `golem_stats` → `stats`, `golem_set_slider` → `level`, `golem_index_path` → `ingest`, `golem_delegate` → `delegate`. `golem_devices` is out of scope for this decision and keeps its current name.
     - **Scope — MCP tool registration only.** This narrowly supersedes the tool-name portion of Decision 19's "frozen tool names" list; every other `golem_*`-branded surface established there is unchanged: prompt names (still `/mcp__golem__<prompt>`), CLI subcommands (`golem status|slider|stats|index|devices|init|uninit`), skills (`/golem/<cmd>`), config directories (`~/.golem/`, `<project>/.golem/`), the `GOLEM_<SECTION>_<KEY>` env prefix, and the `x-golem-bypass` header. This is a rename of the seven MCP tool-registration strings and nothing else.
@@ -374,7 +374,7 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - **Anti-duplication rule:** the wiki never restates what code, `docs/`, or git history already record — it links. Contradictions are reported to the human, never auto-resolved.
     - **Interfaces:** `src/interfaces/knowledge.ts` (frozen) is **untouched** — wiki pages are markdown files the existing ingest/watch/search machinery already handles (chunk `sourcePath` points into the wiki). Wiki authoring (read-by-title/upsert/backlinks) lands later behind a NEW frozen `src/interfaces/wiki.ts` with contract tests first (W2). The vector index becomes disposable: schema migrations become "reindex", never data surgery.
     - **Phasing:** W1 `golem wiki init` scaffold + auto-index + search boost for wiki pages + wiki-first guidance (immediately useful, config + scaffold only); W2 `wiki_read`/`wiki_upsert` MCP tools + `/golem/wiki-ingest`, `/golem/wiki-query` (renamed `/golem/research`, Decision 35) skills with plan-before-write gating; W3 (post WS-D) local-model distillation of fetches/notes (20f) + webcache backfill; W4 user-scope federation + synthesis reports. Wiki maintenance is the flagship consumer of `delegate`/WS-D local inference (renamed `coder`, Decision 35) (distillation at ~zero marginal token cost).
-    - **Housekeeping (same decision):** planning documents relocate to `docs/plan/` (`IMPLEMENTATION_PLAN.md`, `workstream-briefs/`, `proposals/`) — the spec and `verification-notes.md` stay at `docs/` root; the project's own wiki lives at `docs/wiki/`.
+    - **Housekeeping (same decision):** planning documents relocate to `docs/plan/` (`IMPLEMENTATION_PLAN.md`, `workstream-briefs/`, `proposals/`) — the spec and `verification-notes.md` stay at `docs/` root; the project's own wiki lives at `docs/wiki/`. **[Superseded in part by Decision 36 (2026-07-16): `verification-notes.md` moved to `docs/plan/`, the spec file was renamed `golem-spec.md`, and the completed workstream briefs were retired.]**
     - **Status:** ACCEPTED, implementing W1 now. Interfaces touched: none in `src/interfaces/` (W2's `wiki.ts` is additive, contract-first when it lands).
 29. **ACCEPTED — Wiki authoring surface: W1's open autonomy questions resolved ahead of W2 (v1.12, 2026-07-10).** Closes `docs/wiki/questions/wiki-write-autonomy.md` before implementing `src/interfaces/wiki.ts` / `wiki_read` / `wiki_upsert`.
     - **Auto-append autonomy:** confirmed never-automatic through P1/P2 (the question's own working answer stands). `wiki_upsert` performs the write mechanically once called; every tool description states writes must follow a proposed-and-approved plan, the same doc-level gating convention the rest of the MCP surface already uses (e.g. `delegate`'s, now `coder`'s, "treat as a draft, not a final answer" framing) — there is no in-protocol confirmation step, matching how every other Golem tool works today.
@@ -396,7 +396,7 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - **Interfaces/scope:** frozen `src/interfaces/policy.ts` changed again — `StageConfig` loses `localDrafts`/`localOnlyAnswers`, `SliderPolicy` loses `localOnlyOptIn`, `effectiveStages` removed (contract tests updated first, flagged). `ProxyRequest.localResponse` (an additive `src/proxy/types.ts` field, not `src/interfaces/`) removed. `slider.local_only_opt_in` removed from the config schema (old settings files with it now warn, as any unknown key does).
     - **Status:** ACCEPTED — local removal + upstream-gating implemented 2026-07-11; cache-safe structural tier deferred to R2.
 32. **ACCEPTED — Positioning: Golem commits to Decision 22's universal pre-LLM processor, R5.1 unblocked (v1.15, 2026-07-11, USER DECISION, R1.2).** R1.1 (verification-notes §54) found levels 1 and 3 pipeline-identical on Anthropic — there is currently no live traffic on which Decision 23's "compression is situational, true mainly on non-caching upstreams" claim can ever be realized, because no non-Anthropic gateway is wired up. That tension is the R1.2 gate: stay **assistant-for-Claude** (situational compression remains theoretical; R5.1 stays deferred) or commit to **Decision 22** now so the situational claim has a real non-caching upstream to land on. **Decided: Decision 22.**
-    - **What this settles.** Decision 22 (§22, v1.6) is no longer a Phase-P3+ aspiration held at arm's length — it is now the active roadmap direction. **R5.1** (`ROADMAP.md`: "Provider-agnostic adapters, front Foundry/OpenRouter, Anthropic byte-faithful path untouched") and its `IMPLEMENTATION_PLAN.md` counterpart **WS-F14** move from "blocked on R1.2" to unblocked — eligible for scheduling into a future batch. **This decision does not itself start that work**; per `docs/plan/R1_BATCH.md` §3, WS-F* build work still requires a separate ask before it begins. What changed here is the positioning call, not the build queue.
+    - **What this settles.** Decision 22 (§22, v1.6) is no longer a Phase-P3+ aspiration held at arm's length — it is now the active roadmap direction. **R5.1** (`ROADMAP.md`: "Provider-agnostic adapters, front Foundry/OpenRouter, Anthropic byte-faithful path untouched") and its `IMPLEMENTATION_PLAN.md` counterpart **WS-F14** move from "blocked on R1.2" to unblocked — eligible for scheduling into a future batch. **This decision does not itself start that work**; WS-F* build work still requires a separate explicit ask before it begins (a standing gate first recorded in the R1 batch brief, now carried on the ROADMAP's hold sections). What changed here is the positioning call, not the build queue.
     - **Decision 22's hard boundary is reaffirmed, not loosened.** The Anthropic path keeps its byte-faithful, prompt-cache-stable guarantee (CLAUDE.md proxy-fidelity rule, Decision 31's `isCachingUpstream` gate); Foundry/OpenRouter adapters are additive, separate code paths per §22's "Architecture" note — they must never weaken or slow the Claude path. Golem's flagship, most-verified integration stays Claude Code; "universal" describes where the *pipeline* (redaction → lossless compression → knowledge/RAG → prompt translation) can point, not a dilution of Claude-specific polish.
     - **Consequence for identity copy.** CLAUDE.md's opening line ("an agentic developer-assistant layer for Claude") and README.md's "edge offload for Claude" tagline predate this call and now read narrower than the decided scope — both revised in this commit (README leads with the pillars per Decision 23's evidence-based framing: redaction / local tools / routing / honest observability, positions Golem as the pre-LLM layer with Claude as the flagship integration, and keeps compression explicitly situational language rather than a headline claim, per R1.1's finding that it is unrealized on Anthropic today).
     - **Consequence for Decision 23.** Unchanged and not superseded — the evidence (§30-32, §54) that byte-dedup/lossless compression is ~0% on cached Anthropic traffic still stands, and copy still leads with the non-compression pillars. Decision 23's "situational" language now has a stated path to becoming real (via R5.1) rather than being a permanently theoretical footnote.
@@ -423,6 +423,11 @@ Configuration mirrors Claude Code's hierarchy: `~/.eol/settings.json` (user) →
     - **Companion skill rename (same commit, not a separate Decisions Log item since skills are not the frozen tool-name set Decision 27 gates):** the `wiki-query` skill — which already implements the Decision 28 wiki-first ladder — is renamed `research` and its `CLAUDE.local.md`/guidance-writer reference is fixed from a nonexistent `/golem/search` to `/golem/research`. A new `/golem/develop` skill (`invocationMode: auto`) orchestrates the research → `coder`-draft → review → verify loop end-to-end, the sequence this project already followed by hand for every feature.
     - **Interfaces/scope:** no frozen-interface change — `src/interfaces/` untouched. Rename of tool/prompt-registration strings in `src/mcp/server.ts` plus skill content in `src/cli/skills.ts` and guidance text in `src/hooks/guidance.ts`.
     - **Status:** ACCEPTED, implementing now.
+36. **ACCEPTED — Roadmap refocused on the co-developer core; companion-app cluster on hold; docs housekeeping (v1.17, 2026-07-16, USER DECISION).** The remaining roadmap is reorganised around the intent of the pattern that inspired Decision 28 (the "LLM Wiki / developer's second brain" article): **(1)** a planning-collaboration surface where the user and Claude read captured notes/ideas together and turn them into tasks; **(2)** continued distillation of the project and research into the wiki, with the KB collecting raw articles and the webcache caching fetches (largely shipped, WS-W); **(3)** a robust, token-friendly local coder co-developer. Everything serving other ends waits.
+    - **Renumbering.** Shipped releases R1–R3 collapse to a compact "Shipped" section in `ROADMAP.md` (details live in the wiki debriefs/syntheses). The new active release is **R4 — Co-developer core**: planning-collaboration surface (BACKLOG inbox + `/golem/plan` skill), `coder` grounding (retrieval-augmented drafting), honest per-tool token telemetry (closing the verification-notes §59 gap), a coder iteration loop (drafter→judge→revise over existing roles), distill-draft promotion UX, the `FileVectorDriver` flush stream-write fix (R3.7's recommendation), and drafter-catalog re-verification. Old R4 (autonomy & orchestration) renumbers to **R5, ON HOLD**; old R5 (multi-provider & remote, including the Decision 21b companion app) renumbers to **R6, ON HOLD**. Both holds share one gate: not before the R4 co-developer loop is proven robust, and each task still needs its design memo + separate explicit ask (the standing WS-F gate).
+    - **Docs housekeeping (same decision).** This file renamed `edge-offload-spec.md` → `golem-spec.md` and the dead "EOL / Edge Offload Layer" name scrubbed from living prose (§1–§8, updated in place per the Decisions 27/35 precedent; "EOL" survives only inside dated Decisions Log entries where the wording is itself the record). `verification-notes.md` moved to `docs/plan/` (supersedes Decision 28's housekeeping note). `docs/DEVELOPMENT.md` converted to the wiki page `concepts/Dogfooding Golem.md`. The completed batch briefs (`R1_BATCH.md`–`R3_BATCH.md`) and the six P0-era `workstream-briefs/` were deleted (git history and the wiki debriefs are the record); cross-references repointed.
+    - **Interfaces/scope:** no frozen-interface change; docs-only apart from path-comment fixes. R4 tasks that touch interfaces (none expected) follow the normal contract-tests-first rule when they land.
+    - **Status:** ACCEPTED, implemented 2026-07-16.
 
 ### To verify against live docs before P0 — ✅ RESOLVED 2026-07-03 (task T0.1)
 All four items verified; dated findings with URLs live in `verification-notes.md`. Summary:

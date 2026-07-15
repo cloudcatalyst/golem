@@ -11,7 +11,7 @@
  * - `slider.level` (0–3, Decision 30) — spec §4 / interfaces/policy.ts.
  * - `proxy.*` — port, upstream base URL, timeouts. The spec is silent on the
  *   concrete values; defaults chosen here (see DEFAULT_SETTINGS) and recorded
- *   in docs/verification-notes.md §17.
+ *   in docs/plan/verification-notes.md §17.
  * - `inference.ollama_base_url` — spec §6 (Ollama default backend,
  *   URL-addressable for LAN offload, Decision 12).
  * - `knowledge.*` — enabled toggle, optional external vector-DB URL (spec §6:
@@ -222,7 +222,7 @@ export interface GolemSettings {
 
 /**
  * Built-in defaults (the lowest layer). Where the spec is silent the choice is
- * recorded in docs/verification-notes.md §17:
+ * recorded in docs/plan/verification-notes.md §17:
  * - proxy.port 4653 / telemetry.dashboard_port 4654 ("GOLE" on a phone keypad).
  * - slider.level 1 (lossless-only: byte-faithful with real savings, spec P0 DoD).
  * - upstream https://api.anthropic.com; Ollama http://localhost:11434.

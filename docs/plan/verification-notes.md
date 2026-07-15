@@ -1,8 +1,9 @@
-# EOL Verification Notes (live-doc findings)
+# Golem Verification Notes (live-doc findings)
 
 Live-document verification record required by CLAUDE.md and IMPLEMENTATION_PLAN T0.1.
 All findings below were checked against live docs on **2026-07-03** unless noted.
 Add new dated entries below; never rewrite history — corrections get a new entry.
+(Entries §1–§16 predate the Golem rename — read "EOL" as "Golem", see §17.)
 
 ---
 

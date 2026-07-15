@@ -70,7 +70,10 @@ import {
 
 const program = new Command();
 
-program.name("golem").description("Golem — edge offload for Claude (golem.run)").version(VERSION);
+program
+  .name("golem")
+  .description("Golem — universal pre-LLM processing layer (golem.run)")
+  .version(VERSION);
 
 function printReport(report: InitReport): void {
   for (const action of report.actions) {
