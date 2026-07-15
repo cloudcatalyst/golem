@@ -52,6 +52,7 @@ import {
   UnknownWikiPageError,
   WikiWriteConflictError,
 } from "../interfaces/index.js";
+import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
 import { rerankHits } from "../knowledge/rerank.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
 import type { SliderStore } from "./slider-store.js";
@@ -623,6 +624,19 @@ function registerKnowledgeTools(
       // Graph-first search hits carry a synthetic `wiki:<relPath>` chunk id
       // (they were never ingested into the vector store), so fetch must
       // resolve those straight from the wiki rather than knowledge.getChunk.
+      // Memory-scope hits carry a synthetic `memory:<id>` chunk id too (R3.6) —
+      // Headroom's verified Memory API has no point-lookup-by-id (only
+      // search/save/clear/delete), so there is no store to fetch a fresh copy
+      // from. The hit's text_preview already holds up to CHUNK_PREVIEW_CHARS of
+      // the fact; re-run search for more.
+      if (isMemoryChunkId(chunk_id)) {
+        return errorResult(
+          `Memory-scope hit "${chunk_id}" cannot be fetched individually — Headroom's ` +
+            "memory API supports search only, not lookup by id. Its preview from search " +
+            `already contains up to ${CHUNK_PREVIEW_CHARS} characters; re-run search with a ` +
+            "narrower query for more context.",
+        );
+      }
       const wikiRelPath = wikiChunkRelPath(chunk_id);
       if (wikiRelPath !== undefined && wiki !== undefined && wikiDir !== undefined) {
         try {

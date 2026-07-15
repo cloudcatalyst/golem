@@ -4,12 +4,14 @@
  */
 
 import { describe, expect, it } from "vitest";
+import type { MemoryFact, MemorySearchProvider } from "../../../src/compression/index.js";
 import type { Chunk } from "../../../src/interfaces/knowledge.js";
 import { UnknownChunkError } from "../../../src/interfaces/knowledge.js";
 import {
   cosineSimilarity,
   type EmbedFn,
   InMemoryVectorDriver,
+  isMemoryChunkId,
   KNOWLEDGE_SCHEMA_VERSION,
   NotImplementedYetError,
   openKnowledgeBase,
@@ -123,5 +125,75 @@ describe("GolemKnowledgeBase read path", () => {
     expect(() =>
       openKnowledgeBase({ projectDir: "/tmp/x", vectorDbUrl: "http://localhost:6333" }),
     ).toThrow(NotImplementedYetError);
+  });
+});
+
+describe("GolemKnowledgeBase MEMORY-scope federation (R3.6)", () => {
+  const embed: EmbedFn = (texts) =>
+    Promise.resolve(
+      texts.map((t) =>
+        t.includes("deploy") ? [1, 0, 0] : t.includes("add") ? [0, 1, 0] : [0, 0, 1],
+      ),
+    );
+
+  function fakeMemorySearch(facts: MemoryFact[] | null): MemorySearchProvider {
+    return { search: () => Promise.resolve(facts) };
+  }
+
+  it("memory-only search with a provider returns memory hits with a memory: chunk id", async () => {
+    const kb = openKnowledgeBase({
+      projectDir: "/tmp/x",
+      driver: new InMemoryVectorDriver(),
+      embed,
+      memorySearch: fakeMemorySearch([
+        { id: "f1", content: "we decided X", score: 0.9, metadata: { k: "v" } },
+      ]),
+    });
+    const hits = await kb.search("q", "proj", 4, new Set(["memory"]));
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.scope).toBe("memory");
+    expect(hits[0]?.chunk.chunkId).toBe("memory:f1");
+    expect(isMemoryChunkId(hits[0]?.chunk.chunkId ?? "")).toBe(true);
+    expect(hits[0]?.chunk.text).toBe("we decided X");
+  });
+
+  it("merges knowledge + memory hits when both scopes are requested, sorted by score", async () => {
+    const driver = new InMemoryVectorDriver();
+    await driver.upsert("proj", [rec("deploy-doc", "proj", "deploy guide", [1, 0, 0])]);
+    const kb = openKnowledgeBase({
+      projectDir: "/tmp/x",
+      driver,
+      embed,
+      memorySearch: fakeMemorySearch([
+        { id: "f1", content: "a stronger memory fact", score: 5, metadata: {} },
+      ]),
+    });
+    const hits = await kb.search("how do I deploy?", "proj", 4);
+    expect(hits.map((h) => h.scope)).toStrictEqual(["memory", "knowledge"]);
+    expect(hits[0]?.chunk.chunkId).toBe("memory:f1");
+    expect(hits[1]?.chunk.chunkId).toBe("deploy-doc");
+  });
+
+  it("degrades gracefully to knowledge-only when the memory provider resolves null", async () => {
+    const driver = new InMemoryVectorDriver();
+    await driver.upsert("proj", [rec("deploy-doc", "proj", "deploy guide", [1, 0, 0])]);
+    const kb = openKnowledgeBase({
+      projectDir: "/tmp/x",
+      driver,
+      embed,
+      memorySearch: fakeMemorySearch(null),
+    });
+    const hits = await kb.search("how do I deploy?", "proj", 4);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.chunk.chunkId).toBe("deploy-doc");
+  });
+
+  it("without a memorySearch provider, both-scope search still degrades to knowledge-only", async () => {
+    const driver = new InMemoryVectorDriver();
+    await driver.upsert("proj", [rec("deploy-doc", "proj", "deploy guide", [1, 0, 0])]);
+    const kb = openKnowledgeBase({ projectDir: "/tmp/x", driver, embed });
+    const hits = await kb.search("how do I deploy?", "proj", 4);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.scope).toBe("knowledge");
   });
 });

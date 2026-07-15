@@ -1,20 +1,32 @@
 /**
- * HeadroomSidecar — the ONE place Golem knows about Headroom (CLAUDE.md hard
- * rule: "any Headroom client imports live only in headroom-adapter.ts"). It
- * manages a persistent Python worker (headroom-worker.py) that keeps Headroom's
- * compression pipeline warm, and exposes it to the proxy as a neutral
- * {@link SemanticCompressor} for slider ≥3 (spec Decision 18/23).
+ * headroom-adapter.ts — the ONE place Golem knows about Headroom (CLAUDE.md
+ * hard rule: "any Headroom client imports live only in headroom-adapter.ts").
+ * It manages persistent Python workers that keep Headroom's pipelines warm,
+ * communicating over local HTTP, and exposes them to the rest of Golem only
+ * through neutral seams:
+ *
+ * - {@link HeadroomSidecar} implements {@link SemanticCompressor} (slider ≥3
+ *   semantic compression, spec Decision 18/23).
+ * - {@link HeadroomMemorySidecar} implements {@link MemorySearchProvider}
+ *   (R3.6 MEMORY-scope federated search, spec Decisions 13/18).
  *
  * Architecture (verification-notes §34): we do NOT chain `headroom proxy` (it is
- * a competing Anthropic forwarder); we call `headroom.compress()` in-process in
- * the worker and Golem keeps the redaction-first, byte-faithful forward. The
- * worker is launched via `uv run --with headroom-ai==<pin>` by default — an
- * OPT-IN dependency, never in Golem's core install (CLAUDE.md: no heavyweight
- * deps by default). Heuristic-only: bare `headroom-ai`, no torch/`[ml]` (§35).
+ * a competing Anthropic forwarder); each worker calls into `headroom` in-process
+ * and Golem keeps the redaction-first, byte-faithful forward. Workers are
+ * launched via `uv run --with <pin>` by default — an OPT-IN dependency, never
+ * in Golem's core install (CLAUDE.md: no heavyweight deps by default).
  *
- * Fail-open everywhere: if the worker can't start, dies, or errors on a request,
- * {@link compress} resolves `null` so the pipeline skips the stage and forwards
- * the losslessly-compressed body. Nothing here can break a request.
+ * The two sidecars are independently opt-in, independently launched processes,
+ * NOT one shared process: `HeadroomMemorySidecar` needs the `[memory]` extra
+ * (sentence-transformers, transitively torch — verification-notes §4), a much
+ * heavier install than bare compression's `headroom-ai`, so a user must choose
+ * to install it separately from `compression.headroom_sidecar`. They share only
+ * the process-management plumbing (`HeadroomWorkerProcess`, private to this
+ * module) and the PyPI version pin.
+ *
+ * Fail-open everywhere: if a worker can't start, dies, or errors on a request,
+ * the public method resolves `null` so the caller skips the stage/contributes
+ * nothing. Nothing here can break a request or a search.
  *
  * The exact PyPI pin lives in ./index.ts (CLAUDE.md); it is read lazily at spawn
  * time so this module never bumps or hardcodes it.
@@ -25,72 +37,56 @@ import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { request } from "undici";
 import { HEADROOM_SIDECAR_PYPI_PIN } from "./index.js";
+import type { MemoryFact, MemorySearchProvider } from "./memory-search.js";
 import type { SemanticCompressor, SemanticMode, SemanticResult } from "./semantic.js";
 
-/** Line the worker prints on stdout once it is listening (carries the bound port). */
+/** Line every worker prints on stdout once listening (carries the bound port). */
 const LISTENING_RE = /GOLEM_HEADROOM_LISTENING (\d+)/;
 
-/** Default Anthropic model id used by the worker only for token counting. */
+/** Default Anthropic model id used by the compression worker only for token counting. */
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
 
-export interface HeadroomSidecarOptions {
-  /** Launcher command (default "uv"). */
-  readonly command?: string;
-  /**
-   * Args placed BEFORE the worker path. Default runs the pinned package in an
-   * ephemeral uv environment: `run --python 3.13 --with headroom-ai==<pin> python`.
-   */
-  readonly launchArgs?: readonly string[];
-  /** Override the worker script path (default: headroom-worker.py next to this module). */
-  readonly workerPath?: string;
-  readonly host?: string;
-  /** First start may resolve+download the package — allow generous time. */
-  readonly startupTimeoutMs?: number;
-  readonly requestTimeoutMs?: number;
-  /** Model id passed to Headroom for token counting (default sonnet). */
-  readonly model?: string;
-  /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
-  readonly log?: (message: string) => void;
+interface WorkerProcessOptions {
+  readonly command: string;
+  readonly launchArgs: readonly string[];
+  readonly workerPath: string;
+  /** Extra CLI args appended after the standard `--port 0` (e.g. `--db-path`). */
+  readonly workerArgs?: readonly string[];
+  readonly host: string;
+  readonly startupTimeoutMs: number;
+  readonly requestTimeoutMs: number;
+  readonly log: (message: string) => void;
 }
 
-function defaultWorkerPath(): string {
-  return fileURLToPath(new URL("./headroom-worker.py", import.meta.url));
-}
-
-function defaultLaunchArgs(): string[] {
-  return [
-    "run",
-    "--python",
-    "3.13",
-    "--with",
-    `headroom-ai==${HEADROOM_SIDECAR_PYPI_PIN}`,
-    "python",
-  ];
-}
-
-export class HeadroomSidecar implements SemanticCompressor {
+/**
+ * Shared spawn/health/request lifecycle for a Headroom Python worker. The two
+ * sidecars differ only in launch args, worker script, and which endpoint they
+ * POST to — this stays private to the module so neither public class repeats
+ * the process-management plumbing.
+ */
+class HeadroomWorkerProcess {
   readonly #command: string;
   readonly #launchArgs: readonly string[];
   readonly #workerPath: string;
+  readonly #workerArgs: readonly string[];
   readonly #host: string;
   readonly #startupTimeoutMs: number;
   readonly #requestTimeoutMs: number;
-  readonly #model: string;
   readonly #log: (message: string) => void;
 
   #child: ChildProcessByStdio<null, Readable, Readable> | null = null;
   #port: number | null = null;
   #startPromise: Promise<boolean> | null = null;
 
-  constructor(options: HeadroomSidecarOptions = {}) {
-    this.#command = options.command ?? "uv";
-    this.#launchArgs = options.launchArgs ?? defaultLaunchArgs();
-    this.#workerPath = options.workerPath ?? defaultWorkerPath();
-    this.#host = options.host ?? "127.0.0.1";
-    this.#startupTimeoutMs = options.startupTimeoutMs ?? 90_000;
-    this.#requestTimeoutMs = options.requestTimeoutMs ?? 60_000;
-    this.#model = options.model ?? DEFAULT_MODEL;
-    this.#log = options.log ?? ((m) => process.stderr.write(`golem headroom: ${m}\n`));
+  constructor(options: WorkerProcessOptions) {
+    this.#command = options.command;
+    this.#launchArgs = options.launchArgs;
+    this.#workerPath = options.workerPath;
+    this.#workerArgs = options.workerArgs ?? [];
+    this.#host = options.host;
+    this.#startupTimeoutMs = options.startupTimeoutMs;
+    this.#requestTimeoutMs = options.requestTimeoutMs;
+    this.#log = options.log;
   }
 
   /** True once the worker is listening and health-checked. */
@@ -100,7 +96,7 @@ export class HeadroomSidecar implements SemanticCompressor {
 
   /**
    * Spawn the worker and wait until it is listening + healthy. Idempotent and
-   * memoized; resolves `false` (never throws) if the sidecar cannot come up, so
+   * memoized; resolves `false` (never throws) if the worker cannot come up, so
    * callers can degrade gracefully.
    */
   start(): Promise<boolean> {
@@ -114,7 +110,7 @@ export class HeadroomSidecar implements SemanticCompressor {
   }
 
   async #startInner(): Promise<boolean> {
-    const args = [...this.#launchArgs, this.#workerPath, "--port", "0"];
+    const args = [...this.#launchArgs, this.#workerPath, "--port", "0", ...this.#workerArgs];
     const child = spawn(this.#command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -136,7 +132,7 @@ export class HeadroomSidecar implements SemanticCompressor {
     if (port === null) {
       // Startup timeout: the process may still be alive (e.g. a slow first
       // package download) — kill it or it lingers orphaned. Its exit event
-      // then runs #cleanup, so a later compress() may retry a fresh start.
+      // then runs #cleanup, so a later request may retry a fresh start.
       this.#log("worker did not announce a listening port in time");
       try {
         child.kill();
@@ -160,7 +156,7 @@ export class HeadroomSidecar implements SemanticCompressor {
       this.#cleanup();
       return false;
     }
-    this.#log(`sidecar ready on ${this.#host}:${port}`);
+    this.#log(`worker ready on ${this.#host}:${port}`);
     return true;
   }
 
@@ -203,46 +199,33 @@ export class HeadroomSidecar implements SemanticCompressor {
     }
   }
 
-  /** {@link SemanticCompressor}. Fail-open: resolves null on any unavailability/error. */
-  async compress(
-    messages: ReadonlyArray<Readonly<Record<string, unknown>>>,
-    mode: SemanticMode,
-  ): Promise<SemanticResult | null> {
+  /**
+   * POST `body` as JSON to `path` (lazily starting the worker if needed) and
+   * parse the JSON response. Resolves `null` — never throws — on any
+   * unavailability, non-200 status, or malformed response; callers layer
+   * their own shape validation on top of the parsed value.
+   */
+  async postJson(path: string, body: unknown): Promise<unknown | null> {
     if (!this.isRunning() || this.#port === null) {
-      // Not started (or dead) — try one lazy start so callers need not sequence it.
       const up = await this.start();
       if (!up || this.#port === null) return null;
     }
     try {
-      const res = await request(`http://${this.#host}:${this.#port}/compress`, {
+      const res = await request(`http://${this.#host}:${this.#port}${path}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ messages, model: this.#model, mode }),
+        body: JSON.stringify(body),
         headersTimeout: this.#requestTimeoutMs,
         bodyTimeout: this.#requestTimeoutMs,
       });
       const text = await res.body.text();
       if (res.statusCode !== 200) {
-        this.#log(`compress returned ${res.statusCode}: ${text.slice(0, 200)}`);
+        this.#log(`${path} returned ${res.statusCode}: ${text.slice(0, 200)}`);
         return null;
       }
-      const parsed = JSON.parse(text) as {
-        messages?: unknown;
-        tokens_before?: unknown;
-        tokens_after?: unknown;
-        transforms_applied?: unknown;
-      };
-      if (!Array.isArray(parsed.messages)) return null;
-      return {
-        messages: parsed.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
-        tokensBefore: typeof parsed.tokens_before === "number" ? parsed.tokens_before : 0,
-        tokensAfter: typeof parsed.tokens_after === "number" ? parsed.tokens_after : 0,
-        transformsApplied: Array.isArray(parsed.transforms_applied)
-          ? (parsed.transforms_applied as string[])
-          : [],
-      };
+      return JSON.parse(text) as unknown;
     } catch (err) {
-      this.#log(`compress error: ${err instanceof Error ? err.message : String(err)}`);
+      this.#log(`${path} error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
@@ -263,5 +246,209 @@ export class HeadroomSidecar implements SemanticCompressor {
     this.#child = null;
     this.#port = null;
     this.#startPromise = null;
+  }
+}
+
+export interface HeadroomSidecarOptions {
+  /** Launcher command (default "uv"). */
+  readonly command?: string;
+  /**
+   * Args placed BEFORE the worker path. Default runs the pinned package in an
+   * ephemeral uv environment: `run --python 3.13 --with headroom-ai==<pin> python`.
+   */
+  readonly launchArgs?: readonly string[];
+  /** Override the worker script path (default: headroom-worker.py next to this module). */
+  readonly workerPath?: string;
+  readonly host?: string;
+  /** First start may resolve+download the package — allow generous time. */
+  readonly startupTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
+  /** Model id passed to Headroom for token counting (default sonnet). */
+  readonly model?: string;
+  /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
+  readonly log?: (message: string) => void;
+}
+
+function defaultWorkerPath(): string {
+  return fileURLToPath(new URL("./headroom-worker.py", import.meta.url));
+}
+
+function defaultLaunchArgs(): string[] {
+  return [
+    "run",
+    "--python",
+    "3.13",
+    "--with",
+    `headroom-ai==${HEADROOM_SIDECAR_PYPI_PIN}`,
+    "python",
+  ];
+}
+
+export class HeadroomSidecar implements SemanticCompressor {
+  readonly #proc: HeadroomWorkerProcess;
+  readonly #model: string;
+
+  constructor(options: HeadroomSidecarOptions = {}) {
+    const log = options.log ?? ((m: string) => process.stderr.write(`golem headroom: ${m}\n`));
+    this.#proc = new HeadroomWorkerProcess({
+      command: options.command ?? "uv",
+      launchArgs: options.launchArgs ?? defaultLaunchArgs(),
+      workerPath: options.workerPath ?? defaultWorkerPath(),
+      host: options.host ?? "127.0.0.1",
+      startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
+      requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
+      log,
+    });
+    this.#model = options.model ?? DEFAULT_MODEL;
+  }
+
+  /** True once the worker is listening and health-checked. */
+  isRunning(): boolean {
+    return this.#proc.isRunning();
+  }
+
+  /** Spawn the worker and wait until ready. See {@link HeadroomWorkerProcess.start}. */
+  start(): Promise<boolean> {
+    return this.#proc.start();
+  }
+
+  /** {@link SemanticCompressor}. Fail-open: resolves null on any unavailability/error. */
+  async compress(
+    messages: ReadonlyArray<Readonly<Record<string, unknown>>>,
+    mode: SemanticMode,
+  ): Promise<SemanticResult | null> {
+    const parsed = (await this.#proc.postJson("/compress", {
+      messages,
+      model: this.#model,
+      mode,
+    })) as {
+      messages?: unknown;
+      tokens_before?: unknown;
+      tokens_after?: unknown;
+      transforms_applied?: unknown;
+    } | null;
+    if (parsed === null || !Array.isArray(parsed.messages)) return null;
+    return {
+      messages: parsed.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
+      tokensBefore: typeof parsed.tokens_before === "number" ? parsed.tokens_before : 0,
+      tokensAfter: typeof parsed.tokens_after === "number" ? parsed.tokens_after : 0,
+      transformsApplied: Array.isArray(parsed.transforms_applied)
+        ? (parsed.transforms_applied as string[])
+        : [],
+    };
+  }
+
+  /** Stop the worker (best-effort). */
+  stop(): void {
+    this.#proc.stop();
+  }
+}
+
+export interface HeadroomMemorySidecarOptions {
+  /** Launcher command (default "uv"). */
+  readonly command?: string;
+  /**
+   * Args placed BEFORE the worker path. Default runs the pinned package + the
+   * `[memory]` extra in an ephemeral uv environment: `run --python 3.13 --with
+   * headroom-ai[memory]==<pin> python`.
+   */
+  readonly launchArgs?: readonly string[];
+  /** Override the worker script path (default: headroom-memory-worker.py next to this module). */
+  readonly workerPath?: string;
+  readonly host?: string;
+  /** First start may resolve+download the (heavier) package — allow generous time. */
+  readonly startupTimeoutMs?: number;
+  readonly requestTimeoutMs?: number;
+  /** Where the embedded sqlite/HNSW memory store lives (passed as `--db-path`). */
+  readonly dbPath?: string;
+  /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
+  readonly log?: (message: string) => void;
+}
+
+function defaultMemoryWorkerPath(): string {
+  return fileURLToPath(new URL("./headroom-memory-worker.py", import.meta.url));
+}
+
+function defaultMemoryLaunchArgs(): string[] {
+  return [
+    "run",
+    "--python",
+    "3.13",
+    "--with",
+    `headroom-ai[memory]==${HEADROOM_SIDECAR_PYPI_PIN}`,
+    "python",
+  ];
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Object.values(value as Record<string, unknown>).every((v) => typeof v === "string")
+  );
+}
+
+/**
+ * HeadroomMemorySidecar — R3.6 (spec Decisions 13/18): a second, independently
+ * opt-in Headroom worker exposing MEMORY-scope search (`GolemKnowledgeBase`'s
+ * {@link MemorySearchProvider} dependency, wired when `scopes` includes
+ * `"memory"`). Kept as a separate process and config from {@link HeadroomSidecar}
+ * — see this module's doc comment for why the two are never one shared process.
+ *
+ * Golem never writes memories through this seam: MEMORY-scope federation is
+ * search-only, matching the frozen `FederatedSearch` contract, so an empty or
+ * never-populated store degrades to `[]`, same as any other empty search.
+ */
+export class HeadroomMemorySidecar implements MemorySearchProvider {
+  readonly #proc: HeadroomWorkerProcess;
+
+  constructor(options: HeadroomMemorySidecarOptions = {}) {
+    const log =
+      options.log ?? ((m: string) => process.stderr.write(`golem headroom-memory: ${m}\n`));
+    this.#proc = new HeadroomWorkerProcess({
+      command: options.command ?? "uv",
+      launchArgs: options.launchArgs ?? defaultMemoryLaunchArgs(),
+      workerPath: options.workerPath ?? defaultMemoryWorkerPath(),
+      workerArgs: options.dbPath !== undefined ? ["--db-path", options.dbPath] : [],
+      host: options.host ?? "127.0.0.1",
+      startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
+      requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
+      log,
+    });
+  }
+
+  /** True once the worker is listening and health-checked. */
+  isRunning(): boolean {
+    return this.#proc.isRunning();
+  }
+
+  /** Spawn the worker and wait until ready. See {@link HeadroomWorkerProcess.start}. */
+  start(): Promise<boolean> {
+    return this.#proc.start();
+  }
+
+  /** {@link MemorySearchProvider.search}. Fail-open: resolves null on any unavailability/error. */
+  async search(query: string, projectId: string, k: number): Promise<MemoryFact[] | null> {
+    const parsed = (await this.#proc.postJson("/memory/search", {
+      query,
+      project_id: projectId,
+      top_k: k,
+    })) as { results?: unknown } | null;
+    if (parsed === null || !Array.isArray(parsed.results)) return null;
+    const facts: MemoryFact[] = [];
+    for (const r of parsed.results) {
+      if (typeof r !== "object" || r === null) continue;
+      const { id, content, score, metadata } = r as Record<string, unknown>;
+      if (typeof id !== "string" || typeof content !== "string" || typeof score !== "number") {
+        continue;
+      }
+      facts.push({ id, content, score, metadata: isStringRecord(metadata) ? metadata : {} });
+    }
+    return facts;
+  }
+
+  /** Stop the worker (best-effort). */
+  stop(): void {
+    this.#proc.stop();
   }
 }

@@ -130,6 +130,15 @@ export const SETTINGS_LEAVES = {
      * `local_answer_enabled`).
      */
     rerank_enabled: z.boolean(),
+    /**
+     * OPT-IN (R3.6, spec Decisions 13/18): MEMORY-scope federated search via
+     * the optional Headroom `[memory]` sidecar (sentence-transformers,
+     * transitively torch — much heavier than `headroom_sidecar`'s bare
+     * `headroom-ai`, verification-notes §4). Off by default — without it,
+     * `search()` degrades to KNOWLEDGE-only, same as today. Independent of
+     * `headroom_sidecar`: the two run as separate opt-in processes.
+     */
+    memory_federation_enabled: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -194,6 +203,7 @@ export interface KnowledgeSettings {
   readonly syntax_aware_chunking: boolean;
   readonly user_wiki_enabled: boolean;
   readonly rerank_enabled: boolean;
+  readonly memory_federation_enabled: boolean;
 }
 
 export interface TelemetrySettings {
@@ -243,6 +253,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     syntax_aware_chunking: false,
     user_wiki_enabled: true,
     rerank_enabled: false,
+    memory_federation_enabled: false,
   },
   telemetry: {
     enabled: true,
