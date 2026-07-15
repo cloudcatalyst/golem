@@ -80,7 +80,7 @@ distill/KB loop. **Active batch: `R4_BATCH.md`.**
 | R4.2 | **Coder grounding:** retrieval-augmented drafting — `coder` auto-injects relevant KB/wiki hits (size-capped, opt-out param) so local drafts stop being context-blind. | 🛠️ | Dec 36 |
 | R4.3 | **Honest tool telemetry:** instrument `search`/`fetch`/`ingest`/`wiki_read`/`coder` with per-call events + a drafted-locally token bucket — closes the §59 gap so "token-friendly" is measured, not asserted. | 🛠️ | §59, Dec 24 |
 | R4.4 | **Coder iteration loop:** optional draft → local-judge critique → revise pass (existing `drafter`/`judge` roles, no interface change); harden the `/golem/develop` skill around it. | 🛠️ | Dec 35 |
-| R4.5 | **Distill-draft promotion UX:** review/apply flow for `.golem/distill/` drafts (`golem wiki promote`-style), closing capture → distill → promote. | 🛠️ | WS-W W3 follow-up |
+| R4.5 | **Distill-draft promotion UX + wiki-lint cleanup:** review/apply flow for `.golem/distill/` drafts (`golem wiki promote`-style), closing capture → distill → promote; plus fix the 18 pre-existing `golem wiki check` issues in dated pages (broken/missing wikilinks) and consider wiring the check into CI. | 🛠️ | WS-W W3 follow-up, Dec 36 debrief |
 | R4.6 | **`FileVectorDriver.#flush()` stream-write fix** so the raw-article KB can grow past ~30k chunks without crashing. | 🛠️ | R3.7 spike |
 | R4.7 | **Drafter quality/catalog re-verification:** re-verify current best small coder models (advisory per Decision 6), measure coder draft accept-rate; carry R1.6's manual checklist where hardware allows. | 🔬 | Dec 6, R1.6 |
 

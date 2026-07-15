@@ -151,28 +151,42 @@ patterns to reuse), `src/cli/skills.ts` (`develop` skill).
 **Wiki writes:** debrief.
 **Size:** medium. **Interfaces:** none frozen touched.
 
-### R4.5 (🛠️) — Distill-draft promotion UX
+### R4.5 (🛠️) — Distill-draft promotion UX + wiki-lint cleanup
 
 Drafts accumulate in `.golem/distill/` (from `golem wiki distill` and
 `golem note distill`) but the promote step — reviewing a draft and applying it
 as a real wiki page — is manual file surgery. Close the capture → distill →
-promote loop.
+promote loop. Same task, second leg: the wiki has accumulated lint debt —
+`golem wiki check` reports **18 pre-existing issues** as of 2026-07-16 (broken
+wikilinks in dated debriefs/syntheses that name pages by inexact titles, a few
+pages with no wikilinks at all, and WIKI.md's `[[Page Title]]` frontmatter
+example being counted as a link). Promotion writes into this graph, so clean
+it as part of the same work.
 
-**What to build:** a `golem wiki promote [id|--list]` flow: list pending
-drafts (provenance, target page, age), show a draft, and on explicit
-confirmation write it through the same append-and-refine semantics as
-`wiki_upsert` (Decision 29 — union-merge frontmatter, dated separator, never
-wholesale rewrite), then archive/remove the draft. Non-TTY without an explicit
-id/`--yes` refuses rather than prompts (the Decision 26 consent convention).
-Keep the plan-gate framing: promotion is the human approving; the command is
-the mechanical write.
+**What to build:**
+- A `golem wiki promote [id|--list]` flow: list pending drafts (provenance,
+  target page, age), show a draft, and on explicit confirmation write it
+  through the same append-and-refine semantics as `wiki_upsert` (Decision 29 —
+  union-merge frontmatter, dated separator, never wholesale rewrite), then
+  archive/remove the draft. Non-TTY without an explicit id/`--yes` refuses
+  rather than prompts (the Decision 26 consent convention). Keep the plan-gate
+  framing: promotion is the human approving; the command is the mechanical
+  write.
+- Wiki-lint cleanup: fix the 18 `golem wiki check` issues — repair dated
+  pages' broken wikilinks to point at the real page titles (fixing a link is
+  a mechanical path repair, not a history rewrite; leave prose alone), add a
+  minimal wikilink to the link-less pages, and teach the checker to ignore
+  fenced/example wikilinks like WIKI.md's schema block if that's the cleaner
+  fix. Then run `golem wiki check` green and consider adding it to CI for
+  `docs/wiki/` (the Decision 28 proposal's own risk-table suggestion).
 
 **Read first:** `src/knowledge/distill-store.ts` (draft storage,
-`findDraftByNoteTs`), `src/wiki/` (store/upsert semantics),
+`findDraftByNoteTs`), `src/wiki/` (store/upsert semantics + the checker),
 `src/cli/distill-note.ts` + `src/cli/synthesize.ts` (CLI patterns).
 **Wiki writes:** debrief; update `concepts/Distillation Pipeline.md` (the
-promote stage exists now) — plan-gated.
-**Size:** small/medium. **Interfaces:** none frozen touched (check whether
+promote stage exists now) — plan-gated. The link repairs themselves are
+zone-2/3 edits: propose the fix list, get approval, apply.
+**Size:** medium. **Interfaces:** none frozen touched (check whether
 `src/interfaces/wiki.ts` upsert already covers the write path — it should).
 
 ### R4.6 (🛠️) — `FileVectorDriver.#flush()` stream-write fix
