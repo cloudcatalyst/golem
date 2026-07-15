@@ -2,9 +2,9 @@
  * WS-B: unified MCP server via @modelcontextprotocol/sdk (owned by agent-mcp).
  *
  * Frozen tool names (IMPLEMENTATION_PLAN §2.5): search, fetch,
- * ingest, expand, stats, level, delegate,
+ * ingest, expand, stats, level, coder (renamed from delegate, Decision 35),
  * golem_devices. Prompts: slider, index, search, stats, expand, bypass,
- * devices, delegate (surface in Claude Code as /mcp__golem__<prompt>).
+ * devices, coder (surface in Claude Code as /mcp__golem__<prompt>).
  *
  * B1 ships the P0 tools (expand, stats, level) and all
  * eight prompts, over stdio and streamable-HTTP transports. P1 tools arrive

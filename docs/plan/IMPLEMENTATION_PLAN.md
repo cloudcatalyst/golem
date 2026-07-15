@@ -112,11 +112,11 @@ Level 0–3 → per-stage config (**simplified from 0–5 by Decision 30; local 
 | 2 | balanced | ✅ | ✅ | ✅ | stale turns only | strict |
 | 3 | aggressive | ✅ | ✅ | ✅ | aggressive | loose |
 
-> **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams (Decision 31) to preserve prompt-cache prefixes — they run only on non-caching gateways. The local model is invoked only via the explicit `delegate` MCP tool; a reachable local model shows "local + upstream" in the status surfaces.
+> **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams (Decision 31) to preserve prompt-cache prefixes — they run only on non-caching gateways. The local model is invoked only via the explicit `coder` MCP tool (renamed from `delegate`, Decision 35); a reachable local model shows "local + upstream" in the status surfaces.
 
 ### 2.5 MCP surface (WS-B owns; names frozen)
-Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `delegate`, `devices`.
-Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`, `delegate`.
+Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `coder`, `devices`.
+Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`, `coder`.
 
 ## 3. Workstreams & task breakdown
 
@@ -134,7 +134,7 @@ Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `b
 ### WS-B — MCP server & Claude Code integration (P0)
 - B1: Unified MCP server (stdio + HTTP): P0 tools `expand`, `stats`, `level`; prompt-based slash commands. *(after T0.1, T0.3)*
 - B2: Claude Code wiring: hook (per T0.1 findings) swapping oversized tool outputs for CCR refs; guidance-file writer (CLAUDE.md section, coordinated with headroom learn).
-- B3: P1 tools: `search`, `ingest`, `fetch`, `delegate`, `devices` (thin wrappers over WS-C/D).
+- B3: P1 tools: `search`, `ingest`, `fetch`, `coder`, `devices` (thin wrappers over WS-C/D).
 
 ### WS-C — Knowledge base (P1 headline)
 - C1: Embedded vector store setup (spec Decision 17: LanceDB candidate, spike + decision memo required; Qdrant server mode via URL config); per-project collections; schema/migrations.
@@ -149,7 +149,7 @@ Pages are canonical, vectors are a derived rebuildable index. Design: `docs/plan
   - W1b: `golem wiki init` — scaffold `wiki_dir` (WIKI.md zone-0 schema, `concepts/ entities/ sources/ syntheses/ decisions/ debriefs/ questions/ artifacts/`), idempotent like `golem init`.
   - W1c: search-rank boost for hits whose `sourcePath` is under `wiki_dir` (wiki pages beat raw chunks at equal similarity).
   - W1d: wiki-first retrieval guidance in the generated Claude Code surfaces (CLAUDE.local.md template / skills): wiki lookup → `search` → outside world.
-- W2: Authoring surface (contract-first): NEW frozen `src/interfaces/wiki.ts` (readPage/upsertPage/resolveLink/backlinks) + contract tests; `wiki_read` + `wiki_upsert` MCP tools (plan-gated writes); `/golem/wiki-ingest <url>` + `/golem/wiki-query` skills; `golem wiki check` link/frontmatter lint. **✅ done** (skills shipped 2026-07-11, T2).
+- W2: Authoring surface (contract-first): NEW frozen `src/interfaces/wiki.ts` (readPage/upsertPage/resolveLink/backlinks) + contract tests; `wiki_read` + `wiki_upsert` MCP tools (plan-gated writes); `/golem/wiki-ingest <url>` + `/golem/wiki-query` (renamed `research`, Decision 35) skills; `golem wiki check` link/frontmatter lint. **✅ done** (skills shipped 2026-07-11, T2).
 - W3 (post WS-D): local-model distillation queue (fetch → source note draft), `golem note` capture (Decision 20f), webcache backfill distillation, graph-first lookup step ahead of vector search. **✅ done 2026-07-11** (T3 distill engine, T4 `golem note`, T5 graph-first search). *Follow-up → ROADMAP R3.5: shape captured notes into draft pages.*
 - W4: user-scope `~/.golem/wiki/` federation (Decision 20e local tier); weekly synthesis reports. *→ ROADMAP R3.4 (not started).*
 

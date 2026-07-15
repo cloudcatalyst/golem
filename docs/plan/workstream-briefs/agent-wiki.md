@@ -6,7 +6,7 @@ Design doc: `docs/plan/proposals/wiki-knowledge-pivot.md`. The wiki's own schema
 Work on branch `ws-w`; claim tasks by ID in PR titles (e.g. "W1a: ...").
 
 > **Draft locally first.** Before writing any code, draft each unit (function,
-> template, test skeleton) via the `delegate` MCP tool (local model) and refine the
+> template, test skeleton) via the `coder` MCP tool (local model) and refine the
 > draft — don't burn upstream tokens on first drafts. Same for commit messages.
 
 ## Mission
@@ -97,7 +97,8 @@ work without a separate integrator round-trip. Shipped: frozen
 `src/interfaces/wiki.ts` (`WikiReader`/`WikiStore`, contract tests first) +
 `FileWikiStore`; `wiki_read`/`wiki_upsert` MCP tools (plan-gated writes, per
 Decision 29 — doc-level gating, no in-protocol confirmation step) wired into
-`golem mcp serve`; `/golem/wiki-ingest <url>` + `/golem/wiki-query` skills
+`golem mcp serve`; `/golem/wiki-ingest <url>` + `/golem/wiki-query` (renamed
+`research`, Decision 35) skills
 under `.claude/skills/golem/`; `golem wiki check` frontmatter/date/wikilink/
 duplicate-title lint (`src/cli/wiki.ts`). Contract, unit, and MCP integration
 tests all green; see Decision 29 for the concrete `upsertPage` write

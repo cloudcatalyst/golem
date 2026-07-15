@@ -12,9 +12,9 @@ hook that swaps oversized tool outputs for CCR refs.
 
 ## Frozen names (plan §2.5 — do not rename)
 Tools: `search`, `fetch`, `ingest`, `expand`, `stats`,
-`level`, `delegate`, `golem_devices`.
+`level`, `coder` (renamed from `delegate`, Decision 35), `golem_devices`.
 Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`,
-`delegate` → surface as `/mcp__golem__slider` etc. (verified format, notes §10).
+`coder` → surface as `/mcp__golem__slider` etc. (verified format, notes §10).
 
 ## Task list (in order)
 - **B1 — Unified MCP server.** `src/mcp/` on the official TS MCP SDK; stdio +
@@ -35,7 +35,7 @@ Prompts: `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`,
     reads", command list). Coordination with `headroom learn` writers only matters
     when the P2 sidecar is present — design the markers so they can't collide.
 - **B3 — P1 tools.** `search`/`fetch`/`ingest` (thin wrappers
-  over WS-C `KnowledgeBase`), `delegate` (WS-D `InferenceService`),
+  over WS-C `KnowledgeBase`), `coder` (WS-D `InferenceService`),
   `golem_devices` (WS-D capabilities). Ship behind capability checks: tools respond
   with a friendly "not available yet" until the backing service exists.
 

@@ -78,7 +78,7 @@ function buildModel(stats, status) {
  *
  * When a local model is reachable, `local` is folded into the destination
  * ahead of the upstream provider (`→ local + <provider>`) at ANY slider level —
- * Golem is then a local+upstream hybrid (`delegate` at every level; auto-draft
+ * Golem is then a local+upstream hybrid (`coder` at every level; auto-draft
  * / local-first at level 3), Decision 30. The arrow always precedes the
  * destination, whether it's one provider or local-plus-provider.
  *

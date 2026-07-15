@@ -50,7 +50,7 @@ export interface StatusReport {
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
   /**
    * Whether a local model (Ollama) is reachable. When true, Golem is a
-   * local+upstream hybrid — the local model is available via the `delegate` MCP
+   * local+upstream hybrid — the local model is available via the `coder` MCP
    * tool at any slider level (Decision 30/31).
    */
   readonly local_model: {
@@ -196,7 +196,7 @@ export function renderStatus(report: StatusReport): string {
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
   // Inference topology: a reachable local model makes Golem local+upstream —
-  // available via the `delegate` MCP tool at any level (Decision 30/31).
+  // available via the `coder` MCP tool at any level (Decision 30/31).
   lines.push(`Inference: ${report.local_model.reachable ? "local + upstream" : "upstream only"}`);
   lines.push("");
 
