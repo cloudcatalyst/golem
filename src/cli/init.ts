@@ -12,7 +12,10 @@
  *   4. `.golem/settings.json`   — created with defaults when absent.
  *   5. PostToolUse CCR hook + Golem guidance (in gitignored CLAUDE.local.md);
  *      status line + blocked-state hooks; WebFetch KB-cache hooks.
- *   6. The VS Code panel/status-bar extension — copied into VS Code's global
+ *   6. `.vscode/settings.json` — `files.watcherExclude` for Golem's churny
+ *      gitignored runtime dirs (telemetry/state/webcache/ccr/knowledge/notes/
+ *      distill), so VS Code's Source Control icon doesn't flash on every write.
+ *   7. The VS Code panel/status-bar extension — copied into VS Code's global
  *      extensions dir when VS Code is present (dependency-free; `deploy:local` style).
  *
  * `golem uninit` removes exactly what init added (including the Foundry env keys
@@ -163,6 +166,27 @@ const GUIDANCE_FILENAME = "CLAUDE.local.md";
 
 /** Runtime files copied into the installed VS Code extension (no tests/tooling). */
 const VSCODE_EXTENSION_FILES = ["extension.js", "render.js", "package.json", "README.md", "media"];
+
+/**
+ * Golem's own gitignored runtime dirs that churn constantly while a proxy is
+ * running (telemetry event log, statusline/dashboard state, webcache, CCR
+ * store, knowledge index, notes, distill drafts). VS Code's git extension
+ * recomputes repo status on any watched filesystem event — including
+ * gitignored ones, since `files.watcherExclude` only excludes `.git`/
+ * `node_modules` by default — so these writes make the Source Control sync
+ * icon flash continuously. Excluding them from the workspace file watcher is
+ * cosmetic (nothing here is ever committed) but stops the noise.
+ */
+const VSCODE_WATCHER_EXCLUDE_DIRS = [
+  "**/.golem/telemetry/**",
+  "**/.golem/state/**",
+  "**/.golem/webcache/**",
+  "**/.golem/ccr/**",
+  "**/.golem/knowledge/**",
+  "**/.golem/notes/**",
+  "**/.golem/distill/**",
+] as const;
+const VSCODE_WATCHER_EXCLUDE_KEY = "files.watcherExclude";
 
 function proxyBaseUrl(port: number): string {
   return `http://localhost:${port}`;
@@ -597,11 +621,83 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     ),
   );
 
-  // 7. Install the VS Code panel/status-bar extension (only if VS Code is present).
+  // 7. .vscode/settings.json — exclude Golem's churny runtime dirs (telemetry,
+  // state, webcache, CCR, knowledge, notes, distill) from VS Code's file
+  // watcher, so the Source Control sync icon doesn't flash on every proxy
+  // write. Workspace-scoped, independent of whether VS Code itself is present.
+  actions.push(await ensureVscodeWatcherExclude(projectDir, dryRun));
+
+  // 8. Install the VS Code panel/status-bar extension (only if VS Code is present).
   const vscodeAction = await installVscodeExtension(options, dryRun);
   if (vscodeAction !== null) actions.push(vscodeAction);
 
   return { dryRun, actions };
+}
+
+/**
+ * Idempotently add Golem's churny runtime dirs to `.vscode/settings.json`'s
+ * `files.watcherExclude` (workspace-scoped, so it applies whether or not the
+ * Golem VS Code extension itself is installed). Never removes or overwrites
+ * unrelated keys or other watcherExclude entries the user already has.
+ */
+async function ensureVscodeWatcherExclude(
+  projectDir: string,
+  dryRun: boolean,
+): Promise<InitAction> {
+  const file = path.join(projectDir, ".vscode", "settings.json");
+  const existing = await readJsonObject(file);
+  const settings = existing ?? {};
+  const watcherExclude = objectEntry(settings, VSCODE_WATCHER_EXCLUDE_KEY);
+
+  let changed = false;
+  for (const pattern of VSCODE_WATCHER_EXCLUDE_DIRS) {
+    if (watcherExclude[pattern] !== true) {
+      watcherExclude[pattern] = true;
+      changed = true;
+    }
+  }
+
+  const relPath = rel(projectDir, file);
+  if (!changed) {
+    return { kind: "skip", path: relPath, detail: "watcher excludes already set" };
+  }
+  if (!dryRun) await writeJsonObject(file, settings);
+  return {
+    kind: existing === null ? "create" : "modify",
+    path: relPath,
+    detail: "exclude Golem's runtime dirs from the file watcher",
+  };
+}
+
+/** The removal half of {@link ensureVscodeWatcherExclude} — only ever deletes entries init added. */
+async function removeVscodeWatcherExclude(
+  projectDir: string,
+  dryRun: boolean,
+): Promise<InitAction> {
+  const file = path.join(projectDir, ".vscode", "settings.json");
+  const relPath = rel(projectDir, file);
+  const settings = await readJsonObject(file);
+  const watcherExclude = settings?.[VSCODE_WATCHER_EXCLUDE_KEY];
+  if (
+    settings === null ||
+    typeof watcherExclude !== "object" ||
+    watcherExclude === null ||
+    Array.isArray(watcherExclude)
+  ) {
+    return { kind: "skip", path: relPath, detail: "not present" };
+  }
+  const watcherExcludeObj = watcherExclude as JsonObject;
+  let changed = false;
+  for (const pattern of VSCODE_WATCHER_EXCLUDE_DIRS) {
+    if (watcherExcludeObj[pattern] === true) {
+      delete watcherExcludeObj[pattern];
+      changed = true;
+    }
+  }
+  if (!changed) return { kind: "skip", path: relPath, detail: "not present" };
+  if (Object.keys(watcherExcludeObj).length === 0) delete settings[VSCODE_WATCHER_EXCLUDE_KEY];
+  if (!dryRun) await writeJsonObject(file, settings);
+  return { kind: "modify", path: relPath, detail: "removed Golem watcher excludes" };
 }
 
 /**
@@ -771,7 +867,10 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     await removeMatcherHook({ projectDir, dryRun }, "SessionStart", SESSION_START_COMMAND),
   );
 
-  // 6. Remove the installed VS Code extension (global; only if present).
+  // 6. Remove the `.vscode/settings.json` watcher excludes init added.
+  actions.push(await removeVscodeWatcherExclude(projectDir, dryRun));
+
+  // 7. Remove the installed VS Code extension (global; only if present).
   actions.push(...(await removeVscodeExtensions(options, dryRun)));
 
   // .golem/ (settings, CCR store) is user data — deliberately kept.

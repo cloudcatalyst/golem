@@ -250,6 +250,52 @@ describe("golem init", () => {
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
   });
 
+  it("excludes Golem's churny runtime dirs from the VS Code file watcher", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".vscode/settings.json");
+    const watcherExclude = settings["files.watcherExclude"] as Record<string, unknown>;
+    expect(watcherExclude["**/.golem/telemetry/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/state/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/webcache/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/ccr/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/knowledge/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/notes/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/distill/**"]).toBe(true);
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".vscode/settings.json");
+    expect(after["files.watcherExclude"]).toBeUndefined();
+  });
+
+  it("preserves unrelated .vscode/settings.json keys and watcher excludes", async () => {
+    await mkdir(path.join(projectDir, ".vscode"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".vscode", "settings.json"),
+      JSON.stringify({
+        "editor.tabSize": 2,
+        "files.watcherExclude": { "**/some-other-dir/**": true },
+      }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".vscode/settings.json");
+    expect(settings["editor.tabSize"]).toBe(2);
+    const watcherExclude = settings["files.watcherExclude"] as Record<string, unknown>;
+    expect(watcherExclude["**/some-other-dir/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/telemetry/**"]).toBe(true);
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".vscode/settings.json");
+    expect(after["editor.tabSize"]).toBe(2);
+    expect((after["files.watcherExclude"] as Record<string, unknown>)["**/some-other-dir/**"]).toBe(
+      true,
+    );
+    expect(
+      (after["files.watcherExclude"] as Record<string, unknown>)["**/.golem/telemetry/**"],
+    ).toBeUndefined();
+  });
+
   it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {
     await golemInit({ projectDir, probe: okProbe, upstream: "https://openrouter.ai/api" });
     const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;

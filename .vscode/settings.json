@@ -1,0 +1,11 @@
+{
+  "files.watcherExclude": {
+    "**/.golem/telemetry/**": true,
+    "**/.golem/state/**": true,
+    "**/.golem/webcache/**": true,
+    "**/.golem/ccr/**": true,
+    "**/.golem/knowledge/**": true,
+    "**/.golem/notes/**": true,
+    "**/.golem/distill/**": true
+  }
+}
