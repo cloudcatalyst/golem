@@ -13,7 +13,7 @@
 import { Command, InvalidArgumentError } from "commander";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
-import { buildHookCommand } from "../hooks/index.js";
+import { buildHookCommand, defaultRevalidate } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import {
   createProbeRunner,
@@ -1043,6 +1043,17 @@ const hookCmd = buildHookCommand({
       return (await buildKnowledgeStack({ projectDir })).knowledge;
     } catch {
       return null; // KB unavailable → capture skips the vector ingest (cache still written)
+    }
+  },
+  // Conditional revalidation of cached WebFetch URLs, gated by the opt-in
+  // `knowledge.webcache_revalidate` setting (default off). Kept in the CLI layer
+  // so src/hooks stays free of a config dependency.
+  revalidate: defaultRevalidate,
+  revalidateEnabled: async (projectDir) => {
+    try {
+      return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
+    } catch {
+      return false; // config unreadable → behave as if disabled (pure-TTL)
     }
   },
 });

@@ -52,6 +52,74 @@ describe("WebCache.list", () => {
   });
 });
 
+describe("WebCache revalidation metadata (R4 follow-up)", () => {
+  const url = "https://example.com/doc";
+
+  it("put stores optional etag/lastModified/expiresAt when given", async () => {
+    await cache.put(url, "body", "2026-07-01T00:00:00.000Z", {
+      etag: 'W/"v1"',
+      lastModified: "Wed, 01 Jul 2026 00:00:00 GMT",
+      expiresAt: "2026-07-02T00:00:00.000Z",
+    });
+    const entry = await cache.get(url);
+    expect(entry?.etag).toBe('W/"v1"');
+    expect(entry?.lastModified).toBe("Wed, 01 Jul 2026 00:00:00 GMT");
+    expect(entry?.expiresAt).toBe("2026-07-02T00:00:00.000Z");
+  });
+
+  it("put drops stale validators when re-writing content without new meta", async () => {
+    // New content invalidates old validators: put must NOT carry them over, or a
+    // later 304 (matching the stale etag) would serve the wrong bytes as fresh.
+    await cache.put(url, "old", "2026-07-01T00:00:00.000Z", { etag: 'W/"v1"' });
+    await cache.put(url, "new content", "2026-07-02T00:00:00.000Z");
+    const entry = await cache.get(url);
+    expect(entry?.content).toBe("new content");
+    expect(entry?.etag).toBeUndefined(); // stale validator dropped, not carried onto new content
+  });
+
+  it("updateMeta merges onto an existing entry, preserving fields not overridden", async () => {
+    // updateMeta is the one place validators survive a write — safe because the
+    // content is unchanged. Fields absent from the update keep their prior value.
+    await cache.put(url, "body", "2026-07-01T00:00:00.000Z", {
+      etag: 'W/"v1"',
+      lastModified: "Wed, 01 Jul 2026 00:00:00 GMT",
+    });
+    await cache.updateMeta(url, { etag: 'W/"v2"', expiresAt: "2026-07-03T00:00:00.000Z" });
+    const entry = await cache.get(url);
+    expect(entry?.content).toBe("body");
+    expect(entry?.fetchedAt).toBe("2026-07-01T00:00:00.000Z");
+    expect(entry?.etag).toBe('W/"v2"'); // overridden
+    expect(entry?.lastModified).toBe("Wed, 01 Jul 2026 00:00:00 GMT"); // preserved
+    expect(entry?.expiresAt).toBe("2026-07-03T00:00:00.000Z"); // added
+  });
+
+  it("updateMeta is a no-op when the URL isn't cached", async () => {
+    await cache.updateMeta(url, { etag: 'W/"x"' });
+    expect(await cache.get(url)).toBeNull();
+  });
+
+  it("delete removes an entry (and is a no-op when absent)", async () => {
+    await cache.put(url, "body", "2026-07-01T00:00:00.000Z");
+    await cache.delete(url);
+    expect(await cache.get(url)).toBeNull();
+    await cache.delete(url); // no throw on a missing entry
+  });
+
+  it("still parses legacy entries with no metadata fields", async () => {
+    // Simulate a pre-revalidation cache file (only url/fetchedAt/content).
+    await mkdir(dir, { recursive: true });
+    const { webCacheKey } = await import("../../../src/knowledge/web-cache.js");
+    await writeFile(
+      path.join(dir, `${webCacheKey(url)}.json`),
+      JSON.stringify({ url, fetchedAt: "2026-07-01T00:00:00.000Z", content: "legacy" }),
+      "utf8",
+    );
+    const entry = await cache.get(url);
+    expect(entry?.content).toBe("legacy");
+    expect(entry?.etag).toBeUndefined();
+  });
+});
+
 describe("contentHashIndex", () => {
   it("maps sha256(content) -> url for every cached entry", async () => {
     await cache.put("https://example.com/a", "hello world", "2026-07-01T00:00:00.000Z");

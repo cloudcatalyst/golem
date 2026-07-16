@@ -92,9 +92,14 @@ export {
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
 } from "./settings-writer.js";
-export type { WebFetchHookOptions } from "./web-fetch.js";
+export type {
+  RevalidateFn,
+  RevalidateResponse,
+  WebFetchHookOptions,
+} from "./web-fetch.js";
 export {
   DEFAULT_WEB_CACHE_TTL_HOURS,
+  defaultRevalidate,
   runWebFetchPost,
   runWebFetchPre,
 } from "./web-fetch.js";

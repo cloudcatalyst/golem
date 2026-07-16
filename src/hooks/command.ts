@@ -26,6 +26,10 @@ export interface HookCommandOptions extends PostToolUseOptions {
   readonly buildKnowledge?: (projectDir: string) => Promise<KnowledgeBase | null>;
   /** Web-cache freshness window (hours); from config. */
   readonly webCacheTtlHours?: number;
+  /** Conditional-revalidation fetcher for cached URLs (cli injects defaultRevalidate). */
+  readonly revalidate?: WebFetchHookOptions["revalidate"];
+  /** Per-project gate for `revalidate` (cli reads `knowledge.webcache_revalidate`). */
+  readonly revalidateEnabled?: WebFetchHookOptions["revalidateEnabled"];
 }
 
 /** Build the `hook` command group with the `post-tool-use` sub-command. */
@@ -90,6 +94,10 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
     ...(options.buildKnowledge !== undefined ? { buildKnowledge: options.buildKnowledge } : {}),
     ...(options.webCacheTtlHours !== undefined ? { ttlHours: options.webCacheTtlHours } : {}),
     ...(options.redact !== undefined ? { redact: options.redact } : {}),
+    ...(options.revalidate !== undefined ? { revalidate: options.revalidate } : {}),
+    ...(options.revalidateEnabled !== undefined
+      ? { revalidateEnabled: options.revalidateEnabled }
+      : {}),
   });
 
   hook

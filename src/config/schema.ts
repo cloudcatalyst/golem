@@ -139,6 +139,15 @@ export const SETTINGS_LEAVES = {
      * `headroom_sidecar`: the two run as separate opt-in processes.
      */
     memory_federation_enabled: z.boolean(),
+    /**
+     * OPT-IN (R4 follow-up): before serving a cached WebFetch URL, revalidate it
+     * with a conditional request (`If-None-Match`/`If-Modified-Since`); on `304`
+     * serve the cache, on `200` let the fetch re-run (re-cache + re-ingest), and
+     * honor `Cache-Control`/`Expires`. Off by default because it adds a network
+     * round-trip to the PreToolUse(WebFetch) path; when off, freshness stays
+     * pure-TTL (a changed page can be served stale until the TTL lapses).
+     */
+    webcache_revalidate: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -204,6 +213,7 @@ export interface KnowledgeSettings {
   readonly user_wiki_enabled: boolean;
   readonly rerank_enabled: boolean;
   readonly memory_federation_enabled: boolean;
+  readonly webcache_revalidate: boolean;
 }
 
 export interface TelemetrySettings {
@@ -254,6 +264,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     user_wiki_enabled: true,
     rerank_enabled: false,
     memory_federation_enabled: false,
+    webcache_revalidate: false,
   },
   telemetry: {
     enabled: true,
