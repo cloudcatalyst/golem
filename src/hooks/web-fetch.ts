@@ -24,6 +24,8 @@ import {
   isFresh,
   supportsIncremental,
   WebCache,
+  type WebCacheEntry,
+  type WebCacheMeta,
   webCacheDir,
 } from "../knowledge/index.js";
 import type { HookIo } from "./post-tool-use.js";
@@ -81,6 +83,25 @@ function humanAge(fetchedAt: string, nowMs: number): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
+/** The status + validators/cache-directives from a conditional revalidation request. */
+export interface RevalidateResponse {
+  readonly status: number;
+  readonly etag?: string;
+  readonly lastModified?: string;
+  readonly cacheControl?: string;
+  readonly expires?: string;
+}
+
+/** Conditional-GET a URL to check whether the cached copy is still current. */
+export type RevalidateFn = (
+  url: string,
+  validators: {
+    readonly etag?: string | undefined;
+    readonly lastModified?: string | undefined;
+    readonly fetchedAt: string;
+  },
+) => Promise<RevalidateResponse>;
+
 export interface WebFetchHookOptions {
   readonly projectDir?: string;
   readonly ttlHours?: number;
@@ -99,6 +120,108 @@ export interface WebFetchHookOptions {
    * must be redacted to the same standard as the CCR-swap path (T-C3).
    */
   readonly redact?: RedactFn;
+  /**
+   * R4-followup: conditional-revalidation fetcher (default {@link defaultRevalidate}
+   * uses global `fetch`; tests inject a fake). When present AND
+   * {@link revalidateEnabled} allows it, a cached-but-not-explicitly-fresh URL is
+   * revalidated before serving. Absent → pure-TTL behavior (unchanged).
+   */
+  readonly revalidate?: RevalidateFn;
+  /** Per-project gate for {@link revalidate}; CLI reads `knowledge.webcache_revalidate`. */
+  readonly revalidateEnabled?: (projectDir: string) => Promise<boolean>;
+}
+
+/** Default {@link RevalidateFn}: a conditional GET that reads status + headers only (body cancelled). */
+export const defaultRevalidate: RevalidateFn = async (url, v) => {
+  const headers: Record<string, string> = {};
+  if (v.etag !== undefined) headers["if-none-match"] = v.etag;
+  headers["if-modified-since"] = v.lastModified ?? new Date(v.fetchedAt).toUTCString();
+  const res = await fetch(url, { method: "GET", headers, redirect: "follow" });
+  try {
+    await res.body?.cancel(); // we only need status + headers, never the body
+  } catch {
+    // ignore
+  }
+  const etag = res.headers.get("etag") ?? undefined;
+  const lastModified = res.headers.get("last-modified") ?? undefined;
+  const cacheControl = res.headers.get("cache-control") ?? undefined;
+  const expires = res.headers.get("expires") ?? undefined;
+  return {
+    status: res.status,
+    ...(etag !== undefined ? { etag } : {}),
+    ...(lastModified !== undefined ? { lastModified } : {}),
+    ...(cacheControl !== undefined ? { cacheControl } : {}),
+    ...(expires !== undefined ? { expires } : {}),
+  };
+};
+
+/** Parse the relevant `Cache-Control` directives. */
+function parseCacheControl(value: string | undefined): {
+  noStore: boolean;
+  maxAgeMs: number | undefined;
+} {
+  if (value === undefined) return { noStore: false, maxAgeMs: undefined };
+  const lower = value.toLowerCase();
+  const m = lower.match(/\bmax-age\s*=\s*(\d+)/);
+  return { noStore: /\bno-store\b/.test(lower), maxAgeMs: m ? Number(m[1]) * 1000 : undefined };
+}
+
+/** Compute the cache-metadata to persist from a revalidation response. */
+function metaFrom(res: RevalidateResponse, nowMs: number): WebCacheMeta {
+  const cc = parseCacheControl(res.cacheControl);
+  let expiresAt: string | undefined;
+  if (cc.maxAgeMs !== undefined) {
+    expiresAt = new Date(nowMs + cc.maxAgeMs).toISOString();
+  } else if (res.expires !== undefined) {
+    const exp = Date.parse(res.expires);
+    if (Number.isFinite(exp)) expiresAt = new Date(exp).toISOString();
+  }
+  return {
+    ...(res.etag !== undefined ? { etag: res.etag } : {}),
+    ...(res.lastModified !== undefined ? { lastModified: res.lastModified } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+  };
+}
+
+/** Write the deny-with-cached-content response for a cache hit. */
+async function serveCached(
+  io: HookIo,
+  projectDir: string,
+  url: string,
+  entry: WebCacheEntry,
+  nowMs: number,
+): Promise<void> {
+  const served =
+    entry.content.length > MAX_SERVED_CHARS
+      ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
+      : entry.content;
+
+  // Lazy-backfill pointer (T3): note an existing distill draft, if any.
+  // Self-contained — a lookup failure here must never regress the serve.
+  let draftNote = "";
+  try {
+    const draft = await findDraftByUrl(projectDir, url);
+    if (draft !== null) {
+      draftNote =
+        `\n\n(A distilled source-note draft for this URL already exists at ${draft.path} — ` +
+        "review it with `golem wiki distill --pending` rather than re-distilling.)";
+    }
+  } catch {
+    // best-effort only
+  }
+
+  const reason =
+    `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), ` +
+    `skipping the web fetch. Content follows:\n\n${served}${draftNote}`;
+  io.stdout.write(
+    `${JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason,
+      },
+    })}\n`,
+  );
 }
 
 /** PreToolUse(WebFetch): serve a fresh cached URL and skip the fetch, else allow. */
@@ -119,41 +242,52 @@ export async function runWebFetchPre(
 
     const ttl = options.ttlHours ?? DEFAULT_WEB_CACHE_TTL_HOURS;
     const nowMs = options.nowMs ?? Date.now();
-    if (!isFresh(entry, ttl, nowMs)) return 0; // stale → re-fetch
+    if (!isFresh(entry, ttl, nowMs)) return 0; // past the hard TTL cap → re-fetch
 
-    const served =
-      entry.content.length > MAX_SERVED_CHARS
-        ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
-        : entry.content;
-
-    // Lazy-backfill pointer (T3): note an existing distill draft, if any.
-    // Self-contained — a lookup failure here must never regress the cache
-    // serve above, so it gets its own try/catch rather than sharing the
-    // outer one.
-    let draftNote = "";
-    try {
-      const draft = await findDraftByUrl(projectDir, url);
-      if (draft !== null) {
-        draftNote =
-          `\n\n(A distilled source-note draft for this URL already exists at ${draft.path} — ` +
-          "review it with `golem wiki distill --pending` rather than re-distilling.)";
+    // Optional conditional revalidation (opt-in): confirm the cached copy is
+    // still current before serving it, so a changed page isn't served stale.
+    if (
+      options.revalidate !== undefined &&
+      (options.revalidateEnabled === undefined || (await options.revalidateEnabled(projectDir)))
+    ) {
+      // Honor an explicit freshness window (Cache-Control max-age / Expires) —
+      // no network round-trip while the copy is provably fresh.
+      const explicitlyFresh = entry.expiresAt !== undefined && Date.parse(entry.expiresAt) > nowMs;
+      if (!explicitlyFresh) {
+        let res: RevalidateResponse | null = null;
+        try {
+          res = await options.revalidate(url, {
+            etag: entry.etag,
+            lastModified: entry.lastModified,
+            fetchedAt: entry.fetchedAt,
+          });
+        } catch {
+          res = null; // offline / failure → fall through and serve the cache (still within TTL)
+        }
+        if (res !== null) {
+          if (parseCacheControl(res.cacheControl).noStore) {
+            await cache.delete(url);
+            return 0; // uncacheable now → re-fetch
+          }
+          if (res.status === 200) {
+            // Changed: drop the stale entry outright, then let the fetch proceed
+            // (re-cache + re-ingest via the post hook). We deliberately do NOT
+            // stash the new validators onto the old content — if the re-fetch is
+            // cancelled/declined, a bare miss just re-fetches later, whereas old
+            // content wearing new validators would be served as fresh by a future
+            // 304. Fresh validators repopulate on the next revalidation.
+            await cache.delete(url);
+            return 0;
+          }
+          if (res.status === 304) {
+            await cache.updateMeta(url, metaFrom(res, nowMs)); // unchanged → refresh validators/expiry
+          }
+          // 304 and any other status fall through to serving the cached copy.
+        }
       }
-    } catch {
-      // best-effort only
     }
 
-    const reason =
-      `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), ` +
-      `skipping the web fetch. Content follows:\n\n${served}${draftNote}`;
-    io.stdout.write(
-      `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      })}\n`,
-    );
+    await serveCached(io, projectDir, url, entry, nowMs);
     return 0;
   } catch (err) {
     io.stderr.write(

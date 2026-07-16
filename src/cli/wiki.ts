@@ -205,6 +205,15 @@ const VALID_WIKI_PAGE_TYPES: ReadonlySet<WikiPageType> = new Set([
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Blank out fenced code blocks and inline code spans so wikilinks inside them
+ * (schema examples like WIKI.md's `[[Page Title]]`) aren't scanned as real
+ * links. Newlines are preserved so nothing else shifts.
+ */
+function stripCode(md: string): string {
+  return md.replace(/```[\s\S]*?```/g, (m) => m.replace(/[^\n]/g, " ")).replace(/`[^`\n]*`/g, "");
+}
+
 export interface WikiCheckIssue {
   readonly relPath: string;
   readonly message: string;
@@ -302,7 +311,9 @@ export async function checkWiki(wikiDir: string): Promise<WikiCheckReport> {
 
   const knownTitles = new Set(pages.map((p) => p.title));
   for (const page of pages) {
-    for (const link of extractWikilinks(page.body)) {
+    // Ignore wikilinks inside code (fenced blocks or inline spans) — those are
+    // examples/schema, not real graph edges (e.g. WIKI.md's `[[Page Title]]`).
+    for (const link of extractWikilinks(stripCode(page.body))) {
       if (!knownTitles.has(link)) {
         issues.push({ relPath: page.relPath, message: `broken wikilink: [[${link}]]` });
       }

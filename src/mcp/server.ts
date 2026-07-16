@@ -54,7 +54,9 @@ import {
 } from "../interfaces/index.js";
 import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
 import { rerankHits } from "../knowledge/rerank.js";
+import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
+import { refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -116,6 +118,13 @@ export interface GolemMcpServerDeps {
    * turns a successful search into an error.
    */
   readonly rerank?: InferenceService;
+  /**
+   * R4.3 — durable telemetry store. When present, the knowledge/coder tools
+   * (`search`/`fetch`/`ingest`/`wiki_read`/`coder`) record a per-call `tool`
+   * event (duration, result size; for `coder` also model + draft length), and
+   * the `stats` tool surfaces a per-tool summary. Omitted for the P0 stubs.
+   */
+  readonly telemetry?: TelemetryStore;
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -170,6 +179,38 @@ function promptMessages(text: string): {
 
 const P1_TOOL_FALLBACK =
   "If that tool is not available in this session, tell the user this Golem capability has not shipped or is not enabled yet, and suggest checking `golem status`.";
+
+/** R4.3 — snake_case tool_usage map for the `stats` tool, or undefined if nothing was recorded. */
+function toolUsageToStructured(
+  usage: ToolUsageStats | undefined,
+): Record<string, Record<string, number>> | undefined {
+  if (usage === undefined) return undefined;
+  const entries = Object.entries(usage.byTool);
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(
+    entries.map(([tool, u]) => [
+      tool,
+      {
+        calls: u.calls,
+        total_duration_ms: u.totalDurationMs,
+        total_result_bytes: u.totalResultBytes,
+        draft_chars: u.draftChars,
+      },
+    ]),
+  );
+}
+
+/** R4.3 — a one-line tool-usage summary appended to the `stats` text (empty when none). */
+function toolUsageSummaryLine(usage: ToolUsageStats | undefined): string {
+  if (usage === undefined) return "";
+  const entries = Object.entries(usage.byTool);
+  if (entries.length === 0) return "";
+  const calls = entries.reduce((n, [, u]) => n + u.calls, 0);
+  const draftChars = entries.reduce((n, [, u]) => n + u.draftChars, 0);
+  const parts = entries.map(([tool, u]) => `${tool}×${u.calls}`).join(", ");
+  const drafted = draftChars > 0 ? ` ~${Math.round(draftChars / 4)} tokens drafted locally.` : "";
+  return ` Local tools: ${calls} call(s) (${parts}).${drafted}`;
+}
 
 /** Build the unified MCP server: P0 tools + all 8 frozen prompts. */
 export function createGolemMcpServer(deps: GolemMcpServerDeps): McpServer {
@@ -253,14 +294,27 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
         ),
         ccr_refs_stored: z.number().int().nonnegative(),
         ccr_refs_retrieved: z.number().int().nonnegative(),
+        // R4.3: per-tool local-tool usage; present only when telemetry recorded any.
+        tool_usage: z
+          .record(
+            z.object({
+              calls: z.number().int().nonnegative(),
+              total_duration_ms: z.number().int().nonnegative(),
+              total_result_bytes: z.number().int().nonnegative(),
+              draft_chars: z.number().int().nonnegative(),
+            }),
+          )
+          .optional(),
       },
     },
     async ({ project_id }) => {
-      const [stats, level] = await Promise.all([
+      const [stats, level, toolUsage] = await Promise.all([
         project_id === undefined ? deps.compression.stats() : deps.compression.stats(project_id),
         deps.sliderStore.get(),
+        deps.telemetry?.aggregateToolUsage(project_id),
       ]);
       const tokensSaved = stats.tokensBefore - stats.tokensAfter;
+      const toolUsageStructured = toolUsageToStructured(toolUsage);
       const structuredContent = {
         project_id: stats.projectId,
         slider_level: level,
@@ -277,6 +331,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
         ),
         ccr_refs_stored: stats.ccrRefsStored,
         ccr_refs_retrieved: stats.ccrRefsRetrieved,
+        ...(toolUsageStructured !== undefined ? { tool_usage: toolUsageStructured } : {}),
       };
       const scope = stats.projectId === null ? "all projects" : `project ${stats.projectId}`;
       return {
@@ -287,7 +342,8 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
               `Golem stats (${scope}): slider level ${level} (${LEVEL_NAMES[level]}), ` +
               `${stats.requests} requests, ${tokensSaved} tokens saved ` +
               `(${stats.tokensBefore} before → ${stats.tokensAfter} after), ` +
-              `${stats.ccrRefsStored} CCR refs stored / ${stats.ccrRefsRetrieved} retrieved.`,
+              `${stats.ccrRefsStored} CCR refs stored / ${stats.ccrRefsRetrieved} retrieved.` +
+              toolUsageSummaryLine(toolUsage),
           },
         ],
         structuredContent,
@@ -336,6 +392,12 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
 
   registerDevicesTool(server);
 
+  // R4.3 — where the knowledge/coder tools record their per-call telemetry.
+  const tel: ToolTelemetry | undefined =
+    deps.telemetry !== undefined
+      ? { store: deps.telemetry, projectId: deps.defaultProjectId ?? "default" }
+      : undefined;
+
   if (deps.knowledge !== undefined) {
     registerKnowledgeTools(
       server,
@@ -347,15 +409,27 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       deps.projectRootDir ?? deps.defaultProjectId,
       deps.wikiSearch ?? deps.wiki,
       deps.rerank,
+      tel,
     );
   }
 
   if (deps.inference !== undefined) {
-    registerCoderTool(server, deps.inference);
+    registerCoderTool(
+      server,
+      deps.inference,
+      {
+        knowledge: deps.knowledge,
+        wiki: deps.wikiSearch ?? deps.wiki,
+        wikiDir: deps.wikiDir,
+        rerank: deps.rerank,
+        defaultProjectId: deps.defaultProjectId ?? "default",
+      },
+      tel,
+    );
   }
 
   if (deps.wiki !== undefined) {
-    registerWikiTools(server, deps.wiki);
+    registerWikiTools(server, deps.wiki, tel);
   }
 }
 
@@ -512,6 +586,142 @@ export async function graphFirstWikiHits(
   return hits;
 }
 
+/**
+ * The read surfaces `search` (and R4.2's coder grounding) query, bundled so
+ * both paths assemble hits identically. `wiki`/`wikiDir`/`rerank` are optional;
+ * only `knowledge` is required.
+ */
+interface HitAssemblyDeps {
+  readonly knowledge: KnowledgeBase;
+  readonly wiki?: WikiReader | undefined;
+  readonly wikiDir?: string | undefined;
+  readonly rerank?: InferenceService | undefined;
+}
+
+/**
+ * The one place hit assembly lives: graph-first wiki lookup → vector search
+ * (de-duped against the graph hits) → wiki-rank boost → optional chat-judge
+ * rerank. Extracted so `search` and coder grounding compose it rather than
+ * duplicating the pipeline (R4.2).
+ */
+async function assembleHits(
+  query: string,
+  projectId: string,
+  limit: number,
+  deps: HitAssemblyDeps,
+): Promise<Hit[]> {
+  const graphHits =
+    deps.wiki !== undefined && deps.wikiDir !== undefined
+      ? await graphFirstWikiHits(query, deps.wiki, deps.wikiDir, projectId)
+      : [];
+  const graphSourcePaths = new Set(graphHits.map((h) => h.chunk.sourcePath));
+  const vectorHits = (await deps.knowledge.search(query, projectId, limit)).filter(
+    (h) => h.chunk.sourcePath === undefined || !graphSourcePaths.has(h.chunk.sourcePath),
+  );
+  const boosted = boostWikiHits([...graphHits, ...vectorHits], deps.wikiDir).slice(0, limit);
+  return deps.rerank !== undefined ? await rerankHits(deps.rerank, query, boosted) : boosted;
+}
+
+/** R4.2 grounding budget — the drafter models are small; keep the injected block modest. */
+const GROUNDING_MAX_HITS = 4;
+const GROUNDING_CHAR_BUDGET = 4000;
+const GROUNDING_PER_HIT_CHARS = 1200;
+
+interface Grounding {
+  /** Labeled context block to append to the drafter prompt. */
+  readonly block: string;
+  /** Source labels injected, echoed in the tool's structured output. */
+  readonly sources: string[];
+  /** Total characters of injected context. */
+  readonly chars: number;
+}
+
+/** A hit's human-readable location label (`path:line`, or the chunk id). */
+function hitLabel(hit: Hit): string {
+  const { sourcePath, startLine, chunkId } = hit.chunk;
+  if (sourcePath === undefined) return chunkId;
+  return startLine !== undefined ? `${sourcePath}:${startLine}` : sourcePath;
+}
+
+/**
+ * R4.2 — retrieval-augmented drafting. Run the same {@link assembleHits} path
+ * `search` uses over the task text and pack the top hits into a size-capped,
+ * clearly-labeled context block for the local drafter. Returns null when there
+ * is nothing to inject or on ANY failure: grounding is best-effort and must
+ * never turn a draft into an error (degrades to the ungrounded behavior).
+ */
+async function gatherGrounding(
+  query: string,
+  projectId: string,
+  deps: HitAssemblyDeps,
+): Promise<Grounding | null> {
+  try {
+    const hits = await assembleHits(query, projectId, GROUNDING_MAX_HITS, deps);
+    if (hits.length === 0) return null;
+    const parts: string[] = [];
+    const sources: string[] = [];
+    let budget = GROUNDING_CHAR_BUDGET;
+    for (const hit of hits) {
+      if (budget <= 0) break;
+      const label = hitLabel(hit);
+      const snippet = hit.chunk.text.slice(0, Math.min(GROUNDING_PER_HIT_CHARS, budget));
+      if (snippet === "") continue;
+      parts.push(`// ${label}\n${snippet}`);
+      sources.push(label);
+      budget -= snippet.length;
+    }
+    if (parts.length === 0) return null;
+    const block =
+      "---\nRelevant project context, retrieved locally from Golem's knowledge base. " +
+      "It may be incomplete or stale — verify against the real files before relying on it:\n\n" +
+      parts.join("\n\n");
+    return { block, sources, chars: block.length };
+  } catch {
+    return null; // best-effort: never fail a draft because grounding failed
+  }
+}
+
+/** R4.3 — where a tool records its per-call telemetry, and under which project. */
+interface ToolTelemetry {
+  readonly store: TelemetryStore;
+  readonly projectId: string;
+}
+
+/**
+ * R4.3 — record a `tool` telemetry event for `result` and return it unchanged,
+ * so a handler can `return instrumented(tel, "search", startMs, <result>)` at
+ * any of its return sites. Measures wall-clock duration and structured-result
+ * size; for `coder` it also captures the model and the drafted-locally char
+ * count (the "drafted-locally" bucket). Fire-and-forget: a telemetry write
+ * never delays or fails the tool result. No-op when `tel` is undefined.
+ */
+function instrumented<
+  R extends {
+    readonly content: ReadonlyArray<{ readonly type: "text"; readonly text: string }>;
+    readonly structuredContent?: Record<string, unknown>;
+  },
+>(tel: ToolTelemetry | undefined, toolName: string, startMs: number, result: R): R {
+  if (tel !== undefined) {
+    const sc = result.structuredContent;
+    const isCoder = toolName === "coder";
+    void recordToolCall(
+      tel.store,
+      {
+        projectId: tel.projectId,
+        tool: toolName,
+        durationMs: Date.now() - startMs,
+        resultBytes: sc !== undefined ? JSON.stringify(sc).length : 0,
+        ...(isCoder && sc !== undefined && typeof sc.model === "string" ? { model: sc.model } : {}),
+        ...(isCoder && sc !== undefined && typeof sc.text === "string"
+          ? { draftChars: sc.text.length }
+          : {}),
+      },
+      new Date().toISOString(),
+    ).catch(() => {});
+  }
+  return result;
+}
+
 /** Register the P1 knowledge tools (task B3) against an injected KnowledgeBase. */
 function registerKnowledgeTools(
   server: McpServer,
@@ -521,6 +731,7 @@ function registerKnowledgeTools(
   projectRootDir?: string,
   wiki?: WikiReader,
   rerank?: InferenceService,
+  tel?: ToolTelemetry,
 ): void {
   server.registerTool(
     "search",
@@ -558,19 +769,16 @@ function registerKnowledgeTools(
       },
     },
     async ({ query, k, project_id }) => {
+      const startMs = Date.now();
       const projectId = project_id ?? defaultProjectId;
       const limit = k ?? 8;
       try {
-        const graphHits =
-          wiki !== undefined && wikiDir !== undefined
-            ? await graphFirstWikiHits(query, wiki, wikiDir, projectId)
-            : [];
-        const graphSourcePaths = new Set(graphHits.map((h) => h.chunk.sourcePath));
-        const vectorHits = (await knowledge.search(query, projectId, limit)).filter(
-          (h) => h.chunk.sourcePath === undefined || !graphSourcePaths.has(h.chunk.sourcePath),
-        );
-        const boosted = boostWikiHits([...graphHits, ...vectorHits], wikiDir).slice(0, limit);
-        const hits = rerank !== undefined ? await rerankHits(rerank, query, boosted) : boosted;
+        const hits = await assembleHits(query, projectId, limit, {
+          knowledge,
+          wiki,
+          wikiDir,
+          rerank,
+        });
         const structuredHits = hits.map(toStructuredHit);
         const summary =
           hits.length === 0
@@ -584,7 +792,7 @@ function registerKnowledgeTools(
                   return `${i + 1}. [${h.score.toFixed(3)}] ${loc} (chunk ${h.chunk.chunkId})`;
                 })
                 .join("\n");
-        return {
+        return instrumented(tel, "search", startMs, {
           content: [{ type: "text", text: summary }],
           structuredContent: {
             project_id: projectId,
@@ -592,7 +800,7 @@ function registerKnowledgeTools(
             count: hits.length,
             hits: structuredHits,
           },
-        };
+        });
       } catch (err) {
         const msg = backendUnavailableMessage(err);
         if (msg !== null) return errorResult(msg);
@@ -621,6 +829,7 @@ function registerKnowledgeTools(
       },
     },
     async ({ chunk_id }) => {
+      const startMs = Date.now();
       // Graph-first search hits carry a synthetic `wiki:<relPath>` chunk id
       // (they were never ingested into the vector store), so fetch must
       // resolve those straight from the wiki rather than knowledge.getChunk.
@@ -646,7 +855,7 @@ function registerKnowledgeTools(
             defaultProjectId,
             0,
           ).chunk;
-          return {
+          return instrumented(tel, "fetch", startMs, {
             content: [{ type: "text", text: chunk.text }],
             structuredContent: {
               chunk_id: chunk.chunkId,
@@ -654,7 +863,7 @@ function registerKnowledgeTools(
               text: chunk.text,
               ...(chunk.sourcePath !== undefined ? { source_path: chunk.sourcePath } : {}),
             },
-          };
+          });
         } catch (err) {
           if (err instanceof UnknownWikiPageError) {
             return errorResult(
@@ -667,7 +876,7 @@ function registerKnowledgeTools(
       }
       try {
         const chunk = await knowledge.getChunk(chunk_id);
-        return {
+        return instrumented(tel, "fetch", startMs, {
           content: [{ type: "text", text: chunk.text }],
           structuredContent: {
             chunk_id: chunk.chunkId,
@@ -677,7 +886,7 @@ function registerKnowledgeTools(
             ...(chunk.startLine !== undefined ? { start_line: chunk.startLine } : {}),
             ...(chunk.endLine !== undefined ? { end_line: chunk.endLine } : {}),
           },
-        };
+        });
       } catch (err) {
         if (err instanceof UnknownChunkError) {
           return errorResult(
@@ -726,6 +935,7 @@ function registerKnowledgeTools(
       },
     },
     async ({ path, project_id, watch }) => {
+      const startMs = Date.now();
       const projectId = project_id ?? defaultProjectId;
       const target = path ?? projectRootDir;
       if (target === undefined) {
@@ -736,7 +946,7 @@ function registerKnowledgeTools(
       }
       try {
         const report = await knowledge.ingest(target, projectId, watch ?? false);
-        return {
+        return instrumented(tel, "ingest", startMs, {
           content: [
             {
               type: "text",
@@ -754,7 +964,7 @@ function registerKnowledgeTools(
             files_skipped: report.filesSkipped,
             watching: report.watching,
           },
-        };
+        });
       } catch (err) {
         const msg = backendUnavailableMessage(err);
         if (msg !== null) return errorResult(msg);
@@ -799,7 +1009,7 @@ function structuredWikiPage(page: WikiPage): {
 }
 
 /** WS-W W2: wiki authoring tools over an injected WikiStore (spec Decisions 28/29). */
-function registerWikiTools(server: McpServer, wiki: WikiStore): void {
+function registerWikiTools(server: McpServer, wiki: WikiStore, tel?: ToolTelemetry): void {
   server.registerTool(
     "wiki_read",
     {
@@ -829,12 +1039,13 @@ function registerWikiTools(server: McpServer, wiki: WikiStore): void {
       },
     },
     async ({ title_or_path }) => {
+      const startMs = Date.now();
       try {
         const page = await wiki.readPage(title_or_path);
-        return {
+        return instrumented(tel, "wiki_read", startMs, {
           content: [{ type: "text", text: page.body }],
           structuredContent: structuredWikiPage(page),
-        };
+        });
       } catch (err) {
         if (err instanceof UnknownWikiPageError) {
           return errorResult(
@@ -925,7 +1136,21 @@ function registerWikiTools(server: McpServer, wiki: WikiStore): void {
   );
 }
 
-function registerCoderTool(server: McpServer, inference: InferenceService): void {
+/** R4.2 — grounding surface passed to the coder tool (all optional but `defaultProjectId`). */
+interface CoderGroundingDeps {
+  readonly knowledge?: KnowledgeBase | undefined;
+  readonly wiki?: WikiReader | undefined;
+  readonly wikiDir?: string | undefined;
+  readonly rerank?: InferenceService | undefined;
+  readonly defaultProjectId: string;
+}
+
+function registerCoderTool(
+  server: McpServer,
+  inference: InferenceService,
+  grounding: CoderGroundingDeps,
+  tel?: ToolTelemetry,
+): void {
   server.registerTool(
     "coder",
     {
@@ -935,40 +1160,115 @@ function registerCoderTool(server: McpServer, inference: InferenceService): void
         "role — currently backed by a qwen2.5-coder-family model tuned for cheap " +
         "first-draft code generation) instead of doing everything yourself. Use it " +
         "to offload simple or initial work — e.g. a first coding draft — then " +
-        "refine the result. Nothing leaves the machine, but the local model may be " +
-        "slower or lower-quality than you: treat the result as a draft to review, " +
-        "not a final answer.",
+        "refine the result. By default it grounds the draft in relevant hits from " +
+        "Golem's local knowledge base (project code, docs, wiki) so the draft fits " +
+        "this codebase; pass `ground: false` to skip that. Nothing leaves the " +
+        "machine, but the local model may be slower or lower-quality than you: " +
+        "treat the result as a draft to review, not a final answer.",
       inputSchema: {
         task: z.string().min(1).describe("The task or instructions for the local model"),
         context: z
           .string()
           .optional()
           .describe("Extra context to include, e.g. relevant code or file contents"),
+        ground: z
+          .boolean()
+          .optional()
+          .describe(
+            "Inject relevant project context from Golem's knowledge base into the " +
+              "prompt (default true). Set false to draft without grounding.",
+          ),
+        refine: z
+          .boolean()
+          .optional()
+          .describe(
+            "Run one extra local judge→revise pass on the draft (default false). " +
+              "Improves quality on non-trivial tasks at the cost of ~2× local latency; " +
+              "skip it for small drafts.",
+          ),
+        project_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Project whose knowledge base to ground against; omit to use this session's"),
       },
       outputSchema: {
         text: z.string(),
         model: z.string(),
         role: z.string(),
+        // R4.2: present only when grounding actually injected context.
+        grounding: z
+          .object({
+            sources: z.array(z.string()),
+            injected_chars: z.number().int().nonnegative(),
+          })
+          .optional(),
+        // R4.4: present only when a refinement pass ran (refine: true).
+        refinement: z
+          .object({
+            rounds: z.number().int().nonnegative(),
+            critique_summary: z.string().optional(),
+            issues: z.array(z.object({ severity: z.string(), description: z.string() })).optional(),
+          })
+          .optional(),
       },
     },
-    async ({ task, context }) => {
-      const prompt =
-        context === undefined || context === "" ? task : `${task}\n\n---\nContext:\n${context}`;
+    async ({ task, context, ground, refine, project_id }) => {
+      const startMs = Date.now();
+      const grounded =
+        ground !== false && grounding.knowledge !== undefined
+          ? await gatherGrounding(task, project_id ?? grounding.defaultProjectId, {
+              knowledge: grounding.knowledge,
+              wiki: grounding.wiki,
+              wikiDir: grounding.wikiDir,
+              rerank: grounding.rerank,
+            })
+          : null;
+      const sections: string[] = [];
+      if (context !== undefined && context !== "") sections.push(`---\nContext:\n${context}`);
+      if (grounded !== null) sections.push(grounded.block);
+      const prompt = sections.length === 0 ? task : `${task}\n\n${sections.join("\n\n")}`;
       try {
         const result = await inference.chat("drafter", [{ role: "user", content: prompt }]);
-        return {
+        // R4.4: one optional local judge→revise pass. Best-effort — refineDraft
+        // returns the original text with rounds:0 on any failure.
+        const refined = refine === true ? await refineDraft(inference, task, result.text) : null;
+        const finalText = refined !== null ? refined.text : result.text;
+        const groundedNote =
+          grounded !== null ? ` Grounded on ${grounded.sources.length} local source(s).` : "";
+        const refinedNote =
+          refined !== null && refined.rounds > 0
+            ? ` Refined ${refined.rounds} round(s) (judge: ${refined.critiqueSummary ?? "issues found"}).`
+            : refined !== null
+              ? " Judge found nothing worth revising."
+              : "";
+        return instrumented(tel, "coder", startMs, {
           content: [
             {
               type: "text",
-              text: `**Golem** Used ${result.model} locally — verify independently.\n\n${result.text}`,
+              text: `**Golem** Used ${result.model} locally — verify independently.${groundedNote}${refinedNote}\n\n${finalText}`,
             },
           ],
           structuredContent: {
-            text: result.text,
+            text: finalText,
             model: result.model,
             role: result.role,
+            ...(grounded !== null
+              ? { grounding: { sources: grounded.sources, injected_chars: grounded.chars } }
+              : {}),
+            ...(refined !== null
+              ? {
+                  refinement: {
+                    rounds: refined.rounds,
+                    ...(refined.critiqueSummary !== undefined
+                      ? { critique_summary: refined.critiqueSummary }
+                      : {}),
+                    ...(refined.issues !== undefined ? { issues: [...refined.issues] } : {}),
+                  },
+                }
+              : {}),
           },
-        };
+        });
       } catch (err) {
         const msg = backendUnavailableMessage(err);
         if (msg !== null) return errorResult(msg);

@@ -8,6 +8,7 @@
  */
 
 import { afterEach, describe, expect, it } from "vitest";
+import type { SessionStateReport } from "../../src/cli/session-report.js";
 import type { StatsReport } from "../../src/cli/stats.js";
 import {
   type DashboardHandle,
@@ -73,6 +74,37 @@ describe("dashboard server", () => {
   it("404s unknown paths", async () => {
     handle = await startDashboard({ port: 0, snapshot });
     const res = await fetch(`${handle.url}nope`);
+    expect(res.status).toBe(404);
+  });
+
+  it("serves the consolidated session-state endpoint when provided", async () => {
+    const state: SessionStateReport = {
+      project_dir: "/proj",
+      generated_at: "2026-07-16T00:00:00.000Z",
+      proxy: { running: true, upstream: "anthropic" },
+      slider: { level: 1, name: "lossless", redaction_off: false },
+      local_model: { reachable: null },
+      autonomy: { level: "manual" },
+      blocked: { waiting: false },
+      savings: STATS,
+      storage: { ccr_bytes: 1, knowledge_bytes: 2, telemetry_bytes: 3, webcache_bytes: 4 },
+    };
+    handle = await startDashboard({
+      port: 0,
+      snapshot,
+      sessionState: () => Promise.resolve(state),
+    });
+    const res = await fetch(`${handle.url}api/state`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const json = (await res.json()) as SessionStateReport;
+    expect(json.slider.name).toBe("lossless");
+    expect(json.storage.webcache_bytes).toBe(4);
+  });
+
+  it("404s /api/state when no session-state provider is wired", async () => {
+    handle = await startDashboard({ port: 0, snapshot });
+    const res = await fetch(`${handle.url}api/state`);
     expect(res.status).toBe(404);
   });
 

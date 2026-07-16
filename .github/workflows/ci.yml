@@ -36,3 +36,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Wiki lint (docs/wiki graph integrity)
+        run: node dist/cli/main.js wiki check

@@ -2,7 +2,7 @@
 title: Redaction Stage
 type: concept
 tags: [security, pipeline, redaction, t-c3, r1-batch]
-sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/verification-notes.md, docs/verification-notes.md#§55, docs/verification-notes.md#§56]
+sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/verification-notes.md, docs/plan/verification-notes.md#§55, docs/plan/verification-notes.md#§56]
 created: 2026-07-10
 updated: 2026-07-11
 ---
@@ -34,7 +34,7 @@ so re-redacting redacted text is a no-op.
 ## Known false-positive classes (entropy backstop)
 
 The backstop is heuristic and has needed successive narrowing, each logged in
-`docs/verification-notes.md`:
+`docs/plan/verification-notes.md`:
 
 - **§31 — integrity hashes.** `sha512-<base64>` SRI/npm-lockfile `integrity`
   values are content hashes, not secrets, and saturate `package-lock.json`.
@@ -97,7 +97,7 @@ it to the **Known false-positive classes** list, in the same style as §31/§37/
   confirm real card shapes still redact
   (`tests/unit/pipeline/redaction-audit.test.ts`).
 
-See also [[Wiki-First Knowledge]] and docs/verification-notes.md §55.
+See also [[Wiki-First Knowledge]] and docs/plan/verification-notes.md §55.
 
 ---
 
@@ -122,4 +122,4 @@ providers' key shapes remain on the entropy-sweep backstop only, per §24's
 original "add rules as needed" stance — not a claim of exhaustive coverage.
 
 See [[R1.4 — provider-key redaction rule gaps closed (T-C3)]] and
-docs/verification-notes.md#§56.
+docs/plan/verification-notes.md#§56.

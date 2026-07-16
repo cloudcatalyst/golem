@@ -144,13 +144,33 @@ describe("golem init", () => {
     await golemInit({ projectDir, probe: okProbe });
 
     const settings = await readJson(".claude/settings.json");
-    expect(settings.permissions).toStrictEqual({ allow: ["Bash(ls:*)"] });
+    // The unrelated allow rule is preserved (merged, not replaced); init adds its
+    // own Golem MCP rules alongside it.
+    expect(settings.permissions).toStrictEqual({
+      allow: ["Bash(ls:*)", "mcp__golem__*"],
+      ask: ["mcp__golem__wiki_upsert"],
+    });
     expect((settings.env as Record<string, unknown>).FOO).toBe("bar");
     const mcp = await readJson(".mcp.json");
     expect((mcp.mcpServers as Record<string, unknown>).other).toStrictEqual({
       type: "http",
       url: "http://x/mcp",
     });
+  });
+
+  it("pre-approves Golem's MCP tools (all but wiki_upsert), and uninit removes them", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".claude/settings.json");
+    const perms = settings.permissions as { allow?: string[]; ask?: string[] };
+    // All Golem tools auto-approved via the anchored glob; wiki_upsert kept on ask.
+    expect(perms.allow).toContain("mcp__golem__*");
+    expect(perms.ask).toContain("mcp__golem__wiki_upsert");
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".claude/settings.json");
+    // The rules are gone; on a project init created (no other permission rules),
+    // the now-empty permissions object is cleaned up entirely.
+    expect(after.permissions).toBeUndefined();
   });
 
   it("dry-run reports actions but writes nothing", async () => {
@@ -196,18 +216,35 @@ describe("golem init", () => {
     await expect(golemInit({ projectDir, probe: okProbe })).rejects.toThrow(/not valid JSON/);
   });
 
-  it("writes Golem guidance to gitignored CLAUDE.local.md, not committed CLAUDE.md", async () => {
+  it("seeds Golem guidance as committed .claude/rules files, not into CLAUDE.md", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const local = await readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8");
-    expect(local).toContain("wiki-first knowledge");
-    // The committed CLAUDE.md must not gain a Golem section.
+    // Default guidance seeded as project rule files (auto-loaded by Claude Code).
+    const wikiRule = await readFile(
+      path.join(projectDir, ".claude", "rules", "golem-wiki-kb-first.md"),
+      "utf8",
+    );
+    expect(wikiRule).toContain("Check the wiki first");
+    expect(wikiRule).toContain("Managed by Golem");
+    // Golem does NOT touch CLAUDE.md or write the personal file.
     await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
-    // ...and CLAUDE.local.md is gitignored.
-    expect(await readFile(path.join(projectDir, ".gitignore"), "utf8")).toContain(
-      "CLAUDE.local.md",
-    );
+    await expect(readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    // Personal (--user) golem rules + CLAUDE.local.md are gitignored; committed
+    // rules are not.
+    const gitignore = await readFile(path.join(projectDir, ".gitignore"), "utf8");
+    expect(gitignore).toContain("CLAUDE.local.md");
+    expect(gitignore).toContain(".claude/rules/golem-*.local.md");
+  });
+
+  it("uninit removes the seeded guidance rules", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const rule = path.join(projectDir, ".claude", "rules", "golem-local-coder.md");
+    await expect(readFile(rule, "utf8")).resolves.toContain("coder");
+    await golemUninit({ projectDir, probe: okProbe });
+    await expect(readFile(rule, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("--foundry wires Foundry env + proxy upstream (not ANTHROPIC_BASE_URL)", async () => {
@@ -248,6 +285,52 @@ describe("golem init", () => {
     expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
     expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe(foundryUrl);
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
+  });
+
+  it("excludes Golem's churny runtime dirs from the VS Code file watcher", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".vscode/settings.json");
+    const watcherExclude = settings["files.watcherExclude"] as Record<string, unknown>;
+    expect(watcherExclude["**/.golem/telemetry/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/state/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/webcache/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/ccr/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/knowledge/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/notes/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/distill/**"]).toBe(true);
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".vscode/settings.json");
+    expect(after["files.watcherExclude"]).toBeUndefined();
+  });
+
+  it("preserves unrelated .vscode/settings.json keys and watcher excludes", async () => {
+    await mkdir(path.join(projectDir, ".vscode"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".vscode", "settings.json"),
+      JSON.stringify({
+        "editor.tabSize": 2,
+        "files.watcherExclude": { "**/some-other-dir/**": true },
+      }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+    const settings = await readJson(".vscode/settings.json");
+    expect(settings["editor.tabSize"]).toBe(2);
+    const watcherExclude = settings["files.watcherExclude"] as Record<string, unknown>;
+    expect(watcherExclude["**/some-other-dir/**"]).toBe(true);
+    expect(watcherExclude["**/.golem/telemetry/**"]).toBe(true);
+
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = await readJson(".vscode/settings.json");
+    expect(after["editor.tabSize"]).toBe(2);
+    expect((after["files.watcherExclude"] as Record<string, unknown>)["**/some-other-dir/**"]).toBe(
+      true,
+    );
+    expect(
+      (after["files.watcherExclude"] as Record<string, unknown>)["**/.golem/telemetry/**"],
+    ).toBeUndefined();
   });
 
   it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {

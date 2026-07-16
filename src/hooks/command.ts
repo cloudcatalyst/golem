@@ -15,6 +15,7 @@ import process from "node:process";
 import { Command } from "commander";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
+import { runPreToolUseHook } from "./pre-tool-use.js";
 import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
 import { runWebFetchPost, runWebFetchPre, type WebFetchHookOptions } from "./web-fetch.js";
 
@@ -26,6 +27,10 @@ export interface HookCommandOptions extends PostToolUseOptions {
   readonly buildKnowledge?: (projectDir: string) => Promise<KnowledgeBase | null>;
   /** Web-cache freshness window (hours); from config. */
   readonly webCacheTtlHours?: number;
+  /** Conditional-revalidation fetcher for cached URLs (cli injects defaultRevalidate). */
+  readonly revalidate?: WebFetchHookOptions["revalidate"];
+  /** Per-project gate for `revalidate` (cli reads `knowledge.webcache_revalidate`). */
+  readonly revalidateEnabled?: WebFetchHookOptions["revalidateEnabled"];
 }
 
 /** Build the `hook` command group with the `post-tool-use` sub-command. */
@@ -86,10 +91,27 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
       process.exitCode = code;
     });
 
+  hook
+    .command("pre-tool-use")
+    .description(
+      "PreToolUse handler: R5.4 autonomy gate (allow/ask per the project's autonomy level)",
+    )
+    .action(async () => {
+      try {
+        process.exitCode = await runPreToolUseHook(stdio());
+      } catch {
+        process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
+    });
+
   const webFetchOpts = (): WebFetchHookOptions => ({
     ...(options.buildKnowledge !== undefined ? { buildKnowledge: options.buildKnowledge } : {}),
     ...(options.webCacheTtlHours !== undefined ? { ttlHours: options.webCacheTtlHours } : {}),
     ...(options.redact !== undefined ? { redact: options.redact } : {}),
+    ...(options.revalidate !== undefined ? { revalidate: options.revalidate } : {}),
+    ...(options.revalidateEnabled !== undefined
+      ? { revalidateEnabled: options.revalidateEnabled }
+      : {}),
   });
 
   hook

@@ -214,6 +214,25 @@ describe("checkWiki", () => {
     ]);
   });
 
+  it("R4.5: ignores wikilinks inside code (inline span or fenced block)", async () => {
+    const wikiDir = resolveWikiDir(projectDir, "docs/wiki");
+    await writePage(
+      wikiDir,
+      "concepts/Other.md",
+      { ...OK_FM, title: "Other" },
+      "See [[Prompt Caching]].",
+    );
+    // A real link ([[Other]]) plus example links inside code that must NOT be flagged.
+    await writePage(
+      wikiDir,
+      "concepts/Prompt Caching.md",
+      OK_FM,
+      "Links look like `[[Page Title]]`. See [[Other]].\n\n```md\n[[Also Not Real]]\n```\n",
+    );
+    const report = await checkWiki(wikiDir);
+    expect(report.issues).toEqual([]);
+  });
+
   it("flags duplicate titles across two different pages", async () => {
     const wikiDir = resolveWikiDir(projectDir, "docs/wiki");
     await writePage(wikiDir, "concepts/A.md", OK_FM, "See [[Prompt Caching]].");

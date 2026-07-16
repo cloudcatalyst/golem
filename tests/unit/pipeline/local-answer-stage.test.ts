@@ -6,7 +6,7 @@
  * mirroring tests/unit/pipeline/context-substitution-stage.test.ts's pattern.
  */
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LocalDirBlobStore, NativeLosslessCompression } from "../../../src/compression/index.js";
 import type {
   LocalAnswerQuery,
@@ -175,5 +175,28 @@ describe("pipeline local-answer stage (R2.3)", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.text).toBe("plain question, no PII");
+  });
+
+  it("fails open when the service throws — falls through to upstream, never errors the request (verification-notes §64)", async () => {
+    const throwing: LocalAnswerService = {
+      tryAnswer(): Promise<LocalAnswerResult> {
+        return Promise.reject(new Error("embed model 'nomic-embed-text' not found"));
+      },
+    };
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const pipe = makePipeline(throwing, () => {});
+      const out = await pipe.process(
+        messagesRequest([{ role: "user", content: "how do I deploy?" }]),
+      );
+
+      // Fell through to the normal path rather than throwing.
+      expect(out.respondDirectly).toBeUndefined();
+      expect(bodyOf(out).messages).toEqual([{ role: "user", content: "how do I deploy?" }]);
+      // And it was observable on stderr.
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("local-answer stage failed"));
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

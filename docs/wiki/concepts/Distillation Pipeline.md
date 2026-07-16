@@ -1,10 +1,10 @@
 ---
 title: Distillation Pipeline
 type: concept
-tags: [knowledge, distillation, notes]
-sources: [docs/plan/next_batch.md, docs/plan/R3_BATCH.md, src/cli/notes.ts, src/cli/distill-note.ts, src/cli/synthesize.ts, src/knowledge/distill.ts, src/knowledge/distill-store.ts]
+tags: [knowledge, distillation, notes, promote, r4]
+sources: [docs/plan/next_batch.md, docs/plan/R3_BATCH.md, src/cli/notes.ts, src/cli/distill-note.ts, src/cli/synthesize.ts, src/knowledge/distill.ts, src/knowledge/distill-store.ts, src/cli/promote.ts]
 created: 2026-07-10
-updated: 2026-07-12
+updated: 2026-07-15
 ---
 
 # Distillation Pipeline
@@ -111,3 +111,24 @@ write — same plan-gate as every zone-2 wiki write (spec Decision 29): propose,
 get approval, then `wiki_upsert`.
 
 See also [[Wiki-First Knowledge]].
+
+---
+
+## Promote stage (R4.5)
+
+The capture → distill → **promote** loop is now closed end to end. The final
+leg is `golem wiki promote`:
+
+- `golem wiki promote --list` (or with no id) — lists pending `.golem/distill/`
+  drafts with provenance (source note ts / URL), the target page path (routed
+  from the draft's `type` → zone), and age.
+- `golem wiki promote <id> [--yes]` — shows the draft and, on confirmation,
+  writes it through the same append-and-refine `upsertPage` semantics as
+  [[Wiki-First Knowledge]]'s `wiki_upsert` (Decision 29: union-merge
+  frontmatter, dated separator, never a wholesale rewrite), then removes the
+  consumed draft. A non-interactive run refuses without `--yes` (the
+  Decision 26 consent convention) — the human approving is the plan-gate.
+
+Implementation: `src/cli/promote.ts` (`runPromote`, `draftTargetRelPath`),
+`removeDraftFile` in `src/knowledge/distill-store.ts`.
+

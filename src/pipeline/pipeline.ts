@@ -239,24 +239,37 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       if (options.localAnswer !== undefined) {
         const queryText = eligibleLocalAnswerText(body);
         if (queryText !== undefined) {
-          const result = await options.localAnswer.service.tryAnswer({
-            text: queryText,
-            projectId: options.projectId,
-          });
-          if (result.answered) {
-            const stream = body.stream === true;
-            const respondDirectly = synthesizeLocalAnswerResponse(queryText, result.text, stream);
-            const originalJson = JSON.stringify(parsed);
-            emit({
+          try {
+            const result = await options.localAnswer.service.tryAnswer({
+              text: queryText,
               projectId: options.projectId,
-              level: policy.level,
-              requestTokens: { tokensBefore: estimateTokens(originalJson), tokensAfter: 0 },
-              stageSavings: {},
-              ccrRefsStored: 0,
-              avoidedUpstreamInputTokens: estimateTokens(originalJson),
-              avoidedUpstreamOutputTokens: estimateTokens(result.text),
             });
-            return { ...request, respondDirectly };
+            if (result.answered) {
+              const stream = body.stream === true;
+              const respondDirectly = synthesizeLocalAnswerResponse(queryText, result.text, stream);
+              const originalJson = JSON.stringify(parsed);
+              emit({
+                projectId: options.projectId,
+                level: policy.level,
+                requestTokens: { tokensBefore: estimateTokens(originalJson), tokensAfter: 0 },
+                stageSavings: {},
+                ccrRefsStored: 0,
+                avoidedUpstreamInputTokens: estimateTokens(originalJson),
+                avoidedUpstreamOutputTokens: estimateTokens(result.text),
+              });
+              return { ...request, respondDirectly };
+            }
+          } catch (err) {
+            // Fail-open, mirroring the semantic stage below: a retrieval or
+            // embedder failure (e.g. the configured semantic embed model isn't
+            // installed) must never error a live request — fall through to the
+            // normal upstream path exactly as if the KB had declined to answer.
+            // Verified need: verification-notes §64 (Decision 33 review).
+            process.stderr.write(
+              `golem: local-answer stage failed, falling through to upstream (${
+                err instanceof Error ? err.message : String(err)
+              })\n`,
+            );
           }
         }
       }

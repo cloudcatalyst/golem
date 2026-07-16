@@ -68,8 +68,8 @@ export interface TelemetryEvent {
   readonly projectId: string;
   /** Slider level in effect for this request. Unused (0) for a retrieval. */
   readonly level: number;
-  /** Discriminator; absent === "request". A retrieval/usage/avoidedUpstream sample is never a request. */
-  readonly kind?: "request" | "retrieval" | "usage" | "avoidedUpstream";
+  /** Discriminator; absent === "request". A retrieval/usage/avoidedUpstream/tool sample is never a request. */
+  readonly kind?: "request" | "retrieval" | "usage" | "avoidedUpstream" | "tool";
   /**
    * Whole-request before/after — the honest headline savings. Optional for
    * backward compatibility with events written before this field existed;
@@ -116,6 +116,38 @@ export interface TelemetryEvent {
    * absent elsewhere and on events written before this field existed.
    */
   readonly avoidedUpstreamOutputTokens?: number;
+  /**
+   * R4.3 (verification-notes §59 gap): the local knowledge/coder MCP tool this
+   * event measures (`search`/`fetch`/`ingest`/`wiki_read`/`coder`). Only set
+   * (kind: "tool") by {@link recordToolCall}; absent elsewhere.
+   */
+  readonly tool?: string;
+  /** R4.3: wall-clock duration of the tool call in milliseconds. kind: "tool" only. */
+  readonly toolDurationMs?: number;
+  /** R4.3: serialized size of the tool's structured result in bytes. kind: "tool" only. */
+  readonly toolResultBytes?: number;
+  /** R4.3: for `coder`, the local model that produced the draft. kind: "tool" only. */
+  readonly toolModel?: string;
+  /**
+   * R4.3: for `coder`, the character length of the locally-drafted text — the
+   * "drafted-locally" bucket (output the paid model did not have to generate).
+   * kind: "tool" only.
+   */
+  readonly toolDraftChars?: number;
+}
+
+/** R4.3 rollup: per-tool call counts, latency, result size, and drafted-locally bytes. */
+export interface ToolUsagePerTool {
+  readonly calls: number;
+  readonly totalDurationMs: number;
+  readonly totalResultBytes: number;
+  /** Sum of `coder` draft characters (0 for non-drafting tools). */
+  readonly draftChars: number;
+}
+
+export interface ToolUsageStats {
+  readonly projectId: string | null;
+  readonly byTool: Readonly<Record<string, ToolUsagePerTool>>;
 }
 
 /** R2.2/R2.3 rollup: total input/output tokens avoided via either sub-mode. */
@@ -157,6 +189,15 @@ export interface TelemetryStore {
    * count toward `CompressionStats` (same treatment as `usage` events).
    */
   aggregateAvoidedUpstream(projectId?: string): Promise<AvoidedUpstreamStats>;
+  /**
+   * Roll up recorded `tool` (kind: "tool") events (R4.3) — per-tool call
+   * counts, total latency, result bytes, and drafted-locally chars. Closes the
+   * verification-notes §59 gap: the local knowledge/coder tools were entirely
+   * uninstrumented. `projectId` scopes to one project; omit for the global
+   * view. Independent of {@link aggregate}: tool events never count toward
+   * `CompressionStats` (same treatment as usage/avoidedUpstream events).
+   */
+  aggregateToolUsage(projectId?: string): Promise<ToolUsageStats>;
   /** Flush and release resources. Safe to call more than once. */
   close(): Promise<void>;
 }
