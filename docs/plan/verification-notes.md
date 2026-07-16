@@ -2034,3 +2034,50 @@ up the R4.2/R4.4 build) — tracked as follow-up, measurable via R4.3's
 
 **R1.6 cross-OS checklist:** still blocked — no macOS/Linux hardware this
 session (Windows only). `questions/r1.6-ollama-verification-blocked.md` stands.
+
+## §64 — Decision 33 human review: one real served answer, examined (2026-07-16)
+
+The ROADMAP loose end "flip Decision 33 (local-answer sub-mode) PROPOSED→ACCEPTED
+after a human reviews a real served answer" was actioned this session. A real
+served answer was produced and reviewed by the user. **Verdict: keep PROPOSED,
+re-review later** — the flip is now gated on a *fair* re-review (see below),
+not just any manual session.
+
+**Method.** Exercised the production path — `openKnowledgeBase` +
+`KnowledgeLocalAnswerService.tryAnswer` over the live project KB — at the
+default `knowledge.local_answer_min_confidence: 0.6`. Queried with the **hashing
+(lexical) embedder** because the on-disk index is 512-dim (`meta.json`
+`dim:512`, `hashing-embedder.js` `DEFAULT_HASH_DIM`) — i.e. it was built
+lexically, not semantically. 13 self-contained conceptual questions
+("What is Golem?", "What does slider level 0 mean?", the 7 MCP tools, etc.).
+
+**Results.** 12 of 13 **declined** (correctly fell through to upstream — the
+extractive contract's conservatism working as designed). The **1 served answer
+was wrong**: for "What does slider level 0 mean?" it served a raw code constant
+from `src/mcp/slider-store.ts` (`export const LEGACY_SLIDER_LEVEL_KEY = …`), not
+the passthrough/redaction-off explanation (which lives in the spec/CLAUDE.md and
+scored 0.47–0.58, *below* the floor). This is exactly the §354-point-5 residual
+risk: a confident-but-wrong answer to a question that only *looks*
+self-contained.
+
+**Two structural findings.**
+1. **The deployed proxy can't run the feature as designed.** Only
+   `qwen2.5-coder:7b` is pulled in Ollama; `nomic-embed-text` (the catalog
+   text embedder) is absent. `proxy-runtime.ts` builds the semantic embedder
+   whenever Ollama probes up, so a live single-turn request with
+   `local_answer_enabled` would embed via a missing model → throw or
+   dimension-mismatch against the 512-dim lexical index. The local-answer stage
+   at `pipeline.ts:~242` is **not** wrapped in try/catch, so this would error a
+   real request rather than fail-open. (Contrast: R4.2 grounding degrades
+   gracefully on search failure — local-answer should adopt the same fail-open.)
+2. **Lexical ranking favors code over prose.** Dense-token source chunks
+   (repeating the query's words) outrank explanatory wiki/spec prose, so at the
+   0.6 floor the *only* content that clears the bar is the wrong kind.
+
+**Gate for the ACCEPTED flip (was "a manual session", now specific):** a fair
+re-review requires (a) `nomic-embed-text` pulled + the project index rebuilt
+semantically, then (b) re-running the sample to see whether a *good* served
+answer ever appears above the floor. Until then there is no example of a
+correct served answer to justify ACCEPTED. Independent of the flip, the
+`pipeline.ts` local-answer-stage fail-open gap is a real robustness bug worth
+fixing regardless (candidate BACKLOG item).

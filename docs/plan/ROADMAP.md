@@ -58,7 +58,7 @@ them, Decision 36).
 
 | Item | Status | Where tracked |
 |---|---|---|
-| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | waiting on a manual session | spec Decision 33 |
+| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | **reviewed 2026-07-16 → stays PROPOSED** (served answer was wrong; test can't run as designed — no semantic embedder). Flip now gated on a fair re-review after `nomic-embed-text` + semantic reindex. | spec Decision 33; verification-notes §64 |
 | R2.6 live semantic-forced A/B on real traffic | deferred (needs a proxy restart mid-dogfood; only meaningful on non-caching upstreams) | verification-notes §60 |
 | R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware | wiki questions page |
 | `FileVectorDriver.#flush()` crash past ~30k chunks | scheduled | **R4.6** |
