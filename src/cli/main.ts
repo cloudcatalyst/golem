@@ -64,7 +64,12 @@ import {
 } from "../tasks/index.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
-import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
+import {
+  embedderSignature,
+  ensureProjectIndexed,
+  resolvePersistedEmbedMode,
+  writeManifest,
+} from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
@@ -475,9 +480,13 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   const telemetry = openTelemetryStore(dir);
   const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).project);
   let inference: InferenceService | undefined;
+  let facts: Awaited<ReturnType<typeof detectCapability>> | undefined;
   try {
-    const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
-    const facts = await detectCapability(createProbeRunner());
+    const client = new OllamaClient({
+      baseUrl: settings.inference.ollama_base_url,
+      requestTimeoutMs: settings.inference.request_timeout_ms,
+    });
+    facts = await detectCapability(createProbeRunner());
     inference = new OllamaInferenceService(client, facts);
   } catch (err) {
     process.stderr.write(
@@ -486,9 +495,37 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
       })\n`,
     );
   }
+  // Choose the local-answer embedder to MATCH the space the on-disk index was
+  // built in — not a blind "is Ollama up?" probe. Querying a lexically-built
+  // index with semantic vectors (or vice-versa) scores 0 against every chunk
+  // (now rejected loudly by assertEmbedderSpaceMatch), so reconcile up front:
+  //   • semantic index + its embed model present → semantic embedder,
+  //   • semantic index + model gone              → local-answer OFF (unqueryable),
+  //   • lexical index / no index yet             → hashing embedder (matches).
+  // Static per-run, like the KB build itself; a rebuilt/upgraded index is picked
+  // up on the next proxy restart.
+  let localAnswerInference: InferenceService | undefined;
+  let suppressLocalAnswer = false;
+  if (settings.knowledge.local_answer_enabled && inference !== undefined && facts !== undefined) {
+    const persisted = await resolvePersistedEmbedMode(dir, dir);
+    if (persisted === "semantic") {
+      const model = embedModelFor(facts.tier, "text");
+      if (await ollamaHasModel(settings.inference.ollama_base_url, model)) {
+        localAnswerInference = inference;
+      } else {
+        suppressLocalAnswer = true;
+        process.stderr.write(
+          `golem proxy: local-answer disabled — the index was built with the semantic embed model "${model}", which isn't available now; run \`golem index\` to rebuild it lexically, or start Ollama and pull the model\n`,
+        );
+      }
+    }
+    // persisted === "lexical" | null → leave localAnswerInference undefined so the
+    // KB uses the hashing (lexical) embedder, matching the on-disk index.
+  }
   const { proxy, semantic } = buildProxyFromSettings(dir, settings, telemetry, {
     sliderStore,
-    ...(inference !== undefined ? { inference } : {}),
+    ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
+    ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
   });
   if (semantic !== undefined) {
     process.stdout.write(
@@ -669,7 +706,10 @@ mcp
       // (KB disabled, or its own construction failed before reaching this far).
       if (inference === undefined) {
         try {
-          const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+          const client = new OllamaClient({
+            baseUrl: settings.inference.ollama_base_url,
+            requestTimeoutMs: settings.inference.request_timeout_ms,
+          });
           const facts = await detectCapability(createProbeRunner());
           inference = new OllamaInferenceService(client, facts);
         } catch (err) {
@@ -1214,7 +1254,10 @@ taskCmd
 async function buildInferenceForDir(dir: string): Promise<InferenceService | null> {
   try {
     const { settings } = await loadConfig({ projectDir: dir });
-    const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+    const client = new OllamaClient({
+      baseUrl: settings.inference.ollama_base_url,
+      requestTimeoutMs: settings.inference.request_timeout_ms,
+    });
     const facts = await detectCapability(createProbeRunner());
     return new OllamaInferenceService(client, facts);
   } catch {

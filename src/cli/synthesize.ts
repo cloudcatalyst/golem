@@ -74,7 +74,10 @@ export async function synthesizeWeeklyReport(
   let inference = options.inference;
   if (inference === undefined) {
     try {
-      const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+      const client = new OllamaClient({
+        baseUrl: settings.inference.ollama_base_url,
+        requestTimeoutMs: settings.inference.request_timeout_ms,
+      });
       const facts = await detectCapability(createProbeRunner());
       inference = new OllamaInferenceService(client, facts);
     } catch (err) {

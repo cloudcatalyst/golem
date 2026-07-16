@@ -65,6 +65,28 @@ async function readManifest(dir: string): Promise<IndexManifest | null> {
   }
 }
 
+/**
+ * Which embedder space an EXISTING project index was built in, read back from
+ * its persisted manifest signature (see {@link embedderSignature}). A query MUST
+ * be embedded in this same space or it silently scores 0 against every chunk
+ * (guarded by `assertEmbedderSpaceMatch`), so query-side callers (the proxy's
+ * local-answer KB) use this to pick a matching embedder rather than a blind
+ * "is Ollama up?" probe. Returns `null` when there is no index yet, or the
+ * manifest is missing/unreadable/unrecognized.
+ */
+export async function resolvePersistedEmbedMode(
+  projectDir: string,
+  projectId: string,
+): Promise<EmbedMode | null> {
+  const dir = collectionDir(knowledgeDir(projectDir), projectId);
+  const manifest = await readManifest(dir);
+  const signature = manifest?.signature;
+  if (typeof signature !== "string") return null;
+  if (signature.startsWith("semantic:")) return "semantic";
+  if (signature.startsWith("lexical:")) return "lexical";
+  return null;
+}
+
 /** Scan all roots into a `sourcePath → FileState` map (last-writer-wins across roots). */
 async function scanAll(roots: readonly string[]): Promise<Map<string, FileState>> {
   const map = new Map<string, FileState>();

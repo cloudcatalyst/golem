@@ -29,6 +29,7 @@ import path from "node:path";
 import { finished } from "node:stream/promises";
 import type { Chunk } from "../interfaces/knowledge.js";
 import {
+  assertEmbedderSpaceMatch,
   cosineSimilarity,
   type DeletableVectorDriver,
   KNOWLEDGE_SCHEMA_VERSION,
@@ -175,6 +176,11 @@ export class FileVectorDriver implements DeletableVectorDriver {
     await this.openCollection(projectId);
     const col = this.#collections.get(projectId);
     if (col === undefined || k <= 0) return [];
+    // Loud, not silent: a query embedded in a different space than the index was
+    // built in (e.g. semantic vectors against a lexically-built index) would
+    // score 0 for every chunk and return ranked garbage. `col.dim` is the
+    // persisted build-time dimension (meta.json).
+    assertEmbedderSpaceMatch(queryVector.length, col.dim);
     const scored: VectorMatch[] = [];
     for (const rec of col.records.values()) {
       scored.push({ chunkId: rec.chunk.chunkId, score: cosineSimilarity(queryVector, rec.vector) });

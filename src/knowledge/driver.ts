@@ -31,6 +31,41 @@ export interface VectorMatch {
 }
 
 /**
+ * Thrown by a driver's `search` when the query vector's dimension does not match
+ * the collection's stored vectors — i.e. the query was embedded in a DIFFERENT
+ * space than the index was built in (e.g. a semantic embedder querying a
+ * lexically-built index, or vice-versa). Cross-space cosine similarity is
+ * meaningless (it would score every chunk 0), so this is surfaced loudly rather
+ * than returning silent garbage. Recovery: rebuild the index with the current
+ * embedder (`golem index`), or query with the embedder the index was built with.
+ */
+export class EmbedderMismatchError extends Error {
+  constructor(
+    readonly queryDim: number,
+    readonly indexDim: number,
+  ) {
+    super(
+      `query embedding is ${queryDim}-dim but the index was built with ${indexDim}-dim vectors — ` +
+        "the index was built with a different embedder. Rebuild it with `golem index` " +
+        "(or query with the embedder that built it).",
+    );
+    this.name = "EmbedderMismatchError";
+  }
+}
+
+/**
+ * Guard a search against a cross-embedder-space query. `indexDim` of 0 means an
+ * empty/uninitialized collection — nothing to mismatch against, so it's a no-op.
+ * Throws {@link EmbedderMismatchError} when a non-empty index is queried with a
+ * differently-dimensioned vector.
+ */
+export function assertEmbedderSpaceMatch(queryDim: number, indexDim: number): void {
+  if (indexDim > 0 && queryDim > 0 && queryDim !== indexDim) {
+    throw new EmbedderMismatchError(queryDim, indexDim);
+  }
+}
+
+/**
  * The store-agnostic vector driver. Per-project collections keep projects
  * isolated (spec Decision 3); `getChunk` is global because chunk ids are
  * unique across projects.
@@ -41,7 +76,13 @@ export interface VectorDriver {
   openCollection(projectId: string): Promise<void>;
   /** Insert or replace records (by chunkId) in a project collection. */
   upsert(projectId: string, records: readonly StoredChunk[]): Promise<void>;
-  /** Top-k nearest neighbors in a project by cosine similarity, score desc. */
+  /**
+   * Top-k nearest neighbors in a project by cosine similarity, score desc.
+   * Throws {@link EmbedderMismatchError} if `queryVector`'s dimension differs
+   * from the collection's stored vectors (query embedded in a different space
+   * than the index was built in) — the caller must never receive silently-wrong
+   * (all-zero-score) results from a cross-space query.
+   */
   search(projectId: string, queryVector: readonly number[], k: number): Promise<VectorMatch[]>;
   /** Full chunk by id, or null if absent (any project). */
   getChunk(chunkId: string): Promise<Chunk | null>;
@@ -129,8 +170,19 @@ export class InMemoryVectorDriver implements DeletableVectorDriver {
     const c = this.#byProject.get(projectId);
     if (c === undefined || k <= 0) return Promise.resolve([]);
     const scored: VectorMatch[] = [];
-    for (const rec of c.values()) {
-      scored.push({ chunkId: rec.chunk.chunkId, score: cosineSimilarity(queryVector, rec.vector) });
+    try {
+      for (const rec of c.values()) {
+        // Loud, not silent: a cross-space query would otherwise score 0 for every
+        // chunk (dim-mismatch in cosineSimilarity) and return ranked garbage.
+        // Reject (not sync-throw) to honor the Promise-returning contract.
+        assertEmbedderSpaceMatch(queryVector.length, rec.vector.length);
+        scored.push({
+          chunkId: rec.chunk.chunkId,
+          score: cosineSimilarity(queryVector, rec.vector),
+        });
+      }
+    } catch (err) {
+      return Promise.reject(err);
     }
     scored.sort((a, b) => b.score - a.score);
     return Promise.resolve(scored.slice(0, k));

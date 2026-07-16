@@ -12,7 +12,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Chunk } from "../../../src/interfaces/index.js";
 import type { StoredChunk } from "../../../src/knowledge/index.js";
-import { FileVectorDriver } from "../../../src/knowledge/index.js";
+import { EmbedderMismatchError, FileVectorDriver } from "../../../src/knowledge/index.js";
 
 let base: string;
 beforeEach(async () => {
@@ -40,6 +40,23 @@ describe("FileVectorDriver", () => {
     const hits = await d.search("p1", [1, 0, 0], 2);
     expect(hits.map((h) => h.chunkId)).toStrictEqual(["a", "b"]);
     expect(hits[0]?.score).toBeGreaterThan(hits[1]?.score ?? 1);
+  });
+
+  it("throws EmbedderMismatchError on a cross-space query, in-instance and after reload", async () => {
+    const d = new FileVectorDriver(base);
+    await d.upsert("p1", [stored("a", [1, 0, 0]), stored("b", [0, 1, 0])]);
+    // 4-dim query against a 3-dim index: a differently-embedded query that would
+    // otherwise score 0 for every chunk and return ranked garbage.
+    await expect(d.search("p1", [1, 0, 0, 0], 5)).rejects.toBeInstanceOf(EmbedderMismatchError);
+    await d.close();
+    // Reload path: `col.dim` is restored from meta.json, so the guard still fires.
+    await expect(new FileVectorDriver(base).search("p1", [1, 0, 0, 0], 5)).rejects.toBeInstanceOf(
+      EmbedderMismatchError,
+    );
+    // A correctly-dimensioned query still works normally.
+    expect(
+      (await new FileVectorDriver(base).search("p1", [1, 0, 0], 5)).map((h) => h.chunkId),
+    ).toStrictEqual(["a", "b"]);
   });
 
   it("isolates projects and resolves chunks globally", async () => {
