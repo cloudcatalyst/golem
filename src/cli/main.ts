@@ -60,11 +60,13 @@ import {
 } from "./proxy-daemon.js";
 import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
+import { collectSessionStateReport } from "./session-report.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
+import { runWatch } from "./watch.js";
 import {
   checkWiki,
   defaultUserWikiDir,
@@ -906,13 +908,39 @@ program
             generated_at: new Date().toISOString(),
           };
         },
+        // R5.2 — the one consolidated read model every renderer shares.
+        sessionState: () => collectSessionStateReport(opts.dir),
       });
       process.stdout.write(`golem dashboard on ${handle.url} (Ctrl+C to stop)\n`);
+      process.stdout.write(`  consolidated session state: ${handle.url}api/state\n`);
       const shutdown = (): void => {
         void handle.close().finally(() => process.exit(0));
       };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command("watch")
+  .description("Full-screen sidecar TUI of Golem's live session state (run in a second pane)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--interval <ms>", "refresh interval in milliseconds")
+  .option("--no-color", "disable ANSI colors")
+  .action(async (opts: { dir: string; interval?: string; color?: boolean }) => {
+    try {
+      const refreshMs = opts.interval === undefined ? undefined : Number(opts.interval);
+      if (refreshMs !== undefined && (!Number.isFinite(refreshMs) || refreshMs < 100)) {
+        throw new InitError(`invalid --interval "${opts.interval}" (must be ≥ 100 ms)`);
+      }
+      await runWatch({
+        dir: opts.dir,
+        ...(refreshMs !== undefined ? { refreshMs } : {}),
+        ...(opts.color !== undefined ? { color: opts.color } : {}),
+      });
+      process.exit(0);
     } catch (err) {
       fail(err);
     }

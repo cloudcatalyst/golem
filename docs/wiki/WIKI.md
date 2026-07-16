@@ -107,4 +107,5 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-16-R4.7.md — R4.7: drafter catalog re-verified (no change — no small qwen3-coder tags); ungrounded draft-quality baseline 2 accept / 3 revise / 0 reject
 - syntheses/r4.7-drafter-quality-baseline.md — R4.7 spike: catalog re-verification + measured coder accept-rate baseline (accept for self-contained code, revise for project-integrated)
 - syntheses/r4-co-developer-core-batch.md — R4 batch retrospective: all 7 tasks (planning surface, coder grounding/telemetry/refinement, promote+lint, flush fix, re-verification); through-lines + open follow-ups
+- debriefs/2026-07-16-R5.2.md — R5.2 (R5 batch opens): consolidated `SessionStateReport` (one zod payload for statusline/dashboard/VS Code/remote) + `golem watch` full-screen TUI (hand-rolled ANSI, no deps) + `.golem/` storage sizing; dashboard serves it at `/api/state`
 - debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs

@@ -17,6 +17,7 @@
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import type { SessionStateReport } from "../cli/session-report.js";
 import type { StatsReport } from "../cli/stats.js";
 
 /** Everything the page shows, snake_case (it is also the JSON API shape). */
@@ -33,6 +34,13 @@ export interface DashboardOptions {
   readonly port: number;
   /** Fresh data for each page render / API poll. */
   readonly snapshot: () => Promise<DashboardSnapshot>;
+  /**
+   * R5.2 — the consolidated session-state read model, served at `/api/state`.
+   * This is the one payload every renderer and the future 21b remote app share.
+   * Optional so existing callers/tests keep working; when absent, `/api/state`
+   * 404s like any other unknown path.
+   */
+  readonly sessionState?: () => Promise<SessionStateReport>;
 }
 
 export interface DashboardHandle {
@@ -98,6 +106,15 @@ async function handle(
         "cache-control": "no-store",
       });
       res.end(req.method === "HEAD" ? undefined : `${JSON.stringify(snapshot)}\n`);
+      return;
+    }
+    if (url.pathname === "/api/state" && options.sessionState !== undefined) {
+      const state = await options.sessionState();
+      res.writeHead(200, {
+        "content-type": "application/json; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      res.end(req.method === "HEAD" ? undefined : `${JSON.stringify(state)}\n`);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

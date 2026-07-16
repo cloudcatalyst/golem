@@ -20,9 +20,10 @@ developer's second brain" article)?
 3. **A local co-developer.** A robust, token-friendly local coder that drafts so
    the paid model can judge.
 
-Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 are **R4**, the active
-release. The companion-app / orchestration / multi-provider cluster (R5/R6) is
-**on hold** until the co-developer core is proven robust.
+Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 landed in **R4** (all
+seven tasks done, 2026-07-16). The user then lifted the R5 hold and kicked off
+**R5 — Autonomy & orchestration**, now the active release (`R5_BATCH.md`). The
+multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
 
 ## Where we are (validated 2026-07-16)
 
@@ -84,15 +85,17 @@ distill/KB loop. **Active batch: `R4_BATCH.md`.**
 | R4.6 | ~~**`FileVectorDriver.#flush()` stream-write fix** so the raw-article KB can grow past ~30k chunks without crashing.~~ — **DONE** 2026-07-16: `#flush()` streams JSON lines via `createWriteStream` (backpressure-aware, atomic temp+rename kept) instead of one `Array.join` string; benchmark confirms 50k/60k no longer hit the `RangeError` wall (was 30k–50k), search latency unchanged. +1 test, 922 green. See debriefs/2026-07-16-R4.6.md. | ✅ | R3.7 spike |
 | R4.7 | ~~**Drafter quality/catalog re-verification:** re-verify current best small coder models (advisory per Decision 6), measure coder draft accept-rate; carry R1.6's manual checklist where hardware allows.~~ — **DONE** 2026-07-16: re-verified catalog (no change — `qwen3-coder` ships only 30b/480b, no small tags; qwen2.5-coder still best for single-function drafts); measured ungrounded baseline 2 accept / 3 revise / 0 reject (accept for self-contained, revise for project-integrated); R1.6 still hardware-blocked. See verification-notes §63, syntheses/r4.7-drafter-quality-baseline.md. | ✅ | Dec 6, R1.6 |
 
-### R5 — Autonomy & orchestration — ⛔ ON HOLD
-Formerly R4. Do **not** spin into a batch until the R4 co-developer loop is
-proven robust; each task additionally needs a design memo + a separate explicit
-ask before build (the standing WS-F gate, spec Decision 32).
+### R5 — Autonomy & orchestration — 🚧 ACTIVE
+Formerly R4. Hold lifted 2026-07-16 by explicit user call (R4 co-developer loop
+judged robust — all seven R4 tasks landed). Design memos:
+`docs/plan/proposals/r5-autonomy-orchestration-memos.md`; active batch:
+`docs/plan/R5_BATCH.md`. R5.4 additionally carries a security gate — its threat
+model is written as an ADR before its enforcement code.
 
 | # | Task | Type | Source |
 |---|---|---|---|
 | R5.1 | Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity). | 🔬🛠️ | 20a / WS-F1 |
-| R5.2 | Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI). | 🛠️ | 21c / WS-F10 |
+| R5.2 | ~~Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI).~~ — **DONE** 2026-07-16: consolidated `SessionStateReport` + zod contract (`src/cli/session-report.ts`), `golem watch` full-screen TUI (hand-rolled ANSI, no deps, `src/cli/watch.ts`), `.golem/` storage sizing (`src/cli/storage-size.ts`), dashboard `/api/state` endpoint. No frozen interface touched. +14 tests, 952 green. See debriefs/2026-07-16-R5.2.md. | ✅ | 21c / WS-F10 |
 | R5.3 | Task/question queue + local conversation multiplexing. | 🔬🛠️ | 20b/21a |
 | R5.4 | Cruise-control autonomy modes with approval gates. | 🔒🛠️ | 20d / WS-F4 |
 | R5.5 | Writing-style adaptation & prompt translation (local-LLM, fully inspectable). | 🔬 | 20g |
