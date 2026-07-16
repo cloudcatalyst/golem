@@ -1,8 +1,9 @@
 /**
- * T6 (C2 follow-up) — watchPath: debounce/batch + re-stat classification, and
- * the two ADR-0001 backends (native recursive on win32/darwin, per-directory
- * tree walk everywhere else, forced here via the `platform` test override so
- * both are exercised regardless of the host OS running the suite).
+ * T6 (C2 follow-up) — watchPath: debounce/batch + re-stat classification over
+ * the single per-directory, non-recursive tree-walk backend used on every OS
+ * (verification-notes §68 — the old `fs.watch({recursive:true})` backend aborted
+ * the process on Windows/macOS). Nested-subdir coverage below runs on all
+ * platforms, since there is one backend.
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -73,10 +74,7 @@ describe("watchPath", () => {
   it("ignores files under a skipped directory (e.g. node_modules)", async () => {
     await mkdir(path.join(dir, "node_modules", "pkg"), { recursive: true });
     const batches: FileChangeBatch[] = [];
-    watcher = await watchPath(dir, (b) => batches.push(b), {
-      debounceMs: 150,
-      platform: "linux",
-    });
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
 
     await writeFile(path.join(dir, "node_modules", "pkg", "index.js"), "noise");
     expect(await staysQuiet(batches)).toBe(true);
@@ -110,13 +108,10 @@ describe("watchPath", () => {
     expect(await staysQuiet(batches)).toBe(true);
   });
 
-  describe("Linux per-directory tree watcher (forced via platform override)", () => {
-    it("picks up a file created in a new subdirectory", async () => {
+  describe("per-directory tree watcher (all platforms)", () => {
+    it("picks up a file created in a new subdirectory (dynamic subdir add)", async () => {
       const batches: FileChangeBatch[] = [];
-      watcher = await watchPath(dir, (b) => batches.push(b), {
-        debounceMs: 150,
-        platform: "linux",
-      });
+      watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
 
       const subdir = path.join(dir, "sub");
       await mkdir(subdir);
@@ -126,12 +121,8 @@ describe("watchPath", () => {
       const batch = await nextBatch(batches, 6000);
       expect(batch.changed).toEqual([nested]);
     });
-  });
 
-  describe("native recursive backend (win32/darwin only)", () => {
-    const supported = process.platform === "win32" || process.platform === "darwin";
-
-    it.runIf(supported)("picks up changes nested more than one level deep", async () => {
+    it("picks up changes nested more than one level deep (pre-existing subtree)", async () => {
       const subdir = path.join(dir, "a", "b");
       await mkdir(subdir, { recursive: true });
       const batches: FileChangeBatch[] = [];

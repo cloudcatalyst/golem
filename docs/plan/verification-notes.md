@@ -2217,14 +2217,29 @@ symlink) — consistent with an environment-specific trigger; the file-watcher c
 itself was unchanged between the last green run (#3) and #4, so a node-24 libuv
 patch drift (major-only version pins) is the likely tipping factor.
 
-**Fix.** `watchPath` now hands `fs.watch` the OS-canonical path
-(`realpathSync.native`, native-recursive platforms only) via `canonicalWatchPath`,
-so libuv's stored dir matches OS-reported event paths. Events are still EMITTED
-under the caller's original `root` (watch vs emit roots split in
-`watchDirectoryTree`/`watchSingleFile`), so reported paths, downstream sync, and
-existing tests are unchanged. Falls back to `root` if realpath fails.
+**Attempt 1 (did NOT work): canonicalize the watched path.** Hypothesis: the
+assertion is about the watched *root* not being OS-canonical (8.3 / symlink), so
+`watchPath` watched `realpathSync.native(root)` while emitting under the original
+root. Pushed as PR #2 → CI still aborted identically on the same three jobs
+(macOS 22/24, Windows 24). So the trigger is NOT the root path form: libuv still
+aborts even watching a fully-canonical path. Reverted.
 
-**Verification honesty.** Not locally reproducible (see above), so the local
-proof is only "no regression" (all 10 watcher tests + full 1028-test suite green).
-Cross-platform confirmation is via CI on the PR — the intended verifier for a
-macOS/Windows-only libuv path.
+**Also ruled out: node-patch drift.** The resolved node versions are identical
+between the last green run (#3) and the red runs — Windows/macOS node-24 both
+`v24.18.0`, macOS node-22 `v22.23.1`. So pinning node would not help; the tipping
+factor is a code/test-composition change across the (~50-commit) #3→#4 gap, but
+the abort is inherent to the recursive backend on those runners regardless.
+
+**Fix (works): drop `fs.watch({ recursive: true })` entirely.** The assertion
+lives in libuv's *recursive* fs-event event-path reconstruction. `watchPath` now
+uses the per-directory, NON-recursive tree-walk backend (`TreeWatcher`) on ALL
+platforms — previously the Linux-only backend (§51), always green in CI. Plain
+`fs.watch(dir)` does no prefix reconstruction, so it can't hit the assertion.
+Cost: a few more file handles (bounded by `SKIP_DIRS`); benefit: the watcher can
+no longer `abort()` the host process. Supersedes ADR-0001's native-recursive
+choice on Windows/macOS.
+
+**Verification honesty.** Still not locally reproducible (the abort is
+runner-environment-specific — same node version behaves differently there), so
+local proof is only "no regression" (watcher + full suite green). Cross-platform
+confirmation is CI on PR #2.

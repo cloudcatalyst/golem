@@ -1,15 +1,24 @@
 /**
  * WS-C T6 (C2 follow-up) — cross-platform file watcher driving incremental KB
- * freshness. ADR-0001 (docs/wiki/decisions/): `node:fs.watch` with
- * `recursive: true` on Windows/macOS (natively reliable there); a manual
- * per-directory watch-and-rewalk on Linux, where native recursive support is
- * newer and has an open reliability question (verification-notes §51). Both
- * backends feed the same debounce + re-stat batching layer, so a burst of
- * writes (or a `git checkout`) collapses into one reindex instead of one per
- * file, and a half-written file never gets chunked mid-save.
+ * freshness. ONE backend on every OS: a manual per-directory, NON-recursive
+ * `node:fs.watch` tree walk that adds a watcher per directory and picks up new
+ * subdirectories as they appear.
+ *
+ * This supersedes ADR-0001's `fs.watch({ recursive: true })` on Windows/macOS:
+ * libuv's recursive fs-event layer aborts the process on those platforms in some
+ * environments — `Assertion failed: !_wcsnicmp(filename, dir, dirlen)`
+ * (src\win\fs-event.c), a hard `abort()` that no `error` handler can catch —
+ * which reliably reddened CI (verification-notes §68). The per-directory backend
+ * only ever uses plain, non-recursive `fs.watch(dir)`, which does no event-path
+ * prefix reconstruction and so never hits that assertion. It was already the
+ * Linux backend (§51); using it everywhere trades a few more file handles for a
+ * watcher that can't crash the host process. All events feed the same debounce +
+ * re-stat batching layer, so a burst of writes (or a `git checkout`) collapses
+ * into one reindex instead of one per file, and a half-written file never gets
+ * chunked mid-save.
  */
 
-import { type FSWatcher, watch as fsWatch, realpathSync } from "node:fs";
+import { type FSWatcher, watch as fsWatch } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { isChunkableExtension } from "./chunker.js";
@@ -26,38 +35,11 @@ export interface FileChangeBatch {
 export interface FileWatcherOptions {
   /** Debounce window in ms — events within this window collapse into one batch. Default 500. */
   readonly debounceMs?: number;
-  /** Platform override, tests only; defaults to `process.platform`. */
-  readonly platform?: NodeJS.Platform;
 }
 
 export interface FileWatcher {
   /** Stop watching and release every underlying OS handle. */
   close(): void;
-}
-
-/** Platforms where `fs.watch`'s `recursive` option is natively reliable (ADR-0001). */
-const NATIVE_RECURSIVE_PLATFORMS = new Set<NodeJS.Platform>(["win32", "darwin"]);
-
-/**
- * The OS-canonical form of `root`, used as the path we hand to `fs.watch` on the
- * native-recursive backends. libuv's Windows/macOS fs-event layer asserts that
- * each event path starts with the watched directory
- * (`!_wcsnicmp(filename, dir, dirlen)`, fs-event.c) — a hard `abort()`, not a
- * catchable error. That fires when the watched path isn't canonical and the OS
- * reports canonical event paths: Windows 8.3 short names (a CI temp dir like
- * `C:\Users\RUNNER~1\…`) or the macOS `/var → /private/var` symlink
- * (verification-notes §68). Watching the real path keeps libuv's stored dir
- * aligned with what the OS reports. Events are still EMITTED under the original
- * `root` (see `watchPath`), so reported paths — and callers/tests — are
- * unchanged. Falls back to `root` if it can't be resolved (e.g. just deleted).
- */
-function canonicalWatchPath(root: string, platform: NodeJS.Platform): string {
-  if (!NATIVE_RECURSIVE_PLATFORMS.has(platform)) return root;
-  try {
-    return realpathSync.native(root);
-  } catch {
-    return root;
-  }
 }
 
 function isIgnoredSegment(name: string): boolean {
@@ -133,33 +115,16 @@ class TreeWatcher {
 }
 
 async function watchDirectoryTree(
-  watchRoot: string,
-  emitRoot: string,
+  root: string,
   onEvent: (absPath: string) => void,
-  platform: NodeJS.Platform,
 ): Promise<{ close(): void }> {
-  if (NATIVE_RECURSIVE_PLATFORMS.has(platform)) {
-    // Watch the canonical path (avoids the libuv fs-event assertion) but report
-    // paths under the caller's original `emitRoot`; `filename` is relative to
-    // the watched dir, so it reattaches to either root identically.
-    const watcher = fsWatch(watchRoot, { recursive: true }, (_eventType, filename) => {
-      onEvent(filename ? path.join(emitRoot, filename.toString()) : emitRoot);
-    });
-    watcher.on("error", () => {}); // fail-open: stop reporting rather than crash the host process
-    return { close: () => watcher.close() };
-  }
-  // Linux backend (inotify, no native recursion): watchRoot === emitRoot here.
-  const tree = new TreeWatcher(emitRoot, onEvent);
+  const tree = new TreeWatcher(root, onEvent);
   await tree.start();
   return tree;
 }
 
-function watchSingleFile(
-  watchRoot: string,
-  emitRoot: string,
-  onEvent: (absPath: string) => void,
-): { close(): void } {
-  const watcher = fsWatch(watchRoot, () => onEvent(emitRoot));
+function watchSingleFile(root: string, onEvent: (absPath: string) => void): { close(): void } {
+  const watcher = fsWatch(root, () => onEvent(root));
   watcher.on("error", () => {});
   return { close: () => watcher.close() };
 }
@@ -176,7 +141,6 @@ export async function watchPath(
   options: FileWatcherOptions = {},
 ): Promise<FileWatcher> {
   const debounceMs = options.debounceMs ?? 500;
-  const platform = options.platform ?? process.platform;
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -206,10 +170,9 @@ export async function watchPath(
   };
 
   const rootIsDir = (await stat(root)).isDirectory();
-  const watchRoot = canonicalWatchPath(root, platform);
   const backend = rootIsDir
-    ? await watchDirectoryTree(watchRoot, root, onEvent, platform)
-    : watchSingleFile(watchRoot, root, onEvent);
+    ? await watchDirectoryTree(root, onEvent)
+    : watchSingleFile(root, onEvent);
 
   return {
     close(): void {
