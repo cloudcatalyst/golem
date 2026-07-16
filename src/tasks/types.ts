@@ -85,6 +85,13 @@ export const taskSchema = z.object({
   lastError: z.string().optional(),
   /** How many times this task has been resumed. */
   attempts: z.number().int().min(0).default(0),
+  /**
+   * R5.3 — the local model's servicing output (triage/draft/answer), attached
+   * when the task was serviced locally. Additive, optional.
+   */
+  result: z.string().optional(),
+  /** R5.3 — explicitly handed to the Claude tier (21a); prompt carries local grounding. */
+  escalated: z.boolean().default(false),
 });
 export type Task = z.infer<typeof taskSchema>;
 

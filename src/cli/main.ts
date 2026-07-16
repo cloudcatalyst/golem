@@ -40,7 +40,14 @@ import type { HardwareTier, InferenceService } from "../interfaces/inference.js"
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
-import { buildResumeArgv, createTask, FileTaskStore, isResumable } from "../tasks/index.js";
+import {
+  buildResumeArgv,
+  createTask,
+  escalateTask,
+  FileTaskStore,
+  isResumable,
+  runQueueLocally,
+} from "../tasks/index.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
@@ -1118,6 +1125,88 @@ taskCmd
       fail(err);
     }
   });
+
+taskCmd
+  .command("run")
+  .description("Service queued tasks LOCALLY (Ollama tier) — non-blocking multiplexing (R5.3)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--concurrency <n>", "max tasks serviced at once (default 2)", "2")
+  .option("--limit <n>", "cap how many queued tasks to service this run")
+  .action(async (opts: { dir: string; concurrency: string; limit?: string }) => {
+    try {
+      const concurrency = Number(opts.concurrency);
+      if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new InitError(`invalid --concurrency "${opts.concurrency}"`);
+      }
+      const limit = opts.limit === undefined ? undefined : Number(opts.limit);
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+        throw new InitError(`invalid --limit "${opts.limit}"`);
+      }
+      const inference = await buildInferenceForDir(opts.dir);
+      if (inference === null) {
+        process.stdout.write(
+          "local model unavailable — queued tasks left as-is (start Ollama, then `golem task run`).\n",
+        );
+        return;
+      }
+      const result = await runQueueLocally(
+        new FileTaskStore(opts.dir),
+        { inference },
+        {
+          concurrency,
+          ...(limit !== undefined ? { limit } : {}),
+        },
+      );
+      if (result.total === 0) {
+        process.stdout.write("no queued tasks to service\n");
+        return;
+      }
+      if (result.localModelUnavailable) {
+        process.stdout.write(
+          `local model unavailable — ${result.total} task(s) left queued (retry when Ollama is up).\n`,
+        );
+        return;
+      }
+      process.stdout.write(
+        `serviced ${result.serviced}/${result.total} queued task(s) locally` +
+          `${result.failed > 0 ? ` (${result.failed} failed — see \`golem task show\`)` : ""}.\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("escalate")
+  .description("Hand a task to the Claude tier: fold its local result into the prompt (R5.3 / 21a)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (id: string, opts: { dir: string }) => {
+    try {
+      const store = new FileTaskStore(opts.dir);
+      const task = findTask(await store.list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      const stored = await store.put(escalateTask(task, null));
+      process.stdout.write(
+        `escalated task ${stored.id} to the Claude tier — resume it with \`golem task resume ${stored.id.slice(0, 8)} --spawn\`\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+/** Build an InferenceService for `dir`, or null if the local model is unreachable. */
+async function buildInferenceForDir(dir: string): Promise<InferenceService | null> {
+  try {
+    const { settings } = await loadConfig({ projectDir: dir });
+    const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+    const facts = await detectCapability(createProbeRunner());
+    return new OllamaInferenceService(client, facts);
+  } catch {
+    return null;
+  }
+}
 
 // R5.4 — cruise-control autonomy (WS-F4 / spec 20d). Threat model: ADR-0002.
 const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
