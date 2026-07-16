@@ -94,7 +94,7 @@ model is written as an ADR before its enforcement code.
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R5.1 | Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity). | 🔬🛠️ | 20a / WS-F1 |
+| R5.1 | ~~Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity).~~ — **DONE** 2026-07-16: non-frozen `TaskStore` seam + file impl (`src/tasks/`, one zod JSON per task under `.golem/tasks/`), `golem task add/list/show/resume/cancel`. Resume mechanism verified as headless `claude -p --resume <session-id>` — no PTY (verification-notes §65). Capacity gate via `notBefore`; resume prints by default, `--spawn` opt-in (no shell). +25 tests, 977 green. See debriefs/2026-07-16-R5.1.md. | ✅ | 20a / WS-F1 |
 | R5.2 | ~~Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI).~~ — **DONE** 2026-07-16: consolidated `SessionStateReport` + zod contract (`src/cli/session-report.ts`), `golem watch` full-screen TUI (hand-rolled ANSI, no deps, `src/cli/watch.ts`), `.golem/` storage sizing (`src/cli/storage-size.ts`), dashboard `/api/state` endpoint. No frozen interface touched. +14 tests, 952 green. See debriefs/2026-07-16-R5.2.md. | ✅ | 21c / WS-F10 |
 | R5.3 | Task/question queue + local conversation multiplexing. | 🔬🛠️ | 20b/21a |
 | R5.4 | Cruise-control autonomy modes with approval gates. | 🔒🛠️ | 20d / WS-F4 |

@@ -2081,3 +2081,41 @@ answer ever appears above the floor. Until then there is no example of a
 correct served answer to justify ACCEPTED. Independent of the flip, the
 `pipeline.ts` local-answer-stage fail-open gap is a real robustness bug worth
 fixing regardless (candidate BACKLOG item).
+
+## §65 — R5.1 spike: Claude Code headless resume mechanism (verified 2026-07-16)
+
+Resolves the R5.1 memo's hardest open question — *"interactive-session resume
+has no clean Claude Code TUI API — likely needs headless/SDK mode or a PTY
+wrapper"*. Verified against the live CLI reference
+(https://code.claude.com/docs/en/cli-reference, redirected from
+docs.claude.com; fetched 2026-07-16).
+
+**Finding: headless print mode + `--resume` is the mechanism. No PTY needed.**
+Exact flags (quoted):
+- `--print`, `-p` — "Print response without interactive mode" (non-interactive;
+  runs a query and exits). `claude -p "query"`.
+- `--resume`, `-r` — "Resume a specific session by ID or name" (passing a
+  session ID searches the current project dir + its git worktrees; background
+  sessions appear in the picker marked `bg` as of v2.1.144). `claude -r "<id>"`.
+- `--continue`, `-c` — "Load the most recent conversation in the current
+  directory."
+- `--session-id` — "Use a specific session ID for the conversation (must be a
+  valid UUID)." Lets Golem *assign* the id up front so it can resume
+  deterministically later.
+- `--output-format text|json|stream-json` (print mode) — machine-readable
+  resume output for status parsing.
+- `--permission-mode default|acceptEdits|plan|auto|dontAsk|bypassPermissions|manual`
+  and `--dangerously-skip-permissions` — relevant to R5.4's autonomy levels
+  (the enforcement hook can pair with a launch mode).
+
+**Resume recipe Golem uses:** spawn (argument-array, cross-platform, no shell,
+no PTY) `claude --resume <session-id> -p "<continue-prompt>" [--output-format
+json]`, or `claude -c -p "<prompt>"` for most-recent. Golem persists the
+`--session-id` UUID on the task at launch so relaunch is deterministic.
+
+**Implication for the build:** the durable `TaskStore` records the session id +
+the relaunch prompt + a resume argv; `golem task resume` builds that argv and
+spawns it. Because `-p` is a plain non-interactive process, capacity-gated
+auto-resume is just "spawn when due" — no terminal emulation, no fragile TUI
+scripting. The memo's PTY fallback is therefore **not** needed for the headless
+path (an interactive hand-back to a live TUI remains out of scope / manual).

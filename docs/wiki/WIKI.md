@@ -108,4 +108,5 @@ updated: YYYY-MM-DD
 - syntheses/r4.7-drafter-quality-baseline.md — R4.7 spike: catalog re-verification + measured coder accept-rate baseline (accept for self-contained code, revise for project-integrated)
 - syntheses/r4-co-developer-core-batch.md — R4 batch retrospective: all 7 tasks (planning surface, coder grounding/telemetry/refinement, promote+lint, flush fix, re-verification); through-lines + open follow-ups
 - debriefs/2026-07-16-R5.2.md — R5.2 (R5 batch opens): consolidated `SessionStateReport` (one zod payload for statusline/dashboard/VS Code/remote) + `golem watch` full-screen TUI (hand-rolled ANSI, no deps) + `.golem/` storage sizing; dashboard serves it at `/api/state`
+- debriefs/2026-07-16-R5.1.md — R5.1: durable `TaskStore` (`src/tasks/`, one zod JSON per task under `.golem/tasks/`) + `golem task add/list/show/resume/cancel`; resume mechanism verified as headless `claude -p --resume` (no PTY, verification-notes §65); capacity gate via `notBefore`
 - debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs

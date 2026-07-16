@@ -27,6 +27,7 @@ import type { HardwareTier, InferenceService } from "../interfaces/inference.js"
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
+import { buildResumeArgv, createTask, FileTaskStore, isResumable } from "../tasks/index.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
@@ -66,6 +67,7 @@ import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
+import { findTask, renderTask, renderTaskList, spawnResume } from "./task.js";
 import { runWatch } from "./watch.js";
 import {
   checkWiki,
@@ -941,6 +943,164 @@ program
         ...(opts.color !== undefined ? { color: opts.color } : {}),
       });
       process.exit(0);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// R5.1 — durable task queue (WS-F1 / spec 20a): checkpointed prompts that
+// survive session/credit limits and resume via headless `claude` (§65).
+const taskCmd = program
+  .command("task")
+  .description("Durable task queue — persist a prompt/agent and resume it later (survives limits)");
+
+taskCmd
+  .command("add")
+  .description("Queue a durable task (a prompt to run/resume later)")
+  .argument("<prompt...>", "the prompt/instructions to persist")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--title <text>", "short label for `task list`")
+  .option("--session-id <uuid>", "Claude Code session id to resume deterministically")
+  .option("--continue", "resume the most-recent conversation instead of a session id", false)
+  .option("--agent <type>", "agent type to relaunch as")
+  .option("--idem-key <key>", "idempotency key for the side effect this task owns")
+  .option("--not-before <iso>", "capacity gate: don't auto-resume before this ISO time")
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (
+      prompt: string[],
+      opts: {
+        dir: string;
+        title?: string;
+        sessionId?: string;
+        continue: boolean;
+        agent?: string;
+        idemKey?: string;
+        notBefore?: string;
+        json: boolean;
+      },
+    ) => {
+      try {
+        const task = createTask({
+          prompt: prompt.join(" "),
+          continueLatest: opts.continue,
+          ...(opts.title !== undefined ? { title: opts.title } : {}),
+          ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+          ...(opts.agent !== undefined ? { agentType: opts.agent } : {}),
+          ...(opts.idemKey !== undefined ? { idempotencyKey: opts.idemKey } : {}),
+          ...(opts.notBefore !== undefined ? { notBefore: opts.notBefore } : {}),
+        });
+        const stored = await new FileTaskStore(opts.dir).put(task);
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(stored, null, 2)}\n` : `queued task ${stored.id}\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+taskCmd
+  .command("list")
+  .description("List durable tasks (newest-updated first)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const tasks = await new FileTaskStore(opts.dir).list();
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(tasks, null, 2)}\n` : renderTaskList(tasks),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("show")
+  .description("Show one task in detail (by id or unique id prefix)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (id: string, opts: { dir: string; json: boolean }) => {
+    try {
+      const task = findTask(await new FileTaskStore(opts.dir).list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      process.stdout.write(opts.json ? `${JSON.stringify(task, null, 2)}\n` : renderTask(task));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("resume")
+  .description("Build (and optionally spawn) the headless resume command for a task")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--spawn", "actually launch it (detached); default just prints the command", false)
+  .option("--output-json", "resume with --output-format json", false)
+  .option("--permission-mode <mode>", "begin the resumed session in this permission mode")
+  .action(
+    async (
+      id: string,
+      opts: { dir: string; spawn: boolean; outputJson: boolean; permissionMode?: string },
+    ) => {
+      try {
+        const store = new FileTaskStore(opts.dir);
+        const task = findTask(await store.list(), id);
+        if (task === "none") throw new InitError(`no task matching "${id}"`);
+        if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+        if (!isResumable(task)) {
+          const why =
+            task.notBefore !== undefined && task.state !== "done"
+              ? `gated until ${task.notBefore}`
+              : `state is ${task.state}`;
+          process.stdout.write(`task ${task.id} is not resumable (${why})\n`);
+          return;
+        }
+        const argv = buildResumeArgv(task, {
+          outputJson: opts.outputJson,
+          ...(opts.permissionMode !== undefined ? { permissionMode: opts.permissionMode } : {}),
+        });
+        if (!opts.spawn) {
+          process.stdout.write(
+            `resume command (pass --spawn to launch it):\n  ${argv.join(" ")}\n`,
+          );
+          return;
+        }
+        const result = spawnResume(argv);
+        await store.put({ ...task, state: "running", attempts: task.attempts + 1 });
+        process.stdout.write(
+          result.spawned
+            ? `resumed task ${task.id} (pid ${result.pid ?? "?"})\n`
+            : `could not spawn — ${result.note ?? "run it manually"}:\n  ${result.command}\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+taskCmd
+  .command("cancel")
+  .description("Mark a task cancelled (keeps the record; use it to stop auto-resume)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--delete", "remove the task record entirely instead of marking it cancelled", false)
+  .action(async (id: string, opts: { dir: string; delete: boolean }) => {
+    try {
+      const store = new FileTaskStore(opts.dir);
+      const task = findTask(await store.list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      if (opts.delete) {
+        await store.delete(task.id);
+        process.stdout.write(`deleted task ${task.id}\n`);
+        return;
+      }
+      await store.put({ ...task, state: "cancelled" });
+      process.stdout.write(`cancelled task ${task.id}\n`);
     } catch (err) {
       fail(err);
     }
