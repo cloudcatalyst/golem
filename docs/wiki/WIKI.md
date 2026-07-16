@@ -57,6 +57,7 @@ updated: YYYY-MM-DD
 ## Index
 
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
+- [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)
 - syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups

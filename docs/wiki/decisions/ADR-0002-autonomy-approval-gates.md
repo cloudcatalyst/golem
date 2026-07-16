@@ -1,11 +1,8 @@
 ---
-title: ADR-0002 — Cruise-control autonomy modes & approval gates (threat model)
+title: ADR-0002 — Cruise-control autonomy modes & approval gates
 type: adr
 tags: [r5, autonomy, security, hooks, threat-model]
-sources:
-  - docs/plan/proposals/r5-autonomy-orchestration-memos.md
-  - docs/golem-spec.md
-  - docs/plan/verification-notes.md
+sources: [docs/plan/proposals/r5-autonomy-orchestration-memos.md, docs/golem-spec.md, docs/plan/verification-notes.md]
 created: 2026-07-16
 updated: 2026-07-16
 ---

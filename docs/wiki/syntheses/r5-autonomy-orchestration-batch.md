@@ -2,14 +2,7 @@
 title: R5 — Autonomy & orchestration batch retrospective
 type: synthesis
 tags: [r5, retrospective, autonomy, orchestration, tasks]
-sources:
-  - docs/plan/R5_BATCH.md
-  - docs/plan/proposals/r5-autonomy-orchestration-memos.md
-  - docs/wiki/debriefs/2026-07-16-R5.1.md
-  - docs/wiki/debriefs/2026-07-16-R5.2.md
-  - docs/wiki/debriefs/2026-07-16-R5.3.md
-  - docs/wiki/debriefs/2026-07-16-R5.4.md
-  - docs/wiki/debriefs/2026-07-16-R5.5.md
+sources: [docs/plan/R5_BATCH.md, docs/plan/proposals/r5-autonomy-orchestration-memos.md, docs/wiki/debriefs/2026-07-16-R5.1.md, docs/wiki/debriefs/2026-07-16-R5.2.md, docs/wiki/debriefs/2026-07-16-R5.3.md, docs/wiki/debriefs/2026-07-16-R5.4.md, docs/wiki/debriefs/2026-07-16-R5.5.md]
 created: 2026-07-16
 updated: 2026-07-16
 ---
