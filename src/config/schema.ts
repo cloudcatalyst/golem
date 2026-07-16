@@ -63,8 +63,10 @@ export const SETTINGS_LEAVES = {
      * (`golem prompt translate`). Decoupled from the slider (Decision 31: the
      * slider is a compression dial; the local model is engaged only by explicit
      * acts). Never runs unless invoked; this flag lets a project disable it (and
-     * gates whether the init guidance tells the agent to offer it). On by
-     * default — being "available" costs nothing until invoked.
+     * gates whether the init guidance tells the agent to USE it). Off by
+     * default — opt-in, like the other local-model features (`rerank_enabled`,
+     * `local_answer_enabled`). When toggled on, `golem init`'s guidance instructs
+     * the agent to use it; when off, the guidance omits it entirely.
      */
     translation_enabled: z.boolean(),
   },
@@ -267,7 +269,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
   },
   prompt: {
-    translation_enabled: true,
+    translation_enabled: false,
   },
   compression: {
     headroom_sidecar: false,

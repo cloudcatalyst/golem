@@ -13,10 +13,26 @@ import { type InitAction, InitError } from "../cli/init.js";
 export const GUIDANCE_BEGIN_MARKER = "<!-- golem:begin -->";
 export const GUIDANCE_END_MARKER = "<!-- golem:end -->";
 
+/** Options controlling which optional guidance blocks are included. */
+export interface GuidanceOptions {
+  /**
+   * R5.5 — include the prompt-translation directive block. Only true when the
+   * project has `prompt.translation_enabled` on; off → the block is omitted.
+   */
+  readonly promptTranslationEnabled?: boolean;
+}
+
 /** The full fenced section, markers included (no trailing newline). */
-export function golemGuidanceSection(): string {
-  return [
+export function golemGuidanceSection(options: GuidanceOptions = {}): string {
+  const lines: string[] = [
     GUIDANCE_BEGIN_MARKER,
+    "## Golem: how to work in this project (defaults — do these proactively)",
+    "",
+    "This project runs Golem. The practices below are the DEFAULT way to work",
+    "here: apply them on your own initiative, every time they fit — you do not",
+    "need the user to ask for them. They keep paid-model tokens for the judgment",
+    "calls only you can make.",
+    "",
     "## Golem: oversized tool outputs are swapped for CCR refs",
     "",
     "This project runs Golem (golem.run). A PostToolUse hook replaces oversized",
@@ -69,28 +85,37 @@ export function golemGuidanceSection(): string {
     "",
     "## Golem: prefer the local model for coding drafts",
     "",
-    "Before writing non-trivial code, draft it with the `coder` MCP tool",
-    "first — a local model — then review and refine the result yourself rather",
-    "than writing from scratch. This leaves the paid model's tokens for the",
-    "judgment calls the local model can't make: review, integration, and",
-    "anything genuinely hard. The local model is engaged ONLY by explicit acts —",
-    "`coder` (drafting), `golem task run` (servicing queued tasks), and",
-    "`golem prompt translate` (below); the slider is a compression dial only and",
-    "never auto-engages the model (Decision 31). Call `coder` explicitly at",
-    "every level; skip it only when the task is too small for the round trip to pay off.",
-    "",
-    "## Golem: sharpen rough prompts with the local model (optional)",
-    "",
-    "When the user's instruction is terse or rough and a clearer prompt would",
-    'help, you MAY offer to run `golem prompt translate "<their note>"` — a local',
-    "model rewrites it into a clearer prompt, grounded in prompts they've",
-    "accepted before. It ALWAYS shows the suggestion and NEVER sends or",
-    "auto-applies it: show it, let the user choose, and if they like it they can",
-    "`golem prompt accept` to teach the style. Never silently rewrite the user's",
-    "intent. Disable the feature with `prompt.translation_enabled=false` (or",
-    "`GOLEM_PROMPT_TRANSLATION_ENABLED=false`); when disabled, don't offer it.",
-    GUIDANCE_END_MARKER,
-  ].join("\n");
+    "By default, before writing non-trivial code, draft it with the `coder` MCP",
+    "tool first — a local model — then review and refine the result yourself",
+    "rather than writing from scratch. Do this proactively; you don't need to be",
+    "asked. It leaves the paid model's tokens for the judgment calls the local",
+    "model can't make: review, integration, and anything genuinely hard. The",
+    "local model is engaged only by explicit acts — `coder` (drafting), `golem",
+    "task run` (servicing queued tasks), and (when enabled) `golem prompt",
+    "translate`; the slider is a compression dial only and never auto-engages",
+    "the model (Decision 31). Use `coder` at every level; skip it only when the",
+    "task is too small for the round trip to pay off.",
+  ];
+
+  // R5.5 — only when prompt translation is enabled for this project. When on,
+  // this INSTRUCTS the agent to use it (not merely "may offer").
+  if (options.promptTranslationEnabled === true) {
+    lines.push(
+      "",
+      "## Golem: sharpen rough prompts with the local model",
+      "",
+      "This project has prompt translation enabled. When the user's instruction",
+      "is terse or rough and a clearer prompt would help, run",
+      '`golem prompt translate "<their note>"` and work from the clearer prompt it',
+      "returns — a local model rewrites it, grounded in prompts the user has",
+      "accepted before. ALWAYS show the suggestion first and NEVER silently",
+      "rewrite the user's intent; if they like it they can `golem prompt accept`",
+      "to teach the style.",
+    );
+  }
+
+  lines.push(GUIDANCE_END_MARKER);
+  return lines.join("\n");
 }
 
 /**
@@ -99,8 +124,8 @@ export function golemGuidanceSection(): string {
  * byte-for-byte. Throws InitError on a dangling begin marker rather than
  * guessing where the user's section ends.
  */
-export function upsertGuidance(existing: string | null): string {
-  const section = golemGuidanceSection();
+export function upsertGuidance(existing: string | null, options: GuidanceOptions = {}): string {
+  const section = golemGuidanceSection(options);
   if (existing === null || existing.trim() === "") {
     return `${section}\n`;
   }
@@ -126,6 +151,8 @@ export interface GuidanceWriteOptions {
   readonly filePath?: string;
   /** Compute and report the action without writing anything. */
   readonly dryRun?: boolean;
+  /** R5.5 — include the prompt-translation directive (project has it enabled). */
+  readonly promptTranslationEnabled?: boolean;
 }
 
 /** Write (or refresh) the guidance section; reports an init-style action. */
@@ -141,7 +168,11 @@ export async function writeGuidanceSection(options: GuidanceWriteOptions): Promi
     existing = null;
   }
 
-  const next = upsertGuidance(existing);
+  const next = upsertGuidance(existing, {
+    ...(options.promptTranslationEnabled !== undefined
+      ? { promptTranslationEnabled: options.promptTranslationEnabled }
+      : {}),
+  });
   if (existing === next) {
     return { kind: "skip", path: relPath, detail: "guidance section up to date" };
   }

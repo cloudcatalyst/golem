@@ -30,7 +30,7 @@ import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/pro
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { writeSetting } from "../config/index.js";
+import { loadConfig, writeSetting } from "../config/index.js";
 import {
   addEventHook,
   addMatcherHook,
@@ -614,11 +614,21 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // CLAUDE.local.md (personal, not committed to the repo) — Claude Code loads it
   // alongside CLAUDE.md (docs: "Local instructions").
   actions.push(await addPostToolUseHook({ projectDir, dryRun }));
+  // The prompt-translation directive is only included when the project has the
+  // feature enabled (opt-in). Read the effective config; default off on any error.
+  let promptTranslationEnabled = false;
+  try {
+    promptTranslationEnabled = (await loadConfig({ projectDir })).settings.prompt
+      .translation_enabled;
+  } catch {
+    promptTranslationEnabled = false;
+  }
   actions.push(
     await writeGuidanceSection({
       projectDir,
       dryRun,
       filePath: path.join(projectDir, GUIDANCE_FILENAME),
+      promptTranslationEnabled,
     }),
   );
   actions.push(await ensureGitignored(projectDir, GUIDANCE_FILENAME, dryRun));

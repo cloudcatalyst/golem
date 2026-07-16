@@ -36,12 +36,12 @@ describe("env override mapping", () => {
     });
   });
 
-  it("defaults prompt.translation_enabled to true and honors the env override", async () => {
-    const on = await load({});
-    expect(on.settings.prompt.translation_enabled).toBe(true);
-    const off = await load({ GOLEM_PROMPT_TRANSLATION_ENABLED: "false" });
+  it("defaults prompt.translation_enabled to false (opt-in) and honors the env override", async () => {
+    const off = await load({});
     expect(off.settings.prompt.translation_enabled).toBe(false);
-    expect(off.provenance["prompt.translation_enabled"]).toEqual({
+    const on = await load({ GOLEM_PROMPT_TRANSLATION_ENABLED: "true" });
+    expect(on.settings.prompt.translation_enabled).toBe(true);
+    expect(on.provenance["prompt.translation_enabled"]).toEqual({
       layer: "env",
       source: "GOLEM_PROMPT_TRANSLATION_ENABLED",
     });

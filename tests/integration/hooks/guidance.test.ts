@@ -68,6 +68,27 @@ describe("upsertGuidance (pure)", () => {
     expect(out.toLowerCase()).not.toContain("gpu");
   });
 
+  it("frames wiki/KB/coder as proactive defaults, not user-requested", () => {
+    const out = upsertGuidance(null);
+    expect(out).toContain("do these proactively");
+    expect(out).toContain("Do this proactively"); // coder block
+    expect(out).toContain("you do not");
+  });
+
+  it("omits the prompt-translation block by default (opt-in)", () => {
+    expect(upsertGuidance(null)).not.toContain("golem prompt translate");
+    expect(upsertGuidance(null, {})).not.toContain("golem prompt translate");
+  });
+
+  it("includes a directive to USE prompt translation only when enabled", () => {
+    const on = upsertGuidance(null, { promptTranslationEnabled: true });
+    expect(on).toContain("golem prompt translate");
+    expect(on).toContain("prompt translation enabled");
+    expect(on).toContain("golem prompt accept");
+    // Still one section, markers intact.
+    expect(countMarkers(on)).toBe(1);
+  });
+
   it("appends after existing prose without disturbing it", () => {
     const existing = "# My project\n\nSome notes.\n";
     const out = upsertGuidance(existing);
