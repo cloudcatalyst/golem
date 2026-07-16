@@ -9,6 +9,7 @@ import type { Chunk } from "../../../src/interfaces/knowledge.js";
 import { UnknownChunkError } from "../../../src/interfaces/knowledge.js";
 import {
   cosineSimilarity,
+  EmbedderMismatchError,
   type EmbedFn,
   InMemoryVectorDriver,
   isMemoryChunkId,
@@ -50,6 +51,14 @@ describe("InMemoryVectorDriver", () => {
     const hits = await d.search("p", [1, 0, 0], 2);
     expect(hits.map((h) => h.chunkId)).toStrictEqual(["a", "b"]);
     expect(hits[0]?.score).toBeGreaterThanOrEqual(hits[1]?.score ?? 0);
+  });
+
+  it("throws EmbedderMismatchError on a cross-space query (never silently scores 0)", async () => {
+    const d = new InMemoryVectorDriver();
+    await d.upsert("p", [rec("a", "p", "alpha", [1, 0, 0]), rec("b", "p", "beta", [0, 1, 0])]);
+    // A 2-dim query against a 3-dim index = a query embedded in a different
+    // space (e.g. lexical query vs a semantic index). Must be loud, not garbage.
+    await expect(d.search("p", [1, 0], 5)).rejects.toBeInstanceOf(EmbedderMismatchError);
   });
 
   it("isolates projects — a query in one project never sees another's vectors", async () => {

@@ -37,6 +37,7 @@ export type { OllamaClientOptions } from "./ollama-client.js";
 export {
   DEFAULT_OLLAMA_BASE_URL,
   InferenceEndpointError,
+  InferenceTimeoutError,
   ModelNotAvailableError,
   OllamaClient,
 } from "./ollama-client.js";

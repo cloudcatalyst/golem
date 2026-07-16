@@ -68,7 +68,10 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   const { settings } = await loadConfig({ projectDir: options.projectDir });
   const baseUrl = options.ollamaBaseUrl ?? settings.inference.ollama_base_url;
 
-  const client = new OllamaClient({ baseUrl });
+  const client = new OllamaClient({
+    baseUrl,
+    requestTimeoutMs: settings.inference.request_timeout_ms,
+  });
   const facts = await detectCapability(createProbeRunner());
   const inference = new OllamaInferenceService(client, facts);
 

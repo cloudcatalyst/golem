@@ -42,13 +42,28 @@ export interface BuildProxyOptions {
   readonly sliderStore?: SliderStore;
   /**
    * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): local inference
-   * service, used ONLY to select the semantic embedder for the local-answer
-   * sub-mode's KnowledgeBase (mirrors `buildKnowledgeStack`'s "choose ONE
-   * embedder" rule — see build-knowledge.ts). Has no effect unless
+   * service, used ONLY to select the SEMANTIC embedder for the local-answer
+   * sub-mode's KnowledgeBase. Has no effect unless
    * `settings.knowledge.local_answer_enabled` is also set. Absent → the
-   * sub-mode, if enabled, falls back to the pure-TS hashing embedder.
+   * sub-mode, if enabled, falls back to the pure-TS hashing (LEXICAL) embedder.
+   *
+   * The caller MUST pass this only when the on-disk index was actually built
+   * SEMANTIC (see `resolvePersistedEmbedMode`): querying a lexically-built index
+   * with semantic vectors — or vice-versa — is a cross-space query that
+   * `assertEmbedderSpaceMatch` now rejects (it used to silently score 0 for
+   * every chunk). `runProxyForeground` resolves this from the persisted index
+   * manifest rather than a blind "is Ollama up?" probe.
    */
   readonly inference?: InferenceService;
+  /**
+   * Force the local-answer sub-mode OFF for this run even when
+   * `settings.knowledge.local_answer_enabled` is set. `runProxyForeground` sets
+   * this when the on-disk index was built with a semantic embed model that is
+   * no longer available — the index cannot be queried correctly in either space,
+   * so declining up front is cleaner than throwing (and failing open) on every
+   * eligible request.
+   */
+  readonly suppressLocalAnswer?: boolean;
 }
 
 /**
@@ -90,19 +105,20 @@ export function buildProxyFromSettings(
   // provided, else the zero-setup hashing fallback. Static per-run, like
   // `headroom_sidecar` above — this is an opt-in gate, not something the live
   // slider ever toggles (Decision 31: the slider stays a pure compression dial).
-  const localAnswer = settings.knowledge.local_answer_enabled
-    ? {
-        service: new KnowledgeLocalAnswerService(
-          openKnowledgeBase({
-            projectDir: dir,
-            ...(build.inference !== undefined
-              ? { inference: build.inference }
-              : { embed: hashingEmbedFn() }),
-          }),
-          { minConfidence: settings.knowledge.local_answer_min_confidence },
-        ),
-      }
-    : undefined;
+  const localAnswer =
+    settings.knowledge.local_answer_enabled && build.suppressLocalAnswer !== true
+      ? {
+          service: new KnowledgeLocalAnswerService(
+            openKnowledgeBase({
+              projectDir: dir,
+              ...(build.inference !== undefined
+                ? { inference: build.inference }
+                : { embed: hashingEmbedFn() }),
+            }),
+            { minConfidence: settings.knowledge.local_answer_min_confidence },
+          ),
+        }
+      : undefined;
   // Shared with onResponseUsage below so a usage sample is tagged with the
   // SAME level-resolution logic the pipeline used for this request's gross
   // savings (R1.1). Re-read rather than threaded through per-request, so

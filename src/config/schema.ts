@@ -56,6 +56,15 @@ export const SETTINGS_LEAVES = {
   inference: {
     /** OpenAI-compatible local inference endpoint (Ollama default). */
     ollama_base_url: z.string().url(),
+    /**
+     * Per-request timeout for local inference (chat/embeddings). Generous by
+     * default: local generation is non-streaming here, so this bounds the WHOLE
+     * completion — a cold model load plus a grounded `coder` draft on slow
+     * developer hardware can legitimately take a minute-plus (verification-notes
+     * §66). Connection-level failures still fail fast regardless. Raise it on
+     * slow boxes; env override `GOLEM_INFERENCE_REQUEST_TIMEOUT_MS`.
+     */
+    request_timeout_ms: timeoutMsSchema,
   },
   compression: {
     /**
@@ -195,6 +204,7 @@ export interface ProxySettings {
 
 export interface InferenceSettings {
   readonly ollama_base_url: string;
+  readonly request_timeout_ms: number;
 }
 
 export interface CompressionSettings {
@@ -249,6 +259,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   inference: {
     ollama_base_url: "http://localhost:11434",
+    request_timeout_ms: 600_000,
   },
   compression: {
     headroom_sidecar: false,

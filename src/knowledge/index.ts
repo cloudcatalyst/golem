@@ -53,7 +53,13 @@ export {
   writeSynthesisDraftFile,
 } from "./distill-store.js";
 export type { StoredChunk, VectorDriver, VectorMatch } from "./driver.js";
-export { cosineSimilarity, InMemoryVectorDriver, KNOWLEDGE_SCHEMA_VERSION } from "./driver.js";
+export {
+  assertEmbedderSpaceMatch,
+  cosineSimilarity,
+  EmbedderMismatchError,
+  InMemoryVectorDriver,
+  KNOWLEDGE_SCHEMA_VERSION,
+} from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
 export { extractHtmlText, extractPdfText } from "./extractors.js";
 export { collectionDir, FileVectorDriver } from "./file-driver.js";
