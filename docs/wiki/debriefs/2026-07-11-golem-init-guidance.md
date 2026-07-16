@@ -4,8 +4,15 @@ type: debrief
 tags: [init, guidance, wiki, delegate, decision-28]
 sources: [docs/plan/next_batch.md, src/hooks/guidance.ts]
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-16
 ---
+
+> **Update 2026-07-16 (user decision):** the guidance target moved from the
+> gitignored `CLAUDE.local.md` to the **committed `CLAUDE.md`** — the wiki/KB/
+> coder-first practices are project defaults that should apply for every
+> teammate, not per-machine. `CLAUDE.local.md` stays gitignored for a user's own
+> notes + opt-in feature instructions (e.g. `golem prompt guidance`). See
+> `debriefs/2026-07-16-R5.5.md`.
 
 # golem-init guidance template — wiki promotion + local-model-first
 

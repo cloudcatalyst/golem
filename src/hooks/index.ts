@@ -35,6 +35,7 @@ export {
   GUIDANCE_BEGIN_MARKER,
   GUIDANCE_END_MARKER,
   golemGuidanceSection,
+  promptTranslationGuidanceSnippet,
   upsertGuidance,
   writeGuidanceSection,
 } from "./guidance.js";

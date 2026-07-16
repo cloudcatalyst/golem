@@ -25,6 +25,7 @@ import {
   addEventHook,
   buildHookCommand,
   defaultRevalidate,
+  promptTranslationGuidanceSnippet,
   removeEventHook,
 } from "../hooks/index.js";
 import { VERSION } from "../index.js";
@@ -1385,6 +1386,21 @@ promptCmd
     } catch (err) {
       fail(err);
     }
+  });
+
+promptCmd
+  .command("guidance")
+  .description(
+    "Print a paste-ready CLAUDE.local.md block instructing the agent to use prompt translation",
+  )
+  .action(() => {
+    process.stdout.write(
+      "# Paste this into your CLAUDE.local.md (personal, gitignored) to have\n" +
+        "# Claude use prompt translation proactively. Requires the feature enabled\n" +
+        "# (prompt.translation_enabled=true in .golem/settings.json, or\n" +
+        "# GOLEM_PROMPT_TRANSLATION_ENABLED=true).\n\n" +
+        promptTranslationGuidanceSnippet(),
+    );
   });
 
 promptCmd

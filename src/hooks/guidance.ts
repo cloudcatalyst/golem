@@ -13,17 +13,17 @@ import { type InitAction, InitError } from "../cli/init.js";
 export const GUIDANCE_BEGIN_MARKER = "<!-- golem:begin -->";
 export const GUIDANCE_END_MARKER = "<!-- golem:end -->";
 
-/** Options controlling which optional guidance blocks are included. */
-export interface GuidanceOptions {
-  /**
-   * R5.5 — include the prompt-translation directive block. Only true when the
-   * project has `prompt.translation_enabled` on; off → the block is omitted.
-   */
-  readonly promptTranslationEnabled?: boolean;
-}
-
-/** The full fenced section, markers included (no trailing newline). */
-export function golemGuidanceSection(options: GuidanceOptions = {}): string {
+/**
+ * The full fenced section written to the COMMITTED CLAUDE.md by `golem init`:
+ * the project's BASE DEFAULTS (wiki/KB/coder-first), shared by the whole team.
+ *
+ * Optional, per-user opt-in features (e.g. prompt translation) are deliberately
+ * NOT here — a personal choice shouldn't land in the shared file. A user who
+ * enables such a feature adds its usage instruction to their own (gitignored)
+ * CLAUDE.local.md; {@link promptTranslationGuidanceSnippet} produces a
+ * paste-ready block for that.
+ */
+export function golemGuidanceSection(): string {
   const lines: string[] = [
     GUIDANCE_BEGIN_MARKER,
     "## Golem: how to work in this project (defaults — do these proactively)",
@@ -95,27 +95,29 @@ export function golemGuidanceSection(options: GuidanceOptions = {}): string {
     "translate`; the slider is a compression dial only and never auto-engages",
     "the model (Decision 31). Use `coder` at every level; skip it only when the",
     "task is too small for the round trip to pay off.",
+    GUIDANCE_END_MARKER,
   ];
-
-  // R5.5 — only when prompt translation is enabled for this project. When on,
-  // this INSTRUCTS the agent to use it (not merely "may offer").
-  if (options.promptTranslationEnabled === true) {
-    lines.push(
-      "",
-      "## Golem: sharpen rough prompts with the local model",
-      "",
-      "This project has prompt translation enabled. When the user's instruction",
-      "is terse or rough and a clearer prompt would help, run",
-      '`golem prompt translate "<their note>"` and work from the clearer prompt it',
-      "returns — a local model rewrites it, grounded in prompts the user has",
-      "accepted before. ALWAYS show the suggestion first and NEVER silently",
-      "rewrite the user's intent; if they like it they can `golem prompt accept`",
-      "to teach the style.",
-    );
-  }
-
-  lines.push(GUIDANCE_END_MARKER);
   return lines.join("\n");
+}
+
+/**
+ * A paste-ready CLAUDE.local.md block instructing the agent to USE prompt
+ * translation (R5.5). This is for a USER who has enabled the feature to add to
+ * their own gitignored personal instructions — it is never written to the
+ * committed CLAUDE.md. No golem markers, so it doesn't collide with the managed
+ * section. `golem prompt guidance` prints it.
+ */
+export function promptTranslationGuidanceSnippet(): string {
+  return [
+    "## Golem: sharpen rough prompts with the local model",
+    "",
+    "When my instruction is terse or rough and a clearer prompt would help, run",
+    '`golem prompt translate "<my note>"` and work from the clearer prompt it',
+    "returns — a local model rewrites it, grounded in prompts I've accepted",
+    "before. ALWAYS show the suggestion first and NEVER silently rewrite my",
+    "intent; if I like it I can `golem prompt accept` to teach the style.",
+    "",
+  ].join("\n");
 }
 
 /**
@@ -124,8 +126,8 @@ export function golemGuidanceSection(options: GuidanceOptions = {}): string {
  * byte-for-byte. Throws InitError on a dangling begin marker rather than
  * guessing where the user's section ends.
  */
-export function upsertGuidance(existing: string | null, options: GuidanceOptions = {}): string {
-  const section = golemGuidanceSection(options);
+export function upsertGuidance(existing: string | null): string {
+  const section = golemGuidanceSection();
   if (existing === null || existing.trim() === "") {
     return `${section}\n`;
   }
@@ -151,8 +153,6 @@ export interface GuidanceWriteOptions {
   readonly filePath?: string;
   /** Compute and report the action without writing anything. */
   readonly dryRun?: boolean;
-  /** R5.5 — include the prompt-translation directive (project has it enabled). */
-  readonly promptTranslationEnabled?: boolean;
 }
 
 /** Write (or refresh) the guidance section; reports an init-style action. */
@@ -168,11 +168,7 @@ export async function writeGuidanceSection(options: GuidanceWriteOptions): Promi
     existing = null;
   }
 
-  const next = upsertGuidance(existing, {
-    ...(options.promptTranslationEnabled !== undefined
-      ? { promptTranslationEnabled: options.promptTranslationEnabled }
-      : {}),
-  });
+  const next = upsertGuidance(existing);
   if (existing === next) {
     return { kind: "skip", path: relPath, detail: "guidance section up to date" };
   }

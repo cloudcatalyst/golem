@@ -109,7 +109,7 @@ describe("golem slider", () => {
       await expect(
         access(join(projectDir, ".claude", "skills", "golem", "slider", "SKILL.md")),
       ).resolves.toBeUndefined();
-      await expect(access(join(projectDir, "CLAUDE.local.md"))).resolves.toBeUndefined();
+      await expect(access(join(projectDir, "CLAUDE.md"))).resolves.toBeUndefined();
     });
 
     it("does not re-run activation on an already-initialized project", async () => {

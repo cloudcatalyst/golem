@@ -10,7 +10,7 @@
  *   2. `.mcp.json`              — stdio registration of `golem mcp serve` (§9).
  *   3. `.claude/skills/golem/<cmd>/SKILL.md` — namespaced `/golem/*` skills (§11).
  *   4. `.golem/settings.json`   — created with defaults when absent.
- *   5. PostToolUse CCR hook + Golem guidance (in gitignored CLAUDE.local.md);
+ *   5. PostToolUse CCR hook + Golem guidance (in the committed CLAUDE.md);
  *      status line + blocked-state hooks; WebFetch KB-cache hooks.
  *   6. `.vscode/settings.json` — `files.watcherExclude` for Golem's churny
  *      gitignored runtime dirs (telemetry/state/webcache/ccr/knowledge/notes/
@@ -30,7 +30,7 @@ import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/pro
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, writeSetting } from "../config/index.js";
+import { writeSetting } from "../config/index.js";
 import {
   addEventHook,
   addMatcherHook,
@@ -172,8 +172,16 @@ const MCP_SERVER_KEY = "golem";
  */
 const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
 const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
-/** Golem's guidance lives here — gitignored personal instructions (docs: CLAUDE.local.md). */
-const GUIDANCE_FILENAME = "CLAUDE.local.md";
+/**
+ * Golem's guidance lives in the COMMITTED `CLAUDE.md` (user decision 2026-07-16,
+ * reversing the earlier CLAUDE.local.md choice): the wiki/KB/coder-first
+ * practices are project defaults that should apply for every teammate, not
+ * per-machine. The marker-fenced upsert preserves any surrounding CLAUDE.md
+ * content byte-for-byte, so it never clobbers hand-written instructions.
+ */
+const GUIDANCE_FILENAME = "CLAUDE.md";
+/** The conventional personal, gitignored instructions file (Golem doesn't write it). */
+const PERSONAL_INSTRUCTIONS_FILENAME = "CLAUDE.local.md";
 
 /** Runtime files copied into the installed VS Code extension (no tests/tooling). */
 const VSCODE_EXTENSION_FILES = ["extension.js", "render.js", "package.json", "README.md", "media"];
@@ -209,9 +217,10 @@ function defaultVscodeSourceDir(): string {
 }
 
 /**
- * Idempotently ensure `entry` is in the project's `.gitignore` (so a personal
- * file like CLAUDE.local.md is never committed). Creates .gitignore if absent;
- * a no-op if the entry (exact line) is already present.
+ * Idempotently ensure `entry` is in the project's `.gitignore`. Golem uses it to
+ * keep the conventional personal `CLAUDE.local.md` out of version control (even
+ * though Golem's own guidance now lives in the committed CLAUDE.md). Creates
+ * .gitignore if absent; a no-op if the exact line is already present.
  */
 async function ensureGitignored(
   projectDir: string,
@@ -610,28 +619,23 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
   }
 
-  // 5. PostToolUse hook + Golem guidance. The guidance goes in the gitignored
-  // CLAUDE.local.md (personal, not committed to the repo) — Claude Code loads it
-  // alongside CLAUDE.md (docs: "Local instructions").
+  // 5. PostToolUse hook + Golem guidance. The guidance goes in the COMMITTED
+  // CLAUDE.md — the project's BASE DEFAULTS (wiki/KB/coder-first) shared by every
+  // teammate; marker-fenced upsert preserves surrounding content. Optional
+  // opt-in features (e.g. prompt translation) are NOT written here — a user adds
+  // their usage instruction to their own CLAUDE.local.md (`golem prompt guidance`).
   actions.push(await addPostToolUseHook({ projectDir, dryRun }));
-  // The prompt-translation directive is only included when the project has the
-  // feature enabled (opt-in). Read the effective config; default off on any error.
-  let promptTranslationEnabled = false;
-  try {
-    promptTranslationEnabled = (await loadConfig({ projectDir })).settings.prompt
-      .translation_enabled;
-  } catch {
-    promptTranslationEnabled = false;
-  }
   actions.push(
     await writeGuidanceSection({
       projectDir,
       dryRun,
       filePath: path.join(projectDir, GUIDANCE_FILENAME),
-      promptTranslationEnabled,
     }),
   );
-  actions.push(await ensureGitignored(projectDir, GUIDANCE_FILENAME, dryRun));
+  // Keep the conventional personal instructions file out of version control
+  // (Claude Code loads it alongside CLAUDE.md); Golem's own guidance is committed
+  // in CLAUDE.md, but a user's private CLAUDE.local.md should stay gitignored.
+  actions.push(await ensureGitignored(projectDir, PERSONAL_INSTRUCTIONS_FILENAME, dryRun));
 
   // 6. Status line (21c) + blocked-state event hooks (21b).
   actions.push(await writeStatusLine({ projectDir, dryRun }));

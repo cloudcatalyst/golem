@@ -11,6 +11,7 @@ import { InitError } from "../../../src/cli/init.js";
 import {
   GUIDANCE_BEGIN_MARKER,
   GUIDANCE_END_MARKER,
+  promptTranslationGuidanceSnippet,
   upsertGuidance,
   writeGuidanceSection,
 } from "../../../src/hooks/index.js";
@@ -75,18 +76,12 @@ describe("upsertGuidance (pure)", () => {
     expect(out).toContain("you do not");
   });
 
-  it("omits the prompt-translation block by default (opt-in)", () => {
-    expect(upsertGuidance(null)).not.toContain("golem prompt translate");
-    expect(upsertGuidance(null, {})).not.toContain("golem prompt translate");
-  });
-
-  it("includes a directive to USE prompt translation only when enabled", () => {
-    const on = upsertGuidance(null, { promptTranslationEnabled: true });
-    expect(on).toContain("golem prompt translate");
-    expect(on).toContain("prompt translation enabled");
-    expect(on).toContain("golem prompt accept");
-    // Still one section, markers intact.
-    expect(countMarkers(on)).toBe(1);
+  it("keeps the committed guidance to BASE DEFAULTS only (no opt-in directives)", () => {
+    // The prompt-translation USE directive belongs in a user's CLAUDE.local.md,
+    // never the shared committed section.
+    const out = upsertGuidance(null);
+    expect(out).not.toContain('golem prompt translate "');
+    expect(out).not.toContain("This project has prompt translation enabled");
   });
 
   it("appends after existing prose without disturbing it", () => {
@@ -119,6 +114,18 @@ describe("upsertGuidance (pure)", () => {
     expect(() => upsertGuidance(`intro\n${GUIDANCE_BEGIN_MARKER}\nunterminated`)).toThrow(
       InitError,
     );
+  });
+});
+
+describe("promptTranslationGuidanceSnippet", () => {
+  it("is a marker-free block instructing use of prompt translation (for a user's local.md)", () => {
+    const snip = promptTranslationGuidanceSnippet();
+    expect(snip).toContain("golem prompt translate");
+    expect(snip).toContain("golem prompt accept");
+    expect(snip).toContain("NEVER silently rewrite");
+    // No golem markers — it must not collide with the managed CLAUDE.md section.
+    expect(snip).not.toContain(GUIDANCE_BEGIN_MARKER);
+    expect(snip).not.toContain(GUIDANCE_END_MARKER);
   });
 });
 

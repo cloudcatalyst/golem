@@ -216,18 +216,20 @@ describe("golem init", () => {
     await expect(golemInit({ projectDir, probe: okProbe })).rejects.toThrow(/not valid JSON/);
   });
 
-  it("writes Golem guidance to gitignored CLAUDE.local.md, not committed CLAUDE.md", async () => {
+  it("writes Golem guidance to the committed CLAUDE.md (shared team defaults), not CLAUDE.local.md", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const local = await readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8");
-    expect(local).toContain("wiki-first knowledge");
-    // The committed CLAUDE.md must not gain a Golem section.
-    await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
+    const claudeMd = await readFile(path.join(projectDir, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toContain("wiki-first knowledge");
+    expect(claudeMd).toContain("do these proactively"); // framed as standing defaults
+    // Golem does not write the personal file...
+    await expect(readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
-    // ...and CLAUDE.local.md is gitignored.
-    expect(await readFile(path.join(projectDir, ".gitignore"), "utf8")).toContain(
-      "CLAUDE.local.md",
-    );
+    // ...but still keeps the conventional personal CLAUDE.local.md gitignored,
+    // without ignoring the now-committed CLAUDE.md.
+    const gitignore = await readFile(path.join(projectDir, ".gitignore"), "utf8");
+    expect(gitignore).toContain("CLAUDE.local.md");
+    expect(gitignore.split(/\r?\n/)).not.toContain("CLAUDE.md");
   });
 
   it("--foundry wires Foundry env + proxy upstream (not ANTHROPIC_BASE_URL)", async () => {
