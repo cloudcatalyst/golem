@@ -216,20 +216,35 @@ describe("golem init", () => {
     await expect(golemInit({ projectDir, probe: okProbe })).rejects.toThrow(/not valid JSON/);
   });
 
-  it("writes Golem guidance to the committed CLAUDE.md (shared team defaults), not CLAUDE.local.md", async () => {
+  it("seeds Golem guidance as committed .claude/rules files, not into CLAUDE.md", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const claudeMd = await readFile(path.join(projectDir, "CLAUDE.md"), "utf8");
-    expect(claudeMd).toContain("wiki-first knowledge");
-    expect(claudeMd).toContain("do these proactively"); // framed as standing defaults
-    // Golem does not write the personal file...
+    // Default guidance seeded as project rule files (auto-loaded by Claude Code).
+    const wikiRule = await readFile(
+      path.join(projectDir, ".claude", "rules", "golem-wiki-kb-first.md"),
+      "utf8",
+    );
+    expect(wikiRule).toContain("Check the wiki first");
+    expect(wikiRule).toContain("Managed by Golem");
+    // Golem does NOT touch CLAUDE.md or write the personal file.
+    await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(readFile(path.join(projectDir, "CLAUDE.local.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
     });
-    // ...but still keeps the conventional personal CLAUDE.local.md gitignored,
-    // without ignoring the now-committed CLAUDE.md.
+    // Personal (--user) golem rules + CLAUDE.local.md are gitignored; committed
+    // rules are not.
     const gitignore = await readFile(path.join(projectDir, ".gitignore"), "utf8");
     expect(gitignore).toContain("CLAUDE.local.md");
-    expect(gitignore.split(/\r?\n/)).not.toContain("CLAUDE.md");
+    expect(gitignore).toContain(".claude/rules/golem-*.local.md");
+  });
+
+  it("uninit removes the seeded guidance rules", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const rule = path.join(projectDir, ".claude", "rules", "golem-local-coder.md");
+    await expect(readFile(rule, "utf8")).resolves.toContain("coder");
+    await golemUninit({ projectDir, probe: okProbe });
+    await expect(readFile(rule, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("--foundry wires Foundry env + proxy upstream (not ANTHROPIC_BASE_URL)", async () => {

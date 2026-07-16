@@ -36,7 +36,9 @@ import {
   addMatcherHook,
   addPostToolUseHook,
   NOTIFICATION_COMMAND,
+  PERSONAL_RULES_GITIGNORE,
   PROMPT_SUBMIT_COMMAND,
+  removeAllGuidanceRules,
   removeDefaultMode,
   removeEventHook,
   removeMatcherHook,
@@ -44,11 +46,11 @@ import {
   removeStatusLine,
   SESSION_START_COMMAND,
   SESSION_START_MATCHER,
+  seedDefaultGuidance,
   WEB_FETCH_MATCHER,
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
   writeDefaultMode,
-  writeGuidanceSection,
   writeStatusLine,
 } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
@@ -173,13 +175,10 @@ const MCP_SERVER_KEY = "golem";
 const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
 const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /**
- * Golem's guidance lives in the COMMITTED `CLAUDE.md` (user decision 2026-07-16,
- * reversing the earlier CLAUDE.local.md choice): the wiki/KB/coder-first
- * practices are project defaults that should apply for every teammate, not
- * per-machine. The marker-fenced upsert preserves any surrounding CLAUDE.md
- * content byte-for-byte, so it never clobbers hand-written instructions.
+ * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`
+ * (user decision 2026-07-16). Committed, team-wide, auto-loaded every session;
+ * Golem never edits the user's CLAUDE.md. See src/hooks/guidance.ts.
  */
-const GUIDANCE_FILENAME = "CLAUDE.md";
 /** The conventional personal, gitignored instructions file (Golem doesn't write it). */
 const PERSONAL_INSTRUCTIONS_FILENAME = "CLAUDE.local.md";
 
@@ -619,23 +618,16 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
   }
 
-  // 5. PostToolUse hook + Golem guidance. The guidance goes in the COMMITTED
-  // CLAUDE.md — the project's BASE DEFAULTS (wiki/KB/coder-first) shared by every
-  // teammate; marker-fenced upsert preserves surrounding content. Optional
-  // opt-in features (e.g. prompt translation) are NOT written here — a user adds
-  // their usage instruction to their own CLAUDE.local.md (`golem prompt guidance`).
+  // 5. PostToolUse hook + Golem guidance. Guidance is seeded (once) as Claude
+  // Code project rules — `.claude/rules/golem-<feature>.md` (committed, team-wide,
+  // auto-loaded every session). Golem never edits the user's CLAUDE.md. Defaults
+  // are user-owned after seeding: `golem guidance disable <feature>` sticks.
   actions.push(await addPostToolUseHook({ projectDir, dryRun }));
-  actions.push(
-    await writeGuidanceSection({
-      projectDir,
-      dryRun,
-      filePath: path.join(projectDir, GUIDANCE_FILENAME),
-    }),
-  );
-  // Keep the conventional personal instructions file out of version control
-  // (Claude Code loads it alongside CLAUDE.md); Golem's own guidance is committed
-  // in CLAUDE.md, but a user's private CLAUDE.local.md should stay gitignored.
+  actions.push(...(await seedDefaultGuidance(projectDir, dryRun)));
+  // Keep personal (`--user`) golem rules AND the conventional personal
+  // instructions file out of version control.
   actions.push(await ensureGitignored(projectDir, PERSONAL_INSTRUCTIONS_FILENAME, dryRun));
+  actions.push(await ensureGitignored(projectDir, PERSONAL_RULES_GITIGNORE, dryRun));
 
   // 6. Status line (21c) + blocked-state event hooks (21b).
   actions.push(await writeStatusLine({ projectDir, dryRun }));
@@ -939,9 +931,10 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     // not installed
   }
 
-  // 4. Remove the PostToolUse hook entry (guidance prose is left in place —
-  // it is user-editable; removePostToolUseHook is the reversible half).
+  // 4. Remove the PostToolUse hook entry + the seeded Golem guidance rules
+  // (`.claude/rules/golem-*.md`, both scopes) and the seed sentinel.
   actions.push(await removePostToolUseHook({ projectDir, dryRun }));
+  actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
 
   // 5. Remove the status line + blocked-state event hooks.
   actions.push(await removeStatusLine({ projectDir, dryRun }));

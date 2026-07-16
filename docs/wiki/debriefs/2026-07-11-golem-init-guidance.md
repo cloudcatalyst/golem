@@ -7,12 +7,13 @@ created: 2026-07-11
 updated: 2026-07-16
 ---
 
-> **Update 2026-07-16 (user decision):** the guidance target moved from the
-> gitignored `CLAUDE.local.md` to the **committed `CLAUDE.md`** — the wiki/KB/
-> coder-first practices are project defaults that should apply for every
-> teammate, not per-machine. `CLAUDE.local.md` stays gitignored for a user's own
-> notes + opt-in feature instructions (e.g. `golem prompt guidance`). See
-> `debriefs/2026-07-16-R5.5.md`.
+> **Update 2026-07-16 (user decision, final):** guidance no longer lives in
+> `CLAUDE.md`/`CLAUDE.local.md` at all. Golem now writes each practice as a
+> Claude Code project rule — `.claude/rules/golem-<feature>.md` (committed,
+> team-wide) or `.claude/rules/golem-<feature>.local.md` (gitignored, personal),
+> auto-loaded every session. `golem init` seeds the defaults once (sentinel);
+> `golem guidance enable/disable [--user]` toggles them. Golem never edits the
+> user's CLAUDE.md. See `debriefs/2026-07-16-R5.5.md` + `src/hooks/guidance.ts`.
 
 # golem-init guidance template — wiki promotion + local-model-first
 

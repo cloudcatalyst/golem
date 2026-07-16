@@ -10,6 +10,7 @@
  * E3: status / slider / stats / dashboard (+ index/devices stubs for WS-C/D).
  */
 
+import { access } from "node:fs/promises";
 import { Command, InvalidArgumentError } from "commander";
 import {
   AUTONOMY_LEVEL_HELP,
@@ -25,8 +26,13 @@ import {
   addEventHook,
   buildHookCommand,
   defaultRevalidate,
-  promptTranslationGuidanceSnippet,
+  GUIDANCE_FEATURES,
+  type GuidanceScope,
+  guidanceFeature,
+  guidanceRulePath,
   removeEventHook,
+  removeGuidanceRule,
+  writeGuidanceRule,
 } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import {
@@ -1357,14 +1363,6 @@ promptCmd
   .option("--dir <path>", "project directory", process.cwd())
   .action(async (note: string[], opts: { dir: string }) => {
     try {
-      const { settings } = await loadConfig({ projectDir: opts.dir });
-      if (!settings.prompt.translation_enabled) {
-        process.stdout.write(
-          "prompt translation is disabled (prompt.translation_enabled=false). " +
-            "Enable it in .golem/settings.json or GOLEM_PROMPT_TRANSLATION_ENABLED=true.\n",
-        );
-        return;
-      }
       const inference = await buildInferenceForDir(opts.dir);
       if (inference === null) {
         process.stdout.write("local model unavailable — start Ollama, then retry.\n");
@@ -1389,21 +1387,6 @@ promptCmd
   });
 
 promptCmd
-  .command("guidance")
-  .description(
-    "Print a paste-ready CLAUDE.local.md block instructing the agent to use prompt translation",
-  )
-  .action(() => {
-    process.stdout.write(
-      "# Paste this into your CLAUDE.local.md (personal, gitignored) to have\n" +
-        "# Claude use prompt translation proactively. Requires the feature enabled\n" +
-        "# (prompt.translation_enabled=true in .golem/settings.json, or\n" +
-        "# GOLEM_PROMPT_TRANSLATION_ENABLED=true).\n\n" +
-        promptTranslationGuidanceSnippet(),
-    );
-  });
-
-promptCmd
   .command("accept")
   .description("Record the last suggested translation as an accepted style example")
   .option("--dir <path>", "project directory", process.cwd())
@@ -1416,6 +1399,106 @@ promptCmd
       }
       await appendExample(opts.dir, { ...last, ts: new Date().toISOString() });
       process.stdout.write("recorded — future translations will lean toward this style.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// Guidance = Claude Code project rules (`.claude/rules/golem-<feature>.md`).
+// Enabling writes the rule file (auto-loaded every session); disabling removes
+// it. Scope: --project (committed, team-wide) or --user (gitignored, just you).
+const guidanceCmd = program
+  .command("guidance")
+  .description("Manage the Golem guidance rules that direct Claude to use features");
+
+const unknownFeature = (name: string): never => {
+  process.stderr.write(
+    `golem: no guidance feature "${name}" (try: ${GUIDANCE_FEATURES.map((x) => x.name).join(", ")})\n`,
+  );
+  process.exit(2);
+};
+
+const ruleFileExists = async (
+  dir: string,
+  name: string,
+  scope: GuidanceScope,
+): Promise<boolean> => {
+  try {
+    await access(guidanceRulePath(dir, name, scope));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+guidanceCmd
+  .command("list", { isDefault: true })
+  .description("List guidance features and whether each is enabled for this project")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    process.stdout.write("Golem guidance features (.claude/rules/golem-<name>.md):\n\n");
+    for (const g of GUIDANCE_FEATURES) {
+      const project = await ruleFileExists(opts.dir, g.name, "project");
+      const user = await ruleFileExists(opts.dir, g.name, "user");
+      const state = project ? "on (project)" : user ? "on (user)" : "off";
+      const tag = g.seededByDefault ? "default" : "opt-in ";
+      process.stdout.write(`  [${tag}] ${g.name.padEnd(20)} ${state.padEnd(13)} ${g.summary}\n`);
+    }
+    process.stdout.write(
+      "\nEnable:  golem guidance enable <name> [--user]   (default scope: project/committed)\n" +
+        "Disable: golem guidance disable <name> [--user]\n" +
+        "Show:    golem guidance show <name>\n",
+    );
+  });
+
+guidanceCmd
+  .command("show")
+  .description("Print one guidance rule's body")
+  .argument("<name>", `feature (${GUIDANCE_FEATURES.map((g) => g.name).join(", ")})`)
+  .action((name: string) => {
+    const g = guidanceFeature(name);
+    if (g === null) unknownFeature(name);
+    else process.stdout.write(`${g.snippet}\n`);
+  });
+
+guidanceCmd
+  .command("enable")
+  .description("Write a guidance rule file so Claude uses this feature (auto-loaded)")
+  .argument("<name>", "feature name")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option(
+    "--user",
+    "personal scope (gitignored .local.md) instead of committed project scope",
+    false,
+  )
+  .action(async (name: string, opts: { dir: string; user: boolean }) => {
+    try {
+      const g = guidanceFeature(name);
+      if (g === null) return unknownFeature(name);
+      const scope: GuidanceScope = opts.user ? "user" : "project";
+      const action = await writeGuidanceRule(opts.dir, g, scope);
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+      process.stdout.write("restart Claude Code (or reload) to pick up the rule.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+guidanceCmd
+  .command("disable")
+  .description("Remove a guidance rule file so Claude no longer uses this feature")
+  .argument("<name>", "feature name")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--user", "only remove the personal (.local.md) rule; default removes both scopes", false)
+  .action(async (name: string, opts: { dir: string; user: boolean }) => {
+    try {
+      if (guidanceFeature(name) === null) return unknownFeature(name);
+      const action = await removeGuidanceRule(opts.dir, name, opts.user ? "user" : "both");
+      process.stdout.write(
+        action.kind === "skip"
+          ? `${name} was not enabled — nothing to remove.\n`
+          : `removed: ${action.path}\n`,
+      );
     } catch (err) {
       fail(err);
     }

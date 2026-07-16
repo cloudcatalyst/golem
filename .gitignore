@@ -29,3 +29,4 @@ coverage/
 .DS_Store
 Thumbs.db
 CLAUDE.local.md
+.claude/rules/golem-*.local.md
