@@ -36,6 +36,17 @@ describe("env override mapping", () => {
     });
   });
 
+  it("defaults prompt.translation_enabled to true and honors the env override", async () => {
+    const on = await load({});
+    expect(on.settings.prompt.translation_enabled).toBe(true);
+    const off = await load({ GOLEM_PROMPT_TRANSLATION_ENABLED: "false" });
+    expect(off.settings.prompt.translation_enabled).toBe(false);
+    expect(off.provenance["prompt.translation_enabled"]).toEqual({
+      layer: "env",
+      source: "GOLEM_PROMPT_TRANSLATION_ENABLED",
+    });
+  });
+
   it("matches names case-insensitively (Windows-style input)", async () => {
     const config = await load({ golem_Proxy_Port: "9999" });
     expect(config.settings.proxy.port).toBe(9999);

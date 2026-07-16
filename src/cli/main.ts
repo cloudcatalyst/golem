@@ -1356,6 +1356,14 @@ promptCmd
   .option("--dir <path>", "project directory", process.cwd())
   .action(async (note: string[], opts: { dir: string }) => {
     try {
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      if (!settings.prompt.translation_enabled) {
+        process.stdout.write(
+          "prompt translation is disabled (prompt.translation_enabled=false). " +
+            "Enable it in .golem/settings.json or GOLEM_PROMPT_TRANSLATION_ENABLED=true.\n",
+        );
+        return;
+      }
       const inference = await buildInferenceForDir(opts.dir);
       if (inference === null) {
         process.stdout.write("local model unavailable — start Ollama, then retry.\n");

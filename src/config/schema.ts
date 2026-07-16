@@ -57,6 +57,17 @@ export const SETTINGS_LEAVES = {
     /** OpenAI-compatible local inference endpoint (Ollama default). */
     ollama_base_url: z.string().url(),
   },
+  prompt: {
+    /**
+     * R5.5 (spec 20g) — enable the local-model prompt-translation feature
+     * (`golem prompt translate`). Decoupled from the slider (Decision 31: the
+     * slider is a compression dial; the local model is engaged only by explicit
+     * acts). Never runs unless invoked; this flag lets a project disable it (and
+     * gates whether the init guidance tells the agent to offer it). On by
+     * default — being "available" costs nothing until invoked.
+     */
+    translation_enabled: z.boolean(),
+  },
   compression: {
     /**
      * OPT-IN: run the Headroom semantic-compression sidecar at slider ≥2
@@ -197,6 +208,10 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
 }
 
+export interface PromptSettings {
+  readonly translation_enabled: boolean;
+}
+
 export interface CompressionSettings {
   readonly headroom_sidecar: boolean;
   readonly force_semantic_on_caching: boolean;
@@ -225,6 +240,7 @@ export interface GolemSettings {
   readonly slider: SliderSettings;
   readonly proxy: ProxySettings;
   readonly inference: InferenceSettings;
+  readonly prompt: PromptSettings;
   readonly compression: CompressionSettings;
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
@@ -249,6 +265,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   inference: {
     ollama_base_url: "http://localhost:11434",
+  },
+  prompt: {
+    translation_enabled: true,
   },
   compression: {
     headroom_sidecar: false,
