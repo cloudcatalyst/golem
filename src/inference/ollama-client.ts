@@ -30,6 +30,38 @@ export class InferenceEndpointError extends Error {
   }
 }
 
+/**
+ * The request reached the endpoint but did not complete within
+ * `requestTimeoutMs`. Distinct from {@link InferenceEndpointError} (dead
+ * endpoint) and {@link ModelNotAvailableError} (model not pulled) so callers
+ * can report the ACTUAL failure — a slow/cold local model is neither "endpoint
+ * down" nor "no model at this tier" (verification-notes §66). Local generation
+ * here is non-streaming, so this bound covers the whole completion; a cold 7B
+ * load plus a grounded draft on slow hardware can hit it legitimately.
+ */
+export class InferenceTimeoutError extends InferenceEndpointError {
+  constructor(readonly timeoutMs: number) {
+    super(
+      `local inference timed out after ${timeoutMs}ms — the model may be cold-loading or the ` +
+        "hardware is slow for this request. Raise `inference.request_timeout_ms` " +
+        "(env GOLEM_INFERENCE_REQUEST_TIMEOUT_MS) if this is expected on this machine.",
+    );
+    this.name = "InferenceTimeoutError";
+  }
+}
+
+/** undici surfaces headers/body timeouts with these error codes. */
+function isTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  return (
+    code === "UND_ERR_HEADERS_TIMEOUT" ||
+    code === "UND_ERR_BODY_TIMEOUT" ||
+    err.name === "HeadersTimeoutError" ||
+    err.name === "BodyTimeoutError"
+  );
+}
+
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 
 export interface OllamaClientOptions {
@@ -92,6 +124,7 @@ export class OllamaClient {
         ...(signal ? { signal } : {}),
       });
     } catch (err) {
+      if (isTimeoutError(err)) throw new InferenceTimeoutError(this.#timeoutMs);
       throw new InferenceEndpointError(
         `could not reach inference endpoint: ${err instanceof Error ? err.message : String(err)}`,
       );

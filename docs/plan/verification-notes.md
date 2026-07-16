@@ -2082,6 +2082,14 @@ correct served answer to justify ACCEPTED. Independent of the flip, the
 `pipeline.ts` local-answer-stage fail-open gap is a real robustness bug worth
 fixing regardless (candidate BACKLOG item).
 
+**Update (2026-07-17):** both halves of structural finding #1 are now fixed.
+The fail-open try/catch landed in R5 (`pipeline.ts` local-answer stage). The
+*underlying* bug — a semantic query against a lexically-built index silently
+scoring every chunk 0 (which the try/catch only masked, never fixed) — is fixed
+in **§67**: cross-embedder-space queries now throw loudly, and the proxy picks
+its query embedder to match the persisted index. Finding #2 (lexical ranking
+favours code over prose) and the ACCEPTED-flip gate remain open.
+
 ## §65 — R5.1 spike: Claude Code headless resume mechanism (verified 2026-07-16)
 
 Resolves the R5.1 memo's hardest open question — *"interactive-session resume
@@ -2119,3 +2127,73 @@ spawns it. Because `-p` is a plain non-interactive process, capacity-gated
 auto-resume is just "spawn when due" — no terminal emulation, no fragile TUI
 scripting. The memo's PTY fallback is therefore **not** needed for the headless
 path (an interactive hand-back to a live TUI remains out of scope / manual).
+
+## §66 — Local inference timeout was too tight, mis-scoped, and misreported (fixed 2026-07-17)
+
+**Symptom.** A `coder` MCP call failed with *"Golem has no local model available
+for this task at the current hardware tier … Last attempt failed: could not reach
+inference endpoint: Headers Timeout Error."* Ollama was in fact up and
+`qwen2.5-coder:7b` pulled — so the message was wrong on its face.
+
+**Root cause (three compounding bugs).**
+1. **Mis-scoped timeout.** `OllamaClient` chat is non-streaming (`stream:false`),
+   so Ollama computes the *entire* completion before sending any response — which
+   means undici's `headersTimeout` bounds the WHOLE generation, not just
+   time-to-first-byte. The default was 120 000 ms.
+2. **Too tight for this hardware.** Measured on this box: a cold, small-prompt
+   400-token generation is ~40–53 s (~5–10 tok/s). A real *grounded* `coder`
+   draft (multi-KB injected context → slower prompt-eval + longer output) crosses
+   120 s and trips the headers timeout. Verified: a cold grounded-size drafter
+   request completed in ~53 s for only 269 tokens, i.e. 120 s left almost no
+   margin for a heavier request.
+3. **Misreported.** `service.ts` treats any `InferenceEndpointError` as terminal
+   and rethrows it as `CapabilityUnavailableError`, whose canned text says "no
+   local model at this tier" — indistinguishable from a genuinely-missing model.
+   (The class's own doc already flagged this ambiguity.) This is what sent the
+   first investigation down the wrong path.
+
+**Fix.**
+- New `inference.request_timeout_ms` config leaf (default **600 000 ms**), env
+  override `GOLEM_INFERENCE_REQUEST_TIMEOUT_MS`, wired through **every**
+  `new OllamaClient(...)` site (previously the 120 s constructor default was
+  unconfigurable). Connection-level failures still fail fast, so a generous cap
+  only ever extends waiting on a genuinely-slow-but-alive endpoint.
+- New `InferenceTimeoutError extends InferenceEndpointError`: undici
+  headers/body timeouts are detected (`UND_ERR_HEADERS_TIMEOUT` /
+  `UND_ERR_BODY_TIMEOUT`) and surfaced with an actionable message ("model may be
+  cold-loading or the hardware is slow; raise `inference.request_timeout_ms`").
+- The MCP error formatter renders a timeout distinctly ("NOT a missing model")
+  whether it arrives directly or wrapped in `CapabilityUnavailableError`.
+
+**Tests.** `ollama-client` timeout→`InferenceTimeoutError` (fake slow server);
+`config-env` `GOLEM_INFERENCE_REQUEST_TIMEOUT_MS` override. Full suite green.
+
+## §67 — KB search: cross-embedder-space queries silently returned garbage (fixed 2026-07-17)
+
+Closes §64 structural finding #1's underlying cause (the R5 try/catch only
+masked it).
+
+**Root cause.** The embedding space of the on-disk index and the space the query
+is embedded in were chosen independently. `golem mcp serve` reconciles them
+(`ensureProjectIndexed` rebuilds on `manifest.json` signature drift), but the
+`golem proxy` local-answer path chose its embedder from a live "is Ollama up?"
+probe (`inference !== undefined`), never consulting what built the index. When
+the two diverged (semantic query vs a lexically-built 512-dim index),
+`cosineSimilarity` hit its `a.length !== b.length → return 0` branch and scored
+*every* chunk 0 — ranked garbage, no error thrown, so the local-answer try/catch
+never fired. This is the confident-but-wrong served answer §64 observed.
+
+**Fix.**
+- **Loud, not silent (backstop):** `FileVectorDriver.search` and
+  `InMemoryVectorDriver.search` now throw `EmbedderMismatchError` on a
+  query/index dimension mismatch instead of scoring 0. Any residual divergence is
+  now a clear, actionable error everywhere (CLI/MCP surface "rebuild with
+  `golem index`"; the proxy fails open for a real, logged reason).
+- **Consistency:** new `resolvePersistedEmbedMode` reads the index's persisted
+  manifest signature; the proxy picks its local-answer embedder to MATCH it —
+  lexical index → hashing (works with no Ollama), semantic + model present →
+  semantic, semantic + model gone → declines cleanly with a startup warning.
+
+**Verified end-to-end:** built a real 512-dim lexical index, queried it with a
+768-dim semantic embedder → threw `EmbedderMismatchError` (previously: silent
+garbage). Unit + contract tests added; full suite green.

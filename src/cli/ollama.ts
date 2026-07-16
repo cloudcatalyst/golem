@@ -206,7 +206,10 @@ export async function runOllamaSetup(opts: SetupOptions): Promise<SetupResult> {
     const smokeTest = await opts.smokeTest(pull.model);
     return { kind: "completed", install, pull, smokeTest };
   }
-  const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+  const client = new OllamaClient({
+    baseUrl: settings.inference.ollama_base_url,
+    requestTimeoutMs: settings.inference.request_timeout_ms,
+  });
   try {
     const smokeTest = await smokeTestModel(client, pull.model);
     return { kind: "completed", install, pull, smokeTest };

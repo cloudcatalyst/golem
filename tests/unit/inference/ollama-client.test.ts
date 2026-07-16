@@ -8,6 +8,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   InferenceEndpointError,
+  InferenceTimeoutError,
   ModelNotAvailableError,
   OllamaClient,
 } from "../../../src/inference/ollama-client.js";
@@ -98,6 +99,37 @@ describe("OllamaClient.chat", () => {
       ).rejects.toBeInstanceOf(InferenceEndpointError);
     } finally {
       await dead.close();
+    }
+  });
+
+  it("throws InferenceTimeoutError (not a generic endpoint error) when the model is too slow", async () => {
+    // A reachable endpoint that responds only AFTER the client's request timeout:
+    // the exact §66 failure — a slow/cold local model, misread previously as
+    // "no model at this tier". Must surface as a distinct, actionable timeout.
+    // (undici uses a coarse ~500ms timer tick, so keep the delay well above the
+    // timeout for a deterministic fire.)
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    handler = (_req, res) => {
+      timer = setTimeout(() => {
+        if (!res.destroyed) {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ message: { content: "late" } }] }));
+        }
+      }, 5000);
+      res.on("close", () => timer && clearTimeout(timer)); // client aborted → drop the late write
+    };
+    const slow = new OllamaClient({ baseUrl, requestTimeoutMs: 300 });
+    try {
+      const err = await slow
+        .chat({ model: "x", messages: [{ role: "user", content: "hi" }] })
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(InferenceTimeoutError);
+      // Subtype of InferenceEndpointError, but the message names the real cause + fix.
+      expect(err).toBeInstanceOf(InferenceEndpointError);
+      expect((err as InferenceTimeoutError).message).toContain("request_timeout_ms");
+    } finally {
+      if (timer) clearTimeout(timer);
+      await slow.close();
     }
   });
 });

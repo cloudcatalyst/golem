@@ -12,6 +12,7 @@ import {
   embedderSignature,
   ensureProjectIndexed,
   resolveIndexPaths,
+  resolvePersistedEmbedMode,
 } from "../../../src/cli/auto-index.js";
 import { HardwareTier } from "../../../src/interfaces/inference.js";
 import type { Chunk, IngestReport, KnowledgeBase } from "../../../src/interfaces/knowledge.js";
@@ -77,6 +78,26 @@ describe("embedderSignature", () => {
     expect(lex).toBe("lexical:hash-v1-512");
     expect(sem).not.toBe(lex);
     expect(sem).toContain("semantic");
+  });
+});
+
+describe("resolvePersistedEmbedMode", () => {
+  it("returns null when there is no index yet", async () => {
+    expect(await resolvePersistedEmbedMode(projectDir, projectDir)).toBeNull();
+  });
+
+  it("reads back the space a lexical index was built in", async () => {
+    await ensureProjectIndexed({ ...base(new SpyKB(), projectDir), embedMode: "lexical", tier: 2 });
+    expect(await resolvePersistedEmbedMode(projectDir, projectDir)).toBe("lexical");
+  });
+
+  it("reads back the space a semantic index was built in", async () => {
+    await ensureProjectIndexed({
+      ...base(new SpyKB(), projectDir),
+      embedMode: "semantic",
+      tier: 2,
+    });
+    expect(await resolvePersistedEmbedMode(projectDir, projectDir)).toBe("semantic");
   });
 });
 

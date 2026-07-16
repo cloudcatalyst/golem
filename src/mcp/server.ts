@@ -442,8 +442,25 @@ const CHUNK_PREVIEW_CHARS = 240;
  * pulled — surface that as an actionable `isError` result, not a crash. Matched
  * by error `name` so this file stays decoupled from WS-C/WS-D concrete classes.
  */
+const INFERENCE_TIMEOUT_MESSAGE =
+  "The local model timed out — it was reachable but too slow to finish in time " +
+  "(cold-loading, or the hardware is slow for this request). This is NOT a missing " +
+  "model. Raise `inference.request_timeout_ms` (env GOLEM_INFERENCE_REQUEST_TIMEOUT_MS), " +
+  "or do the task directly instead of delegating it.";
+
+/** True when this error (or the error it wraps) is a local-inference timeout. */
+function isTimeout(err: Error): boolean {
+  return (
+    err.name === "InferenceTimeoutError" ||
+    (err.cause as Error | undefined)?.name === "InferenceTimeoutError"
+  );
+}
+
 function backendUnavailableMessage(err: unknown): string | null {
   if (!(err instanceof Error)) return null;
+  // A timeout can surface directly or wrapped in CapabilityUnavailableError —
+  // never let it read as "no model at this tier" (verification-notes §66).
+  if (isTimeout(err)) return INFERENCE_TIMEOUT_MESSAGE;
   switch (err.name) {
     case "InferenceEndpointError":
       return (

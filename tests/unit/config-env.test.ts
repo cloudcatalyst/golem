@@ -36,6 +36,15 @@ describe("env override mapping", () => {
     });
   });
 
+  it("overrides inference.request_timeout_ms (raise it on slow local hardware — §66)", async () => {
+    const config = await load({ GOLEM_INFERENCE_REQUEST_TIMEOUT_MS: "900000" });
+    expect(config.settings.inference.request_timeout_ms).toBe(900000);
+    expect(config.provenance["inference.request_timeout_ms"]).toEqual({
+      layer: "env",
+      source: "GOLEM_INFERENCE_REQUEST_TIMEOUT_MS",
+    });
+  });
+
   it("matches names case-insensitively (Windows-style input)", async () => {
     const config = await load({ golem_Proxy_Port: "9999" });
     expect(config.settings.proxy.port).toBe(9999);
