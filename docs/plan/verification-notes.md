@@ -2197,3 +2197,34 @@ never fired. This is the confident-but-wrong served answer §64 observed.
 **Verified end-to-end:** built a real 512-dim lexical index, queried it with a
 768-dim semantic embedder → threw `EmbedderMismatchError` (previously: silent
 garbage). Unit + contract tests added; full suite green.
+
+## §68 — CI red on a Windows/macOS file-watcher libuv abort (fix 2026-07-17)
+
+**Symptom.** CI (`.github/workflows/ci.yml`) went red at run #4 (2026-07-15) and
+stayed red (#5, #6). The failing step is `Tests`, but ONLY on macOS (node 22+24)
+and Windows/node-24 — Ubuntu (both) and Windows/node-22 pass. The crash is a
+hard libuv `abort()`, not a test assertion:
+`Assertion failed: !_wcsnicmp(filename, dir, dirlen), file src\win\fs-event.c,
+line 72`, followed by `ERR_IPC_CHANNEL_CLOSED` (the vitest tinypool worker died).
+
+**Cause.** libuv's Windows/macOS `fs.watch` fs-event layer requires each reported
+event path to start with the watched directory. It doesn't when the watched path
+isn't the OS-canonical form: Windows 8.3 short names (GitHub runner temp is
+`C:\Users\RUNNER~1\…`) or the macOS `/var → /private/var` temp symlink — the OS
+then reports canonical event paths that fail the prefix check → abort. Not
+reproducible on this dev box (temp path `…\paulc\…` needs no 8.3 mangling, and no
+symlink) — consistent with an environment-specific trigger; the file-watcher code
+itself was unchanged between the last green run (#3) and #4, so a node-24 libuv
+patch drift (major-only version pins) is the likely tipping factor.
+
+**Fix.** `watchPath` now hands `fs.watch` the OS-canonical path
+(`realpathSync.native`, native-recursive platforms only) via `canonicalWatchPath`,
+so libuv's stored dir matches OS-reported event paths. Events are still EMITTED
+under the caller's original `root` (watch vs emit roots split in
+`watchDirectoryTree`/`watchSingleFile`), so reported paths, downstream sync, and
+existing tests are unchanged. Falls back to `root` if realpath fails.
+
+**Verification honesty.** Not locally reproducible (see above), so the local
+proof is only "no regression" (all 10 watcher tests + full 1028-test suite green).
+Cross-platform confirmation is via CI on the PR — the intended verifier for a
+macOS/Windows-only libuv path.
