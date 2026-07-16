@@ -22,8 +22,11 @@
  */
 
 import { createHash } from "node:crypto";
+import { once } from "node:events";
+import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import type { Chunk } from "../interfaces/knowledge.js";
 import {
   cosineSimilarity,
@@ -126,14 +129,11 @@ export class FileVectorDriver implements DeletableVectorDriver {
 
   async #flush(col: Collection): Promise<void> {
     await mkdir(col.dir, { recursive: true });
-    const lines: string[] = [];
-    for (const rec of col.records.values()) lines.push(JSON.stringify(rec));
-    const body = lines.length > 0 ? `${lines.join("\n")}\n` : "";
-    // Atomic replace: write a temp file then rename over the live one so a crash
-    // mid-write never leaves a half-truncated collection.
+    // Atomic replace: stream records to a temp file then rename over the live
+    // one so a crash mid-write never leaves a half-truncated collection.
     const tmp = path.join(col.dir, "chunks.jsonl.tmp");
     const dest = path.join(col.dir, "chunks.jsonl");
-    await writeFile(tmp, body, "utf8");
+    await this.#writeRecordsStreamed(tmp, col.records.values());
     await rename(tmp, dest);
     const meta: PersistedMeta = {
       schemaVersion: KNOWLEDGE_SCHEMA_VERSION,
@@ -141,6 +141,30 @@ export class FileVectorDriver implements DeletableVectorDriver {
       count: col.records.size,
     };
     await writeFile(path.join(col.dir, "meta.json"), `${JSON.stringify(meta)}\n`, "utf8");
+  }
+
+  /**
+   * Write one JSON line per record via a stream, honoring backpressure. R4.6
+   * (r3.7-lancedb-scale-spike): the old `Array.join("\n")` built one string for
+   * the entire collection and hard-crashed (`RangeError: Invalid string length`)
+   * past ~30k-50k chunks — V8's max string length. Streaming line-by-line keeps
+   * memory flat and removes the ceiling. `events.once(stream, "drain")` rejects
+   * if the stream errors mid-wait, so an I/O failure surfaces instead of hanging.
+   */
+  async #writeRecordsStreamed(file: string, records: Iterable<StoredChunk>): Promise<void> {
+    const stream = createWriteStream(file, { encoding: "utf8" });
+    try {
+      for (const rec of records) {
+        if (!stream.write(`${JSON.stringify(rec)}\n`)) {
+          await once(stream, "drain");
+        }
+      }
+    } catch (err) {
+      stream.destroy();
+      throw err;
+    }
+    stream.end();
+    await finished(stream);
   }
 
   async search(

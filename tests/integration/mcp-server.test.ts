@@ -6,6 +6,9 @@
  * exercises every P0 tool with valid and invalid inputs.
  */
 
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -32,6 +35,7 @@ import {
 } from "../../src/interfaces/index.js";
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
+import { JsonlTelemetryStore, recordToolCall } from "../../src/telemetry/index.js";
 
 const P0_TOOLS = ["expand", "stats", "level", "devices"] as const;
 const ALL_PROMPTS = [
@@ -594,6 +598,335 @@ describe("coder tool", () => {
         "task directly instead of delegating it. Last attempt failed: could not reach " +
         "inference endpoint: timeout",
     );
+  });
+
+  // ---- R4.2: retrieval-augmented drafting (coder grounding) ----
+
+  /** A KB whose search returns one hit whenever the query mentions "redaction". */
+  class GroundingKnowledgeBase implements KnowledgeBase {
+    searchCalls = 0;
+    async ingest(): Promise<IngestReport> {
+      throw new Error("not used by these tests");
+    }
+    async search(query: string, projectId: string): Promise<Hit[]> {
+      this.searchCalls += 1;
+      if (!query.toLowerCase().includes("redaction")) return [];
+      return [
+        {
+          chunk: {
+            chunkId: "chunk-red-1",
+            projectId,
+            text: "redaction runs BEFORE compression — never weaken or reorder it (T-C3)",
+            sourcePath: "src/hooks/redact.ts",
+            startLine: 12,
+            metadata: { kind: "code" },
+          },
+          score: 0.95,
+          scope: "knowledge",
+        },
+      ];
+    }
+    async getChunk(): Promise<Chunk> {
+      throw new Error("not used by these tests");
+    }
+  }
+
+  /** A KB whose search always throws, to exercise graceful grounding degradation. */
+  class ThrowingKnowledgeBase implements KnowledgeBase {
+    async ingest(): Promise<IngestReport> {
+      throw new Error("not used by these tests");
+    }
+    async search(): Promise<Hit[]> {
+      throw new Error("vector store on fire");
+    }
+    async getChunk(): Promise<Chunk> {
+      throw new Error("not used by these tests");
+    }
+  }
+
+  const okDrafter = () =>
+    new FakeInferenceService(async (role) => ({
+      text: "draft",
+      model: "qwen2.5-coder:7b",
+      role,
+      promptTokens: 1,
+      completionTokens: 1,
+      finishReason: "stop",
+    }));
+
+  it("grounds the draft in KB hits by default and reports the injected sources", async () => {
+    const fake = okDrafter();
+    const kb = new GroundingKnowledgeBase();
+    const client = await connectInMemory({ ...depsWithInference(fake), knowledge: kb });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "add a redaction rule for API keys" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    // The retrieved chunk text is injected into the drafter prompt under a labeled block.
+    const sent = (fake.lastMessages ?? []).map((m) => String(m.content)).join("\n");
+    expect(sent).toContain("Relevant project context");
+    expect(sent).toContain("src/hooks/redact.ts:12");
+    expect(sent).toContain("redaction runs BEFORE compression");
+    // ...and the sources are echoed in the structured output for the caller to judge.
+    expect(result.structuredContent).toMatchObject({
+      grounding: { sources: ["src/hooks/redact.ts:12"] },
+    });
+    expect(textOf(result)).toContain("Grounded on 1 local source(s).");
+  });
+
+  it("skips grounding when ground:false, leaving the prompt ungrounded", async () => {
+    const fake = okDrafter();
+    const kb = new GroundingKnowledgeBase();
+    const client = await connectInMemory({ ...depsWithInference(fake), knowledge: kb });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "add a redaction rule for API keys", ground: false },
+    });
+
+    expect(kb.searchCalls).toBe(0);
+    const sent = (fake.lastMessages ?? []).map((m) => String(m.content)).join("\n");
+    expect(sent).not.toContain("Relevant project context");
+    expect(result.structuredContent).not.toHaveProperty("grounding");
+  });
+
+  it("omits grounding when the KB has no relevant hits (no empty block)", async () => {
+    const fake = okDrafter();
+    const client = await connectInMemory({
+      ...depsWithInference(fake),
+      knowledge: new GroundingKnowledgeBase(),
+    });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write an unrelated helper" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).not.toHaveProperty("grounding");
+  });
+
+  it("degrades gracefully to an ungrounded draft when KB search throws", async () => {
+    const fake = okDrafter();
+    const client = await connectInMemory({
+      ...depsWithInference(fake),
+      knowledge: new ThrowingKnowledgeBase(),
+    });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "add a redaction rule for API keys" },
+    });
+
+    // Grounding failure must never turn a successful draft into an error.
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("draft");
+    expect(result.structuredContent).not.toHaveProperty("grounding");
+  });
+
+  it("does not attempt grounding when no knowledge base is wired", async () => {
+    const fake = okDrafter();
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "add a redaction rule for API keys" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).not.toHaveProperty("grounding");
+  });
+
+  // ---- R4.4: opt-in draft → judge → revise refinement ----
+
+  it("runs a judge→revise pass when refine:true and the judge flags real issues", async () => {
+    let drafterCalls = 0;
+    const fake = new FakeInferenceService(async (role) => {
+      if (role === "judge") {
+        return {
+          text: JSON.stringify({
+            hasIssues: true,
+            summary: "missing null check",
+            issues: [{ severity: "high", description: "guard the undefined case" }],
+          }),
+          model: "fake-judge",
+          role,
+          promptTokens: 1,
+          completionTokens: 1,
+          finishReason: "stop",
+        };
+      }
+      drafterCalls += 1;
+      return {
+        text: drafterCalls === 1 ? "first draft" : "revised draft",
+        model: "qwen2.5-coder:7b",
+        role,
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      };
+    });
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write a safe parse function", refine: true },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toMatchObject({
+      text: "revised draft",
+      refinement: { rounds: 1, critique_summary: "missing null check" },
+    });
+    expect(textOf(result)).toContain("Refined 1 round(s)");
+    expect(drafterCalls).toBe(2); // initial draft + one revision
+  });
+
+  it("reports rounds:0 when refine:true but the judge finds nothing worth revising", async () => {
+    const fake = new FakeInferenceService(async (role) => {
+      if (role === "judge") {
+        return {
+          text: JSON.stringify({ hasIssues: false, summary: "fine", issues: [] }),
+          model: "fake-judge",
+          role,
+          promptTokens: 1,
+          completionTokens: 1,
+          finishReason: "stop",
+        };
+      }
+      return {
+        text: "the one draft",
+        model: "qwen2.5-coder:7b",
+        role,
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      };
+    });
+    const client = await connectInMemory(depsWithInference(fake));
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "trivial", refine: true },
+    });
+
+    expect(result.structuredContent).toMatchObject({
+      text: "the one draft",
+      refinement: { rounds: 0 },
+    });
+  });
+
+  it("does not refine by default (no refinement field)", async () => {
+    const client = await connectInMemory(depsWithInference(okDrafter()));
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write something" },
+    });
+    expect(result.structuredContent).not.toHaveProperty("refinement");
+  });
+});
+
+describe("tool telemetry (R4.3 — §59 gap)", () => {
+  let dir: string;
+  afterEach(async () => {
+    if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+  });
+
+  class OneHitKnowledgeBase implements KnowledgeBase {
+    async ingest(): Promise<IngestReport> {
+      throw new Error("not used");
+    }
+    async search(_query: string, projectId: string): Promise<Hit[]> {
+      return [
+        {
+          chunk: { chunkId: "c1", projectId, text: "hello", sourcePath: "a.ts", metadata: {} },
+          score: 0.9,
+          scope: "knowledge",
+        },
+      ];
+    }
+    async getChunk(chunkId: string, projectId = "default"): Promise<Chunk> {
+      return { chunkId, projectId, text: "hello", sourcePath: "a.ts", metadata: {} };
+    }
+  }
+
+  class DrafterInferenceService implements InferenceService {
+    async chat(role: Role): Promise<ChatResult> {
+      return {
+        text: "a locally drafted answer",
+        model: "qwen2.5-coder:7b",
+        role,
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      };
+    }
+    async embed(): Promise<Vector[]> {
+      throw new Error("not used");
+    }
+    capabilities(): HardwareTier {
+      return HardwareTier.PMid;
+    }
+  }
+
+  it("records a per-call tool event for search and coder (with model + draft length)", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "golem-tooltel-"));
+    const store = new JsonlTelemetryStore(dir);
+    const client = await connectInMemory({
+      ...createStandaloneDeps(),
+      knowledge: new OneHitKnowledgeBase(),
+      inference: new DrafterInferenceService(),
+      defaultProjectId: "projA",
+      telemetry: store,
+    });
+
+    await client.callTool({ name: "search", arguments: { query: "anything" } });
+    await client.callTool({
+      name: "coder",
+      arguments: { task: "write a function", ground: false },
+    });
+    // Drain the fire-and-forget appends, then read with a fresh store.
+    await store.close();
+
+    const usage = await new JsonlTelemetryStore(dir).aggregateToolUsage("projA");
+    expect(usage.byTool.search?.calls).toBe(1);
+    expect(usage.byTool.coder?.calls).toBe(1);
+    // The coder event carries the drafted-locally char bucket.
+    expect(usage.byTool.coder?.draftChars).toBe("a locally drafted answer".length);
+  });
+
+  it("stats tool surfaces a per-tool tool_usage summary when telemetry is present", async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "golem-tooltel-"));
+    const store = new JsonlTelemetryStore(dir);
+    await recordToolCall(
+      store,
+      { projectId: "projA", tool: "coder", durationMs: 900, resultBytes: 100, draftChars: 400 },
+      "2026-07-16T00:00:00.000Z",
+    );
+    await store.close();
+
+    const client = await connectInMemory({
+      ...createStandaloneDeps(),
+      defaultProjectId: "projA",
+      telemetry: new JsonlTelemetryStore(dir),
+    });
+    const result = await client.callTool({ name: "stats", arguments: { project_id: "projA" } });
+
+    expect(result.structuredContent).toHaveProperty("tool_usage");
+    expect(
+      (result.structuredContent as { tool_usage: Record<string, unknown> }).tool_usage,
+    ).toMatchObject({ coder: { calls: 1, draft_chars: 400 } });
+    expect(textOf(result)).toContain("Local tools:");
+    expect(textOf(result)).toContain("tokens drafted locally");
+  });
+
+  it("omits tool_usage when no telemetry store is wired", async () => {
+    const client = await connectInMemory(createStandaloneDeps());
+    const result = await client.callTool({ name: "stats", arguments: {} });
+    expect(result.structuredContent).not.toHaveProperty("tool_usage");
   });
 });
 

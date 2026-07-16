@@ -7,7 +7,8 @@
  *   - buildHookCommand(options?)       — commander `Command` for the CLI.
  *   - addPostToolUseHook / removePostToolUseHook — `.claude/settings.json`
  *     writers for the E2 init/uninit flows.
- *   - writeGuidanceSection             — CLAUDE.md guidance-section writer.
+ *   - seedDefaultGuidance / writeGuidanceRule / removeGuidanceRule — Claude Code
+ *     `.claude/rules/golem-*.md` guidance writers (init/uninit + `golem guidance`).
  *   - RedactFn / pipelineRedact / stripKnownSecrets — redaction seam (T-C3).
  *
  * ## Integrator wiring (files owned by other agents — do NOT edit them here)
@@ -18,25 +19,30 @@
  *
  * src/cli/init.ts — inside golemInit(), after the skills step, append the
  * returned actions:
- *     import { addPostToolUseHook, writeGuidanceSection } from "../hooks/index.js";
+ *     import { addPostToolUseHook, seedDefaultGuidance } from "../hooks/index.js";
  *     actions.push(await addPostToolUseHook({ projectDir, dryRun }));
- *     actions.push(await writeGuidanceSection({ projectDir, dryRun }));
+ *     actions.push(...(await seedDefaultGuidance(projectDir, dryRun)));
  *
  * src/cli/init.ts — inside golemUninit():
- *     import { removePostToolUseHook } from "../hooks/index.js";
+ *     import { removePostToolUseHook, removeAllGuidanceRules } from "../hooks/index.js";
  *     actions.push(await removePostToolUseHook({ projectDir, dryRun }));
- *   (The guidance section is left in CLAUDE.md on uninit — it is user-editable
- *    prose; removePostToolUseHook is the reversible half.)
+ *     actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
  */
 
 export { buildHookCommand, type HookCommandOptions } from "./command.js";
-export type { GuidanceWriteOptions } from "./guidance.js";
 export {
-  GUIDANCE_BEGIN_MARKER,
-  GUIDANCE_END_MARKER,
-  golemGuidanceSection,
-  upsertGuidance,
-  writeGuidanceSection,
+  GUIDANCE_FEATURES,
+  type GuidanceFeature,
+  type GuidanceScope,
+  guidanceFeature,
+  guidanceRuleBody,
+  guidanceRulePath,
+  PERSONAL_RULES_GITIGNORE,
+  promptTranslationGuidanceSnippet,
+  removeAllGuidanceRules,
+  removeGuidanceRule,
+  seedDefaultGuidance,
+  writeGuidanceRule,
 } from "./guidance.js";
 export type { HookIo, PostToolUseOptions, PostToolUsePayload } from "./post-tool-use.js";
 export {
@@ -92,9 +98,14 @@ export {
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
 } from "./settings-writer.js";
-export type { WebFetchHookOptions } from "./web-fetch.js";
+export type {
+  RevalidateFn,
+  RevalidateResponse,
+  WebFetchHookOptions,
+} from "./web-fetch.js";
 export {
   DEFAULT_WEB_CACHE_TTL_HOURS,
+  defaultRevalidate,
   runWebFetchPost,
   runWebFetchPre,
 } from "./web-fetch.js";

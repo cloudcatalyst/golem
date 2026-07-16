@@ -20,6 +20,8 @@ import type {
   AvoidedUpstreamStats,
   TelemetryEvent,
   TelemetryStore,
+  ToolUsagePerTool,
+  ToolUsageStats,
   UsageByLevel,
   UsageBySemanticForced,
   UsageTotals,
@@ -74,7 +76,9 @@ function parseEvent(line: string): TelemetryEvent | null {
         ? "usage"
         : parsed.kind === "avoidedUpstream"
           ? "avoidedUpstream"
-          : "request";
+          : parsed.kind === "tool"
+            ? "tool"
+            : "request";
   return {
     ts: parsed.ts,
     projectId: parsed.projectId,
@@ -92,6 +96,13 @@ function parseEvent(line: string): TelemetryEvent | null {
     ...(typeof parsed.avoidedUpstreamOutputTokens === "number"
       ? { avoidedUpstreamOutputTokens: parsed.avoidedUpstreamOutputTokens }
       : {}),
+    ...(typeof parsed.tool === "string" ? { tool: parsed.tool } : {}),
+    ...(typeof parsed.toolDurationMs === "number" ? { toolDurationMs: parsed.toolDurationMs } : {}),
+    ...(typeof parsed.toolResultBytes === "number"
+      ? { toolResultBytes: parsed.toolResultBytes }
+      : {}),
+    ...(typeof parsed.toolModel === "string" ? { toolModel: parsed.toolModel } : {}),
+    ...(typeof parsed.toolDraftChars === "number" ? { toolDraftChars: parsed.toolDraftChars } : {}),
   };
 }
 
@@ -161,6 +172,11 @@ export class JsonlTelemetryStore implements TelemetryStore {
       if (ev.kind === "avoidedUpstream") {
         // Not a pipeline run either — rolled up separately by
         // aggregateAvoidedUpstream (R2.2), never into the gross-token headline.
+        continue;
+      }
+      if (ev.kind === "tool") {
+        // Not a pipeline run either — rolled up separately by
+        // aggregateToolUsage (R4.3), never into the gross-token headline.
         continue;
       }
 
@@ -303,6 +319,39 @@ export class JsonlTelemetryStore implements TelemetryStore {
       outputTokensAvoided += ev.avoidedUpstreamOutputTokens ?? 0;
     }
     return { projectId: projectId ?? null, events, inputTokensAvoided, outputTokensAvoided };
+  }
+
+  async aggregateToolUsage(projectId?: string): Promise<ToolUsageStats> {
+    let raw: string;
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { projectId: projectId ?? null, byTool: {} };
+      }
+      throw err;
+    }
+
+    const byTool: Record<string, ToolUsagePerTool> = {};
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null || ev.kind !== "tool" || ev.tool === undefined) continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+
+      const acc = byTool[ev.tool] ?? {
+        calls: 0,
+        totalDurationMs: 0,
+        totalResultBytes: 0,
+        draftChars: 0,
+      };
+      byTool[ev.tool] = {
+        calls: acc.calls + 1,
+        totalDurationMs: acc.totalDurationMs + (ev.toolDurationMs ?? 0),
+        totalResultBytes: acc.totalResultBytes + (ev.toolResultBytes ?? 0),
+        draftChars: acc.draftChars + (ev.toolDraftChars ?? 0),
+      };
+    }
+    return { projectId: projectId ?? null, byTool };
   }
 
   async close(): Promise<void> {

@@ -2,7 +2,7 @@
 title: wiki-write-autonomy
 type: question
 tags: [knowledge-base, autonomy]
-sources: [docs/plan/proposals/wiki-knowledge-pivot.md, docs/edge-offload-spec.md]
+sources: [docs/plan/proposals/wiki-knowledge-pivot.md, docs/golem-spec.md]
 created: 2026-07-10
 updated: 2026-07-10
 ---

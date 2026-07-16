@@ -77,6 +77,29 @@ function rel(projectDir: string, abs: string): string {
   return path.relative(projectDir, abs).split(path.sep).join("/");
 }
 
+/**
+ * Recursively sort object keys so two values that differ ONLY in key order
+ * serialize identically. JSON object key order is not semantically meaningful,
+ * but a hand-edit, a formatter, or an older code version can reorder the keys
+ * of an already-installed hook (e.g. `timeout` before `async` vs. after). The
+ * "already installed → skip" checks below must not be fooled by that, or
+ * `golem init` rewrites unchanged hooks on every run (non-idempotent).
+ */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (isRecord(value)) {
+    const out: JsonObject = {};
+    for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key]);
+    return out;
+  }
+  return value;
+}
+
+/** Key-order-insensitive structural equality for hook entries. */
+function sameHookEntry(a: unknown, b: unknown): boolean {
+  return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
+}
+
 function settingsPath(projectDir: string): string {
   return path.join(projectDir, ".claude", "settings.json");
 }
@@ -169,8 +192,7 @@ export async function addPostToolUseHook(options: HookSettingsOptions): Promise<
   const list: unknown[] = Array.isArray(listValue) ? listValue : [];
 
   const desired = golemPostToolUseEntry();
-  const desiredJson = JSON.stringify(desired);
-  if (list.some((entry) => JSON.stringify(entry) === desiredJson)) {
+  if (list.some((entry) => sameHookEntry(entry, desired))) {
     return { kind: "skip", path: rel(projectDir, file), detail: "hook already installed" };
   }
 
@@ -282,7 +304,7 @@ export async function addMatcherHook(
   const list: unknown[] = Array.isArray(listValue) ? listValue : [];
 
   const desired = matcherEntry(spec);
-  if (list.some((e) => JSON.stringify(e) === JSON.stringify(desired))) {
+  if (list.some((e) => sameHookEntry(e, desired))) {
     return {
       kind: "skip",
       path: rel(projectDir, file),

@@ -4,7 +4,7 @@ type: schema
 tags: [meta]
 sources: []
 created: 2026-07-10
-updated: 2026-07-12
+updated: 2026-07-16
 ---
 
 # Golem project wiki — schema (Zone 0)
@@ -27,7 +27,7 @@ Hard rules for every write, agent or human:
 1. **Redaction before storage** — no secrets/PII ever land here (repo hard rule).
 2. **Link, don't restate.** The wiki never duplicates what the code, `docs/`, or git
    history already record — link to the file/spec section instead. For this repo,
-   `docs/edge-offload-spec.md` stays authoritative for decisions.
+   `docs/golem-spec.md` stays authoritative for decisions.
 3. **No raw fetched full-text.** Fetched pages live in the webcache (zone 1); what
    goes here is a distilled source note in our own words, citing the URL.
 4. **Contradictions are reported to the human, never auto-resolved.**
@@ -57,11 +57,13 @@ updated: YYYY-MM-DD
 ## Index
 
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
+- [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)
 - syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
   originating article
+- sources/local-coder-models-2026.md — distilled landscape of small local coder models (Qwen3-Coder vs Qwen2.5-Coder; Ollama tag availability), captured during R4.7
 - `questions/` — open questions carried over from the Decision 28 proposal
 - debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix
 - debriefs/2026-07-10-T1.md — wired durable `ccrRefsRetrieved` telemetry
@@ -71,6 +73,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
 - decisions/ADR-0001-file-watcher.md — accepted: `node:fs.watch` (native recursive on Windows/macOS, manual per-directory on Linux) behind a swappable `FileWatcher` interface, `chokidar` deferred unless proven necessary
+- decisions/ADR-0002-autonomy-approval-gates.md — accepted: R5.4 threat model — autonomy levels (manual/assisted/outcome, no full-auto), PreToolUse gate emitting allow/ask, conservative fail-closed classifier, default-deny proofs; enforcement never auto-allows destructive/outward
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there
 - debriefs/2026-07-11-R1.1.md — shipped `UsageSniffer`/`aggregateUsageByLevel` usage-telemetry infra + the gzip response-decoding fix it required
@@ -95,3 +98,21 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-12-R3.7.md — recorded the LanceDB scale spike finding + go/no-go
 - debriefs/2026-07-12-R3.1.md — Decision 34: chat-judge rerank via the existing "judge" role + `jsonSchema` on the frozen `InferenceService.chat()` (no interface change), opt-in `knowledge.rerank_enabled` decoupled from the slider per Decision 31
 - debriefs/2026-07-15-R3.6.md — C4: MEMORY-scope federated search via the optional Headroom `[memory]` sidecar (`HeadroomMemorySidecar`); verified the real `easy.Memory` API (docs' `MemoryCategory` doesn't exist in source); search-only (no write path exists yet), opt-in `knowledge.memory_federation_enabled` decoupled from `headroom_sidecar`
+- [[Dogfooding Golem]] — two-proxy stable/dev split, daemon lifecycle, promote flow, Headroom sidecar setup (relocated from docs/DEVELOPMENT.md by Decision 36)
+- debriefs/2026-07-16-decision-36-refocus.md — Decision 36: roadmap refocused on the co-developer core (R4), old R4/R5 → R5/R6 ON HOLD; spec renamed golem-spec.md, EOL scrubbed, batch briefs retired
+- debriefs/2026-07-16-R4.1.md — R4.1: `docs/plan/BACKLOG.md` ideas inbox + `/golem/plan` skill close the second-brain loop into tasks (plan-gated); the last leg of capture → distill → plan
+- debriefs/2026-07-16-R4.2.md — R4.2: coder grounding — extracted shared `assembleHits`, `gatherGrounding` size-capped RAG injection into the local drafter (`ground` opt-out), degrades to ungrounded on any failure
+- debriefs/2026-07-16-R4.3.md — R4.3: honest tool telemetry — `kind:"tool"` events for search/fetch/ingest/wiki_read/coder (coder tracks drafted-locally chars), surfaced in `stats` MCP tool + `golem stats`
+- debriefs/2026-07-16-R4.4.md — R4.4: coder iteration loop — `refineDraft` (judge→revise, opt-in `refine`, best-effort fallback); `/golem/develop` hardened around grounding + refinement
+- debriefs/2026-07-16-R4.5.md — R4.5: `golem wiki promote` closes capture→distill→promote (append-and-refine, Decision 26 consent); wiki-lint debt cleared (18→0), checker ignores code-fenced links, `wiki check` in CI
+- debriefs/2026-07-16-R4.6.md — R4.6: `FileVectorDriver.#flush()` streams JSON lines (backpressure-aware) instead of one `Array.join` string — removes the ~30k–50k-chunk `RangeError` crash wall
+- debriefs/2026-07-16-R4.7.md — R4.7: drafter catalog re-verified (no change — no small qwen3-coder tags); ungrounded draft-quality baseline 2 accept / 3 revise / 0 reject
+- syntheses/r4.7-drafter-quality-baseline.md — R4.7 spike: catalog re-verification + measured coder accept-rate baseline (accept for self-contained code, revise for project-integrated)
+- syntheses/r4-co-developer-core-batch.md — R4 batch retrospective: all 7 tasks (planning surface, coder grounding/telemetry/refinement, promote+lint, flush fix, re-verification); through-lines + open follow-ups
+- debriefs/2026-07-16-R5.2.md — R5.2 (R5 batch opens): consolidated `SessionStateReport` (one zod payload for statusline/dashboard/VS Code/remote) + `golem watch` full-screen TUI (hand-rolled ANSI, no deps) + `.golem/` storage sizing; dashboard serves it at `/api/state`
+- debriefs/2026-07-16-R5.1.md — R5.1: durable `TaskStore` (`src/tasks/`, one zod JSON per task under `.golem/tasks/`) + `golem task add/list/show/resume/cancel`; resume mechanism verified as headless `claude -p --resume` (no PTY, verification-notes §65); capacity gate via `notBefore`
+- debriefs/2026-07-16-R5.4.md — R5.4: cruise-control autonomy (`src/autonomy/` levels/classifier/gate + `PreToolUse` hook + `golem autonomy`); threat model ADR-0002 written first; default-deny/fail-closed proven (never auto-approves destructive/outward); surfaced in the R5.2 report
+- debriefs/2026-07-16-R5.3.md — R5.3: local conversation multiplexing (`src/tasks/multiplex.ts`) — service queued tasks locally (bounded concurrency, fail-open), explicit escalate-to-Claude folding the local pass as grounding (21a); `golem task run`/`escalate`
+- debriefs/2026-07-16-R5.5.md — R5.5 (spike): prompt translation (`src/prompt/`) — local rewrite of a raw note into a clearer prompt, always shown/never sent/off proxy path, few-shot on accepted examples; `golem prompt translate/accept`; scoring loop demand-gated
+- syntheses/r5-autonomy-orchestration-batch.md — R5 batch retrospective: all 5 tasks (dashboard sidecar, durable tasks, autonomy gates, local multiplexing, prompt-translation spike); through-lines (verify-first, default-deny, local-first explicit escalation, one state contract) + open follow-ups
+- debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs

@@ -4,8 +4,16 @@ type: debrief
 tags: [init, guidance, wiki, delegate, decision-28]
 sources: [docs/plan/next_batch.md, src/hooks/guidance.ts]
 created: 2026-07-11
-updated: 2026-07-11
+updated: 2026-07-16
 ---
+
+> **Update 2026-07-16 (user decision, final):** guidance no longer lives in
+> `CLAUDE.md`/`CLAUDE.local.md` at all. Golem now writes each practice as a
+> Claude Code project rule — `.claude/rules/golem-<feature>.md` (committed,
+> team-wide) or `.claude/rules/golem-<feature>.local.md` (gitignored, personal),
+> auto-loaded every session. `golem init` seeds the defaults once (sentinel);
+> `golem guidance enable/disable [--user]` toggles them. Golem never edits the
+> user's CLAUDE.md. See `debriefs/2026-07-16-R5.5.md` + `src/hooks/guidance.ts`.
 
 # golem-init guidance template — wiki promotion + local-model-first
 

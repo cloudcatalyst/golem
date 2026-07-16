@@ -10,7 +10,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectStats, LIVE_STATS_NOTE, statsSourceFor } from "../../src/cli/stats.js";
+import { collectStats, LIVE_STATS_NOTE, renderStats, statsSourceFor } from "../../src/cli/stats.js";
 import { NativeLosslessCompression, STAGE_DEDUP } from "../../src/compression/index.js";
 import type { Message } from "../../src/interfaces/compression.js";
 import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
@@ -84,5 +84,58 @@ describe("golem stats", () => {
     expect(report.tokens_saved).toBe(400);
     expect(report.per_stage.dedup?.tokens_saved).toBe(400);
     expect(report.note).toBe("durable history");
+  });
+
+  it("R4.3: folds per-tool usage into the report and renders a local-tools section", async () => {
+    const fake = statsSourceFor(
+      {
+        stats: () =>
+          Promise.resolve({
+            projectId: null,
+            requests: 0,
+            tokensBefore: 0,
+            tokensAfter: 0,
+            perStage: {},
+            ccrRefsStored: 0,
+            ccrRefsRetrieved: 0,
+          }),
+      },
+      "telemetry",
+      "durable history",
+    );
+    const report = await collectStats(fake, undefined, {
+      projectId: null,
+      byTool: {
+        coder: { calls: 2, totalDurationMs: 1800, totalResultBytes: 3000, draftChars: 800 },
+        search: { calls: 5, totalDurationMs: 100, totalResultBytes: 2000, draftChars: 0 },
+      },
+    });
+    expect(report.tool_usage?.coder?.calls).toBe(2);
+    const rendered = renderStats(report);
+    expect(rendered).toContain("local tools:");
+    expect(rendered).toContain("coder");
+    expect(rendered).toContain("tokens drafted");
+  });
+
+  it("R4.3: omits the tool_usage section when no tool events were recorded", async () => {
+    const fake = statsSourceFor(
+      {
+        stats: () =>
+          Promise.resolve({
+            projectId: null,
+            requests: 1,
+            tokensBefore: 10,
+            tokensAfter: 5,
+            perStage: {},
+            ccrRefsStored: 0,
+            ccrRefsRetrieved: 0,
+          }),
+      },
+      "telemetry",
+      "durable history",
+    );
+    const report = await collectStats(fake, undefined, { projectId: null, byTool: {} });
+    expect(report.tool_usage).toBeUndefined();
+    expect(renderStats(report)).not.toContain("local tools:");
   });
 });

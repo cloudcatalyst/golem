@@ -12,19 +12,16 @@ not estimates). Compression (Golem-native lossless stage; optional
 [Headroom](https://github.com/headroomlabs-ai/headroom) Python sidecar for
 ML-heavy stages) is part of the pipeline too, but it's *situational* — it pays
 off on non-caching upstreams, not on Anthropic's cached traffic, where the
-honest number today is ~0% (see `docs/verification-notes.md` §54).
+honest number today is ~0% (see `docs/plan/verification-notes.md` §54).
 
 Claude Code is Golem's flagship, most-verified integration — byte-faithful
 proxying, native MCP tools, `/golem/*` skills — with the same pipeline
 designed to extend to other gateways. Native Windows, macOS, and Linux.
 
-> Formerly "EOL / Edge Offload Layer" — renamed Golem 2026-07-03 (spec Decision 19).
-
-- **Spec:** [docs/edge-offload-spec.md](docs/edge-offload-spec.md) (source of truth)
-- **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md)
-- **Live-doc findings:** [docs/verification-notes.md](docs/verification-notes.md)
+- **Spec:** [docs/golem-spec.md](docs/golem-spec.md) (source of truth)
+- **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md) · [docs/plan/ROADMAP.md](docs/plan/ROADMAP.md)
+- **Live-doc findings:** [docs/plan/verification-notes.md](docs/plan/verification-notes.md)
 - **Agent guidance:** [CLAUDE.md](CLAUDE.md)
-- **Workstream briefs:** [docs/plan/workstream-briefs/](docs/plan/workstream-briefs/)
 - **Project wiki:** [docs/wiki/](docs/wiki/) (knowledge base — see [WIKI.md](docs/wiki/WIKI.md))
 
 ## Development

@@ -10,10 +10,30 @@
  * E3: status / slider / stats / dashboard (+ index/devices stubs for WS-C/D).
  */
 
+import { access } from "node:fs/promises";
 import { Command, InvalidArgumentError } from "commander";
+import {
+  AUTONOMY_LEVEL_HELP,
+  AUTONOMY_LEVELS,
+  parseAutonomyLevel,
+  readActionLog,
+  readAutonomyLevel,
+  writeAutonomyLevel,
+} from "../autonomy/index.js";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
-import { buildHookCommand } from "../hooks/index.js";
+import {
+  addEventHook,
+  buildHookCommand,
+  defaultRevalidate,
+  GUIDANCE_FEATURES,
+  type GuidanceScope,
+  guidanceFeature,
+  guidanceRulePath,
+  removeEventHook,
+  removeGuidanceRule,
+  writeGuidanceRule,
+} from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import {
   createProbeRunner,
@@ -27,7 +47,22 @@ import type { HardwareTier, InferenceService } from "../interfaces/inference.js"
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
-import { openTelemetryStore } from "../telemetry/index.js";
+import {
+  appendExample,
+  readExamples,
+  readLastSuggestion,
+  translatePrompt,
+  writeLastSuggestion,
+} from "../prompt/index.js";
+import {
+  buildResumeArgv,
+  createTask,
+  escalateTask,
+  FileTaskStore,
+  isResumable,
+  runQueueLocally,
+} from "../tasks/index.js";
+import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import { embedderSignature, ensureProjectIndexed, writeManifest } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
@@ -44,6 +79,12 @@ import {
   SetupRefusedError,
 } from "./ollama.js";
 import {
+  draftTargetRelPath,
+  listPendingPromotions,
+  renderPendingPromotions,
+  runPromote,
+} from "./promote.js";
+import {
   portInUse,
   proxyStatus,
   removeProxyPid,
@@ -54,11 +95,14 @@ import {
 } from "./proxy-daemon.js";
 import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
+import { collectSessionStateReport } from "./session-report.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
 import { collectStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
+import { findTask, renderTask, renderTaskList, spawnResume } from "./task.js";
+import { runWatch } from "./watch.js";
 import {
   checkWiki,
   defaultUserWikiDir,
@@ -70,7 +114,10 @@ import {
 
 const program = new Command();
 
-program.name("golem").description("Golem — edge offload for Claude (golem.run)").version(VERSION);
+program
+  .name("golem")
+  .description("Golem — universal pre-LLM processing layer (golem.run)")
+  .version(VERSION);
 
 function printReport(report: InitReport): void {
   for (const action of report.actions) {
@@ -339,6 +386,69 @@ wiki
     }
   });
 
+wiki
+  .command("promote")
+  .description(
+    "Review and apply a pending distill draft as a wiki page (Decision 29 append-and-refine)",
+  )
+  .argument("[id]", "draft id (slug) to promote; omit (or use --list) to list pending drafts")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--list", "list pending drafts instead of promoting", false)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .option("--json", "machine-readable output (with --list)", false)
+  .action(
+    async (
+      id: string | undefined,
+      opts: { dir: string; list: boolean; yes: boolean; json: boolean },
+    ) => {
+      try {
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
+        const nowIso = new Date().toISOString();
+
+        // No id (or --list): show what's pending, don't write anything.
+        if (id === undefined || opts.list) {
+          const drafts = await listPendingPromotions(opts.dir);
+          if (opts.json) {
+            process.stdout.write(
+              `${JSON.stringify(
+                drafts.map((d) => ({
+                  id: d.slug,
+                  type: d.frontmatter.type,
+                  target: draftTargetRelPath(d),
+                  sources: d.frontmatter.sources,
+                  created: d.frontmatter.created,
+                })),
+                null,
+                2,
+              )}\n`,
+            );
+          } else {
+            process.stdout.write(renderPendingPromotions(drafts, nowIso));
+          }
+          return;
+        }
+
+        const outcome = await runPromote({
+          projectDir: opts.dir,
+          wikiDir,
+          slug: id,
+          nowIso,
+          yes: opts.yes,
+        });
+        if (outcome.kind === "cancelled") {
+          process.stdout.write("aborted — draft left in place.\n");
+          return;
+        }
+        process.stdout.write(
+          `${outcome.created ? "created" : "updated"}: ${outcome.relPath} (draft ${outcome.slug} consumed)\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
 async function resolvePort(
   dir: string,
   portOpt?: string,
@@ -570,8 +680,12 @@ mcp
           );
         }
       }
+      // R4.3 — one telemetry store shared by the compression wrapper (retrieval
+      // events) and deps.telemetry (per-call tool events + the stats summary).
+      const telemetry = openTelemetryStore(opts.dir);
       await serveStdio({
-        compression: mcpCompressionService(opts.dir),
+        compression: mcpCompressionService(opts.dir, telemetry),
+        telemetry,
         // Project-scope settings file — the same file (and nested slider.level
         // key) the E1 loader and `golem slider` use (verification-notes §20).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
@@ -720,7 +834,15 @@ program
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; project?: string; json: boolean }) => {
     try {
-      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project);
+      // R4.3 — fold durable per-tool usage into the report (best-effort: a
+      // telemetry read failure just omits the section, never fails `stats`).
+      let toolUsage: ToolUsageStats | undefined;
+      try {
+        toolUsage = await openTelemetryStore(opts.dir).aggregateToolUsage(opts.project);
+      } catch {
+        toolUsage = undefined;
+      }
+      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
       );
@@ -822,13 +944,561 @@ program
             generated_at: new Date().toISOString(),
           };
         },
+        // R5.2 — the one consolidated read model every renderer shares.
+        sessionState: () => collectSessionStateReport(opts.dir),
       });
       process.stdout.write(`golem dashboard on ${handle.url} (Ctrl+C to stop)\n`);
+      process.stdout.write(`  consolidated session state: ${handle.url}api/state\n`);
       const shutdown = (): void => {
         void handle.close().finally(() => process.exit(0));
       };
       process.on("SIGINT", shutdown);
       process.on("SIGTERM", shutdown);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+program
+  .command("watch")
+  .description("Full-screen sidecar TUI of Golem's live session state (run in a second pane)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--interval <ms>", "refresh interval in milliseconds")
+  .option("--no-color", "disable ANSI colors")
+  .action(async (opts: { dir: string; interval?: string; color?: boolean }) => {
+    try {
+      const refreshMs = opts.interval === undefined ? undefined : Number(opts.interval);
+      if (refreshMs !== undefined && (!Number.isFinite(refreshMs) || refreshMs < 100)) {
+        throw new InitError(`invalid --interval "${opts.interval}" (must be ≥ 100 ms)`);
+      }
+      await runWatch({
+        dir: opts.dir,
+        ...(refreshMs !== undefined ? { refreshMs } : {}),
+        ...(opts.color !== undefined ? { color: opts.color } : {}),
+      });
+      process.exit(0);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// R5.1 — durable task queue (WS-F1 / spec 20a): checkpointed prompts that
+// survive session/credit limits and resume via headless `claude` (§65).
+const taskCmd = program
+  .command("task")
+  .description("Durable task queue — persist a prompt/agent and resume it later (survives limits)");
+
+taskCmd
+  .command("add")
+  .description("Queue a durable task (a prompt to run/resume later)")
+  .argument("<prompt...>", "the prompt/instructions to persist")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--title <text>", "short label for `task list`")
+  .option("--session-id <uuid>", "Claude Code session id to resume deterministically")
+  .option("--continue", "resume the most-recent conversation instead of a session id", false)
+  .option("--agent <type>", "agent type to relaunch as")
+  .option("--idem-key <key>", "idempotency key for the side effect this task owns")
+  .option("--not-before <iso>", "capacity gate: don't auto-resume before this ISO time")
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (
+      prompt: string[],
+      opts: {
+        dir: string;
+        title?: string;
+        sessionId?: string;
+        continue: boolean;
+        agent?: string;
+        idemKey?: string;
+        notBefore?: string;
+        json: boolean;
+      },
+    ) => {
+      try {
+        const task = createTask({
+          prompt: prompt.join(" "),
+          continueLatest: opts.continue,
+          ...(opts.title !== undefined ? { title: opts.title } : {}),
+          ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
+          ...(opts.agent !== undefined ? { agentType: opts.agent } : {}),
+          ...(opts.idemKey !== undefined ? { idempotencyKey: opts.idemKey } : {}),
+          ...(opts.notBefore !== undefined ? { notBefore: opts.notBefore } : {}),
+        });
+        const stored = await new FileTaskStore(opts.dir).put(task);
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(stored, null, 2)}\n` : `queued task ${stored.id}\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+taskCmd
+  .command("list")
+  .description("List durable tasks (newest-updated first)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const tasks = await new FileTaskStore(opts.dir).list();
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(tasks, null, 2)}\n` : renderTaskList(tasks),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("show")
+  .description("Show one task in detail (by id or unique id prefix)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (id: string, opts: { dir: string; json: boolean }) => {
+    try {
+      const task = findTask(await new FileTaskStore(opts.dir).list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      process.stdout.write(opts.json ? `${JSON.stringify(task, null, 2)}\n` : renderTask(task));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("resume")
+  .description("Build (and optionally spawn) the headless resume command for a task")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--spawn", "actually launch it (detached); default just prints the command", false)
+  .option("--output-json", "resume with --output-format json", false)
+  .option("--permission-mode <mode>", "begin the resumed session in this permission mode")
+  .action(
+    async (
+      id: string,
+      opts: { dir: string; spawn: boolean; outputJson: boolean; permissionMode?: string },
+    ) => {
+      try {
+        const store = new FileTaskStore(opts.dir);
+        const task = findTask(await store.list(), id);
+        if (task === "none") throw new InitError(`no task matching "${id}"`);
+        if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+        if (!isResumable(task)) {
+          const why =
+            task.notBefore !== undefined && task.state !== "done"
+              ? `gated until ${task.notBefore}`
+              : `state is ${task.state}`;
+          process.stdout.write(`task ${task.id} is not resumable (${why})\n`);
+          return;
+        }
+        const argv = buildResumeArgv(task, {
+          outputJson: opts.outputJson,
+          ...(opts.permissionMode !== undefined ? { permissionMode: opts.permissionMode } : {}),
+        });
+        if (!opts.spawn) {
+          process.stdout.write(
+            `resume command (pass --spawn to launch it):\n  ${argv.join(" ")}\n`,
+          );
+          return;
+        }
+        const result = spawnResume(argv);
+        await store.put({ ...task, state: "running", attempts: task.attempts + 1 });
+        process.stdout.write(
+          result.spawned
+            ? `resumed task ${task.id} (pid ${result.pid ?? "?"})\n`
+            : `could not spawn — ${result.note ?? "run it manually"}:\n  ${result.command}\n`,
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+taskCmd
+  .command("cancel")
+  .description("Mark a task cancelled (keeps the record; use it to stop auto-resume)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--delete", "remove the task record entirely instead of marking it cancelled", false)
+  .action(async (id: string, opts: { dir: string; delete: boolean }) => {
+    try {
+      const store = new FileTaskStore(opts.dir);
+      const task = findTask(await store.list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      if (opts.delete) {
+        await store.delete(task.id);
+        process.stdout.write(`deleted task ${task.id}\n`);
+        return;
+      }
+      await store.put({ ...task, state: "cancelled" });
+      process.stdout.write(`cancelled task ${task.id}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("run")
+  .description("Service queued tasks LOCALLY (Ollama tier) — non-blocking multiplexing (R5.3)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--concurrency <n>", "max tasks serviced at once (default 2)", "2")
+  .option("--limit <n>", "cap how many queued tasks to service this run")
+  .action(async (opts: { dir: string; concurrency: string; limit?: string }) => {
+    try {
+      const concurrency = Number(opts.concurrency);
+      if (!Number.isInteger(concurrency) || concurrency < 1) {
+        throw new InitError(`invalid --concurrency "${opts.concurrency}"`);
+      }
+      const limit = opts.limit === undefined ? undefined : Number(opts.limit);
+      if (limit !== undefined && (!Number.isInteger(limit) || limit < 1)) {
+        throw new InitError(`invalid --limit "${opts.limit}"`);
+      }
+      const inference = await buildInferenceForDir(opts.dir);
+      if (inference === null) {
+        process.stdout.write(
+          "local model unavailable — queued tasks left as-is (start Ollama, then `golem task run`).\n",
+        );
+        return;
+      }
+      const result = await runQueueLocally(
+        new FileTaskStore(opts.dir),
+        { inference },
+        {
+          concurrency,
+          ...(limit !== undefined ? { limit } : {}),
+        },
+      );
+      if (result.total === 0) {
+        process.stdout.write("no queued tasks to service\n");
+        return;
+      }
+      if (result.localModelUnavailable) {
+        process.stdout.write(
+          `local model unavailable — ${result.total} task(s) left queued (retry when Ollama is up).\n`,
+        );
+        return;
+      }
+      process.stdout.write(
+        `serviced ${result.serviced}/${result.total} queued task(s) locally` +
+          `${result.failed > 0 ? ` (${result.failed} failed — see \`golem task show\`)` : ""}.\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+taskCmd
+  .command("escalate")
+  .description("Hand a task to the Claude tier: fold its local result into the prompt (R5.3 / 21a)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (id: string, opts: { dir: string }) => {
+    try {
+      const store = new FileTaskStore(opts.dir);
+      const task = findTask(await store.list(), id);
+      if (task === "none") throw new InitError(`no task matching "${id}"`);
+      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      const stored = await store.put(escalateTask(task, null));
+      process.stdout.write(
+        `escalated task ${stored.id} to the Claude tier — resume it with \`golem task resume ${stored.id.slice(0, 8)} --spawn\`\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+/** Build an InferenceService for `dir`, or null if the local model is unreachable. */
+async function buildInferenceForDir(dir: string): Promise<InferenceService | null> {
+  try {
+    const { settings } = await loadConfig({ projectDir: dir });
+    const client = new OllamaClient({ baseUrl: settings.inference.ollama_base_url });
+    const facts = await detectCapability(createProbeRunner());
+    return new OllamaInferenceService(client, facts);
+  } catch {
+    return null;
+  }
+}
+
+// R5.4 — cruise-control autonomy (WS-F4 / spec 20d). Threat model: ADR-0002.
+const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
+
+// Pure command group (no parent options/action) so each subcommand's own
+// `--dir` is honored — a parent-level `--dir` shadows the child's (learned the
+// hard way in R5.4 e2e). `golem autonomy` alone runs the default `show`.
+const autonomyCmd = program
+  .command("autonomy")
+  .description("Cruise-control autonomy level + approval gate (see ADR-0002)");
+
+autonomyCmd
+  .command("show", { isDefault: true })
+  .description("Show the current autonomy level")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const level = await readAutonomyLevel(opts.dir);
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify({ level, help: AUTONOMY_LEVEL_HELP[level] }, null, 2)}\n`,
+        );
+        return;
+      }
+      process.stdout.write(`autonomy level: ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`);
+      if (level !== "manual") {
+        process.stdout.write(
+          `⚠ Golem is auto-approving some steps at level "${level}". Destructive/outward ` +
+            `actions still require your approval (ADR-0002). Set 'manual' to disable.\n`,
+        );
+      }
+      process.stdout.write(
+        "the gate only takes effect once wired: `golem autonomy wire` (remove: `unwire`).\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("set")
+  .description(`Set the autonomy level (${AUTONOMY_LEVELS.join(" | ")})`)
+  .argument("<level>", "autonomy level", parseAutonomyLevel)
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (level: ReturnType<typeof parseAutonomyLevel>, opts: { dir: string }) => {
+    try {
+      await writeAutonomyLevel(opts.dir, level);
+      process.stdout.write(`autonomy level set to ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`);
+      if (level !== "manual") {
+        process.stdout.write(
+          `⚠ Golem will now auto-approve ${level === "outcome" ? "read + write" : "read-only"} ` +
+            `actions once wired. Destructive/outward steps still require your approval.\n`,
+        );
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("wire")
+  .description("Install the PreToolUse gate hook in .claude/settings.json (activates autonomy)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const action = await addEventHook(
+        { projectDir: opts.dir },
+        "PreToolUse",
+        PRE_TOOL_USE_HOOK_COMMAND,
+      );
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+      process.stdout.write("autonomy gate wired. Restart Claude Code to activate.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("unwire")
+  .description("Remove the PreToolUse gate hook (deactivates autonomy)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const action = await removeEventHook(
+        { projectDir: opts.dir },
+        "PreToolUse",
+        PRE_TOOL_USE_HOOK_COMMAND,
+      );
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("log")
+  .description("Show the autonomy action log (auditable allow/ask/defer decisions)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("-n, --limit <count>", "how many entries to show", "50")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; limit: string; json: boolean }) => {
+    try {
+      const limit = Number(opts.limit);
+      if (!Number.isInteger(limit) || limit <= 0)
+        throw new InitError(`invalid --limit "${opts.limit}"`);
+      const entries = await readActionLog(opts.dir, limit);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+        return;
+      }
+      if (entries.length === 0) {
+        process.stdout.write("no autonomy decisions logged yet\n");
+        return;
+      }
+      for (const e of entries) {
+        process.stdout.write(
+          `  ${e.ts}  ${e.decision.padEnd(6)} ${e.action.padEnd(11)} ${e.tool}\n`,
+        );
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// R5.5 (SPIKE) — prompt translation (WS-F7 / spec 20g). Always shown for
+// inspection, never sent, never on the proxy path. Demand-gated.
+const promptCmd = program
+  .command("prompt")
+  .description(
+    "Prompt translation (spike): rewrite a raw note into a clearer prompt (shown, never sent)",
+  );
+
+promptCmd
+  .command("translate")
+  .description(
+    "Suggest a clearer prompt for a raw note (local model; you decide whether to use it)",
+  )
+  .argument("<note...>", "the raw note to translate")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (note: string[], opts: { dir: string }) => {
+    try {
+      const inference = await buildInferenceForDir(opts.dir);
+      if (inference === null) {
+        process.stdout.write("local model unavailable — start Ollama, then retry.\n");
+        return;
+      }
+      const raw = note.join(" ");
+      const examples = await readExamples(opts.dir);
+      const result = await translatePrompt(raw, { inference, examples });
+      if (result.translated === null) {
+        process.stdout.write(`could not translate: ${result.error ?? "unknown error"}\n`);
+        return;
+      }
+      await writeLastSuggestion(opts.dir, raw, result.translated);
+      process.stdout.write(
+        `suggested prompt (grounded in ${result.examplesUsed} accepted example(s)):\n\n` +
+          `${result.translated}\n\n` +
+          "— Golem never sends this. Copy it if you like it; run `golem prompt accept` to teach your style.\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+promptCmd
+  .command("accept")
+  .description("Record the last suggested translation as an accepted style example")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const last = await readLastSuggestion(opts.dir);
+      if (last === null) {
+        process.stdout.write("nothing to accept — run `golem prompt translate <note>` first.\n");
+        return;
+      }
+      await appendExample(opts.dir, { ...last, ts: new Date().toISOString() });
+      process.stdout.write("recorded — future translations will lean toward this style.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// Guidance = Claude Code project rules (`.claude/rules/golem-<feature>.md`).
+// Enabling writes the rule file (auto-loaded every session); disabling removes
+// it. Scope: --project (committed, team-wide) or --user (gitignored, just you).
+const guidanceCmd = program
+  .command("guidance")
+  .description("Manage the Golem guidance rules that direct Claude to use features");
+
+const unknownFeature = (name: string): never => {
+  process.stderr.write(
+    `golem: no guidance feature "${name}" (try: ${GUIDANCE_FEATURES.map((x) => x.name).join(", ")})\n`,
+  );
+  process.exit(2);
+};
+
+const ruleFileExists = async (
+  dir: string,
+  name: string,
+  scope: GuidanceScope,
+): Promise<boolean> => {
+  try {
+    await access(guidanceRulePath(dir, name, scope));
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+guidanceCmd
+  .command("list", { isDefault: true })
+  .description("List guidance features and whether each is enabled for this project")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    process.stdout.write("Golem guidance features (.claude/rules/golem-<name>.md):\n\n");
+    for (const g of GUIDANCE_FEATURES) {
+      const project = await ruleFileExists(opts.dir, g.name, "project");
+      const user = await ruleFileExists(opts.dir, g.name, "user");
+      const state = project ? "on (project)" : user ? "on (user)" : "off";
+      const tag = g.seededByDefault ? "default" : "opt-in ";
+      process.stdout.write(`  [${tag}] ${g.name.padEnd(20)} ${state.padEnd(13)} ${g.summary}\n`);
+    }
+    process.stdout.write(
+      "\nEnable:  golem guidance enable <name> [--user]   (default scope: project/committed)\n" +
+        "Disable: golem guidance disable <name> [--user]\n" +
+        "Show:    golem guidance show <name>\n",
+    );
+  });
+
+guidanceCmd
+  .command("show")
+  .description("Print one guidance rule's body")
+  .argument("<name>", `feature (${GUIDANCE_FEATURES.map((g) => g.name).join(", ")})`)
+  .action((name: string) => {
+    const g = guidanceFeature(name);
+    if (g === null) unknownFeature(name);
+    else process.stdout.write(`${g.snippet}\n`);
+  });
+
+guidanceCmd
+  .command("enable")
+  .description("Write a guidance rule file so Claude uses this feature (auto-loaded)")
+  .argument("<name>", "feature name")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option(
+    "--user",
+    "personal scope (gitignored .local.md) instead of committed project scope",
+    false,
+  )
+  .action(async (name: string, opts: { dir: string; user: boolean }) => {
+    try {
+      const g = guidanceFeature(name);
+      if (g === null) return unknownFeature(name);
+      const scope: GuidanceScope = opts.user ? "user" : "project";
+      const action = await writeGuidanceRule(opts.dir, g, scope);
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+      process.stdout.write("restart Claude Code (or reload) to pick up the rule.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+guidanceCmd
+  .command("disable")
+  .description("Remove a guidance rule file so Claude no longer uses this feature")
+  .argument("<name>", "feature name")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--user", "only remove the personal (.local.md) rule; default removes both scopes", false)
+  .action(async (name: string, opts: { dir: string; user: boolean }) => {
+    try {
+      if (guidanceFeature(name) === null) return unknownFeature(name);
+      const action = await removeGuidanceRule(opts.dir, name, opts.user ? "user" : "both");
+      process.stdout.write(
+        action.kind === "skip"
+          ? `${name} was not enabled — nothing to remove.\n`
+          : `removed: ${action.path}\n`,
+      );
     } catch (err) {
       fail(err);
     }
@@ -959,6 +1629,17 @@ const hookCmd = buildHookCommand({
       return (await buildKnowledgeStack({ projectDir })).knowledge;
     } catch {
       return null; // KB unavailable → capture skips the vector ingest (cache still written)
+    }
+  },
+  // Conditional revalidation of cached WebFetch URLs, gated by the opt-in
+  // `knowledge.webcache_revalidate` setting (default off). Kept in the CLI layer
+  // so src/hooks stays free of a config dependency.
+  revalidate: defaultRevalidate,
+  revalidateEnabled: async (projectDir) => {
+    try {
+      return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
+    } catch {
+      return false; // config unreadable → behave as if disabled (pure-TTL)
     }
   },
 });

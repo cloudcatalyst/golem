@@ -19,6 +19,8 @@ export type {
   AvoidedUpstreamStats,
   TelemetryEvent,
   TelemetryStore,
+  ToolUsagePerTool,
+  ToolUsageStats,
   UsageByLevel,
   UsageBySemanticForced,
   UsageTotals,
@@ -155,6 +157,45 @@ export function recordAvoidedUpstream(
     ccrRefsStored: 0,
     avoidedUpstreamInputTokens: inputTokensAvoided,
     avoidedUpstreamOutputTokens: outputTokensAvoided,
+  };
+  return store.record(telemetryEvent);
+}
+
+/**
+ * Persist one local-tool call event (R4.3 — closes the verification-notes §59
+ * gap: `search`/`fetch`/`ingest`/`wiki_read`/`coder` were uninstrumented).
+ * `nowIso` is injected like {@link recordPipelineEvent}. Not a pipeline run
+ * (`kind: "tool"` keeps it out of aggregate()'s `requests`/gross-token counts,
+ * same treatment as usage/avoidedUpstream); rolled up separately by
+ * `TelemetryStore.aggregateToolUsage`. Fire-and-forget safe — a telemetry
+ * write must never fail the tool call the model is waiting on.
+ */
+export function recordToolCall(
+  store: TelemetryStore,
+  event: {
+    readonly projectId: string;
+    readonly tool: string;
+    readonly durationMs: number;
+    readonly resultBytes: number;
+    /** For `coder`: the local model that produced the draft. */
+    readonly model?: string | undefined;
+    /** For `coder`: character length of the locally-drafted text. */
+    readonly draftChars?: number | undefined;
+  },
+  nowIso: string,
+): Promise<void> {
+  const telemetryEvent: TelemetryEvent = {
+    ts: nowIso,
+    projectId: event.projectId,
+    level: 0,
+    kind: "tool",
+    stageSavings: {},
+    ccrRefsStored: 0,
+    tool: event.tool,
+    toolDurationMs: event.durationMs,
+    toolResultBytes: event.resultBytes,
+    ...(event.model !== undefined ? { toolModel: event.model } : {}),
+    ...(event.draftChars !== undefined ? { toolDraftChars: event.draftChars } : {}),
   };
   return store.record(telemetryEvent);
 }

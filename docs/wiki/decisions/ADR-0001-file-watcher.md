@@ -2,7 +2,7 @@
 title: ADR-0001 File Watcher Backend
 type: adr
 tags: [knowledge, file-watching, cross-platform, decision]
-sources: [docs/plan/next_batch.md, docs/verification-notes.md]
+sources: [docs/plan/next_batch.md, docs/plan/verification-notes.md]
 created: 2026-07-11
 updated: 2026-07-11
 ---

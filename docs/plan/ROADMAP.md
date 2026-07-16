@@ -1,37 +1,68 @@
-# Golem Roadmap (post-P0/P1)
+# Golem Roadmap
 
-> **Written 2026-07-11** by a revalidation session. This is the durable,
-> multi-release view that sits above `IMPLEMENTATION_PLAN.md` (workstreams,
-> frozen interfaces) and whatever the current actionable batch file is
-> (`R1_BATCH.md` at time of writing). When a release's work is picked up, spin
-> its tasks into a batch brief in the style the repo already uses; when it
-> lands, mark it here and move on.
+> **Rewritten 2026-07-16 (spec Decision 36).** This is the durable, multi-release
+> view that sits above `IMPLEMENTATION_PLAN.md` (workstreams, frozen interfaces)
+> and the current actionable batch file (`R4_BATCH.md`). When a release's work is
+> picked up, spin its tasks into a batch brief in the style the repo already
+> uses; when it lands, mark it here and move on.
 
-## Where we are (validated 2026-07-11)
+## The organising intent (Decision 36)
+
+Everything below is sorted by one criterion: does it serve the working pattern
+that inspired the wiki-first pivot (spec Decision 28 — the "LLM Wiki /
+developer's second brain" article)?
+
+1. **Plan together.** A place where the user and Claude collaborate on planning:
+   reading captured notes and ideas, and turning them into tasks.
+2. **Distill everything.** The project and its research distilled into the
+   committed wiki; the knowledge base collects raw articles; web fetches are
+   cached and served offline.
+3. **A local co-developer.** A robust, token-friendly local coder that drafts so
+   the paid model can judge.
+
+Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 landed in **R4** (all
+seven tasks done, 2026-07-16). The user then lifted the R5 hold and kicked off
+**R5 — Autonomy & orchestration**, now the active release (`R5_BATCH.md`). The
+multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
+
+## Where we are (validated 2026-07-16)
 
 - **Baseline green:** `tsc --noEmit`, `biome check`, and `vitest run`
-  (77 files / 728 tests) all pass on this machine.
-- **P0 shipped:** proxy + redaction + native lossless + telemetry (WS-A),
-  unified MCP server + 8 tools (WS-B), CLI + `init`/`uninit` + VS Code
-  extension + statusline (WS-E).
-- **P1 largely shipped:** zero-setup KB with a pure-TS hashing embedder and a
-  durable `FileVectorDriver`, semantic upgrade to `bge-m3` when Ollama is
-  present (WS-C); capability detection + Ollama bootstrap + local-drafter
-  intercept, slider levels 0–3 (WS-D, simplified by Decision 30); wiki W1–W3 (WS-W); file watcher (T6).
-- **The prior batch (`NEXT_BATCH.md`, tasks T1–T7) is fully landed** — telemetry
-  `ccrRefsRetrieved`, wiki skills, distillation engine, `golem note`,
-  graph-first search, file watcher, and the entropy/path redaction fix.
+  (886 tests) all pass.
+- **R1–R3 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
+  dogfooded daily; compression is honestly scoped as situational (Decision 23);
+  positioning is the universal pre-LLM processor (Decision 32).
 
-## The strategic finding that shapes everything below
+## Shipped
 
-`verification-notes.md` §30–§35 + spec **Decision 23** re-based the token-savings
-thesis on measured evidence: native lossless compression saves **≈0%** on cached
-Anthropic traffic, heuristic Headroom **~5.3%**, and the ML tier **<1%** on code
-traffic. **No net-of-cache savings number has ever been measured live.** Until it
-is (R1.1), Golem cannot honestly headline any savings figure, and the lead
-positioning is redaction + local tools + routing + honest observability, with
-compression demoted to *situational* (non-caching upstreams). R2 is the search
-for the real lever; it is gated on R1.1's measurement rigor.
+Details live in the wiki (`docs/wiki/debriefs/`, `docs/wiki/syntheses/`) and the
+spec Decisions Log; the batch briefs themselves were retired (git history has
+them, Decision 36).
+
+- **R1 — Honest baseline** (2026-07-11): net-of-cache A/B infra (§54),
+  positioning Decision 32, redaction false-positive + provider-rule fixes,
+  cross-OS e2e smoke. Open remainder: R1.6 (macOS/Linux Ollama manual
+  verification — blocked on hardware, see
+  `wiki/questions/r1.6-ollama-verification-blocked.md`).
+- **R2 — Real savings, evidence-gated** (2026-07-11): cache-safe bypass A/B
+  infra (R2.6, live A/B deferred), `avoidedUpstream` telemetry + context
+  substitution (R2.2), local-answer contract (R2.3 / Decision 33 — still
+  PROPOSED pending human review of a real served answer), expand↔Headroom-CCR
+  backfill (R2.4).
+- **R3 — Knowledge depth** (2026-07-12 → 2026-07-15): chat-judge rerank
+  (Decision 34), HTML/PDF extractors, tree-sitter chunker (opt-in), user-scope
+  wiki federation + weekly synthesis (W4), note→distill shaping, MEMORY-scope
+  federation via the Headroom memory sidecar (C4), LanceDB no-go spike (R3.7 —
+  recommended the `#flush()` stream-write fix, scheduled as R4.6).
+
+## Carried-over loose ends (visible, not lost)
+
+| Item | Status | Where tracked |
+|---|---|---|
+| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | **reviewed 2026-07-16 → stays PROPOSED** (served answer was wrong; test can't run as designed — no semantic embedder). Flip now gated on a fair re-review after `nomic-embed-text` + semantic reindex. | spec Decision 33; verification-notes §64 |
+| R2.6 live semantic-forced A/B on real traffic | deferred (needs a proxy restart mid-dogfood; only meaningful on non-caching upstreams) | verification-notes §60 |
+| R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware | wiki questions page |
+| `FileVectorDriver.#flush()` crash past ~30k chunks | scheduled | **R4.6** |
 
 ---
 
@@ -39,68 +70,46 @@ for the real lever; it is gated on R1.1's measurement rigor.
 
 Legend: 🔬 research/spike · 🧭 decision · 🔒 security/ToS gate · 🛠️ build
 
-### R1 — Honest baseline (ship-readiness)
-Make the current build correct, measured, and honestly positioned before any
-public/golem.run push. No new architecture. **Active batch: `R1_BATCH.md`.**
+### R4 — Co-developer core (ACTIVE)
+Make goals 1 and 3 real: a planning-collaboration surface, a grounded,
+measured, iterating local coder, and the last robustness gaps in the
+distill/KB loop. **Active batch: `R4_BATCH.md`.**
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R1.1 | Net-of-cache A/B: real billed `cache_read` vs uncached tokens, ± Headroom sidecar, on live traffic. Hard gate for every savings claim. | 🔬 | §34.3, §36, Dec 23 |
-| R1.2 | Positioning decision: assistant-for-Claude vs universal pre-LLM processor; update golem.run copy to the evidence-based framing. | 🧭 | Dec 22/23 |
-| R1.3 | Redaction: credit-card false-positive on sparse digit runs (Luhn on space/dash-separated small numbers). T-C3-gated. | 🛠️🔒 | §50 |
-| R1.4 | Redaction: provider-rule gaps — Google `AIza`, Stripe `sk_live_`, GCP `ya29.`, Azure conn-strings. | 🛠️🔒 | §24 |
-| R1.5 | Plan housekeeping: mark shipped work in `IMPLEMENTATION_PLAN.md`; syntheses wiki page (plan-gated); retire the old batch file. | 🛠️ | NEXT_BATCH §5 |
-| R1.6 | macOS + Linux manual Ollama-setup verification (the §48 checklist rows still unrun). | 🔬 | §48 |
-| R1.7 | T-C2 cross-OS e2e smoke in CI + verify Linux recursive `fs.watch` reliability (else fall back to chokidar per ADR-0001). | 🛠️🧭 | §51, T-C2 |
+| R4.1 | ~~**Planning-collaboration surface:** `docs/plan/BACKLOG.md` ideas inbox + `/golem/plan` skill — reads `golem note` captures, wiki `questions/`, pending distill drafts, and this ROADMAP, then co-drafts task proposals with the user (plan-gated writes; approved tasks graduate into the ROADMAP/batch).~~ — **DONE** 2026-07-16: shipped `docs/plan/BACKLOG.md` (Date/Idea/Source/Status inbox, human-editable + plan-gated agent appends) and the `/golem/plan` skill (`src/cli/skills.ts`, installed by `golem init`): read-only gather of notes/`questions/`/distill drafts/BACKLOG/ROADMAP → grouped candidates → plan-gated proposals → cite-sources/flag-inference/admit-gaps contract. +4 unit tests, 890 green. See debriefs/2026-07-16-R4.1.md. | ✅ | Dec 36, Dec 20f |
+| R4.2 | ~~**Coder grounding:** retrieval-augmented drafting — `coder` auto-injects relevant KB/wiki hits (size-capped, opt-out param) so local drafts stop being context-blind.~~ — **DONE** 2026-07-16: extracted a shared `assembleHits` (graph→vector→boost→rerank, reused by `search` and coder), added `gatherGrounding` (≤4 hits/≤4000 chars, `ground` opt-out + `project_id` inputs, `grounding:{sources,injected_chars}` in output, degrades to ungrounded on any failure). No frozen interface touched. +5 tests, 895 green. See debriefs/2026-07-16-R4.2.md. | ✅ | Dec 36 |
+| R4.3 | ~~**Honest tool telemetry:** instrument `search`/`fetch`/`ingest`/`wiki_read`/`coder` with per-call events + a drafted-locally token bucket — closes the §59 gap so "token-friendly" is measured, not asserted.~~ — **DONE** 2026-07-16: new `kind:"tool"` telemetry event + `recordToolCall`/`aggregateToolUsage`; the 5 tools record duration/result-bytes (coder also model + drafted-locally chars) fire-and-forget; surfaced in the `stats` MCP tool (`tool_usage`) and `golem stats` ("local tools" section). No frozen interface touched. +6 tests, 901 green. See debriefs/2026-07-16-R4.3.md. | ✅ | §59, Dec 24 |
+| R4.4 | ~~**Coder iteration loop:** optional draft → local-judge critique → revise pass (existing `drafter`/`judge` roles, no interface change); harden the `/golem/develop` skill around it.~~ — **DONE** 2026-07-16: `src/mcp/coder-refine.ts` `refineDraft` (judge critiques via forced-JSON verdict, drafter revises once on high/medium issues, best-effort fallback); `coder` gains `refine` (default off) + `refinement` output; `/golem/develop` hardened (grounding auto, refine for non-trivial, skip coder for tiny edits). No interface change. +9 tests, 912 green. See debriefs/2026-07-16-R4.4.md. | ✅ | Dec 35 |
+| R4.5 | ~~**Distill-draft promotion UX + wiki-lint cleanup:** review/apply flow for `.golem/distill/` drafts (`golem wiki promote`-style), closing capture → distill → promote; plus fix the 18 pre-existing `golem wiki check` issues in dated pages (broken/missing wikilinks) and consider wiring the check into CI.~~ — **DONE** 2026-07-16: `golem wiki promote [id\|--list\|--yes]` (`src/cli/promote.ts`, append-and-refine upsert + draft consume, Decision 26 non-TTY refuse); checker now ignores code-fenced/inline wikilinks; all 18 lint issues fixed (17 link repairs + code-strip); `wiki check` wired into CI. `golem wiki check` → 0 issues. +9 tests, 921 green. See debriefs/2026-07-16-R4.5.md. | ✅ | WS-W W3 follow-up, Dec 36 debrief |
+| R4.6 | ~~**`FileVectorDriver.#flush()` stream-write fix** so the raw-article KB can grow past ~30k chunks without crashing.~~ — **DONE** 2026-07-16: `#flush()` streams JSON lines via `createWriteStream` (backpressure-aware, atomic temp+rename kept) instead of one `Array.join` string; benchmark confirms 50k/60k no longer hit the `RangeError` wall (was 30k–50k), search latency unchanged. +1 test, 922 green. See debriefs/2026-07-16-R4.6.md. | ✅ | R3.7 spike |
+| R4.7 | ~~**Drafter quality/catalog re-verification:** re-verify current best small coder models (advisory per Decision 6), measure coder draft accept-rate; carry R1.6's manual checklist where hardware allows.~~ — **DONE** 2026-07-16: re-verified catalog (no change — `qwen3-coder` ships only 30b/480b, no small tags; qwen2.5-coder still best for single-function drafts); measured ungrounded baseline 2 accept / 3 revise / 0 reject (accept for self-contained, revise for project-integrated); R1.6 still hardware-blocked. See verification-notes §63, syntheses/r4.7-drafter-quality-baseline.md. | ✅ | Dec 6, R1.6 |
 
-### R2 — Real savings, evidence-gated
-The actual big-savings levers. Every build here is gated on R1.1 — no repeat of
-the §31 artifact. **Active batch: `R2_BATCH.md`.**
-
-| # | Task | Type | Source |
-|---|---|---|---|
-| R2.5 | ~~**Verify** whether Headroom can disable `read_lifecycle`~~ — **DONE** 2026-07-11 (verification-notes §58): possible but not the right lever; the cache-risky half is already off by default; the library's real cache-safe mechanism (read maturation) is proxy-only, out of reach for Golem's sidecar. | 🔬 | §53, §58, Dec 31 |
-| R2.6 | ~~Build the **cache-safe structural tier**~~ — **⚠️ PARTIAL** 2026-07-11 (verification-notes §60): opt-in `force_semantic_on_caching` bypass + `aggregateUsageBySemanticForced`/`semanticForcedReportRows` A/B infra shipped and tested; live real-traffic A/B deliberately deferred (would require restarting the dogfooded proxy mid-session). Gate defaults OFF pending that follow-up. | 🛠️ | §58, §60, Dec 31 |
-| R2.1 | ~~Decision 24 spike: measure real `avoidedUpstream` token volume~~ — **DONE** 2026-07-11 (verification-notes §59): no telemetry exists yet for KB-answer substitution itself (`search`/`fetch`/`ingest`/`wiki_read` uninstrumented); the one real proxy signal (CCR retrieval rate, 0 misses/1051 stores) is encouraging but indirect. R2.2 to ship its own bucket. | 🔬 | Dec 24 |
-| R2.4 | ~~Fix the `expand`↔Headroom-CCR gap~~ — **DONE** 2026-07-11 (verification-notes §61): confirmed Headroom's `hash=` markers are reproducible SHA-256/MD5-prefix digests of the elided content; `backfillHeadroomCcrRefs` backfills Golem's own CCR store under that hash so `expand` recovers it, no marker-text changes. | 🛠️ | §38, §61 |
-| R2.2 | ~~Build context-substitution (conservative sub-mode) behind the compression seam + `avoidedUpstream` telemetry bucket~~ — **DONE** 2026-07-11 (verification-notes §62): shipped as pipeline Stage 4, gated by the existing `semanticCompression !== "off"` slot (Decision 24's "old ≥3" translates to new levels 2-3) + the Decision-31 non-caching-upstream gate; webcache-only v1 scope; new `avoidedUpstream` telemetry bucket (`recordAvoidedUpstream`/`aggregateAvoidedUpstream`). | 🛠️ | §62, Dec 24 |
-| R2.3 | ~~Local-answer sub-mode contract + recorded-shape tests (proxy-as-responder)~~ — **DONE** 2026-07-11 (Decision 33, PROPOSED): new frozen `LocalAnswerService` contract + `ProxyRequest.respondDirectly` seam, single-turn/extractive/confidence-gated, decoupled from the slider, opt-in and off by default. Contract/unit/integration tests all green (86 files, 809 tests). Pending human review of a real served answer before flipping to ACCEPTED. | 🛠️🔒 | Dec 24 |
-
-**R2 batch complete** 2026-07-11 (R2.5, R2.6⚠️partial, R2.1, R2.4, R2.2, R2.3
-all landed) — see `R2_BATCH.md`. **Active batch: `R3_BATCH.md`.**
-
-### R3 — Knowledge depth
-Make the KB/wiki genuinely strong now that the retrieval spine exists.
+### R5 — Autonomy & orchestration — ✅ SHIPPED (2026-07-16)
+Formerly R4. Hold lifted 2026-07-16 by explicit user call; all five tasks landed
+the same day (suite 922 → 1018 green). Retrospective:
+`docs/wiki/syntheses/r5-autonomy-orchestration-batch.md`; memos:
+`docs/plan/proposals/r5-autonomy-orchestration-memos.md`; batch:
+`docs/plan/R5_BATCH.md`. R5.4's threat model is ADR-0002.
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R3.1 | ~~Rerank — cross-encoder or chat-judge rerank at slider ≥2 (needs a new optional reranker surface; frozen `InferenceService` has no `rerank`).~~ — **DONE** 2026-07-12 (Decision 34): chat-judge rerank via the existing "judge" role + `jsonSchema` on `InferenceService.chat()` — no interface change needed. Opt-in `knowledge.rerank_enabled` (default off), decoupled from `slider.level` per Decision 31 rather than gated at slider ≥2. Falls back to the pre-rerank order on any failure. See `src/knowledge/rerank.ts`. | ✅ | §29, Decision 34 |
-| R3.2 | ~~Real HTML/PDF-text extractor (`.html/.rst/.pdf` currently route through the plain text chunker)~~ — **DONE** 2026-07-11: `src/knowledge/extractors.ts` (dependency-free HTML tag/comment/entity handling; `.pdf` via the optional `unpdf` package — `.pdf` wasn't chunkable at all before). Wired into `ingest.ts`; `chunker.ts` stays pure-TS/zero-dependency. 818/818 tests green. | 🛠️ | §27 |
-| R3.3 | ~~tree-sitter (WASM) opt-in syntax-aware code chunker, behind the KB add-on.~~ — **DONE** 2026-07-11: `src/knowledge/tree-sitter-chunker.ts` (`web-tree-sitter` + TS/JS grammar packages as devDependencies only, never shipped to `golem-run` consumers); `knowledge.syntax_aware_chunking` config leaf, default off, threaded through ingest → knowledge-base → index → build-knowledge. Degrades to `null`/heuristic chunker on any failure. 825/825 tests green. | 🛠️ | §27 |
-| R3.4 | ~~W4 — user-scope `~/.golem/wiki/` federation + weekly synthesis reports.~~ — **DONE** 2026-07-12: `FederatedWikiReader` (`src/wiki/federated-wiki-reader.ts`) merges the project wiki with a new `~/.golem/wiki/` user-scope tier (spec Decision 20e), read-only, into `search`/`fetch` via a new `GolemMcpServerDeps.wikiSearch` field (`knowledge.user_wiki_enabled`, default on); `golem wiki init --user` scaffolds it. `golem wiki synthesize [--days N]` (`src/cli/synthesize.ts`) drafts a weekly through-line narrative over recent `debriefs/` pages + `golem note` captures, reusing the existing distill JSON-forcing/parse machinery (`synthesizeWeekly`, `src/knowledge/distill.ts`). 861/861 tests green. | 🛠️ | WS-W W4 |
-| R3.5 | ~~note→distill shaping — shape `golem note` captures into draft `questions/artifacts/` pages.~~ — **DONE** 2026-07-12: `distillNote` (`src/knowledge/distill.ts`) shares its JSON-parse/validate/kebab-case/wikilink logic with `distillPage` via a new `parseDistillResponse` helper; `writeNoteDraftFile`/`findDraftByNoteTs` (`src/knowledge/distill-store.ts`) store note drafts in the same `.golem/distill/` dir with a synthetic `note:<ts>` provenance marker; new `golem note distill [ts]` CLI subcommand (`src/cli/distill-note.ts`). 841/841 tests green. | 🛠️ | T3 debrief |
-| R3.6 | ~~C4 — MEMORY-scope federated search (requires the P2 Headroom Python sidecar).~~ — **DONE** 2026-07-15: new `MemorySearchProvider` seam (`src/compression/memory-search.ts`) + `HeadroomMemorySidecar` (`src/compression/headroom-adapter.ts`, alongside the refactored-out `HeadroomWorkerProcess` process-lifecycle base both sidecars share), built against Headroom's verified `easy.Memory` API (search/save/clear/delete — no point-lookup-by-id; docs claimed a `MemoryCategory` that doesn't actually exist in source). `GolemKnowledgeBase.search()` now merges KNOWLEDGE + MEMORY hits by score when both scopes are requested, degrading to KNOWLEDGE-only when the sidecar is absent or errors (unchanged default behavior). Opt-in `knowledge.memory_federation_enabled` (default off — separate, heavier `[memory]`/torch install from `headroom_sidecar`), wired in `build-knowledge.ts`. Search-only by design: nothing in Golem writes to Headroom's memory store today, so MEMORY-scope hits stay empty until a future population path exists — an honest, documented limitation, not a bug. 881/881 tests green (fake-worker fixture, no real Python/torch needed in CI). | ✅ | C4 |
-| R3.7 | ~~LanceDB scale driver spike (optional; only pays at 10⁵⁺ vectors).~~ — **DONE (no-go)** 2026-07-12: benchmarked `FileVectorDriver` at real (3,967 chunks) + synthetic (4k/10k/30k/50k/100k) scale. Search stays fast to 30k chunks (<75ms) — LanceDB's ANN index would solve a bottleneck that doesn't exist yet. The real issue is `#flush()` rewriting the whole collection on every upsert, which hard-crashes (`RangeError: Invalid string length` from `Array.join`) between 30k-50k chunks — earlier than the 10⁵ figure here, but still ~8-13x above today's real usage. No-go on LanceDB; recommends a cheap stream-write fix to `#flush()` instead (not built — out of this spike's read-only scope). See syntheses/r3.7-lancedb-scale-spike.md. | ✅ | §26/§39 |
+| R5.1 | ~~Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity).~~ — **DONE** 2026-07-16: non-frozen `TaskStore` seam + file impl (`src/tasks/`, one zod JSON per task under `.golem/tasks/`), `golem task add/list/show/resume/cancel`. Resume mechanism verified as headless `claude -p --resume <session-id>` — no PTY (verification-notes §65). Capacity gate via `notBefore`; resume prints by default, `--spawn` opt-in (no shell). +25 tests, 977 green. See debriefs/2026-07-16-R5.1.md. | ✅ | 20a / WS-F1 |
+| R5.2 | ~~Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI).~~ — **DONE** 2026-07-16: consolidated `SessionStateReport` + zod contract (`src/cli/session-report.ts`), `golem watch` full-screen TUI (hand-rolled ANSI, no deps, `src/cli/watch.ts`), `.golem/` storage sizing (`src/cli/storage-size.ts`), dashboard `/api/state` endpoint. No frozen interface touched. +14 tests, 952 green. See debriefs/2026-07-16-R5.2.md. | ✅ | 21c / WS-F10 |
+| R5.3 | ~~Task/question queue + local conversation multiplexing.~~ — **DONE** 2026-07-16: `src/tasks/multiplex.ts` — `serviceTaskLocally` (fail-open), `runQueueLocally` (bounded concurrency, stops early if Ollama down), explicit `escalateTask` (folds local result → Claude tier, 21a, never silent). `golem task run` / `task escalate`. +8 tests, 1012 green. Grounding-injection into `run` is a follow-up. See debriefs/2026-07-16-R5.3.md. | ✅ | 20b/21a |
+| R5.4 | ~~Cruise-control autonomy modes with approval gates.~~ — **DONE** 2026-07-16: threat model written first (ADR-0002); `src/autonomy/` (levels manual/assisted/outcome, conservative classifier, gate) + `PreToolUse` hook (`golem hook pre-tool-use`) + `golem autonomy show/set/wire/unwire/log`. Default-deny/fail-closed proven — never auto-approves destructive/outward, errors → native prompt. Opt-in (not auto-wired by init); surfaced in the R5.2 report. +27 tests, 1004 green. See debriefs/2026-07-16-R5.4.md. | ✅ | 20d / WS-F4 |
+| R5.5 | ~~Writing-style adaptation & prompt translation (local-LLM, fully inspectable).~~ — **DONE (spike)** 2026-07-16: `src/prompt/` — `translatePrompt` (local rewrite, always shown/never sent/off proxy path, few-shot on accepted examples), `golem prompt translate/accept`. Scoring loop deliberately NOT built — demand-gated (see debrief). +6 tests, 1018 green. See debriefs/2026-07-16-R5.5.md. | ✅ | 20g |
 
-### R4 — Autonomy & orchestration (each needs a design memo first)
-The WS-F cluster where dogfooding hurt most (losing in-flight work to limits).
-
-| # | Task | Type | Source |
-|---|---|---|---|
-| R4.1 | Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity). | 🔬🛠️ | 20a / WS-F1 |
-| R4.2 | Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI). | 🛠️ | 21c / WS-F10 |
-| R4.3 | Task/question queue + local conversation multiplexing. | 🔬🛠️ | 20b/21a |
-| R4.4 | Cruise-control autonomy modes with approval gates. | 🔒🛠️ | 20d / WS-F4 |
-| R4.5 | Writing-style adaptation & prompt translation (local-LLM, fully inspectable). | 🔬 | 20g |
-
-### R5 — Multi-provider & remote (security/ToS-gated, furthest out)
+### R6 — Multi-provider & remote — ⛔ ON HOLD (security/ToS-gated)
+Formerly R5. Same hold + per-task design-memo gate as R5; R6.3 is the
+Decision 21b **companion app** the user has explicitly deferred.
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R5.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Unblocked by Decision 32 (R1.2, 2026-07-11) — not yet scheduled; starting the build still needs a separate ask per R1_BATCH.md §3's WS-F* gate. | 🧭🛠️ | Dec 22/32 |
-| R5.2 | Account switching + multi-LLM/quota routing. | 🔒 | 21d/21e |
-| R5.3 | Remote steering / permission-granting (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
-| R5.4 | Cost-governance benchmarks vs Claude's cost doc (continuous). | 🛠️ | 21f |
+| R6.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Positioning-unblocked by Decision 32; build still needs its memo + explicit ask. | 🧭🛠️ | Dec 22/32 |
+| R6.2 | Account switching + multi-LLM/quota routing. | 🔒 | 21d/21e |
+| R6.3 | Remote steering / permission-granting — companion app + locally-hosted web (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
+| R6.4 | Cost-governance benchmarks vs Claude's cost doc (continuous once picked up). | 🛠️ | 21f |
 
 ---
 
@@ -108,17 +117,17 @@ The WS-F cluster where dogfooding hurt most (losing in-flight work to limits).
 
 The gates that block downstream work, in priority order:
 
-1. ~~**🧭 Positioning (R1.2)**~~ — **RESOLVED** 2026-07-11 (Decision 32): universal pre-LLM processor, R5.1 unblocked. golem.run copy revised.
-2. ~~**🔬 Net-of-cache A/B (R1.1)**~~ — **RESOLVED** 2026-07-11 (verification-notes §54): levels 1/3 pipeline-identical on Anthropic today; no live A/B signal there until the §53 cache-safe structural tier lands.
-3. **🔬🧭 Decision 24 (R2.1)** — `avoidedUpstream` is plausibly the only real big-savings lever on cached Anthropic traffic.
-4. ~~**🧭 Rerank surface (R3.1)**~~ — **RESOLVED** 2026-07-12 (Decision 34): reused the frozen `InferenceService.chat()` + `jsonSchema` mechanism (the "judge" role) instead of a new reranker interface — no frozen-interface change after all.
-5. **🔒 R4.4 + all of R5** — autonomy, account-switching, remote approval each need a written memo + review before code. R5.1 is positioning-unblocked (Decision 32) but still needs that memo + an explicit go-ahead before build starts.
+1. **🔬 R4.7 drafter quality** — the co-developer thesis stands or falls on
+   whether local drafts are good enough to be worth reviewing; measure, don't
+   assume.
+2. **🧭 Decision 33 human review** — one real served local answer, reviewed,
+   then flip to ACCEPTED (or retire it).
+3. **🔒 R5.4 + all of R6** — autonomy, account-switching, remote approval each
+   need a written memo + review before code, after the R4 hold lifts.
 
 ## Deferred / not scheduled
-Every WS-F workstream (`IMPLEMENTATION_PLAN.md` §7), plus WS-C C4 and WS-W W4,
-is now scheduled as a task above (R3–R5) — see §7's WS-F↔ROADMAP crosswalk; they
-are no longer a separate backlog. The **only** work still off the roadmap is the
-**hosted workspace/org knowledge tier** (WS-F5's upper tiers — P4+, candidate
-paid). Each scheduled item still carries its own gate (design memo, security/ToS
-review, or explicit go-ahead) noted on its task; the full spec rationale lives in
-the Decisions Log (`docs/edge-offload-spec.md`, Decisions 20–29).
+
+The **hosted workspace/org knowledge tier** (WS-F5's upper tiers — P4+,
+candidate paid) remains the only work off the roadmap entirely. The WS-F↔
+ROADMAP crosswalk lives in `IMPLEMENTATION_PLAN.md` §6; the full spec rationale
+is the Decisions Log (`docs/golem-spec.md`, Decisions 20–36).

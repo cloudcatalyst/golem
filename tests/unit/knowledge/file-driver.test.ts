@@ -109,6 +109,28 @@ describe("FileVectorDriver", () => {
     expect((await read.getChunk("x"))?.text).toBe("durable");
   });
 
+  it("R4.6: streams a large collection to disk and reloads every record (no lost lines)", async () => {
+    // Guards the stream-write flush (r3.7 spike's RangeError fix): thousands of
+    // ~1KB records force many internal buffer flushes (drain), so a dropped line
+    // or missing trailing newline would surface here. Kept modest so CI stays
+    // fast — the full 50k+ crash-wall check is the (uncommitted) scratch bench.
+    const n = 3000;
+    const big = "x".repeat(1000);
+    const records: StoredChunk[] = [];
+    for (let i = 0; i < n; i++) records.push(stored(`c${i}`, [i % 7, 1, 0], `${i}:${big}`));
+    const write = new FileVectorDriver(base);
+    await write.upsert("big", records);
+    await write.close();
+
+    // Reload from disk: count and a specific record must survive intact.
+    const read = new FileVectorDriver(base);
+    await read.openCollection("big");
+    expect((await read.getChunk("c0"))?.text).toBe(`0:${big}`);
+    expect((await read.getChunk(`c${n - 1}`))?.text).toBe(`${n - 1}:${big}`);
+    const hits = await read.search("big", [6, 1, 0], n);
+    expect(hits).toHaveLength(n);
+  });
+
   it("treats a future schema version as empty (re-index), never crashes", async () => {
     const d = new FileVectorDriver(base);
     await d.upsert("proj", [stored("x", [1, 0])]);

@@ -8,7 +8,7 @@
  * reformat.
  */
 
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { stripKnownSecrets } from "../hooks/redact.js";
 import type { WikiFrontmatter } from "../interfaces/index.js";
@@ -186,6 +186,15 @@ export async function listDraftFiles(projectDir: string): Promise<DraftFile[]> {
     if (draft !== null) drafts.push(draft);
   }
   return drafts;
+}
+
+/**
+ * R4.5 — remove a draft file once it has been promoted into the wiki (or
+ * dropped). Idempotent: a missing file is not an error (the draft is a
+ * transient zone-1 artifact, regenerable by re-distilling).
+ */
+export async function removeDraftFile(projectDir: string, slug: string): Promise<void> {
+  await rm(draftPath(projectDir, slug), { force: true });
 }
 
 /** Find an existing draft citing `url`, for the lazy-backfill pointer note in the fetch hook. */

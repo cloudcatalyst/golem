@@ -193,6 +193,138 @@ describe("WebFetch gate (PreToolUse)", () => {
   });
 });
 
+describe("WebFetch pre-hook conditional revalidation (opt-in)", () => {
+  const url = "https://example.com/doc";
+  const nowMs = Date.parse("2026-07-06T00:00:00Z");
+  const seed = () =>
+    new WebCache(webCacheDir(projectDir)).put(url, "CACHED DOC BODY", "2026-07-01T00:00:00Z");
+
+  it("serves the cache on 304 and refreshes validators", async () => {
+    await seed();
+    const calls: string[] = [];
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async (u) => {
+        calls.push(u);
+        return { status: 304, etag: 'W/"v2"', cacheControl: "max-age=3600" };
+      },
+    });
+    expect(calls).toStrictEqual([url]);
+    expect(io.out[0]).toContain("CACHED DOC BODY"); // 304 → served from cache
+    // Validators were refreshed for next time.
+    const entry = await new WebCache(webCacheDir(projectDir)).get(url);
+    expect(entry?.etag).toBe('W/"v2"');
+    expect(entry?.expiresAt).toBeDefined();
+  });
+
+  it("drops the stale entry and lets the fetch re-run on 200 (changed)", async () => {
+    await seed();
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async () => ({
+        status: 200,
+        etag: 'W/"v3"',
+        lastModified: "Wed, 01 Jul 2026 00:00:00 GMT",
+      }),
+    });
+    expect(io.out).toStrictEqual([]); // allow the fetch (changed)
+    // The stale entry is dropped, not left wearing the new validators — a
+    // cancelled re-fetch must never leave old content that a future 304 serves
+    // as fresh. The post hook re-caches fresh content when the fetch completes.
+    expect(await new WebCache(webCacheDir(projectDir)).get(url)).toBeNull();
+  });
+
+  it("sends conditional headers from the stored validators", async () => {
+    await new WebCache(webCacheDir(projectDir)).put(url, "BODY", "2026-07-01T00:00:00Z", {
+      etag: 'W/"v1"',
+    });
+    let seen:
+      | { etag?: string | undefined; lastModified?: string | undefined; fetchedAt: string }
+      | undefined;
+    await runWebFetchPre(fakeIo(preInput(url)), {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async (_u, v) => {
+        seen = v;
+        return { status: 304 };
+      },
+    });
+    expect(seen?.etag).toBe('W/"v1"');
+    expect(seen?.fetchedAt).toBe("2026-07-01T00:00:00Z");
+  });
+
+  it("skips the network call while an explicit freshness window (expiresAt) holds", async () => {
+    await new WebCache(webCacheDir(projectDir)).put(url, "FRESH BODY", "2026-07-05T23:00:00Z", {
+      expiresAt: "2026-07-06T06:00:00Z", // still fresh at nowMs
+    });
+    let called = false;
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async () => {
+        called = true;
+        return { status: 200 };
+      },
+    });
+    expect(called).toBe(false); // provably fresh → no revalidation
+    expect(io.out[0]).toContain("FRESH BODY");
+  });
+
+  it("drops the entry and re-fetches when revalidation returns no-store", async () => {
+    await seed();
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async () => ({ status: 200, cacheControl: "no-store" }),
+    });
+    expect(io.out).toStrictEqual([]); // allow
+    expect(await new WebCache(webCacheDir(projectDir)).get(url)).toBeNull(); // dropped
+  });
+
+  it("serves the cache when revalidation fails (offline-friendly)", async () => {
+    await seed();
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async () => {
+        throw new Error("network down");
+      },
+    });
+    expect(io.out[0]).toContain("CACHED DOC BODY"); // fell back to cache
+  });
+
+  it("does not revalidate when the enable predicate is false (pure-TTL)", async () => {
+    await seed();
+    let called = false;
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs,
+      ttlHours: 168,
+      revalidate: async () => {
+        called = true;
+        return { status: 200 };
+      },
+      revalidateEnabled: async () => false,
+    });
+    expect(called).toBe(false);
+    expect(io.out[0]).toContain("CACHED DOC BODY"); // served without revalidation
+  });
+});
+
 describe("WebCache.get corrupt entries", () => {
   it("resolves null (not a rejection) for a syntactically-invalid JSON cache file", async () => {
     const url = "https://example.com/corrupt";

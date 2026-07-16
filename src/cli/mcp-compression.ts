@@ -7,7 +7,12 @@
 
 import { NativeLosslessCompression } from "../compression/index.js";
 import type { CompressionService } from "../interfaces/compression.js";
-import { openTelemetryStore, recordRetrieval, telemetryStatsSource } from "../telemetry/index.js";
+import {
+  openTelemetryStore,
+  recordRetrieval,
+  type TelemetryStore,
+  telemetryStatsSource,
+} from "../telemetry/index.js";
 import { liveStatsSource, type StatsSource } from "./stats.js";
 
 /**
@@ -39,9 +44,14 @@ export async function statsSourceForCli(projectDir: string): Promise<StatsSource
  * retrieved` survives this process exiting, same reasoning as `stats()`
  * preferring telemetry over the live in-memory counters above.
  */
-export function mcpCompressionService(projectDir: string): CompressionService {
+export function mcpCompressionService(
+  projectDir: string,
+  telemetryStore?: TelemetryStore,
+): CompressionService {
   const live = NativeLosslessCompression.forProjectDir(projectDir);
-  const telemetry = openTelemetryStore(projectDir);
+  // Reuse the caller's store (R4.3: the same one deps.telemetry records tool
+  // events to) so both write through one handle; open our own if none given.
+  const telemetry = telemetryStore ?? openTelemetryStore(projectDir);
   return {
     compress: (messages, policy, projectId) => live.compress(messages, policy, projectId),
     retrieve: async (ref) => {

@@ -13,6 +13,7 @@ import {
   recordAvoidedUpstream,
   recordPipelineEvent,
   recordRetrieval,
+  recordToolCall,
   recordUsageEvent,
   telemetryFilePath,
   telemetryStatsSource,
@@ -504,6 +505,81 @@ describe("recordAvoidedUpstream + aggregateAvoidedUpstream (R2.2, §62)", () => 
     const stats = await store.aggregateAvoidedUpstream();
     expect(stats.events).toBe(0);
     expect(stats.inputTokensAvoided).toBe(0);
+    await store.close();
+  });
+});
+
+describe("recordToolCall + aggregateToolUsage (R4.3, §59)", () => {
+  it("rolls up per-tool call counts, duration, result bytes, and draft chars", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordToolCall(
+      store,
+      { projectId: "projA", tool: "search", durationMs: 12, resultBytes: 400 },
+      "2026-07-16T00:00:00.000Z",
+    );
+    await recordToolCall(
+      store,
+      { projectId: "projA", tool: "search", durationMs: 8, resultBytes: 200 },
+      "2026-07-16T00:00:01.000Z",
+    );
+    await recordToolCall(
+      store,
+      {
+        projectId: "projA",
+        tool: "coder",
+        durationMs: 900,
+        resultBytes: 1500,
+        model: "qwen2.5-coder:7b",
+        draftChars: 1200,
+      },
+      "2026-07-16T00:00:02.000Z",
+    );
+
+    const stats = await store.aggregateToolUsage("projA");
+    expect(stats.byTool.search).toStrictEqual({
+      calls: 2,
+      totalDurationMs: 20,
+      totalResultBytes: 600,
+      draftChars: 0,
+    });
+    expect(stats.byTool.coder).toStrictEqual({
+      calls: 1,
+      totalDurationMs: 900,
+      totalResultBytes: 1500,
+      draftChars: 1200,
+    });
+    await store.close();
+  });
+
+  it("tool events never count as pipeline requests or gross-token savings", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await recordToolCall(
+      store,
+      { projectId: "projA", tool: "coder", durationMs: 5, resultBytes: 10, draftChars: 7 },
+      "2026-07-16T00:00:00.000Z",
+    );
+    const agg = await store.aggregate("projA");
+    expect(agg.requests).toBe(0);
+    expect(agg.tokensBefore).toBe(0);
+    await store.close();
+  });
+
+  it("scopes by project and returns an empty map when no file exists yet", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    expect((await store.aggregateToolUsage()).byTool).toStrictEqual({});
+    await recordToolCall(
+      store,
+      { projectId: "projA", tool: "fetch", durationMs: 3, resultBytes: 50 },
+      "2026-07-16T00:00:00.000Z",
+    );
+    await recordToolCall(
+      store,
+      { projectId: "projB", tool: "fetch", durationMs: 4, resultBytes: 60 },
+      "2026-07-16T00:00:01.000Z",
+    );
+    expect(Object.keys((await store.aggregateToolUsage("projA")).byTool)).toStrictEqual(["fetch"]);
+    expect((await store.aggregateToolUsage("projA")).byTool.fetch?.calls).toBe(1);
+    expect((await store.aggregateToolUsage()).byTool.fetch?.calls).toBe(2);
     await store.close();
   });
 });
