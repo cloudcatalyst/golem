@@ -1,5 +1,10 @@
 # R5 batch — Autonomy & orchestration
 
+> **✅ COMPLETE (2026-07-16).** All five tasks (R5.1–R5.5) landed; suite
+> 922 → 1018 green. Retrospective:
+> `docs/wiki/syntheses/r5-autonomy-orchestration-batch.md`; ✅ rows in
+> `ROADMAP.md`. R6 remains ON HOLD. Kept for reference.
+
 > **Written 2026-07-16.** The user lifted the R5 hold (spec Decision 36) and
 > authorized kicking off the whole release without per-task approval pauses.
 > The design-memo half of the standing WS-F gate is satisfied by

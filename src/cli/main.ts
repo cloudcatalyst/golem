@@ -41,6 +41,13 @@ import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import {
+  appendExample,
+  readExamples,
+  readLastSuggestion,
+  translatePrompt,
+  writeLastSuggestion,
+} from "../prompt/index.js";
+import {
   buildResumeArgv,
   createTask,
   escalateTask,
@@ -1327,6 +1334,64 @@ autonomyCmd
           `  ${e.ts}  ${e.decision.padEnd(6)} ${e.action.padEnd(11)} ${e.tool}\n`,
         );
       }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// R5.5 (SPIKE) — prompt translation (WS-F7 / spec 20g). Always shown for
+// inspection, never sent, never on the proxy path. Demand-gated.
+const promptCmd = program
+  .command("prompt")
+  .description(
+    "Prompt translation (spike): rewrite a raw note into a clearer prompt (shown, never sent)",
+  );
+
+promptCmd
+  .command("translate")
+  .description(
+    "Suggest a clearer prompt for a raw note (local model; you decide whether to use it)",
+  )
+  .argument("<note...>", "the raw note to translate")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (note: string[], opts: { dir: string }) => {
+    try {
+      const inference = await buildInferenceForDir(opts.dir);
+      if (inference === null) {
+        process.stdout.write("local model unavailable — start Ollama, then retry.\n");
+        return;
+      }
+      const raw = note.join(" ");
+      const examples = await readExamples(opts.dir);
+      const result = await translatePrompt(raw, { inference, examples });
+      if (result.translated === null) {
+        process.stdout.write(`could not translate: ${result.error ?? "unknown error"}\n`);
+        return;
+      }
+      await writeLastSuggestion(opts.dir, raw, result.translated);
+      process.stdout.write(
+        `suggested prompt (grounded in ${result.examplesUsed} accepted example(s)):\n\n` +
+          `${result.translated}\n\n` +
+          "— Golem never sends this. Copy it if you like it; run `golem prompt accept` to teach your style.\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+promptCmd
+  .command("accept")
+  .description("Record the last suggested translation as an accepted style example")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const last = await readLastSuggestion(opts.dir);
+      if (last === null) {
+        process.stdout.write("nothing to accept — run `golem prompt translate <note>` first.\n");
+        return;
+      }
+      await appendExample(opts.dir, { ...last, ts: new Date().toISOString() });
+      process.stdout.write("recorded — future translations will lean toward this style.\n");
     } catch (err) {
       fail(err);
     }

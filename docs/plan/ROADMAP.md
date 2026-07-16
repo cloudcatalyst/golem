@@ -85,12 +85,12 @@ distill/KB loop. **Active batch: `R4_BATCH.md`.**
 | R4.6 | ~~**`FileVectorDriver.#flush()` stream-write fix** so the raw-article KB can grow past ~30k chunks without crashing.~~ — **DONE** 2026-07-16: `#flush()` streams JSON lines via `createWriteStream` (backpressure-aware, atomic temp+rename kept) instead of one `Array.join` string; benchmark confirms 50k/60k no longer hit the `RangeError` wall (was 30k–50k), search latency unchanged. +1 test, 922 green. See debriefs/2026-07-16-R4.6.md. | ✅ | R3.7 spike |
 | R4.7 | ~~**Drafter quality/catalog re-verification:** re-verify current best small coder models (advisory per Decision 6), measure coder draft accept-rate; carry R1.6's manual checklist where hardware allows.~~ — **DONE** 2026-07-16: re-verified catalog (no change — `qwen3-coder` ships only 30b/480b, no small tags; qwen2.5-coder still best for single-function drafts); measured ungrounded baseline 2 accept / 3 revise / 0 reject (accept for self-contained, revise for project-integrated); R1.6 still hardware-blocked. See verification-notes §63, syntheses/r4.7-drafter-quality-baseline.md. | ✅ | Dec 6, R1.6 |
 
-### R5 — Autonomy & orchestration — 🚧 ACTIVE
-Formerly R4. Hold lifted 2026-07-16 by explicit user call (R4 co-developer loop
-judged robust — all seven R4 tasks landed). Design memos:
-`docs/plan/proposals/r5-autonomy-orchestration-memos.md`; active batch:
-`docs/plan/R5_BATCH.md`. R5.4 additionally carries a security gate — its threat
-model is written as an ADR before its enforcement code.
+### R5 — Autonomy & orchestration — ✅ SHIPPED (2026-07-16)
+Formerly R4. Hold lifted 2026-07-16 by explicit user call; all five tasks landed
+the same day (suite 922 → 1018 green). Retrospective:
+`docs/wiki/syntheses/r5-autonomy-orchestration-batch.md`; memos:
+`docs/plan/proposals/r5-autonomy-orchestration-memos.md`; batch:
+`docs/plan/R5_BATCH.md`. R5.4's threat model is ADR-0002.
 
 | # | Task | Type | Source |
 |---|---|---|---|
@@ -98,7 +98,7 @@ model is written as an ADR before its enforcement code.
 | R5.2 | ~~Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI).~~ — **DONE** 2026-07-16: consolidated `SessionStateReport` + zod contract (`src/cli/session-report.ts`), `golem watch` full-screen TUI (hand-rolled ANSI, no deps, `src/cli/watch.ts`), `.golem/` storage sizing (`src/cli/storage-size.ts`), dashboard `/api/state` endpoint. No frozen interface touched. +14 tests, 952 green. See debriefs/2026-07-16-R5.2.md. | ✅ | 21c / WS-F10 |
 | R5.3 | ~~Task/question queue + local conversation multiplexing.~~ — **DONE** 2026-07-16: `src/tasks/multiplex.ts` — `serviceTaskLocally` (fail-open), `runQueueLocally` (bounded concurrency, stops early if Ollama down), explicit `escalateTask` (folds local result → Claude tier, 21a, never silent). `golem task run` / `task escalate`. +8 tests, 1012 green. Grounding-injection into `run` is a follow-up. See debriefs/2026-07-16-R5.3.md. | ✅ | 20b/21a |
 | R5.4 | ~~Cruise-control autonomy modes with approval gates.~~ — **DONE** 2026-07-16: threat model written first (ADR-0002); `src/autonomy/` (levels manual/assisted/outcome, conservative classifier, gate) + `PreToolUse` hook (`golem hook pre-tool-use`) + `golem autonomy show/set/wire/unwire/log`. Default-deny/fail-closed proven — never auto-approves destructive/outward, errors → native prompt. Opt-in (not auto-wired by init); surfaced in the R5.2 report. +27 tests, 1004 green. See debriefs/2026-07-16-R5.4.md. | ✅ | 20d / WS-F4 |
-| R5.5 | Writing-style adaptation & prompt translation (local-LLM, fully inspectable). | 🔬 | 20g |
+| R5.5 | ~~Writing-style adaptation & prompt translation (local-LLM, fully inspectable).~~ — **DONE (spike)** 2026-07-16: `src/prompt/` — `translatePrompt` (local rewrite, always shown/never sent/off proxy path, few-shot on accepted examples), `golem prompt translate/accept`. Scoring loop deliberately NOT built — demand-gated (see debrief). +6 tests, 1018 green. See debriefs/2026-07-16-R5.5.md. | ✅ | 20g |
 
 ### R6 — Multi-provider & remote — ⛔ ON HOLD (security/ToS-gated)
 Formerly R5. Same hold + per-task design-memo gate as R5; R6.3 is the
