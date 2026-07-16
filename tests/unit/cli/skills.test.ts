@@ -10,6 +10,18 @@ describe("wiki skills (T2, W2 leftover)", () => {
     expect(skill).toMatch(/\$ARGUMENTS/);
   });
 
+  it("research puts the wiki + local KB strictly before any external WebFetch", () => {
+    const skill = P0_SKILLS.research;
+    if (skill === undefined) throw new Error("expected a research skill");
+    // The whole point: never hit the network before checking the KB.
+    expect(skill).toContain("WebFetch");
+    expect(skill.indexOf("wiki_read")).toBeLessThan(skill.indexOf("WebFetch"));
+    expect(skill.indexOf("search")).toBeLessThan(skill.indexOf("WebFetch"));
+    // Re-check the KB before each fetch, and capture durable findings back.
+    expect(skill.toLowerCase()).toContain("re-run `search` before each new fetch".toLowerCase());
+    expect(skill).toContain("/golem/wiki-ingest");
+  });
+
   it("wiki-ingest requires approval before writing (plan-gated per Decision 29)", () => {
     const skill = P0_SKILLS["wiki-ingest"];
     if (skill === undefined) throw new Error("expected a wiki-ingest skill");

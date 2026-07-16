@@ -11,9 +11,22 @@
  */
 
 import { Command, InvalidArgumentError } from "commander";
+import {
+  AUTONOMY_LEVEL_HELP,
+  AUTONOMY_LEVELS,
+  parseAutonomyLevel,
+  readActionLog,
+  readAutonomyLevel,
+  writeAutonomyLevel,
+} from "../autonomy/index.js";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
-import { buildHookCommand, defaultRevalidate } from "../hooks/index.js";
+import {
+  addEventHook,
+  buildHookCommand,
+  defaultRevalidate,
+  removeEventHook,
+} from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import {
   createProbeRunner,
@@ -1101,6 +1114,130 @@ taskCmd
       }
       await store.put({ ...task, state: "cancelled" });
       process.stdout.write(`cancelled task ${task.id}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// R5.4 — cruise-control autonomy (WS-F4 / spec 20d). Threat model: ADR-0002.
+const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
+
+// Pure command group (no parent options/action) so each subcommand's own
+// `--dir` is honored — a parent-level `--dir` shadows the child's (learned the
+// hard way in R5.4 e2e). `golem autonomy` alone runs the default `show`.
+const autonomyCmd = program
+  .command("autonomy")
+  .description("Cruise-control autonomy level + approval gate (see ADR-0002)");
+
+autonomyCmd
+  .command("show", { isDefault: true })
+  .description("Show the current autonomy level")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const level = await readAutonomyLevel(opts.dir);
+      if (opts.json) {
+        process.stdout.write(
+          `${JSON.stringify({ level, help: AUTONOMY_LEVEL_HELP[level] }, null, 2)}\n`,
+        );
+        return;
+      }
+      process.stdout.write(`autonomy level: ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`);
+      if (level !== "manual") {
+        process.stdout.write(
+          `⚠ Golem is auto-approving some steps at level "${level}". Destructive/outward ` +
+            `actions still require your approval (ADR-0002). Set 'manual' to disable.\n`,
+        );
+      }
+      process.stdout.write(
+        "the gate only takes effect once wired: `golem autonomy wire` (remove: `unwire`).\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("set")
+  .description(`Set the autonomy level (${AUTONOMY_LEVELS.join(" | ")})`)
+  .argument("<level>", "autonomy level", parseAutonomyLevel)
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (level: ReturnType<typeof parseAutonomyLevel>, opts: { dir: string }) => {
+    try {
+      await writeAutonomyLevel(opts.dir, level);
+      process.stdout.write(`autonomy level set to ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`);
+      if (level !== "manual") {
+        process.stdout.write(
+          `⚠ Golem will now auto-approve ${level === "outcome" ? "read + write" : "read-only"} ` +
+            `actions once wired. Destructive/outward steps still require your approval.\n`,
+        );
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("wire")
+  .description("Install the PreToolUse gate hook in .claude/settings.json (activates autonomy)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const action = await addEventHook(
+        { projectDir: opts.dir },
+        "PreToolUse",
+        PRE_TOOL_USE_HOOK_COMMAND,
+      );
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+      process.stdout.write("autonomy gate wired. Restart Claude Code to activate.\n");
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("unwire")
+  .description("Remove the PreToolUse gate hook (deactivates autonomy)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      const action = await removeEventHook(
+        { projectDir: opts.dir },
+        "PreToolUse",
+        PRE_TOOL_USE_HOOK_COMMAND,
+      );
+      process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("log")
+  .description("Show the autonomy action log (auditable allow/ask/defer decisions)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("-n, --limit <count>", "how many entries to show", "50")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; limit: string; json: boolean }) => {
+    try {
+      const limit = Number(opts.limit);
+      if (!Number.isInteger(limit) || limit <= 0)
+        throw new InitError(`invalid --limit "${opts.limit}"`);
+      const entries = await readActionLog(opts.dir, limit);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`);
+        return;
+      }
+      if (entries.length === 0) {
+        process.stdout.write("no autonomy decisions logged yet\n");
+        return;
+      }
+      for (const e of entries) {
+        process.stdout.write(
+          `  ${e.ts}  ${e.decision.padEnd(6)} ${e.action.padEnd(11)} ${e.tool}\n`,
+        );
+      }
     } catch (err) {
       fail(err);
     }

@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { AUTONOMY_LEVELS, type AutonomyLevel, readAutonomyLevel } from "../autonomy/index.js";
 import { readSessionState } from "../hooks/index.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { statsSourceForCli } from "./mcp-compression.js";
@@ -54,6 +55,10 @@ export interface SessionStateReport {
   readonly local_model: {
     /** true=reachable, false=probed-unreachable, null=unknown. */
     readonly reachable: boolean | null;
+  };
+  /** R5.4 — the cruise-control autonomy level (surfaced per ADR-0002). */
+  readonly autonomy: {
+    readonly level: AutonomyLevel;
   };
   readonly blocked: {
     /** Session is waiting on the human (fresh 21b blocked flag). */
@@ -109,6 +114,9 @@ export const sessionStateReportSchema = z.object({
   local_model: z.object({
     reachable: z.boolean().nullable(),
   }),
+  autonomy: z.object({
+    level: z.enum(AUTONOMY_LEVELS),
+  }),
   blocked: z.object({
     waiting: z.boolean(),
     reason: z.string().optional(),
@@ -140,12 +148,13 @@ export async function collectSessionStateReport(
 ): Promise<SessionStateReport> {
   const nowIso = opts.nowIso ?? new Date().toISOString();
   const collectState = opts.collectState ?? collectGolemState;
-  const [golem, slider, savings, storage, session] = await Promise.all([
+  const [golem, slider, savings, storage, session, autonomyLevel] = await Promise.all([
     collectState(dir).catch(() => null),
     getSliderInfo({ projectDir: dir }).catch(() => null),
     collectSavings(dir),
     golemStorageSizes(dir),
     readSessionState(dir).catch(() => null),
+    readAutonomyLevel(dir).catch(() => "manual" as AutonomyLevel),
   ]);
 
   const level = slider?.level ?? golem?.sliderLevel ?? 1;
@@ -161,6 +170,7 @@ export async function collectSessionStateReport(
     },
     slider: { level, name, redaction_off: level === 0 },
     local_model: { reachable: golem?.localModelReachable ?? null },
+    autonomy: { level: autonomyLevel },
     blocked: {
       waiting,
       ...(waiting && session?.reason !== undefined ? { reason: session.reason } : {}),

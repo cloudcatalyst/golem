@@ -13,6 +13,7 @@ function report(overrides: Partial<SessionStateReport> = {}): SessionStateReport
     proxy: { running: true, upstream: "anthropic" },
     slider: { level: 1, name: "lossless", redaction_off: false },
     local_model: { reachable: true },
+    autonomy: { level: "manual" },
     blocked: { waiting: false },
     savings: {
       source: "telemetry",

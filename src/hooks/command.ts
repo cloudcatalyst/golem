@@ -15,6 +15,7 @@ import process from "node:process";
 import { Command } from "commander";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
+import { runPreToolUseHook } from "./pre-tool-use.js";
 import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
 import { runWebFetchPost, runWebFetchPre, type WebFetchHookOptions } from "./web-fetch.js";
 
@@ -88,6 +89,19 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
         code = 0;
       }
       process.exitCode = code;
+    });
+
+  hook
+    .command("pre-tool-use")
+    .description(
+      "PreToolUse handler: R5.4 autonomy gate (allow/ask per the project's autonomy level)",
+    )
+    .action(async () => {
+      try {
+        process.exitCode = await runPreToolUseHook(stdio());
+      } catch {
+        process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
     });
 
   const webFetchOpts = (): WebFetchHookOptions => ({

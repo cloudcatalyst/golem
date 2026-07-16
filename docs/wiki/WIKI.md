@@ -72,6 +72,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
 - decisions/ADR-0001-file-watcher.md — accepted: `node:fs.watch` (native recursive on Windows/macOS, manual per-directory on Linux) behind a swappable `FileWatcher` interface, `chokidar` deferred unless proven necessary
+- decisions/ADR-0002-autonomy-approval-gates.md — accepted: R5.4 threat model — autonomy levels (manual/assisted/outcome, no full-auto), PreToolUse gate emitting allow/ask, conservative fail-closed classifier, default-deny proofs; enforcement never auto-allows destructive/outward
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there
 - debriefs/2026-07-11-R1.1.md — shipped `UsageSniffer`/`aggregateUsageByLevel` usage-telemetry infra + the gzip response-decoding fix it required
@@ -109,4 +110,5 @@ updated: YYYY-MM-DD
 - syntheses/r4-co-developer-core-batch.md — R4 batch retrospective: all 7 tasks (planning surface, coder grounding/telemetry/refinement, promote+lint, flush fix, re-verification); through-lines + open follow-ups
 - debriefs/2026-07-16-R5.2.md — R5.2 (R5 batch opens): consolidated `SessionStateReport` (one zod payload for statusline/dashboard/VS Code/remote) + `golem watch` full-screen TUI (hand-rolled ANSI, no deps) + `.golem/` storage sizing; dashboard serves it at `/api/state`
 - debriefs/2026-07-16-R5.1.md — R5.1: durable `TaskStore` (`src/tasks/`, one zod JSON per task under `.golem/tasks/`) + `golem task add/list/show/resume/cancel`; resume mechanism verified as headless `claude -p --resume` (no PTY, verification-notes §65); capacity gate via `notBefore`
+- debriefs/2026-07-16-R5.4.md — R5.4: cruise-control autonomy (`src/autonomy/` levels/classifier/gate + `PreToolUse` hook + `golem autonomy`); threat model ADR-0002 written first; default-deny/fail-closed proven (never auto-approves destructive/outward); surfaced in the R5.2 report
 - debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs
