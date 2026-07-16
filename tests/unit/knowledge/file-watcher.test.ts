@@ -1,9 +1,9 @@
 /**
- * T6 (C2 follow-up) — watchPath: debounce/batch + re-stat classification over
- * the single per-directory, non-recursive tree-walk backend used on every OS
- * (verification-notes §68 — the old `fs.watch({recursive:true})` backend aborted
- * the process on Windows/macOS). Nested-subdir coverage below runs on all
- * platforms, since there is one backend.
+ * T6 — watchPath: debounce/batch + re-stat classification over the single
+ * POLLING (scan + mtime/size diff) backend used on every OS (verification-notes
+ * §68 — `node:fs.watch` aborts the process on Windows/macOS). Tests pass a small
+ * `pollMs` so detection is fast and deterministic; nested-subdir coverage runs
+ * on all platforms, since there is one backend.
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -47,7 +47,7 @@ async function staysQuiet(batches: FileChangeBatch[], windowMs = 700): Promise<b
 describe("watchPath", () => {
   it("debounces a burst of writes into a single batch", async () => {
     const batches: FileChangeBatch[] = [];
-    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
     const file = path.join(dir, "note.md");
     await writeFile(file, "one");
     await writeFile(file, "two");
@@ -63,7 +63,7 @@ describe("watchPath", () => {
     const file = path.join(dir, "gone.md");
     await writeFile(file, "content");
     const batches: FileChangeBatch[] = [];
-    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
 
     await rm(file);
     const batch = await nextBatch(batches);
@@ -74,7 +74,7 @@ describe("watchPath", () => {
   it("ignores files under a skipped directory (e.g. node_modules)", async () => {
     await mkdir(path.join(dir, "node_modules", "pkg"), { recursive: true });
     const batches: FileChangeBatch[] = [];
-    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
 
     await writeFile(path.join(dir, "node_modules", "pkg", "index.js"), "noise");
     expect(await staysQuiet(batches)).toBe(true);
@@ -88,7 +88,7 @@ describe("watchPath", () => {
 
   it("ignores non-chunkable extensions", async () => {
     const batches: FileChangeBatch[] = [];
-    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
 
     await writeFile(path.join(dir, "image.png"), "binary-ish");
     expect(await staysQuiet(batches)).toBe(true);
@@ -101,17 +101,17 @@ describe("watchPath", () => {
 
   it("close() stops further batches", async () => {
     const batches: FileChangeBatch[] = [];
-    const w = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+    const w = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
     w.close();
 
     await writeFile(path.join(dir, "after-close.md"), "content");
     expect(await staysQuiet(batches)).toBe(true);
   });
 
-  describe("per-directory tree watcher (all platforms)", () => {
+  describe("nested subdirectories (all platforms)", () => {
     it("picks up a file created in a new subdirectory (dynamic subdir add)", async () => {
       const batches: FileChangeBatch[] = [];
-      watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+      watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
 
       const subdir = path.join(dir, "sub");
       await mkdir(subdir);
@@ -126,7 +126,7 @@ describe("watchPath", () => {
       const subdir = path.join(dir, "a", "b");
       await mkdir(subdir, { recursive: true });
       const batches: FileChangeBatch[] = [];
-      watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150 });
+      watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
 
       const nested = path.join(subdir, "deep.md");
       await writeFile(nested, "content");

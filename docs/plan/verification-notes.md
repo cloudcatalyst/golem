@@ -2207,39 +2207,39 @@ hard libuv `abort()`, not a test assertion:
 `Assertion failed: !_wcsnicmp(filename, dir, dirlen), file src\win\fs-event.c,
 line 72`, followed by `ERR_IPC_CHANNEL_CLOSED` (the vitest tinypool worker died).
 
-**Cause.** libuv's Windows/macOS `fs.watch` fs-event layer requires each reported
-event path to start with the watched directory. It doesn't when the watched path
-isn't the OS-canonical form: Windows 8.3 short names (GitHub runner temp is
-`C:\Users\RUNNER~1\…`) or the macOS `/var → /private/var` temp symlink — the OS
-then reports canonical event paths that fail the prefix check → abort. Not
-reproducible on this dev box (temp path `…\paulc\…` needs no 8.3 mangling, and no
-symlink) — consistent with an environment-specific trigger; the file-watcher code
-itself was unchanged between the last green run (#3) and #4, so a node-24 libuv
-patch drift (major-only version pins) is the likely tipping factor.
+**Two dead ends, then the real root cause (from libuv source).**
+- *Attempt 1 — canonicalize the watched path* (`realpathSync.native`, emit under
+  the original root). Pushed on PR #2 → CI aborted identically (macOS 22/24,
+  Windows 24). So it is NOT the root-path form.
+- *Attempt 2 — drop `{recursive:true}`, use a per-directory NON-recursive
+  `fs.watch` tree walk.* Pushed → CI aborted identically again.
+- *Ruled out — node drift.* Resolved node is identical green (#3) vs red — win/mac
+  node-24 `v24.18.0`, mac node-22 `v22.23.1`. Pinning wouldn't help.
 
-**Attempt 1 (did NOT work): canonicalize the watched path.** Hypothesis: the
-assertion is about the watched *root* not being OS-canonical (8.3 / symlink), so
-`watchPath` watched `realpathSync.native(root)` while emitting under the original
-root. Pushed as PR #2 → CI still aborted identically on the same three jobs
-(macOS 22/24, Windows 24). So the trigger is NOT the root path form: libuv still
-aborts even watching a fully-canonical path. Reverted.
+Reading `libuv/src/win/fs-event.c` (v1.51.0) settled it. The abort is in
+`uv__relative_path`: `assert(!_wcsnicmp(filename, dir, dirlen))`, where `dir` is
+`handle->dirw` (the watched dir's long path from `GetLongPathNameW` at start) and
+`filename` is `GetLongPathNameW(dir + "\\" + eventName)` at event time. It fires
+when those two long-path resolutions don't share the `dir` prefix — a
+runner/junction/mapped-drive/8.3 quirk. Crucially it is reached for **every
+directory watch, recursive or not** (the recursive flag only sets
+`ReadDirectoryChangesW`'s subtree bit at fs-event.c:46), and `realpath` can't
+prevent it (Node's `realpath` ≠ Windows `GetLongPathNameW` semantics). So **no
+`fs.watch`-on-a-directory variant is safe** — and it's an `abort()`, uncatchable
+by any `error` handler, that can also crash a real Windows user on an unlucky path.
 
-**Also ruled out: node-patch drift.** The resolved node versions are identical
-between the last green run (#3) and the red runs — Windows/macOS node-24 both
-`v24.18.0`, macOS node-22 `v22.23.1`. So pinning node would not help; the tipping
-factor is a code/test-composition change across the (~50-commit) #3→#4 gap, but
-the abort is inherent to the recursive backend on those runners regardless.
+**Fix (guaranteed): stop using `fs.watch`; poll instead.** `watchPath` now scans
+the tree (`scanFiles` — SKIP_DIRS-pruned, chunkable-only) on an interval
+(`pollMs`, default 1000) and diffs mtime/size against the previous snapshot,
+feeding the existing debounce + re-stat batching layer. No `fs.watch` → the libuv
+fs-event path is never entered → the abort is impossible, on every OS. Bonus: one
+backend everywhere means Linux CI now exercises exactly what Windows/macOS run
+(previously they ran different code). Cost: change latency ≤ `pollMs` and a
+periodic pruned stat-scan — fine for opt-in KB freshness. Supersedes ADR-0001.
 
-**Fix (works): drop `fs.watch({ recursive: true })` entirely.** The assertion
-lives in libuv's *recursive* fs-event event-path reconstruction. `watchPath` now
-uses the per-directory, NON-recursive tree-walk backend (`TreeWatcher`) on ALL
-platforms — previously the Linux-only backend (§51), always green in CI. Plain
-`fs.watch(dir)` does no prefix reconstruction, so it can't hit the assertion.
-Cost: a few more file handles (bounded by `SKIP_DIRS`); benefit: the watcher can
-no longer `abort()` the host process. Supersedes ADR-0001's native-recursive
-choice on Windows/macOS.
-
-**Verification honesty.** Still not locally reproducible (the abort is
-runner-environment-specific — same node version behaves differently there), so
-local proof is only "no regression" (watcher + full suite green). Cross-platform
-confirmation is CI on PR #2.
+**Verification honesty.** The abort itself remains not locally reproducible
+(runner-environment-specific), but the fix removes the entire crashing mechanism
+rather than trying to dodge its trigger, so its correctness doesn't depend on
+reproducing it: with no `fs.watch` call, `uv__relative_path` cannot run. Local
+proof is behavioral (watcher + full suite green on the polling backend);
+cross-platform green is confirmed by CI on PR #2 after this change.
