@@ -62,6 +62,32 @@ describe("addPostToolUseHook", () => {
     expect(settings.hooks.PostToolUse).toHaveLength(1);
   });
 
+  it("is idempotent when an existing hook differs only in JSON key order", async () => {
+    // A hand-edited / older-code settings.json can order the hook's keys
+    // differently (timeout before async) than the code emits (async before
+    // timeout). Same fields, same values — the skip check must not be fooled
+    // into rewriting an unchanged hook. Regression for the golem-init drift.
+    await writeSettings({
+      hooks: {
+        PostToolUse: [
+          {
+            matcher: "Bash|Read|Grep|Glob|WebFetch",
+            hooks: [{ type: "command", command: POST_TOOL_USE_COMMAND, timeout: 30, async: false }],
+          },
+        ],
+      },
+    });
+
+    const action = await addPostToolUseHook({ projectDir });
+
+    expect(action.kind).toBe("skip");
+    const settings = (await readSettings()) as Any;
+    expect(settings.hooks.PostToolUse).toHaveLength(1);
+    // The reordered original is left byte-untouched (not rewritten).
+    const keys = Object.keys(settings.hooks.PostToolUse[0].hooks[0]);
+    expect(keys).toEqual(["type", "command", "timeout", "async"]);
+  });
+
   it("preserves foreign hooks and other settings when adding", async () => {
     await writeSettings({
       env: { FOO: "bar" },
