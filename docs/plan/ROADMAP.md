@@ -74,7 +74,7 @@ re-scoped (not open work).
 | R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware (unchanged). | wiki questions page |
 
 **New since this batch (not loose ends — tracked features):**
-- **Auto-resume on limit — Phase 1 shipped, Phase 2 deferred** (auto-spawn, ADR-0002-gated) — `docs/plan/proposals/auto-resume-on-limit.md`, durable task `20a9f9ae`.
+- **Auto-resume on limit — REMOVED 2026-07-18 (Decision 37).** Phase 1 (detect + capture) was reverted and Phase 2 (auto-spawn) abandoned unbuilt: a proxy can't drive Claude Code's interactive TUI, and dedicated tmux-wrapper tools already cover unattended resume. The R5.1 durable task queue is unaffected.
 - **R5.5 prompt-translation scoring loop** stays **deferred** (demand-gated per its debrief) — not unfinished work.
 
 ---
