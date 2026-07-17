@@ -26,6 +26,7 @@ import {
   forwardableResponseHeaders,
   isBypassRequest,
 } from "./headers.js";
+import { detectUsageLimit } from "./limit-detector.js";
 import {
   type ProxyConfig,
   type ProxyRequest,
@@ -165,6 +166,20 @@ export class GolemProxy {
     // Push headers immediately so SSE clients see the response open
     // before the first event arrives.
     res.flushHeaders();
+
+    // Auto-resume Phase 1 (proposals/auto-resume-on-limit.md): observe a usage
+    // limit (429) from the status/headers only — never touches the body pipe
+    // below, so fidelity is preserved. Fire-and-forget; must never throw or
+    // delay the response.
+    const onUsageLimit = this.config.onUsageLimit;
+    if (onUsageLimit !== undefined) {
+      try {
+        const signal = detectUsageLimit(upstream.statusCode, upstream.headers, Date.now());
+        if (signal !== null) onUsageLimit(signal, forward);
+      } catch {
+        // observe-only — a detection error can never affect the forwarded response
+      }
+    }
 
     // R1.1: optional read-only usage sniffer (verification-notes §30-37) —
     // only constructed when a consumer is listening, so the byte pipe stays

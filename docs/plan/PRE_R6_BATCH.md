@@ -1,5 +1,12 @@
 # Pre-R6 batch — loose-ends closeout
 
+> **✅ COMPLETE (2026-07-17).** LE1–LE5 all landed. LE5 (incl. LE5c reindex
+> clear) shipped in `deccfc5`; LE1 (Decision 33 → ACCEPTED); LE2 (fair
+> grounded/refined measurement — see [[LE2 — grounded-refined coder quality]]);
+> LE3 (grounding into `golem task run`); LE4 (CI green on `deccfc5`, R2.6/R1.6/
+> R5.5 re-scoped in `ROADMAP.md`). Debrief: `docs/wiki/debriefs/2026-07-17-pre-r6-loose-ends.md`.
+> The loose-ends ledger in `ROADMAP.md` is now empty. Kept for reference.
+
 > **Written 2026-07-17.** With R1–R5 shipped and R6 (multi-provider & remote)
 > deliberately ON HOLD (security/ToS-gated), this batch closes the carried-over
 > loose ends tracked in `ROADMAP.md` (the "Carried-over loose ends" table and the
@@ -204,9 +211,11 @@ dir before a clean rebuild — **not** the fix.
 batch; and clearing stale chunks on a same-dim rebuild of deleted files (milder —
 `ensureProjectIndexed`'s incremental delete already covers the mcp-serve path).
 
-**Status:** LE5a (input bounding) + LE5b (batching) ✅ fixed + tested this
-session; LE5c (reindex clear-on-embedder-change) diagnosed, fix planned. Fold all
-three into the LE5 debrief when the batch is written up.
+**Status:** LE5a (input bounding) + LE5b (batching) + LE5c (reindex
+clear-on-embedder-change) all ✅ fixed + tested, shipped in `deccfc5`
+(`FileVectorDriver.upsert` clears the collection when the incoming vector
+dimension differs from a non-zero `col.dim`; `auto-index.ts` `fullIndex` now
+`rm`s the dir on embedder change; +2 unit tests).
 
 ### LE4 (📋) — Ledger tidy: re-scope the blocked-not-broken items
 **Source:** ROADMAP loose-ends table (R2.6, R1.6); §68 CI fix; R5.5 debrief.

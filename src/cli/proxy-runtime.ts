@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { type GolemSettings, policyFromSettings } from "../config/index.js";
+import { readSessionState } from "../hooks/session-state.js";
 import type { InferenceService } from "../interfaces/inference.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
@@ -19,7 +20,8 @@ import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
-import { GolemProxy } from "../proxy/index.js";
+import { appendLimitHit, buildLimitCapture, GolemProxy } from "../proxy/index.js";
+import { FileTaskStore } from "../tasks/index.js";
 import {
   recordAvoidedUpstream,
   recordPipelineEvent,
@@ -186,6 +188,19 @@ export function buildProxyFromSettings(
         );
       })().catch(() => {});
     },
+    // Auto-resume Phase 1 (opt-in): on an upstream usage limit (429), log the
+    // full signal for validation and capture a durable resume task gated to the
+    // reset time. Observe-only; no process is spawned (that's Phase 2).
+    ...(settings.proxy.limit_autoresume
+      ? {
+          onUsageLimit: buildLimitCapture({
+            store: new FileTaskStore(dir),
+            sessionId: async () => (await readSessionState(dir))?.sessionId,
+            log: (entry) => appendLimitHit(dir, entry),
+            now: () => Date.now(),
+          }),
+        }
+      : {}),
   });
   return semantic !== undefined ? { proxy, semantic } : { proxy };
 }

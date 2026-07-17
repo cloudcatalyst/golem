@@ -15,22 +15,46 @@
  */
 
 import { z } from "zod";
-import type { ChatMessage, InferenceService } from "../interfaces/inference.js";
+import {
+  CapabilityUnavailableError,
+  type ChatMessage,
+  type ChatResult,
+  type InferenceService,
+  type Role,
+} from "../interfaces/inference.js";
 
 export interface RefineIssue {
   readonly severity: "high" | "medium" | "low";
   readonly description: string;
 }
 
+/**
+ * Why refinement ended (LE2 observability). A bare `rounds: 0` used to hide the
+ * difference between "the judge ran and found nothing" and "the judge never ran"
+ * (its model wasn't pulled) — the latter silently no-op'd every call while the
+ * tool falsely reported "nothing worth revising".
+ */
+export type RefineStatus =
+  | "revised" // rounds 1: real issues found and a revision applied
+  | "clean" // the critique ran and found nothing high/medium
+  | "judge-unavailable" // no judge AND no drafter model could run the critique
+  | "unparseable" // the critique returned but wasn't valid/matching JSON
+  | "empty-revision" // the revision produced empty output; kept the draft
+  | "error"; // an unexpected inference error
+
 export interface RefineOutcome {
   /** The final draft — revised when the judge found real issues, else the original. */
   readonly text: string;
-  /** Revision cycles performed: 0 (nothing worth revising / failure) or 1. */
+  /** Revision cycles performed: 0 (nothing worth revising / could not run) or 1. */
   readonly rounds: number;
-  /** The judge's one-line summary, when a revision happened. */
+  /** Why refinement ended — distinguishes a clean draft from a judge that never ran. */
+  readonly status: RefineStatus;
+  /** The judge's one-line summary, when the critique ran. */
   readonly critiqueSummary?: string;
   /** The issues the judge flagged, when a revision happened. */
   readonly issues?: readonly RefineIssue[];
+  /** Which role produced the critique: "judge", or "drafter" when the judge model was unavailable. */
+  readonly critiquedBy?: Role;
 }
 
 /** JSON Schema the judge is forced to fill (same shape convention as rerank's). */
@@ -110,35 +134,94 @@ function worthRevising(critique: z.infer<typeof critiqueResultSchema>): boolean 
 }
 
 /**
- * Run one optional draft → judge → revise cycle. Returns the original draft
- * unchanged (`rounds: 0`) when the judge finds nothing worth revising or on any
- * failure; returns the revised text (`rounds: 1`) with the critique otherwise.
+ * Run one optional draft → critique → revise cycle, with an explicit
+ * {@link RefineStatus} so a no-op is never silent (LE2).
+ *
+ * The critique prefers the dedicated "judge" role but **falls back to the
+ * "drafter" role** when no judge model is pulled — a drafter self-review is far
+ * better than skipping refinement, and at many tiers the judge model isn't
+ * installed while the drafter (just used to write the draft) is. Ollama honors
+ * `response_format: json_schema`, so the critique parses.
  */
 export async function refineDraft(
   inference: InferenceService,
   task: string,
   draft: string,
 ): Promise<RefineOutcome> {
+  // 1. Critique: judge role, falling back to the drafter as self-reviewer.
+  let critique: ChatResult;
+  let critiquedBy: Role;
   try {
-    const critiqueResult = await inference.chat("judge", critiquePrompt(task, draft), {
+    critique = await inference.chat("judge", critiquePrompt(task, draft), {
       jsonSchema: CRITIQUE_JSON_SCHEMA,
     });
-    const parsed = critiqueResultSchema.safeParse(JSON.parse(critiqueResult.text));
-    if (!parsed.success || !worthRevising(parsed.data)) {
-      return { text: draft, rounds: 0 };
+    critiquedBy = "judge";
+  } catch (judgeErr) {
+    if (!(judgeErr instanceof CapabilityUnavailableError)) {
+      return { text: draft, rounds: 0, status: "error" };
     }
-    const revised = await inference.chat("drafter", revisePrompt(task, draft, parsed.data.issues));
-    // An empty revision is worse than the draft — keep the draft in that case.
-    if (revised.text.trim() === "") {
-      return { text: draft, rounds: 0 };
+    try {
+      critique = await inference.chat("drafter", critiquePrompt(task, draft), {
+        jsonSchema: CRITIQUE_JSON_SCHEMA,
+      });
+      critiquedBy = "drafter";
+    } catch {
+      // Neither a judge nor the drafter model could run — surface it, don't hide it.
+      return { text: draft, rounds: 0, status: "judge-unavailable" };
     }
+  }
+
+  // 2. Parse the critique.
+  let parsed: ReturnType<typeof critiqueResultSchema.safeParse>;
+  try {
+    parsed = critiqueResultSchema.safeParse(JSON.parse(critique.text));
+  } catch {
+    return { text: draft, rounds: 0, status: "unparseable", critiquedBy };
+  }
+  if (!parsed.success) {
+    return { text: draft, rounds: 0, status: "unparseable", critiquedBy };
+  }
+  if (!worthRevising(parsed.data)) {
     return {
-      text: revised.text,
-      rounds: 1,
+      text: draft,
+      rounds: 0,
+      status: "clean",
+      critiquedBy,
+      critiqueSummary: parsed.data.summary,
+    };
+  }
+
+  // 3. Revise once with the drafter.
+  let revised: ChatResult;
+  try {
+    revised = await inference.chat("drafter", revisePrompt(task, draft, parsed.data.issues));
+  } catch {
+    return {
+      text: draft,
+      rounds: 0,
+      status: "error",
+      critiquedBy,
       critiqueSummary: parsed.data.summary,
       issues: parsed.data.issues,
     };
-  } catch {
-    return { text: draft, rounds: 0 };
   }
+  // An empty revision is worse than the draft — keep the draft in that case.
+  if (revised.text.trim() === "") {
+    return {
+      text: draft,
+      rounds: 0,
+      status: "empty-revision",
+      critiquedBy,
+      critiqueSummary: parsed.data.summary,
+      issues: parsed.data.issues,
+    };
+  }
+  return {
+    text: revised.text,
+    rounds: 1,
+    status: "revised",
+    critiquedBy,
+    critiqueSummary: parsed.data.summary,
+    issues: parsed.data.issues,
+  };
 }

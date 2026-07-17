@@ -13,13 +13,14 @@
 
 export type { GolemHttpServerHandle, ServeHttpOptions } from "./serve.js";
 export { serveHttp, serveStdio } from "./serve.js";
-export type { GolemMcpServerDeps } from "./server.js";
+export type { GolemMcpServerDeps, Grounding, HitAssemblyDeps } from "./server.js";
 export {
   boostWikiHits,
   createGolemMcpServer,
   createStandaloneDeps,
   GOLEM_MCP_SERVER_NAME,
   GOLEM_MCP_SERVER_VERSION,
+  gatherGrounding,
 } from "./server.js";
 export type { SliderStore } from "./slider-store.js";
 export {
