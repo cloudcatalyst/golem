@@ -86,6 +86,23 @@ describe("serviceTaskLocally", () => {
     expect(out.lastError).toContain("local model unavailable");
     expect(out.result).toBeUndefined();
   });
+
+  it("re-queues a task that was already marked running (never strands it in running)", async () => {
+    // runQueueLocally marks a task `running` before servicing; a failure must
+    // put it BACK to `queued` or no future `golem task run` would pick it up.
+    const task = { ...createTask({ prompt: "p" }, undefined, "t3"), state: "running" as const };
+    const out = await serviceTaskLocally(task, { inference: unavailable() });
+    expect(out.state).toBe("queued");
+    expect(out.lastError).toContain("local model unavailable");
+  });
+
+  it("re-queues on a generic servicing failure too (not just unavailability)", async () => {
+    const failing = fakeInference({ chat: () => Promise.reject(new Error("boom")) });
+    const task = { ...createTask({ prompt: "p" }, undefined, "t4"), state: "running" as const };
+    const out = await serviceTaskLocally(task, { inference: failing });
+    expect(out.state).toBe("queued");
+    expect(out.lastError).toContain("local servicing failed");
+  });
 });
 
 describe("mapWithConcurrency", () => {
@@ -134,6 +151,37 @@ describe("runQueueLocally", () => {
     expect(res.localModelUnavailable).toBe(true);
     expect(res.serviced).toBe(0);
     expect((await store.get("b"))?.state).toBe("queued"); // untouched
+    // The probed task itself must also be back in the queue (with the error
+    // recorded), not stranded in `running` where no later run would see it.
+    expect((await store.get("a"))?.state).toBe("queued");
+    expect((await store.get("a"))?.lastError).toContain("local model unavailable");
+  });
+
+  it("leaves a task retryable (queued + lastError) when servicing fails mid-run", async () => {
+    const store = new FileTaskStore(dir);
+    await store.put(createTask({ prompt: "a" }, undefined, "a"));
+    await store.put(createTask({ prompt: "b" }, undefined, "b"));
+    // First task succeeds (so the run fans out), second fails generically.
+    let calls = 0;
+    const flaky = fakeInference({
+      chat: (role) => {
+        calls += 1;
+        if (calls > 1) return Promise.reject(new Error("boom"));
+        return Promise.resolve({
+          text: "ok",
+          model: "m",
+          role,
+          promptTokens: 0,
+          completionTokens: 0,
+          finishReason: "stop",
+        });
+      },
+    });
+    const res = await runQueueLocally(store, { inference: flaky }, { concurrency: 1 });
+    expect(res.serviced).toBe(1);
+    expect(res.failed).toBe(1);
+    const states = new Set([(await store.get("a"))?.state, (await store.get("b"))?.state]);
+    expect(states).toEqual(new Set(["done", "queued"])); // failed one is retryable
   });
 
   it("reports nothing to do on an empty queue", async () => {

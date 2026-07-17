@@ -17,8 +17,8 @@
  *
  * Embedders are NOT interchangeable within one index (different dimensions /
  * spaces); switching between hashing and bge-m3 means re-indexing. The vector
- * driver stores the dimension and a mismatched query simply returns no hits
- * rather than garbage.
+ * driver stores the dimension and rejects a mismatched query loudly
+ * (EmbedderMismatchError) rather than returning silently-wrong results.
  */
 
 import type { EmbedFn } from "./knowledge-base.js";

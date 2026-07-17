@@ -63,6 +63,24 @@ describe("eligibleLocalAnswerText", () => {
     expect(eligibleLocalAnswerText(body)).toBeUndefined();
   });
 
+  it("rejects a request that defines tools — the model may need to answer with tool_use", () => {
+    const body = {
+      messages: [{ role: "user", content: "how do I deploy this?" }],
+      tools: [{ name: "run_command", description: "…", input_schema: { type: "object" } }],
+    };
+    expect(eligibleLocalAnswerText(body)).toBeUndefined();
+  });
+
+  it("accepts an explicitly empty tools array", () => {
+    const body = { messages: [{ role: "user", content: "how do I deploy this?" }], tools: [] };
+    expect(eligibleLocalAnswerText(body)).toBe("how do I deploy this?");
+  });
+
+  it("fails closed on a non-array tools value", () => {
+    const body = { messages: [{ role: "user", content: "q" }], tools: "everything" };
+    expect(eligibleLocalAnswerText(body)).toBeUndefined();
+  });
+
   it("rejects a missing messages array", () => {
     expect(eligibleLocalAnswerText({})).toBeUndefined();
   });

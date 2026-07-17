@@ -20,12 +20,12 @@ const READ_TOOLS = new Set([
   "WebSearch",
   "WebFetch",
   "TodoWrite",
-  // Golem read-only MCP tools (short verb names, Decision 27).
+  // Golem read-only MCP tools (short verb names, Decision 27). `level` is NOT
+  // here — it WRITES the persistent slider (see classifyAction's special case).
   "mcp__golem__search",
   "mcp__golem__fetch",
   "mcp__golem__stats",
   "mcp__golem__expand",
-  "mcp__golem__level",
   "mcp__golem__devices",
   "mcp__golem__wiki_read",
 ]);
@@ -89,6 +89,16 @@ const OUTWARD_BASH = [
   /\bterraform\s+apply\b/i,
 ];
 
+/**
+ * Shell metacharacters that void a safe-read classification: redirection can
+ * truncate/overwrite files (`echo x > ~/.bashrc` leads with a "safe" token),
+ * and separators/substitution can smuggle an arbitrary second command past a
+ * safe-looking prefix (`ls -la; anything`). The destructive/outward pattern
+ * lists only catch their specific shapes, so a command that composes at all is
+ * `unknown` (gated), never `read`. `<` (input redirection) stays allowed.
+ */
+const SHELL_COMPOSITION_RE = /[;&|>`]|\$\(/;
+
 function bashCommand(input: unknown): string | null {
   if (typeof input === "object" && input !== null && !Array.isArray(input)) {
     const c = (input as Record<string, unknown>).command;
@@ -102,8 +112,30 @@ export function classifyBash(command: string): ActionClass {
   const cmd = command.trim();
   if (OUTWARD_BASH.some((re) => re.test(cmd))) return "outward";
   if (DESTRUCTIVE_BASH.some((re) => re.test(cmd))) return "destructive";
+  // Composition (redirection, chaining, pipes, substitution) can hide a write
+  // or a second command behind a safe leading token — never classify it read.
+  if (SHELL_COMPOSITION_RE.test(cmd)) return "unknown";
   if (SAFE_BASH.some((re) => re.test(cmd))) return "read";
   // A shell can do anything; an unrecognized command is gated, not assumed safe.
+  return "unknown";
+}
+
+/**
+ * Classify the `level` MCP tool by the level it requests. Setting the slider
+ * is a persistent local settings WRITE for levels ≥ 1 — but level 0
+ * ("passthrough") disables redaction entirely, so every later request would
+ * leave the machine with secrets/PII unredacted. That consequence is the
+ * `outward` class's territory (leaves the machine / hard to reverse), so a
+ * level-0 request is always gated to the human at every autonomy level
+ * (ADR-0002's never-auto set). An unparseable input fails closed as `unknown`.
+ */
+function classifyLevelTool(input: unknown): ActionClass {
+  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+    const level = (input as Record<string, unknown>).level;
+    if (typeof level === "number") {
+      return level <= 0 ? "outward" : "write";
+    }
+  }
   return "unknown";
 }
 
@@ -114,6 +146,7 @@ export function classifyAction(toolName: string, toolInput: unknown): ActionClas
     const cmd = bashCommand(toolInput);
     return cmd === null ? "unknown" : classifyBash(cmd);
   }
+  if (toolName === "mcp__golem__level") return classifyLevelTool(toolInput);
   if (READ_TOOLS.has(toolName)) return "read";
   if (WRITE_TOOLS.has(toolName)) return "write";
   return "unknown";
