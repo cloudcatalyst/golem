@@ -167,9 +167,13 @@ describe("buildProxyFromSettings — R2.3 knowledge.local_answer_enabled wiring"
     expect(stats.outputTokensAvoided).toBeGreaterThan(0);
   });
 
-  it("never wires localAnswer when local_answer_enabled is false (default) — no respondDirectly even for a matching query", async () => {
+  it("never wires localAnswer when local_answer_enabled is false — no respondDirectly even for a matching query", async () => {
     await seedKnowledgeBase();
-    const { settings } = await loadConfig({ projectDir, userDir: fakeUserDir });
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: { knowledge: { local_answer_enabled: false } },
+    });
     expect(settings.knowledge.local_answer_enabled).toBe(false);
 
     const build = buildProxyFromSettings(projectDir, settings, telemetry);

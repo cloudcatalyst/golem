@@ -59,6 +59,8 @@ updated: YYYY-MM-DD
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
+- [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
+- [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)
 - syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the
@@ -116,3 +118,4 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-16-R5.5.md — R5.5 (spike): prompt translation (`src/prompt/`) — local rewrite of a raw note into a clearer prompt, always shown/never sent/off proxy path, few-shot on accepted examples; `golem prompt translate/accept`; scoring loop demand-gated
 - syntheses/r5-autonomy-orchestration-batch.md — R5 batch retrospective: all 5 tasks (dashboard sidecar, durable tasks, autonomy gates, local multiplexing, prompt-translation spike); through-lines (verify-first, default-deny, local-first explicit escalation, one state contract) + open follow-ups
 - debriefs/2026-07-16-init-mcp-permissions.md — `golem init` now pre-approves Golem's MCP tools (`mcp__golem__*` allow + `wiki_upsert` ask); verified MCP permission-rule syntax against Claude Code docs
+- debriefs/2026-07-17-le5-decision-33.md — LE5: three embed-path bugs that made the semantic KB unbuildable (input bounding, batching, reindex dim-reset); Decision 33 semantic re-review + finding-#2 prose restriction; the wiki-first payoff ([[Slider Levels]], [[Compression]])
