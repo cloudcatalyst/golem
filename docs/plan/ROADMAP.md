@@ -59,7 +59,7 @@ them, Decision 36).
 
 | Item | Status | Where tracked |
 |---|---|---|
-| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | **reviewed 2026-07-16 → stays PROPOSED** (served answer was wrong; test can't run as designed — no semantic embedder). Flip now gated on a fair re-review after `nomic-embed-text` + semantic reindex. | spec Decision 33; verification-notes §64 |
+| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | **re-reviewed 2026-07-17 on a real semantic (`bge-m3`) index → stays PROPOSED.** Semantic ranking improved (wiki/spec prose now wins several questions), but test/code still outranks prose for definitional queries (slider level 0/1 serve a wrong test constant above the floor). Now gated on a *concrete fix* — exclude/down-weight test+code from local-answer sources, prefer prose — then re-run the sample. Fixing it also required 3 embed-path bug fixes (§69). Tracked as **PRE_R6_BATCH LE1** + its follow-on. | spec Decision 33; verification-notes §64/§69/§69b; PRE_R6_BATCH LE1/LE5 |
 | R2.6 live semantic-forced A/B on real traffic | deferred (needs a proxy restart mid-dogfood; only meaningful on non-caching upstreams) | verification-notes §60 |
 | R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware | wiki questions page |
 | `FileVectorDriver.#flush()` crash past ~30k chunks | scheduled | **R4.6** |

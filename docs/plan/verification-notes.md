@@ -2090,6 +2090,14 @@ in **§67**: cross-embedder-space queries now throw loudly, and the proxy picks
 its query embedder to match the persisted index. Finding #2 (lexical ranking
 favours code over prose) and the ACCEPTED-flip gate remain open.
 
+**Update (2026-07-17, cont.):** the fair semantic re-review the gate asked for is
+now done — see **§69b**. It required first fixing three embed-path bugs that made
+the semantic index unbuildable/uncleanable (**§69**). Outcome: finding #2 persists
+even semantically (test/code still outranks prose for definitional queries; slider
+level 0/1 still serve a wrong test constant), so Decision 33 **stays PROPOSED**,
+now gated on a specific fix (exclude/down-weight `*.test.ts`+code from local-answer
+sources, prefer prose), not a vague re-review.
+
 ## §65 — R5.1 spike: Claude Code headless resume mechanism (verified 2026-07-16)
 
 Resolves the R5.1 memo's hardest open question — *"interactive-session resume
@@ -2243,3 +2251,95 @@ rather than trying to dodge its trigger, so its correctness doesn't depend on
 reproducing it: with no `fs.watch` call, `uv__relative_path` cannot run. Local
 proof is behavioral (watcher + full suite green on the polling backend);
 cross-platform green is confirmed by CI on PR #2 after this change.
+
+## §69 — Semantic KB path was unbuildable/uncleanable; three embed-path bugs fixed (2026-07-17)
+
+Found while executing PRE_R6_BATCH **LE1** (the Decision 33 semantic re-review):
+the semantic KB had **never built end-to-end on this repo**. The default lexical
+hashing embedder (no token limit, fixed 512-dim) masked all three bugs. Root
+cause was three compounding defects, all now fixed with tests (full suite green,
+1032; `tsc` + `biome` clean):
+
+1. **Oversized single input (LE5a).** `chunker.ts` `MAX_CHUNK_CHARS = 2_000` is a
+   *soft* cap (splits on paragraph boundaries only). A dense unsplittable block (a
+   wide markdown table in this file, a long `golem-spec.md` section) becomes a
+   ~4096-token chunk. `OllamaClient.embed` forwarded inputs unbounded; stock
+   `bge-m3` has physical batch 2048 < its 4096 context, so any input > 2048 tokens
+   errored `input … too large to process` and, under load, crashed the runner.
+   Ollama-side `num_batch` tuning did NOT fix it (2048 → clean error; 4096/8192 →
+   runner crash). **Fix:** `MAX_EMBED_INPUT_CHARS = 6000`, each input truncated
+   before send (stored chunk text unchanged; only the vector uses the head).
+2. **Whole corpus in one request (LE5b).** `knowledge-base.ts` `#embedAndStore`
+   embeds *all* chunks of a kind in a single `embed()` call → one `/v1/embeddings`
+   request over thousands of inputs. Ollama opens a localhost connection to its
+   runner per input; after ~1 min of rapid connections the dial is refused
+   (**Windows ephemeral-port/TIME_WAIT exhaustion** — NOT a crash or CUDA-OOM: the
+   server log showed 7 GB VRAM free throughout and a *different* ephemeral port in
+   each `dial tcp 127.0.0.1:<port>/tokenize` failure), 400ing the whole request and
+   losing all progress. **Fix:** `EMBED_BATCH_SIZE = 64` — sequential bounded
+   batches; connections drain between them. Both fixes in `OllamaClient.embed`,
+   +2 unit tests. Verified: stock (freshly-pulled) `bge-m3` builds the full 2550-
+   chunk index end-to-end in ~6 min, no model tuning.
+3. **Reindex never clears on embedder change (LE5c).** With 1+2 fixed the build
+   completes, but `golem index` (`main.ts` → `knowledge.ingest`) upserts into the
+   *pre-existing* collection. `FileVectorDriver.openCollection` loads the old
+   `dim` from `meta.json` and `upsert` only set `dim` when 0, so a lexical→semantic
+   reindex wrote 1024-dim vectors into a `dim:512`-labelled collection, kept the
+   stale lexical chunks, and produced a mixed-dim collection §67's
+   `assertEmbedderSpaceMatch` (correctly) refuses to query. `fullIndex` in
+   `auto-index.ts` had the same gap (comment claims "clear + full rebuild"; code
+   didn't clear). This is the real user path: *index lexically → `ollama pull
+   bge-m3` → reindex* → unqueryable. **Fix:** `FileVectorDriver.upsert` detects an
+   incoming-vector dimension that differs from a non-zero `col.dim`, clears the
+   collection (+ its `#chunkIndex` entries) and resets `dim` before storing;
+   +2 unit tests (resets on dim change; does NOT reset on same-dim incremental).
+
+**Follow-ups (optional, logged, not blocking):** a *hard* char cap in the chunker
+so oversized chunks never form; a retry around each embed batch; clearing stale
+chunks on a same-dim rebuild of deleted files (mcp-serve already covers this via
+`ensureProjectIndexed` incremental delete). None needed for correctness now.
+
+## §69b — Decision 33 local-answer: fair semantic re-review (2026-07-17)
+
+The §64 gate ("re-review on a semantically-built index, flip only if a *good*
+served answer clears the 0.6 floor and no *wrong* one does") was actioned once
+§69's fixes made a clean 1024-dim `semantic:bge-m3` index buildable. Method:
+`KnowledgeLocalAnswerService.tryAnswer` (`knowledge` scope, default 0.6 floor,
+k=5) over 13 self-contained conceptual questions; recorded top-5 hits + verdict.
+
+**Results — 11 served / 2 declined:**
+
+| Q | verdict | top source | correct? |
+|---|---|---|---|
+| What is Golem? | DECLINED (0.589) | CLAUDE.md (right prose) | good answer sat just under the floor |
+| slider level 0 | SERVED 0.694 | `native-lossless.test.ts` `const LEVEL_0 = …` | **WRONG** (§64's canonical failure persists) |
+| search tool | SERVED 0.612 | wiki *Wiki-First Knowledge* | ✅ correct |
+| fetch tool | SERVED 0.603 | `autonomy/classify.ts` READ_TOOLS set | **WRONG** |
+| expand tool | SERVED 0.640 | `skills.ts` expand skill | ✅ ok |
+| stats tool | SERVED 0.635 | `skills.ts` stats skill | ✅ ok |
+| level tool | SERVED 0.609 | `mcp/index.ts` tool-names comment | ~ weak |
+| ingest tool | DECLINED (0.594) | `classify.ts` | correct decline |
+| coder tool | SERVED 0.655 | R4.2 debrief | ✅ ok |
+| redaction stage | SERVED 0.636 | wiki *Redaction Stage* | ✅ correct |
+| compression saves tokens | SERVED 0.612 | vscode README | ~ weak (misses Decision 23 nuance) |
+| wiki-first pattern | SERVED 0.677 | wiki *Wiki-First Knowledge* | ✅ correct |
+| slider level 1 | SERVED 0.677 | `cli-stats.test.ts` `const LEVEL_1 = …` | **WRONG** |
+
+**Read.** Semantic ranking is a clear improvement over lexical (§64 served 1/1
+wrong; here wiki/spec prose now genuinely wins several — search, redaction,
+wiki-first). BUT the §64 failure mode **persists**: dense-token code/**test**
+chunks still outrank explanatory prose for definitional queries, and the two
+canonical questions (slider level 0/1) still serve a confidently-wrong test
+constant *above* the floor while the correct prose ("What is Golem?", 0.589) is
+declined *below* it. Serving wrong > declining, so this still fails the bar.
+
+**Verdict: Decision 33 stays PROPOSED — do NOT flip, do NOT retire.** Now
+gated on a concrete, evidence-backed fix, not a vague re-review: address §64
+finding #2 for the local-answer path — a source-type weighting that prefers
+wiki/spec/doc prose and **excludes or down-weights `*.test.ts` (and likely all
+code) from the local-answer source set** (mirror `boostWikiHits`), and/or raise
+the floor / require the top source to be prose for definitional queries. Then
+re-run this sample; flip only when no wrong answer is served. Test files are the
+worst offenders (they repeat query terms: `LEVEL_0`, `LEVEL_1`) and are the
+cheapest, highest-impact thing to exclude. This becomes PRE_R6_BATCH LE1's
+follow-on task.
