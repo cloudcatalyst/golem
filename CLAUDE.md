@@ -9,7 +9,7 @@ Golem is a universal pre-LLM processing layer (spec Decision 22, positioning con
 
 ## Source of truth
 1. `docs/golem-spec.md` (v1.x) — architecture and decisions. Do not diverge silently; propose spec changes via the Decisions Log. **Decision 16 switched the implementation language to TypeScript (2026-07-03, user decision).**
-2. `docs/plan/IMPLEMENTATION_PLAN.md` — workstreams and frozen interfaces; `docs/plan/ROADMAP.md` — release ordering (current batch: `docs/plan/R4_BATCH.md`). Planning docs live under `docs/plan/`.
+2. `docs/plan/IMPLEMENTATION_PLAN.md` — workstreams and frozen interfaces; `docs/plan/ROADMAP.md` — release ordering; `docs/plan/BACKLOG.md` — ideas inbox. Planning docs live under `docs/plan/`; completed batch briefs are retired to git history.
 3. `docs/plan/verification-notes.md` — dated live-doc findings (T0.1). Check it before building on any external-tool fact.
 
 ## Hard rules
@@ -47,5 +47,5 @@ See IMPLEMENTATION_PLAN §4. Short version: `npx golem-run init` works on all 3 
 Don't consider a batch done until these run — dogfooding this repo means the running services and the planning docs must both reflect the new code:
 1. **Build & verify green:** `npx tsc --noEmit`, `npm run lint`, `npm run format:check`, `npx vitest run` — and `golem wiki check` if any wiki page changed.
 2. **Deploy locally** (so the *running* processes pick up the rebuild — see the deploy notes): `npm run build` → `golem proxy restart` → note that any live `golem mcp serve` connection must be reconnected by Claude Code → `cd vscode-extension && npm run deploy:local` + "Developer: Reload Window" **only if** extension files changed. Restarting matters: e.g. a proxy/MCP change is invisible until the daemon/connection restarts.
-3. **Tidy the planning docs:** mark tasks done in `ROADMAP.md` (empty the loose-ends table when you can), retire/supersede the batch brief, and write the dated `docs/wiki/debriefs/` page (plan-gated). Record any spec Decisions Log change.
-4. **Commit & PR:** conventional commits on a branch (never commit straight to `main`), one workstream per PR, PR body lists affected interfaces.
+3. **Tidy the planning docs:** mark tasks done in `ROADMAP.md` (empty the loose-ends table when you can) and write the dated `docs/wiki/debriefs/` page (plan-gated). **Retire the batch brief:** a batch brief is committed to git while its batch runs, then **deleted once the batch lands** — completed briefs are never kept in the tree (git history preserves them; precedent: R1–R5 + PRE-R6 were retired). Update any living-doc references (CLAUDE.md, ROADMAP, IMPLEMENTATION_PLAN, spec) to point at git history / shipped artifacts; dated wiki debriefs keep their point-in-time references. Record any spec Decisions Log change.
+4. **Commit & PR:** conventional commits on a branch (never commit straight to `main`), one workstream per PR, PR body lists affected interfaces. **Use the `gh` CLI** for PR operations (`gh pr create`, `gh pr merge --squash`) — squash-merge to match the repo's `(#N)` history.
