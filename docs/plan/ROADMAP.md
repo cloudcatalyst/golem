@@ -59,7 +59,7 @@ them, Decision 36).
 
 | Item | Status | Where tracked |
 |---|---|---|
-| Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer | **re-reviewed 2026-07-17 on a real semantic (`bge-m3`) index; finding #2 fixed same day.** Local-answer now restricts to prose sources → post-fix sample serves **zero wrong answers** (§69b's bar met). Fixing all this required 3 embed-path bug fixes (§69) + the prose restriction (§69c). **Remaining: a human judgment call** — flip to ACCEPTED if on-topic-but-thin extractive answers are good enough (given the "verify independently" label + off-by-default), or tighten further first. Deliberately not flipped unilaterally. | spec Decision 33; verification-notes §64/§69/§69b/§69c; PRE_R6_BATCH LE1/LE5 |
+| ~~Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer~~ | **✅ DONE — ACCEPTED 2026-07-17 (USER DECISION).** Required 3 embed-path fixes (§69, semantic index now buildable), the durable-prose restriction (§69c), and two new wiki pages ([[Slider Levels]], [[Compression]]); post-fix sample serves only correct authoritative wiki prose (8 served / 5 declined, zero wrong). Stays opt-in/OFF-by-default; answer coverage tracks wiki coverage by design. | spec Decision 33; verification-notes §64/§69/§69b/§69c/§69d; PRE_R6_BATCH LE1/LE5 |
 | R2.6 live semantic-forced A/B on real traffic | deferred (needs a proxy restart mid-dogfood; only meaningful on non-caching upstreams) | verification-notes §60 |
 | R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware | wiki questions page |
 | `FileVectorDriver.#flush()` crash past ~30k chunks | scheduled | **R4.6** |

@@ -71,7 +71,9 @@ Steps:
 4. **Decide (the point of the task):**
    - If ≥1 *correct* served answer clears the floor and no *wrong* answer does →
      propose flipping Decision 33 PROPOSED→ACCEPTED (with the served sample as
-     evidence).
+     evidence). **→ DONE: Decision 33 flipped to ACCEPTED 2026-07-17 (USER
+     DECISION) after finding #2's fix + the [[Slider Levels]]/[[Compression]]
+     wiki pages; post-fix sample serves only correct authoritative wiki prose.**
    - If wrong answers still clear the floor, or nothing correct does → the honest
      call is to **retire** Decision 33 (or re-gate on a concrete ranking fix, see
      LE-note below), not leave it parked indefinitely.
