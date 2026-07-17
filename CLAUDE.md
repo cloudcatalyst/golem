@@ -42,3 +42,10 @@ Record findings with dates in `docs/plan/verification-notes.md`.
 
 ## Definition of done (P0 — ✅ met; kept as the standing bar)
 See IMPLEMENTATION_PLAN §4. Short version: `npx golem-run init` works on all 3 OSes; proxy is byte-faithful at level ≤1 with real savings at level 1; the `/golem/*` skills and `/mcp__golem__*` prompts function in Claude Code; redaction verified; CI green.
+
+## Batch close-out (run after the last task in a batch)
+Don't consider a batch done until these run — dogfooding this repo means the running services and the planning docs must both reflect the new code:
+1. **Build & verify green:** `npx tsc --noEmit`, `npm run lint`, `npm run format:check`, `npx vitest run` — and `golem wiki check` if any wiki page changed.
+2. **Deploy locally** (so the *running* processes pick up the rebuild — see the deploy notes): `npm run build` → `golem proxy restart` → note that any live `golem mcp serve` connection must be reconnected by Claude Code → `cd vscode-extension && npm run deploy:local` + "Developer: Reload Window" **only if** extension files changed. Restarting matters: e.g. a proxy/MCP change is invisible until the daemon/connection restarts.
+3. **Tidy the planning docs:** mark tasks done in `ROADMAP.md` (empty the loose-ends table when you can), retire/supersede the batch brief, and write the dated `docs/wiki/debriefs/` page (plan-gated). Record any spec Decisions Log change.
+4. **Commit & PR:** conventional commits on a branch (never commit straight to `main`), one workstream per PR, PR body lists affected interfaces.

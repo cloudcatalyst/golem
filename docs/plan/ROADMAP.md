@@ -57,12 +57,24 @@ them, Decision 36).
 
 ## Carried-over loose ends (visible, not lost)
 
+**All cleared by the PRE-R6 batch (2026-07-17).** The batch
+(`PRE_R6_BATCH.md`) closed LE1–LE5; the two remaining items are
+blocked-not-broken and re-scoped (not open work).
+
 | Item | Status | Where tracked |
 |---|---|---|
-| ~~Decision 33 local-answer: flip PROPOSED→ACCEPTED after a human reviews a real served answer~~ | **✅ DONE — ACCEPTED 2026-07-17 (USER DECISION).** Required 3 embed-path fixes (§69, semantic index now buildable), the durable-prose restriction (§69c), and two new wiki pages ([[Slider Levels]], [[Compression]]); post-fix sample serves only correct authoritative wiki prose (8 served / 5 declined, zero wrong). Stays opt-in/OFF-by-default; answer coverage tracks wiki coverage by design. | spec Decision 33; verification-notes §64/§69/§69b/§69c/§69d; PRE_R6_BATCH LE1/LE5 |
-| R2.6 live semantic-forced A/B on real traffic | deferred (needs a proxy restart mid-dogfood; only meaningful on non-caching upstreams) | verification-notes §60 |
-| R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware | wiki questions page |
-| `FileVectorDriver.#flush()` crash past ~30k chunks | scheduled | **R4.6** |
+| ~~Decision 33 local-answer: flip PROPOSED→ACCEPTED~~ | **✅ DONE — ACCEPTED 2026-07-17 (USER DECISION).** 3 embed-path fixes (§69), durable-prose restriction (§69c), [[Slider Levels]] + [[Compression]] pages; post-fix sample zero wrong. Opt-in/OFF-by-default. | spec Decision 33; verification-notes §64/§69b/§69c; PRE_R6 LE1 |
+| ~~LE2 fair grounded/refined coder quality on the semantic index~~ | **✅ DONE 2026-07-17.** n=5 grounded+refine; grounding improves *revise-quality* on project-integrated drafts (verdict count flat); `refine` fired 0/5 rounds (follow-up in BACKLOG). | [[LE2 — grounded-refined coder quality]] |
+| ~~LE3 grounding injection into `golem task run`~~ | **✅ DONE 2026-07-17** (feat(cli), shared `gatherGrounding`). | PRE_R6 LE3 |
+| ~~LE4 ledger tidy + CI-green check~~ | **✅ DONE 2026-07-17** — CI green on `deccfc5`; R2.6/R1.6/R5.5 re-scoped below. | PRE_R6 LE4 |
+| ~~LE5 semantic embed path robustness (incl. LE5c reindex clear)~~ | **✅ DONE** (`deccfc5`). | PRE_R6 LE5 |
+| ~~`FileVectorDriver.#flush()` crash past ~30k chunks~~ | **✅ DONE** — R4.6. | R4.6 |
+| R2.6 live semantic-forced A/B on real traffic | **re-scoped: unblocks-with-R6.1** (only meaningful on a non-caching upstream, which needs the provider adapters). Infra already built + tested. | verification-notes §60 |
+| R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware (unchanged). | wiki questions page |
+
+**New since this batch (not loose ends — tracked features):**
+- **Auto-resume on limit — Phase 1 shipped, Phase 2 deferred** (auto-spawn, ADR-0002-gated) — `docs/plan/proposals/auto-resume-on-limit.md`, durable task `20a9f9ae`.
+- **R5.5 prompt-translation scoring loop** stays **deferred** (demand-gated per its debrief) — not unfinished work.
 
 ---
 

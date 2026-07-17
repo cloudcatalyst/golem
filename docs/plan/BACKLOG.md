@@ -37,4 +37,5 @@ lives in `ROADMAP.md` and the batch brief.
 
 | Date | Idea | Source | Status |
 |---|---|---|---|
+| 2026-07-17 | Coder `refine` (judge→revise) fired 0 rounds across all 5 LE2 tasks — the judge never flagged high/medium issues, even a `module.exports`/CJS error it should catch. Investigate the judge prompt/verdict-schema/threshold so refinement actually catches obvious defects; re-measure accept-rate after. | conversation (2026-07-17 PRE-R6 batch); syntheses/le2-grounded-refined-coder-quality.md | raw |
 | 2026-07-16 | Webcache pre-cache freshness check: on a repeat WebFetch, send a conditional request (`If-None-Match` from a stored `ETag`, `If-Modified-Since` from `Last-Modified`); on `200` replace the cache + re-distill, on `304` serve cache. Honor `Cache-Control`/`Expires` (`no-store`/`max-age`) so a changed page isn't served stale (as the Claude Code docs were during R4.7). | conversation (2026-07-16 R4 session) | promoted — shipped 2026-07-16 (opt-in `knowledge.webcache_revalidate`); see debriefs/2026-07-16-webcache-revalidation.md |
