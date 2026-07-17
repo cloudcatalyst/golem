@@ -9,6 +9,15 @@ export {
   forwardableResponseHeaders,
   isBypassRequest,
 } from "./headers.js";
+export {
+  appendLimitHit,
+  buildLimitCapture,
+  captureTaskId,
+  DEFAULT_MIN_CAPTURE_SECONDS,
+  type LimitCaptureDeps,
+  limitHitsLogPath,
+} from "./limit-capture.js";
+export { detectUsageLimit, LIMIT_STATUS, type UsageLimitSignal } from "./limit-detector.js";
 export { GolemProxy } from "./server.js";
 export {
   BYPASS_HEADER,
