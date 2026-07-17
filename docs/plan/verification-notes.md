@@ -2402,3 +2402,35 @@ the missing concept pages** (proposed: `Slider Levels` incl. level-0
 passthrough/redaction-OFF per Decision 30; `Compression` incl. situational savings
 per Decision 23), which then rank as authoritative prose and let local-answer
 serve them. Tracked in PRE_R6_BATCH LE1 + the wiki work.
+
+**Update (2026-07-17): wiki pages written, loop closed.** Added
+`docs/wiki/concepts/Slider Levels.md` and `Compression.md`; after reindex the
+three problem questions all serve the correct authoritative wiki prose:
+"slider level 0" → `Slider Levels.md` (0.620, the passthrough/redaction-OFF
+answer), "slider level 1" → `Slider Levels.md` (0.628), "compression" →
+`Compression.md` (0.700, top hit). Final sample: 8 served / 5 declined, every
+served answer now correct/authoritative wiki prose; the 5 declines fall through
+safely (no wiki page defines those yet — more coverage opportunities, not bugs).
+The wiki-first loop end to end: write the durable page → local-answer serves it.
+
+## §69d — `golem index` made incremental (2026-07-17)
+
+Prompted by "a 6-minute reindex is a long process." Incremental reindex already
+existed — `ensureProjectIndexed` (`src/cli/auto-index.ts`, used by `golem mcp
+serve` startup) diffs each file's mtime+size against the manifest and re-embeds
+only changed/new files (drops deleted, or skips entirely) unless the embedder
+signature changed. But the explicit `golem index` command called
+`knowledge.ingest` directly — a **full** re-embed every run — and wrote its
+manifest WITHOUT per-file states (no `files` arg), so even the auto-index couldn't
+sync against a `golem index`-written manifest.
+
+**Fix (`src/cli/main.ts`):** a whole-project `golem index` (no path arg, no
+`--watch`) now routes through `ensureProjectIndexed` — incremental, and it writes
+a proper file-state manifest. An explicit `golem index <path>` or `--watch` keeps
+the targeted full ingest. Also closes LE5c at the command level
+(`ensureProjectIndexed` does the correct `rm`+rebuild on embedder change).
+Verified on this repo: the first run after the old empty-manifest is a one-time
+catch-up (all files look "changed"); then a no-op run is **1.4 s** (was ~6–7 min)
+and a single-file edit syncs in **3.7 s** (3 chunks). Full suite green (1036);
+core incremental logic already covered by `tests/unit/cli/auto-index.test.ts` +
+`tests/integration/knowledge-incremental.test.ts`.
