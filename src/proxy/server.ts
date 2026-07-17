@@ -35,6 +35,12 @@ import {
 } from "./types.js";
 import { UsageSniffer } from "./usage-sniffer.js";
 
+/**
+ * Buffer the whole request body. Deliberately uncapped: the proxy binds
+ * loopback-only and serves the local developer's own Claude Code traffic
+ * (bounded JSON documents), so a size limit would only add a failure mode.
+ * Revisit if the proxy ever binds a non-loopback interface.
+ */
 function readBody(req: IncomingMessage): Promise<Buffer | null> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];

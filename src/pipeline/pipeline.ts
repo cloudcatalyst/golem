@@ -252,7 +252,9 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
                 projectId: options.projectId,
                 level: policy.level,
                 requestTokens: { tokensBefore: estimateTokens(originalJson), tokensAfter: 0 },
-                stageSavings: {},
+                // Redaction (stage 1) already ran and recorded its delta —
+                // keep it in the event rather than dropping it on this path.
+                stageSavings,
                 ccrRefsStored: 0,
                 avoidedUpstreamInputTokens: estimateTokens(originalJson),
                 avoidedUpstreamOutputTokens: estimateTokens(result.text),

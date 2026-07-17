@@ -34,15 +34,24 @@ function extractPlainText(content: unknown): string | undefined {
 /**
  * A parsed request body qualifies for the local-answer attempt only when it
  * is a single-turn, tool-free, plain-text user question: `messages.length
- * === 1`, role `user`, content is a bare string or a single `text` block.
- * Anything else (prior turns to escalate mid-flow, tool_result content,
- * multiple content blocks, images) returns undefined — the caller must fall
- * through to the normal upstream path. This is the narrowing that keeps this
- * sub-mode's trigger tighter than Decision 25's general auto-draft.
+ * === 1`, role `user`, content is a bare string or a single `text` block,
+ * and the request defines NO tools. Anything else (prior turns to escalate
+ * mid-flow, tool_result content, multiple content blocks, images) returns
+ * undefined — the caller must fall through to the normal upstream path. This
+ * is the narrowing that keeps this sub-mode's trigger tighter than Decision
+ * 25's general auto-draft.
+ *
+ * The tools check is load-bearing, not cosmetic: a request that DEFINES
+ * `tools` (a `claude -p` one-shot in a wired project does) expects the model
+ * may answer with `tool_use`; a locally-synthesized `end_turn` reply would
+ * silently deny that capability. A present-but-non-array `tools` value fails
+ * closed (ineligible); an explicitly empty array is fine.
  */
 export function eligibleLocalAnswerText(
   body: Readonly<Record<string, unknown>>,
 ): string | undefined {
+  const tools = body.tools;
+  if (tools !== undefined && (!Array.isArray(tools) || tools.length > 0)) return undefined;
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length !== 1) return undefined;
   const message: unknown = messages[0];
