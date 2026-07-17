@@ -100,11 +100,17 @@ export const SETTINGS_LEAVES = {
      */
     wiki_dir: z.string(),
     /**
-     * OPT-IN (R2.3, spec Decision 24 sub-mode 2 / Decision 33): the
-     * proxy-as-responder local-answer sub-mode. Independent of `slider.level`
-     * (Decision 31 — the slider stays a pure compression dial); off by
-     * default because a served answer is un-reviewed until this has real
-     * usage evidence (see Decision 33's honest evidence-basis note).
+     * The proxy-as-responder local-answer sub-mode (R2.3, spec Decision 24
+     * sub-mode 2 / Decision 33). Independent of `slider.level` (Decision 31 —
+     * the slider stays a pure compression dial). **ON by default** as of
+     * Decision 33's acceptance (2026-07-17, USER decision): the safety posture
+     * that gated it is now in place — extractive-only (never generative, so it
+     * can't fabricate), single-turn, confidence-gated (`local_answer_min_confidence`),
+     * restricted to durable prose (`isProseSource` — wiki/spec/docs, never
+     * code/tests/plan docs), and always labelled "verify independently". A topic
+     * with no durable wiki/spec page declines and falls through to the upstream
+     * model, so coverage tracks the wiki (the wiki-first loop, Decision 28).
+     * Set false to turn it off entirely.
      */
     local_answer_enabled: z.boolean(),
     /**
@@ -269,7 +275,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     enabled: true,
     watch_paths: [],
     wiki_dir: "docs/wiki",
-    local_answer_enabled: false,
+    local_answer_enabled: true,
     local_answer_min_confidence: 0.6,
     syntax_aware_chunking: false,
     user_wiki_enabled: true,

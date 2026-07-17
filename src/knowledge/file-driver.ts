@@ -120,6 +120,20 @@ export class FileVectorDriver implements DeletableVectorDriver {
     await this.openCollection(projectId);
     const col = this.#collections.get(projectId);
     if (col === undefined) return; // unreachable: openCollection just set it
+    // Embedder-space change (verification-notes §69 / PRE_R6_BATCH LE5c): if the
+    // incoming vectors have a different dimension than the persisted collection,
+    // the existing chunks were embedded by a different model and live in an
+    // incompatible space — a mixed-dim collection is unqueryable
+    // (`assertEmbedderSpaceMatch` rejects every query). `golem index` re-ingests
+    // without clearing, so a lexical→semantic reindex (e.g. after `ollama pull
+    // bge-m3`) would otherwise strand the old-dim chunks under the new signature.
+    // Reset the collection to the new space rather than corrupt it.
+    const incomingDim = records.find((r) => r.vector.length > 0)?.vector.length ?? 0;
+    if (incomingDim > 0 && col.dim > 0 && incomingDim !== col.dim) {
+      for (const id of col.records.keys()) this.#chunkIndex.delete(id);
+      col.records.clear();
+      col.dim = incomingDim;
+    }
     for (const rec of records) {
       col.records.set(rec.chunk.chunkId, rec);
       this.#chunkIndex.set(rec.chunk.chunkId, projectId);

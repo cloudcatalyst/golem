@@ -1565,6 +1565,50 @@ program
     async (pathArg: string | undefined, opts: { dir: string; watch: boolean; json: boolean }) => {
       try {
         const { knowledge, embedMode, facts } = await buildKnowledgeStack({ projectDir: opts.dir });
+        const embedNote =
+          embedMode === "semantic"
+            ? "semantic (Ollama bge-m3)"
+            : "lexical (built-in, no Ollama — pull bge-m3 for semantic)";
+
+        // Whole-project (re)index with no explicit path and no --watch: route
+        // through ensureProjectIndexed so it is INCREMENTAL — only changed/new
+        // files are re-embedded (deleted ones dropped), or the whole run is
+        // skipped when nothing changed. A full re-embed of a large tree is
+        // minutes; a typical edit is seconds. It also does the correct
+        // clear+rebuild when the embedder changed (e.g. bge-m3 got pulled).
+        if (pathArg === undefined && !opts.watch) {
+          const { settings } = await loadConfig({ projectDir: opts.dir });
+          const result = await ensureProjectIndexed({
+            projectDir: opts.dir,
+            projectId: opts.dir,
+            knowledge,
+            embedMode,
+            tier: facts.tier,
+            watchPaths: settings.knowledge.watch_paths,
+            now: new Date().toISOString(),
+          });
+          if (opts.json) {
+            process.stdout.write(`${JSON.stringify({ ...result, embedMode }, null, 2)}\n`);
+          } else {
+            const line =
+              result.action === "skipped"
+                ? `Index already up to date (${embedNote}) — nothing changed.\n`
+                : result.action === "synced"
+                  ? `Synced index (${embedNote}): ${result.updated ?? 0} file(s) changed, ` +
+                    `${result.removed ?? 0} removed — ${result.chunks} chunk(s) re-embedded.\n`
+                  : `${result.action === "reindexed" ? "Re-indexed" : "Indexed"} ` +
+                    `${result.chunks} chunks from ${result.files} file(s) using ${embedNote}` +
+                    `${result.action === "reindexed" ? " (embedder changed)" : ""}.\n`;
+            process.stdout.write(line);
+            process.stdout.write(
+              "The index is persisted under .golem/knowledge, so `search` " +
+                "finds it in any later session.\n",
+            );
+          }
+          return;
+        }
+
+        // Explicit path or --watch: a targeted (full) ingest of just that path.
         const target = pathArg ?? opts.dir;
         const report = await knowledge.ingest(target, opts.dir, opts.watch);
         // Record the embedder signature so `mcp serve` respects this index (and
@@ -1579,10 +1623,6 @@ program
         if (opts.json) {
           process.stdout.write(`${JSON.stringify({ ...report, embedMode }, null, 2)}\n`);
         } else {
-          const embedNote =
-            embedMode === "semantic"
-              ? "semantic (Ollama bge-m3)"
-              : "lexical (built-in, no Ollama — pull bge-m3 for semantic)";
           process.stdout.write(
             `Indexed ${report.path}: ${report.chunksIndexed} chunks from ` +
               `${report.filesSeen} file(s) (${report.filesSkipped} skipped) ` +

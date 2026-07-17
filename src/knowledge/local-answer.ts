@@ -20,6 +20,42 @@ export const DEFAULT_MIN_CONFIDENCE = 0.6;
 export const LOCAL_ANSWER_LABEL =
   "**Golem** Answered locally from the project knowledge base — verify independently.";
 
+/**
+ * Working/planning docs whose query-term-dense tables rank spuriously but are NOT
+ * durable answers about what Golem is/does. The durable knowledge lives in the
+ * wiki and the spec (Decision 28); plan docs (IMPLEMENTATION_PLAN, ROADMAP, batch
+ * briefs, verification-notes, BACKLOG) are ephemeral working state.
+ */
+const WORKING_DOC_RE = /(^|\/)docs\/plan\//;
+
+/**
+ * Is this source an AUTHORITATIVE prose source to serve an extractive answer from?
+ *
+ * The local-answer path is EXTRACTIVE — it quotes a retrieved chunk verbatim as
+ * the answer. Two filters (verification-notes §64/§69b/§69c, Decision 33
+ * finding #2):
+ *  1. Prose only. A raw source-code or test chunk is almost never a good answer to
+ *     a definitional/conceptual question, and dense-token code/test chunks reliably
+ *     OUTRANK explanatory prose for such questions — e.g. `const LEVEL_0 =
+ *     sliderPolicyForLevel(0)` in a test file scored *above* the correct "slider
+ *     level 0 = passthrough" prose.
+ *  2. Durable prose only. Among prose, exclude working/planning docs (`docs/plan/`)
+ *     so an answer comes from the durable knowledge store (wiki + spec + root docs
+ *     like README/CLAUDE.md), not an ephemeral plan table.
+ *
+ * If nothing authoritative clears the confidence floor, the service declines and
+ * the request falls through to the upstream model — serving a wrong (or spurious
+ * working-doc) answer is worse than serving none. A topic with no durable wiki/spec
+ * page therefore declines by design: the fix is to write the page (the wiki-first
+ * loop), not to loosen this filter.
+ */
+export function isProseSource(sourcePath: string | undefined): boolean {
+  if (sourcePath === undefined) return false;
+  const p = sourcePath.replace(/\\/g, "/").toLowerCase();
+  if (!/\.(md|markdown|mdx|txt|rst)$/.test(p)) return false;
+  return !WORKING_DOC_RE.test(p);
+}
+
 export interface KnowledgeLocalAnswerOptions {
   /** Minimum Hit.score required to serve an answer. Default {@link DEFAULT_MIN_CONFIDENCE}. */
   readonly minConfidence?: number;
@@ -39,13 +75,19 @@ export class KnowledgeLocalAnswerService implements LocalAnswerService {
   }
 
   async tryAnswer(query: LocalAnswerQuery): Promise<LocalAnswerResult> {
-    const hits = await this.#search.search(
+    // Fetch a WIDER candidate set than we'll serve, then keep only prose sources
+    // (see isProseSource): dense-token code/test chunks otherwise crowd prose out
+    // of the top-k, so a narrow fetch would strand the correct explanation below
+    // the cut. Restrict-to-prose is applied before the confidence floor, so a
+    // query with no confident prose answer declines rather than serving code.
+    const candidates = await this.#search.search(
       query.text,
       query.projectId,
-      this.#k,
+      Math.max(this.#k * 4, 12),
       new Set(["knowledge"]),
     );
-    const result = composeFromHits(hits, this.#minConfidence);
+    const prose = candidates.filter((h) => isProseSource(h.chunk.sourcePath)).slice(0, this.#k);
+    const result = composeFromHits(prose, this.#minConfidence);
     if (!result.answered) return result;
     return { ...result, text: `${LOCAL_ANSWER_LABEL}\n\n${result.text}` };
   }

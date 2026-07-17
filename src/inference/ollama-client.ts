@@ -64,6 +64,34 @@ function isTimeoutError(err: unknown): boolean {
 
 export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
 
+/**
+ * Max characters per embedding input (verification-notes §69 / PRE_R6_BATCH LE5).
+ *
+ * Embedding models process each input as a SINGLE physical batch, so an input
+ * longer than the model's batch size (stock `bge-m3` on Ollama: 2048 tokens)
+ * does not merely truncate — it errors (`input … is too large to process`) and
+ * can crash the model runner, aborting the whole index build. Golem's chunker
+ * only *soft*-caps chunk size (splits on paragraph boundaries), so a dense
+ * unsplittable block (a wide markdown table, a long spec section) can exceed it.
+ *
+ * We bound each input to a conservative character budget that stays under a
+ * 2048-token physical batch for latin/code text (~4 chars/token → ~1500 tokens,
+ * leaving margin). The full chunk text is still STORED and returned by search;
+ * only its embedding vector is computed from the head. Token-accurate bounding
+ * (and a per-model batch probe) is a future refinement — CJK-dense text packs
+ * more tokens per char and may need a smaller cap.
+ */
+export const MAX_EMBED_INPUT_CHARS = 6000;
+
+/**
+ * Max inputs per `/v1/embeddings` request (verification-notes §69 / LE5). A
+ * full-project reindex embeds thousands of chunks; sending them as one request
+ * makes Ollama open a per-input localhost connection to its runner and exhausts
+ * ephemeral ports/TIME_WAIT on Windows mid-request. Batching keeps each request
+ * short and lets connections drain. 64 is a safe, conservative default.
+ */
+export const EMBED_BATCH_SIZE = 64;
+
 export interface OllamaClientOptions {
   readonly baseUrl?: string;
   readonly requestTimeoutMs?: number;
@@ -173,6 +201,31 @@ export class OllamaClient {
   }
 
   async embed(model: string, input: readonly string[]): Promise<number[][]> {
+    // Bound each input so an oversized chunk cannot exceed the model's physical
+    // batch and crash the runner (see MAX_EMBED_INPUT_CHARS).
+    const bounded = input.map((t) =>
+      t.length > MAX_EMBED_INPUT_CHARS ? t.slice(0, MAX_EMBED_INPUT_CHARS) : t,
+    );
+    // Send in bounded batches rather than one giant request. A full-project
+    // reindex embeds thousands of chunks; posting them all in a single
+    // `/v1/embeddings` call makes Ollama open a localhost connection to its
+    // model runner per input, and after ~a minute of rapid connections the dial
+    // starts getting refused (Windows ephemeral-port/TIME_WAIT exhaustion),
+    // 400ing the whole request and losing all progress (verification-notes §69 /
+    // PRE_R6_BATCH LE5). Sequential batches keep each request short and let
+    // connections drain between them. Sequential (not parallel) on purpose — the
+    // single local runner has no concurrency to exploit.
+    const out: number[][] = [];
+    for (let i = 0; i < bounded.length; i += EMBED_BATCH_SIZE) {
+      const batch = await this.#embedBatch(model, bounded.slice(i, i + EMBED_BATCH_SIZE));
+      out.push(...batch);
+    }
+    return out;
+  }
+
+  /** One `/v1/embeddings` request for a single bounded batch. */
+  async #embedBatch(model: string, input: readonly string[]): Promise<number[][]> {
+    if (input.length === 0) return [];
     const json = await this.#postJson("/v1/embeddings", { model, input });
     if (!isRecord(json) || !Array.isArray(json.data)) {
       throw new InferenceEndpointError("embeddings response missing data");

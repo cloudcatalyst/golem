@@ -37,12 +37,21 @@ const exists = async (p: string) =>
 describe("guidance feature registry", () => {
   it("covers base defaults (seeded) and opt-in features", () => {
     const byName = new Map(GUIDANCE_FEATURES.map((g) => [g.name, g]));
-    for (const n of ["ccr-refs", "wiki-kb-first", "local-coder"]) {
+    for (const n of ["ccr-refs", "wiki-kb-first", "local-coder", "local-answer"]) {
       expect(byName.get(n)?.seededByDefault).toBe(true);
     }
     for (const n of ["prompt-translation", "durable-tasks"]) {
       expect(byName.get(n)?.seededByDefault).toBe(false);
     }
+  });
+
+  it("local-answer explains the proxy behaviour + the keep-the-wiki-current lever", () => {
+    const snip = guidanceFeature("local-answer")?.snippet ?? "";
+    expect(snip).toContain("local_answer_enabled");
+    expect(snip).toContain("verify");
+    expect(snip.toLowerCase()).toContain("keep the wiki current");
+    // It is a proxy behaviour, not an agent-invoked tool.
+    expect(snip).toContain("not something you invoke");
   });
 
   it("wiki-kb-first directs wiki → KB → web, and frames it as proactive", () => {
