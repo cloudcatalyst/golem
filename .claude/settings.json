@@ -19,8 +19,7 @@
       "Bash(echo \"TSC_EXIT=$?\")",
       "Bash(git ls-remote *)",
       "Bash(golem task *)",
-      "Bash(grep -nA6 \"^### MCP\" \"C:/Users/paulc/AppData/Local/Temp/claude/d--Personar-Source-repos-golem/e9d06c48-8ba9-43bf-bf5d-de74892e2600/tool-results/toolu_01Ms3Q1bR9cVmRq5vJLjBeBK.txt\")",
-      "Bash(grep -nA6 '^### MCP' C:/Users/paulc/.claude/projects/d--Personar-Source-repos-golem/e9d06c48-8ba9-43bf-bf5d-de74892e2600/tool-results/toolu_01Ms3Q1bR9cVmRq5vJLjBeBK.txt)"
+      "Bash(golem wiki *)"
     ],
     "ask": [
       "mcp__golem__wiki_upsert"
