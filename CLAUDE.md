@@ -9,7 +9,7 @@ Golem is a universal pre-LLM processing layer (spec Decision 22, positioning con
 
 ## Source of truth
 1. `docs/golem-spec.md` (v1.x) — architecture and decisions. Do not diverge silently; propose spec changes via the Decisions Log. **Decision 16 switched the implementation language to TypeScript (2026-07-03, user decision).**
-2. `docs/plan/IMPLEMENTATION_PLAN.md` — workstreams and frozen interfaces; `docs/plan/ROADMAP.md` — release ordering (current batch: `docs/plan/R4_BATCH.md`). Planning docs live under `docs/plan/`.
+2. `docs/plan/IMPLEMENTATION_PLAN.md` — workstreams and frozen interfaces; `docs/plan/ROADMAP.md` — release ordering; `docs/plan/BACKLOG.md` — ideas inbox. Planning docs live under `docs/plan/`; completed batch briefs are retired to git history.
 3. `docs/plan/verification-notes.md` — dated live-doc findings (T0.1). Check it before building on any external-tool fact.
 
 ## Hard rules

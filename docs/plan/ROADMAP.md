@@ -2,9 +2,10 @@
 
 > **Rewritten 2026-07-16 (spec Decision 36).** This is the durable, multi-release
 > view that sits above `IMPLEMENTATION_PLAN.md` (workstreams, frozen interfaces)
-> and the current actionable batch file (`R4_BATCH.md`). When a release's work is
+> and whatever the current actionable batch file is. When a release's work is
 > picked up, spin its tasks into a batch brief in the style the repo already
-> uses; when it lands, mark it here and move on.
+> uses; when it lands, mark it here and **retire the batch brief to git history**
+> (completed briefs are not kept in the tree — R1–R5 + PRE-R6 were retired).
 
 ## The organising intent (Decision 36)
 
@@ -21,9 +22,9 @@ developer's second brain" article)?
    the paid model can judge.
 
 Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 landed in **R4** (all
-seven tasks done, 2026-07-16). The user then lifted the R5 hold and kicked off
-**R5 — Autonomy & orchestration**, now the active release (`R5_BATCH.md`). The
-multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
+seven tasks done, 2026-07-16). **R5 — Autonomy & orchestration** then shipped,
+followed by the PRE-R6 loose-ends closeout (2026-07-17). The multi-provider /
+remote cluster (R6, incl. the companion app) stays **on hold**.
 
 ## Where we are (validated 2026-07-16)
 
@@ -57,9 +58,9 @@ them, Decision 36).
 
 ## Carried-over loose ends (visible, not lost)
 
-**All cleared by the PRE-R6 batch (2026-07-17).** The batch
-(`PRE_R6_BATCH.md`) closed LE1–LE5; the two remaining items are
-blocked-not-broken and re-scoped (not open work).
+**All cleared by the PRE-R6 batch (2026-07-17)** (batch brief retired to git
+history). It closed LE1–LE5; the two remaining items are blocked-not-broken and
+re-scoped (not open work).
 
 | Item | Status | Where tracked |
 |---|---|---|
@@ -82,10 +83,10 @@ blocked-not-broken and re-scoped (not open work).
 
 Legend: 🔬 research/spike · 🧭 decision · 🔒 security/ToS gate · 🛠️ build
 
-### R4 — Co-developer core (ACTIVE)
-Make goals 1 and 3 real: a planning-collaboration surface, a grounded,
+### R4 — Co-developer core — ✅ SHIPPED (2026-07-16)
+Made goals 1 and 3 real: a planning-collaboration surface, a grounded,
 measured, iterating local coder, and the last robustness gaps in the
-distill/KB loop. **Active batch: `R4_BATCH.md`.**
+distill/KB loop. (Batch brief retired to git history.)
 
 | # | Task | Type | Source |
 |---|---|---|---|
@@ -100,9 +101,8 @@ distill/KB loop. **Active batch: `R4_BATCH.md`.**
 ### R5 — Autonomy & orchestration — ✅ SHIPPED (2026-07-16)
 Formerly R4. Hold lifted 2026-07-16 by explicit user call; all five tasks landed
 the same day (suite 922 → 1018 green). Retrospective:
-`docs/wiki/syntheses/r5-autonomy-orchestration-batch.md`; memos:
-`docs/plan/proposals/r5-autonomy-orchestration-memos.md`; batch:
-`docs/plan/R5_BATCH.md`. R5.4's threat model is ADR-0002.
+`docs/wiki/syntheses/r5-autonomy-orchestration-batch.md` (the batch brief + design
+memos were retired to git history). R5.4's threat model is ADR-0002.
 
 | # | Task | Type | Source |
 |---|---|---|---|
