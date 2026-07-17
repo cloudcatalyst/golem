@@ -608,7 +608,7 @@ export async function graphFirstWikiHits(
  * both paths assemble hits identically. `wiki`/`wikiDir`/`rerank` are optional;
  * only `knowledge` is required.
  */
-interface HitAssemblyDeps {
+export interface HitAssemblyDeps {
   readonly knowledge: KnowledgeBase;
   readonly wiki?: WikiReader | undefined;
   readonly wikiDir?: string | undefined;
@@ -644,7 +644,7 @@ const GROUNDING_MAX_HITS = 4;
 const GROUNDING_CHAR_BUDGET = 4000;
 const GROUNDING_PER_HIT_CHARS = 1200;
 
-interface Grounding {
+export interface Grounding {
   /** Labeled context block to append to the drafter prompt. */
   readonly block: string;
   /** Source labels injected, echoed in the tool's structured output. */
@@ -666,8 +666,11 @@ function hitLabel(hit: Hit): string {
  * clearly-labeled context block for the local drafter. Returns null when there
  * is nothing to inject or on ANY failure: grounding is best-effort and must
  * never turn a draft into an error (degrades to the ungrounded behavior).
+ *
+ * Exported so non-MCP callers reuse the exact same path (LE3: `golem task run`'s
+ * local multiplexing grounds queued tasks identically to `coder`).
  */
-async function gatherGrounding(
+export async function gatherGrounding(
   query: string,
   projectId: string,
   deps: HitAssemblyDeps,
