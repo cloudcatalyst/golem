@@ -59,6 +59,41 @@ describe("FileVectorDriver", () => {
     ).toStrictEqual(["a", "b"]);
   });
 
+  it("resets the collection when the embedder dimension changes on reindex (§69/LE5c)", async () => {
+    // Simulates a lexical→semantic reindex (e.g. after `ollama pull bge-m3`):
+    // `golem index` re-ingests without clearing, so without this reset the old
+    // low-dim chunks would strand under the new signature and every query would
+    // throw EmbedderMismatchError. New-dim upsert must drop the old space cleanly.
+    const d = new FileVectorDriver(base);
+    await d.upsert("p1", [stored("lex1", [1, 0]), stored("lex2", [0, 1])]);
+    // Reindex with 3-dim (new embedder) vectors — must wipe the 2-dim chunks.
+    await d.upsert("p1", [stored("sem1", [1, 0, 0]), stored("sem2", [0, 1, 0])]);
+
+    const hits = await d.search("p1", [1, 0, 0], 10);
+    expect(hits.map((h) => h.chunkId).sort()).toStrictEqual(["sem1", "sem2"]);
+    // Old-space chunks are gone from search AND global chunk resolution.
+    expect(await d.getChunk("lex1")).toBeNull();
+    // Survives a reload with the new dimension persisted.
+    await d.close();
+    const read = new FileVectorDriver(base);
+    expect((await read.search("p1", [0, 1, 0], 10)).map((h) => h.chunkId).sort()).toStrictEqual([
+      "sem1",
+      "sem2",
+    ]);
+  });
+
+  it("does NOT reset on a same-dimension incremental reindex", async () => {
+    const d = new FileVectorDriver(base);
+    await d.upsert("p1", [stored("a", [1, 0, 0]), stored("b", [0, 1, 0])]);
+    // Same dim → an incremental add must preserve existing chunks.
+    await d.upsert("p1", [stored("c", [0, 0, 1])]);
+    expect((await d.search("p1", [1, 0, 0], 10)).map((h) => h.chunkId).sort()).toStrictEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+
   it("isolates projects and resolves chunks globally", async () => {
     const d = new FileVectorDriver(base);
     await d.upsert("p1", [stored("a", [1, 0])]);
