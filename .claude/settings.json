@@ -19,7 +19,8 @@
       "Bash(echo \"TSC_EXIT=$?\")",
       "Bash(git ls-remote *)",
       "Bash(golem task *)",
-      "Bash(golem wiki *)"
+      "Bash(golem wiki *)",
+      "Bash(ollama list *)"
     ],
     "ask": [
       "mcp__golem__wiki_upsert"
