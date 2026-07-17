@@ -2343,3 +2343,43 @@ re-run this sample; flip only when no wrong answer is served. Test files are the
 worst offenders (they repeat query terms: `LEVEL_0`, `LEVEL_1`) and are the
 cheapest, highest-impact thing to exclude. This becomes PRE_R6_BATCH LE1's
 follow-on task.
+
+## §69c — Decision 33 finding #2 fixed: local-answer restricted to prose sources (2026-07-17)
+
+Implemented §69b's gate. `KnowledgeLocalAnswerService.tryAnswer` now fetches a
+wider candidate set (`max(k*4, 12)`) so prose isn't crowded out of the top-k by
+dense-token code, then keeps only **prose** sources (`isProseSource`:
+`.md/.markdown/.mdx/.txt/.rst`) before applying the confidence floor. Rationale:
+the path is extractive (quotes a chunk verbatim), and a raw code/test chunk is
+almost never a good answer to a definitional question. If no prose hit clears the
+floor it declines and falls through to upstream (serving wrong > serving nothing).
++4 unit tests; full suite green (1036); `tsc`/`biome` clean.
+
+**Re-run of the §69b sample after the fix — 6 served / 7 declined, ZERO wrong
+served answers:**
+
+| Q | before (§69b) | after |
+|---|---|---|
+| slider level 0 | SERVED wrong (`test.ts` `LEVEL_0`) | SERVED `IMPLEMENTATION_PLAN.md` §2.4 SliderPolicy (on-topic prose) |
+| slider level 1 | SERVED wrong (`test.ts` `LEVEL_1`) | **DECLINED** |
+| fetch tool | SERVED wrong (`classify.ts`) | **DECLINED** |
+| expand / stats / level (code sources) | SERVED from `skills.ts`/`mcp` code | expand/level **DECLINE**; stats serves R4.3 debrief (prose) |
+| search / redaction / wiki-first / coder | correct (wiki/debrief) | unchanged — still correct |
+| What is Golem? / ingest | declined (prose under floor) | still declined |
+
+**Net:** the confident-WRONG answers are eliminated — every previously-wrong
+served answer now either declines or serves on-topic prose. Two remaining served
+answers are on-topic but thin: "slider level 0" serves the SliderPolicy spec
+table rather than the passthrough/redaction-OFF safety warning (Decision 30), and
+"compression saves tokens" serves the VS Code panel README rather than the
+situational-savings nuance (Decision 23). Neither is *wrong*, but neither is the
+best possible answer — an inherent limit of extractive top-chunk serving (Decision
+33 deliberately forbids generative phrasing to avoid fabrication).
+
+**Bar check for the ACCEPTED flip:** §69b's gate was "no wrong answer served" —
+now met. The remaining judgment (is on-topic-but-thin good enough, given the
+"verify independently" label + opt-in/off-by-default posture?) is a **human call**
+per Decision 33's PROPOSED convention; not flipped unilaterally. Optional further
+tightening if the human wants it before flipping: require the top prose source to
+out-score a raised floor for safety-critical topics, or prefer wiki/spec over
+plan/README prose. Recommend a human review the post-fix sample and decide.

@@ -88,14 +88,20 @@ test constant (`const LEVEL_0 = …`) *above* the 0.6 floor, while the correct
 "What is Golem?" prose (0.589) is declined *below* it. Serving-wrong > declining,
 so **Decision 33 stays PROPOSED** (not flipped, not retired).
 
-**LE1 follow-on (the now-concrete gate):** finding #2 must be fixed for the
-local-answer path — exclude or down-weight `*.test.ts` (and likely all code) from
-the local-answer source set and prefer wiki/spec/doc prose (a source-type weight
-mirroring `boostWikiHits`, `src/mcp/server.ts`, applied above the frozen search
-contract), and/or raise the floor / require a prose top-source for definitional
-queries. Then re-run this sample; flip to ACCEPTED only when no wrong answer is
-served. Test files are the cheapest, highest-impact exclusion (they repeat query
-terms verbatim). This is the graduated task LE1 produces.
+**LE1 follow-on — ✅ DONE 2026-07-17 (verification-notes §69c).** Finding #2 fixed:
+`KnowledgeLocalAnswerService` now restricts to prose sources (`isProseSource`)
+over a wider candidate fetch, so a raw code/test chunk is never served as an
+extractive definitional answer. Post-fix sample: 6 served / 7 declined, **zero
+wrong answers** — the §69b bar is met. +4 unit tests; suite green (1036). Two
+served answers remain on-topic-but-thin (slider 0 → SliderPolicy table, not the
+redaction-OFF warning; compression → VS Code README) — inherent to extractive
+serving. **What's left for the ACCEPTED flip is a human judgment call** (is
+on-topic-but-thin good enough, given the "verify independently" label +
+off-by-default?), NOT another mechanical gate — deliberately not flipped
+unilaterally per Decision 33's PROPOSED convention. Optional further tightening
+before a flip: prefer wiki/spec over plan/README prose, or raise the floor for
+safety-critical topics. **Recommend: a human reviews the post-fix sample and
+decides flip-or-tighten.**
 
 ### LE2 (🔬) — Fair local-model quality re-measurement on the semantic index
 **Source:** verification-notes §63 (R4.7 follow-up: "grounded/refined accept-rate
