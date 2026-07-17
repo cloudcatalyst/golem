@@ -2379,7 +2379,26 @@ best possible answer — an inherent limit of extractive top-chunk serving (Deci
 **Bar check for the ACCEPTED flip:** §69b's gate was "no wrong answer served" —
 now met. The remaining judgment (is on-topic-but-thin good enough, given the
 "verify independently" label + opt-in/off-by-default posture?) is a **human call**
-per Decision 33's PROPOSED convention; not flipped unilaterally. Optional further
-tightening if the human wants it before flipping: require the top prose source to
-out-score a raised floor for safety-critical topics, or prefer wiki/spec over
-plan/README prose. Recommend a human review the post-fix sample and decide.
+per Decision 33's PROPOSED convention; not flipped unilaterally.
+
+**Tightening (2026-07-17, cont.):** applied the "prefer durable prose" step —
+`isProseSource` now also excludes working/planning docs (`docs/plan/`:
+IMPLEMENTATION_PLAN, ROADMAP, batch briefs, verification-notes, BACKLOG), so an
+answer comes from the durable knowledge store (wiki + spec + root docs), not an
+ephemeral plan table. Post-tightening sample: **6 served / 7 declined, still zero
+wrong** — and now **5 of 6 served answers come from the wiki** (concepts +
+debriefs). The two previously-thin answers resolve into a clean wiki-first signal:
+- "slider level 0/1" now **DECLINE** (the spurious `IMPLEMENTATION_PLAN.md`
+  SliderPolicy-table hit is excluded; the authoritative passthrough/redaction-OFF
+  prose scores < 0.6). Safe, but it *should* serve a good answer.
+- "compression saves tokens" still serves the VS Code README (thin) — the only
+  non-wiki served answer left.
+
+**Root cause of both = a wiki COVERAGE gap, not a ranking bug:** there is no wiki
+concept page for the slider/levels or for compression (only `Redaction Stage.md`
+exists among the pipeline concepts). Local-answer quality is now bounded by wiki
+coverage — exactly the wiki-first design (Decision 28). **Fix at the source: add
+the missing concept pages** (proposed: `Slider Levels` incl. level-0
+passthrough/redaction-OFF per Decision 30; `Compression` incl. situational savings
+per Decision 23), which then rank as authoritative prose and let local-answer
+serve them. Tracked in PRE_R6_BATCH LE1 + the wiki work.

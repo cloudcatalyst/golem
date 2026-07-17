@@ -31,13 +31,20 @@ function fakeSearch(hits: Hit[]): FederatedSearch {
 }
 
 describe("isProseSource", () => {
-  it("accepts docs/markdown and rejects code + tests", () => {
+  it("accepts durable prose (wiki/spec/root docs), rejects code, tests, and working docs", () => {
+    // Durable prose — served.
     expect(isProseSource("docs/wiki/concepts/Redaction Stage.md")).toBe(true);
+    expect(isProseSource("docs/golem-spec.md")).toBe(true);
     expect(isProseSource("README.md")).toBe(true);
     expect(isProseSource("notes.txt")).toBe(true);
+    // Code + tests — never.
     expect(isProseSource("src\\interfaces\\policy.ts")).toBe(false); // windows sep
     expect(isProseSource("tests/unit/compression/native-lossless.test.ts")).toBe(false);
     expect(isProseSource("src/cli/skills.ts")).toBe(false);
+    // Working/planning docs — prose, but ephemeral working state, not answers.
+    expect(isProseSource("docs/plan/IMPLEMENTATION_PLAN.md")).toBe(false);
+    expect(isProseSource("docs/plan/verification-notes.md")).toBe(false);
+    expect(isProseSource("docs/plan/ROADMAP.md")).toBe(false);
     expect(isProseSource(undefined)).toBe(false);
   });
 });

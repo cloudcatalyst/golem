@@ -21,22 +21,39 @@ export const LOCAL_ANSWER_LABEL =
   "**Golem** Answered locally from the project knowledge base — verify independently.";
 
 /**
- * Is this source a documentation/prose file (as opposed to source code or tests)?
+ * Working/planning docs whose query-term-dense tables rank spuriously but are NOT
+ * durable answers about what Golem is/does. The durable knowledge lives in the
+ * wiki and the spec (Decision 28); plan docs (IMPLEMENTATION_PLAN, ROADMAP, batch
+ * briefs, verification-notes, BACKLOG) are ephemeral working state.
+ */
+const WORKING_DOC_RE = /(^|\/)docs\/plan\//;
+
+/**
+ * Is this source an AUTHORITATIVE prose source to serve an extractive answer from?
  *
  * The local-answer path is EXTRACTIVE — it quotes a retrieved chunk verbatim as
- * the answer. A raw source-code or test chunk is almost never a good answer to a
- * definitional/conceptual question, and (verification-notes §64/§69b, Decision 33
- * finding #2) dense-token code/test chunks reliably OUTRANK explanatory prose for
- * such questions — e.g. `const LEVEL_0 = sliderPolicyForLevel(0)` in a test file
- * scored *above* the correct "slider level 0 = passthrough" prose. So local-answer
- * only serves from prose sources; if none clears the confidence floor it declines
- * and the request falls through to the upstream model (the safe outcome —
- * serving a wrong answer is worse than serving none).
+ * the answer. Two filters (verification-notes §64/§69b/§69c, Decision 33
+ * finding #2):
+ *  1. Prose only. A raw source-code or test chunk is almost never a good answer to
+ *     a definitional/conceptual question, and dense-token code/test chunks reliably
+ *     OUTRANK explanatory prose for such questions — e.g. `const LEVEL_0 =
+ *     sliderPolicyForLevel(0)` in a test file scored *above* the correct "slider
+ *     level 0 = passthrough" prose.
+ *  2. Durable prose only. Among prose, exclude working/planning docs (`docs/plan/`)
+ *     so an answer comes from the durable knowledge store (wiki + spec + root docs
+ *     like README/CLAUDE.md), not an ephemeral plan table.
+ *
+ * If nothing authoritative clears the confidence floor, the service declines and
+ * the request falls through to the upstream model — serving a wrong (or spurious
+ * working-doc) answer is worse than serving none. A topic with no durable wiki/spec
+ * page therefore declines by design: the fix is to write the page (the wiki-first
+ * loop), not to loosen this filter.
  */
 export function isProseSource(sourcePath: string | undefined): boolean {
   if (sourcePath === undefined) return false;
   const p = sourcePath.replace(/\\/g, "/").toLowerCase();
-  return /\.(md|markdown|mdx|txt|rst)$/.test(p);
+  if (!/\.(md|markdown|mdx|txt|rst)$/.test(p)) return false;
+  return !WORKING_DOC_RE.test(p);
 }
 
 export interface KnowledgeLocalAnswerOptions {
