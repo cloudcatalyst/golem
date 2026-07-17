@@ -232,10 +232,14 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
       description:
         "Retrieve the original, uncompressed content behind a Golem CCR " +
         "(compress-cache-retrieve) reference marker such as " +
-        "`[golem:ccr ref=abc123 ...]`. Use when compressed context is not " +
+        "`Retrieve original: hash=<hex id>` (standalone stub runs emit " +
+        "`[golem:ccr ref=<id> ...]`). Use when compressed context is not " +
         "detailed enough and the full original is needed.",
       inputSchema: {
-        ref_id: z.string().min(1).describe("The CCR ref id from the marker, e.g. `abc123`"),
+        ref_id: z
+          .string()
+          .min(1)
+          .describe("The CCR ref id from the marker — the hex id after `hash=` (or `ref=`)"),
         content_type: z
           .string()
           .optional()
@@ -1435,7 +1439,12 @@ function registerPrompts(server: McpServer): void {
       title: "Expand a Golem CCR reference",
       description: "Retrieve the original content behind a Golem CCR ref marker",
       argsSchema: {
-        ref_id: z.string().describe("The CCR ref id, e.g. abc123 from `[golem:ccr ref=abc123]`"),
+        ref_id: z
+          .string()
+          .describe(
+            "The CCR ref id — the hex id from a `Retrieve original: hash=<id>` " +
+              "(or `[golem:ccr ref=<id>]`) marker",
+          ),
       },
     },
     ({ ref_id }) =>

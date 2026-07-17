@@ -37,8 +37,12 @@ const SERVICE_SYSTEM =
 
 /**
  * Service one task locally. Returns the updated task: `done` with `result` set
- * on success, or unchanged `state` + `lastError` if the local model is
- * unavailable (fail-open — the task stays queued for a later attempt).
+ * on success, or state `queued` + `lastError` on any failure (fail-open — the
+ * task goes back to the queue for a later attempt). Re-queueing is explicit,
+ * not "unchanged": the caller (`serviceOne`) marks the task `running` before
+ * servicing, so returning the incoming state on failure would strand it in
+ * `running`, invisible to every future `golem task run` (which only picks up
+ * `queued`).
  */
 export async function serviceTaskLocally(
   task: Task,
@@ -81,12 +85,12 @@ export async function serviceTaskLocally(
       ],
     };
   } catch (err) {
-    // CapabilityUnavailableError or any transport error → leave it queued.
+    // CapabilityUnavailableError or any transport error → back to the queue.
     const message =
       err instanceof CapabilityUnavailableError
         ? `local model unavailable: ${err.message}`
         : `local servicing failed: ${err instanceof Error ? err.message : String(err)}`;
-    return { ...task, lastError: message, updatedAt: nowIso };
+    return { ...task, state: "queued", lastError: message, updatedAt: nowIso };
   }
 }
 
