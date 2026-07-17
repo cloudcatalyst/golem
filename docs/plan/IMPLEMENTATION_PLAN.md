@@ -38,7 +38,7 @@ golem/
 │   │   ├── ROADMAP.md               # multi-release view
 │   │   ├── BACKLOG.md               # ideas inbox
 │   │   ├── verification-notes.md    # dated live-doc findings (source of truth #3)
-│   │   └── proposals/               # active design proposals (e.g. auto-resume-on-limit)
+│   │   └── proposals/               # active design proposals (created per feature; retired when shipped/dropped)
 │   └── wiki/                    # the project's own wiki (Decision 28; see WIKI.md)
 ├── src/
 │   ├── interfaces/              # FROZEN CONTRACTS (workstream boundaries)
