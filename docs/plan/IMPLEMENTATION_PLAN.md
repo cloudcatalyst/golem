@@ -3,7 +3,7 @@
 Companion to `docs/golem-spec.md`. Originally structured for multi-agent P0/P1
 development (parallel workstreams, frozen contracts); **P0/P1 shipped**, so this
 document now serves as the workstream/interface reference. The forward-looking
-view is `ROADMAP.md`; the current batch is `R4_BATCH.md`.
+view is `ROADMAP.md`; completed batch briefs are retired to git history.
 
 > **Status (2026-07-16, Decision 36):** P0, P1, and releases R1–R3 are shipped;
 > the test baseline is green (886 tests). The per-agent workstream briefs and
@@ -36,9 +36,9 @@ golem/
 │   ├── plan/                    # planning docs
 │   │   ├── IMPLEMENTATION_PLAN.md   # this file
 │   │   ├── ROADMAP.md               # multi-release view
-│   │   ├── R4_BATCH.md              # current actionable batch
+│   │   ├── BACKLOG.md               # ideas inbox
 │   │   ├── verification-notes.md    # dated live-doc findings (source of truth #3)
-│   │   └── proposals/               # design proposals (e.g. wiki-knowledge-pivot)
+│   │   └── proposals/               # active design proposals (e.g. auto-resume-on-limit)
 │   └── wiki/                    # the project's own wiki (Decision 28; see WIKI.md)
 ├── src/
 │   ├── interfaces/              # FROZEN CONTRACTS (workstream boundaries)
