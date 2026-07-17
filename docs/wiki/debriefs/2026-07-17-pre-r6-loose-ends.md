@@ -27,8 +27,16 @@ feature the dogfooding surfaced (auto-resume). Suite 1040 → **1055 green**;
   +3 tests.
 - **LE2** — fair grounded/refined coder measurement — see
   [[LE2 — grounded-refined coder quality]]. Headline: grounding improves
-  *revise-quality*, not the verdict count; `refine` fired 0/5 rounds (BACKLOG
-  follow-up).
+  *revise-quality*, not the verdict count; `refine` fired 0/5 rounds.
+- **LE2 follow-up (refine fix)** — root-caused the 0-rounds: the judge model
+  (`qwen2.5:14b`) isn't pulled, the service's step-down tries only other
+  (also-unpulled) *judge* models, and a silent `catch` in `refineDraft` reported
+  `rounds:0` — while the `coder` tool falsely printed "nothing worth revising".
+  Fixed: explicit `RefineStatus` (`revised|clean|judge-unavailable|unparseable|
+  empty-revision|error`) so a skip is never silent, a **judge→drafter
+  self-review fallback** (the drafter is pulled and — verified live — critiques
+  well), and a truthful `coder` note. E2E against live Ollama: a flawed draft is
+  now critiqued (high severity) and revised. +2 tests (8 total); suite 1057.
 - **LE4** — CI confirmed green on `deccfc5`; R2.6 re-scoped as
   unblocks-with-R6.1, R1.6 still hardware-blocked, R5.5 explicitly deferred.
 

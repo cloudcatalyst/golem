@@ -43,9 +43,12 @@ Verdict count: **1 accept / 4 revise / 0 reject** vs R4.7's 2 / 3 / 0.
 
 2. **`refine` fired 0 rounds on all 5.** The judge never flagged a high/medium
    issue worth revising — even the `module.exports`/CJS error a judge should
-   catch. So refinement added nothing here. Real follow-up (logged in
-   `docs/plan/BACKLOG.md`): the judge threshold/prompt is too lenient, or the
-   verdict schema isn't surfacing actionable issues.
+   catch. **Root-caused + fixed 2026-07-17:** it wasn't the prompt/threshold —
+   the judge model (`qwen2.5:14b`) simply isn't pulled on this box, so every
+   judge call failed and a silent `catch` reported `rounds:0`. Fixed with an
+   explicit `RefineStatus` (no silent skips) + a judge→drafter self-review
+   fallback; E2E-verified it now produces a real critique and revision. See
+   [[PRE-R6 loose-ends closeout]].
 
 3. **Rerank spot-check:** semantic search returns sensible hits
    (`policy.ts:45` `MAX_SLIDER_LEVEL` top at 0.66). But the chat-judge **rerank

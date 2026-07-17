@@ -56,7 +56,7 @@ import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
 import { rerankHits } from "../knowledge/rerank.js";
 import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
-import { refineDraft } from "./coder-refine.js";
+import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -1165,6 +1165,29 @@ interface CoderGroundingDeps {
   readonly defaultProjectId: string;
 }
 
+/**
+ * Human-readable coder note for a refinement outcome. LE2: this must be
+ * truthful — a skipped refine (no judge model, parse failure) never reads as a
+ * clean "nothing worth revising".
+ */
+function refineNote(r: RefineOutcome): string {
+  const by = r.critiquedBy === "drafter" ? " (drafter self-review)" : "";
+  switch (r.status) {
+    case "revised":
+      return ` Refined ${r.rounds} round(s)${by}: ${r.critiqueSummary ?? "issues fixed"}.`;
+    case "clean":
+      return ` Reviewed${by} — nothing worth revising.`;
+    case "judge-unavailable":
+      return " Refine skipped — no local judge/drafter model available.";
+    case "unparseable":
+      return " Refine skipped — the critique was unparseable.";
+    case "empty-revision":
+      return " Refine skipped — the revision came back empty; kept the draft.";
+    case "error":
+      return " Refine skipped — the critique errored.";
+  }
+}
+
 function registerCoderTool(
   server: McpServer,
   inference: InferenceService,
@@ -1251,17 +1274,13 @@ function registerCoderTool(
       try {
         const result = await inference.chat("drafter", [{ role: "user", content: prompt }]);
         // R4.4: one optional local judge→revise pass. Best-effort — refineDraft
-        // returns the original text with rounds:0 on any failure.
+        // returns the original text with rounds:0 and an explicit status on any
+        // no-op (LE2: the status prevents a silent skip masquerading as "clean").
         const refined = refine === true ? await refineDraft(inference, task, result.text) : null;
         const finalText = refined !== null ? refined.text : result.text;
         const groundedNote =
           grounded !== null ? ` Grounded on ${grounded.sources.length} local source(s).` : "";
-        const refinedNote =
-          refined !== null && refined.rounds > 0
-            ? ` Refined ${refined.rounds} round(s) (judge: ${refined.critiqueSummary ?? "issues found"}).`
-            : refined !== null
-              ? " Judge found nothing worth revising."
-              : "";
+        const refinedNote = refined === null ? "" : refineNote(refined);
         return instrumented(tel, "coder", startMs, {
           content: [
             {
@@ -1280,6 +1299,10 @@ function registerCoderTool(
               ? {
                   refinement: {
                     rounds: refined.rounds,
+                    status: refined.status,
+                    ...(refined.critiquedBy !== undefined
+                      ? { critiqued_by: refined.critiquedBy }
+                      : {}),
                     ...(refined.critiqueSummary !== undefined
                       ? { critique_summary: refined.critiqueSummary }
                       : {}),
