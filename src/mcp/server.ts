@@ -56,7 +56,7 @@ import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
 import { rerankHits } from "../knowledge/rerank.js";
 import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
-import { refineDraft } from "./coder-refine.js";
+import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
@@ -608,7 +608,7 @@ export async function graphFirstWikiHits(
  * both paths assemble hits identically. `wiki`/`wikiDir`/`rerank` are optional;
  * only `knowledge` is required.
  */
-interface HitAssemblyDeps {
+export interface HitAssemblyDeps {
   readonly knowledge: KnowledgeBase;
   readonly wiki?: WikiReader | undefined;
   readonly wikiDir?: string | undefined;
@@ -644,7 +644,7 @@ const GROUNDING_MAX_HITS = 4;
 const GROUNDING_CHAR_BUDGET = 4000;
 const GROUNDING_PER_HIT_CHARS = 1200;
 
-interface Grounding {
+export interface Grounding {
   /** Labeled context block to append to the drafter prompt. */
   readonly block: string;
   /** Source labels injected, echoed in the tool's structured output. */
@@ -666,8 +666,11 @@ function hitLabel(hit: Hit): string {
  * clearly-labeled context block for the local drafter. Returns null when there
  * is nothing to inject or on ANY failure: grounding is best-effort and must
  * never turn a draft into an error (degrades to the ungrounded behavior).
+ *
+ * Exported so non-MCP callers reuse the exact same path (LE3: `golem task run`'s
+ * local multiplexing grounds queued tasks identically to `coder`).
  */
-async function gatherGrounding(
+export async function gatherGrounding(
   query: string,
   projectId: string,
   deps: HitAssemblyDeps,
@@ -1162,6 +1165,29 @@ interface CoderGroundingDeps {
   readonly defaultProjectId: string;
 }
 
+/**
+ * Human-readable coder note for a refinement outcome. LE2: this must be
+ * truthful — a skipped refine (no judge model, parse failure) never reads as a
+ * clean "nothing worth revising".
+ */
+function refineNote(r: RefineOutcome): string {
+  const by = r.critiquedBy === "drafter" ? " (drafter self-review)" : "";
+  switch (r.status) {
+    case "revised":
+      return ` Refined ${r.rounds} round(s)${by}: ${r.critiqueSummary ?? "issues fixed"}.`;
+    case "clean":
+      return ` Reviewed${by} — nothing worth revising.`;
+    case "judge-unavailable":
+      return " Refine skipped — no local judge/drafter model available.";
+    case "unparseable":
+      return " Refine skipped — the critique was unparseable.";
+    case "empty-revision":
+      return " Refine skipped — the revision came back empty; kept the draft.";
+    case "error":
+      return " Refine skipped — the critique errored.";
+  }
+}
+
 function registerCoderTool(
   server: McpServer,
   inference: InferenceService,
@@ -1248,17 +1274,13 @@ function registerCoderTool(
       try {
         const result = await inference.chat("drafter", [{ role: "user", content: prompt }]);
         // R4.4: one optional local judge→revise pass. Best-effort — refineDraft
-        // returns the original text with rounds:0 on any failure.
+        // returns the original text with rounds:0 and an explicit status on any
+        // no-op (LE2: the status prevents a silent skip masquerading as "clean").
         const refined = refine === true ? await refineDraft(inference, task, result.text) : null;
         const finalText = refined !== null ? refined.text : result.text;
         const groundedNote =
           grounded !== null ? ` Grounded on ${grounded.sources.length} local source(s).` : "";
-        const refinedNote =
-          refined !== null && refined.rounds > 0
-            ? ` Refined ${refined.rounds} round(s) (judge: ${refined.critiqueSummary ?? "issues found"}).`
-            : refined !== null
-              ? " Judge found nothing worth revising."
-              : "";
+        const refinedNote = refined === null ? "" : refineNote(refined);
         return instrumented(tel, "coder", startMs, {
           content: [
             {
@@ -1277,6 +1299,10 @@ function registerCoderTool(
               ? {
                   refinement: {
                     rounds: refined.rounds,
+                    status: refined.status,
+                    ...(refined.critiquedBy !== undefined
+                      ? { critiqued_by: refined.critiquedBy }
+                      : {}),
                     ...(refined.critiqueSummary !== undefined
                       ? { critique_summary: refined.critiqueSummary }
                       : {}),

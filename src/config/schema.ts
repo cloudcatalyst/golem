@@ -52,6 +52,16 @@ export const SETTINGS_LEAVES = {
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
     connect_timeout_ms: timeoutMsSchema,
+    /**
+     * ON by default (proposals/auto-resume-on-limit.md, Phase 1): when a request
+     * hits an upstream usage limit (HTTP 429), auto-capture a durable resume task
+     * gated to the limit's reset time and log the full limit response for signal
+     * validation. Observe-only — never alters the proxied response, never spawns
+     * anything (the auto-SPAWN half is a separate, still-off Phase 2 flag under
+     * ADR-0002). Default-on is safe because it only logs + records a task; set
+     * false to disable capture entirely.
+     */
+    limit_autoresume: z.boolean(),
   },
   inference: {
     /** OpenAI-compatible local inference endpoint (Ollama default). */
@@ -206,6 +216,7 @@ export interface ProxySettings {
   readonly upstream_base_url: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
+  readonly limit_autoresume: boolean;
 }
 
 export interface InferenceSettings {
@@ -262,6 +273,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     upstream_base_url: "https://api.anthropic.com",
     request_timeout_ms: 600_000,
     connect_timeout_ms: 10_000,
+    limit_autoresume: true,
   },
   inference: {
     ollama_base_url: "http://localhost:11434",

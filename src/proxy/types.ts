@@ -20,6 +20,8 @@
  * new field/name — never confused with the removed `localResponse` seam.
  */
 
+import type { UsageLimitSignal } from "./limit-detector.js";
+
 /** Header that forces pure passthrough. Stripped before forwarding upstream. */
 export const BYPASS_HEADER = "x-golem-bypass";
 
@@ -124,6 +126,14 @@ export interface ProxyServerOptions {
    * rethrow. Default: none (sniffing is skipped entirely when absent).
    */
   readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
+  /**
+   * Called (observe-only) when the upstream returns a usage/rate limit (HTTP
+   * 429), with the parsed reset signal — see auto-resume Phase 1
+   * (proposals/auto-resume-on-limit.md). Like {@link onResponseUsage} it never
+   * affects the forwarded response and must not rethrow. Default: none (the
+   * detection is skipped entirely when absent).
+   */
+  readonly onUsageLimit?: (signal: UsageLimitSignal, request: ProxyRequest) => void;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -135,6 +145,7 @@ export interface ProxyConfig {
   readonly pipeline: RequestPipeline;
   readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
   readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
+  readonly onUsageLimit?: (signal: UsageLimitSignal, request: ProxyRequest) => void;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -146,5 +157,6 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     pipeline: options.pipeline ?? identityPipeline,
     ...(options.onPipelineError !== undefined ? { onPipelineError: options.onPipelineError } : {}),
     ...(options.onResponseUsage !== undefined ? { onResponseUsage: options.onResponseUsage } : {}),
+    ...(options.onUsageLimit !== undefined ? { onUsageLimit: options.onUsageLimit } : {}),
   };
 }

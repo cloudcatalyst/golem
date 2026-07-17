@@ -107,6 +107,7 @@ import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
 import { findTask, renderTask, renderTaskList, spawnResume } from "./task.js";
+import { buildTaskGrounding } from "./task-grounding.js";
 import { runWatch } from "./watch.js";
 import {
   checkWiki,
@@ -1203,9 +1204,12 @@ taskCmd
         );
         return;
       }
+      // LE3 — ground locally-serviced tasks with KB/wiki hits the way `coder`
+      // does (R4.2). Best-effort: undefined = service ungrounded, never blocks.
+      const ground = await buildTaskGrounding(opts.dir, inference);
       const result = await runQueueLocally(
         new FileTaskStore(opts.dir),
-        { inference },
+        { inference, ...(ground !== undefined ? { ground } : {}) },
         {
           concurrency,
           ...(limit !== undefined ? { limit } : {}),
