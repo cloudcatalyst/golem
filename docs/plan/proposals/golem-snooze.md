@@ -45,24 +45,28 @@ continues. This is the only mechanism we've found that resumes in-place.
   promptly with `{ reset: false, reason }` rather than hanging the session —
   degrade to "no snooze," never to a stuck window.
 
-### Required config (increment 1b — SHIPPED)
-`golem init` sets:
-- **`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`** in `.claude/settings.json` env —
-  **critical, and verified against the docs** (code.claude.com/docs/en/mcp,
-  2026-07-18): a main-conversation MCP call still running after ~2 min *"moves
-  to a background task … Claude receives the task ID immediately and keeps
-  working"* — i.e. auto-background **defeats the pause** (Claude continues and
-  burns quota). There is **no per-server override**, so it is set globally.
-  Trade-off: other long MCP tool calls also foreground-block rather than
-  backgrounding — low impact, since nearly all tool calls finish under 2 min.
-  A no-op on Claude Code versions without the feature (so no version gate needed).
-- **`timeout: 23_400_000` (6.5 h)** on the golem server entry in `.mcp.json` —
-  a per-server wall-clock / idle-timeout floor above snooze's own 6 h cap, so a
-  full park completes even if the heartbeat's progress token isn't honored; it
-  also backstops a genuinely-stuck golem tool. Fast tools finish well under it.
-- The 60 s progress **heartbeat** (P1a) keeps the call under the stdio idle
-  timeout (30 min default) during the wait; the `.mcp.json timeout` is the
-  belt-and-suspenders fallback if no progress token is sent.
+### Approach: document-and-hold, not foreground-block (revised 2026-07-18)
+The first cut (1b) forced a **foreground block** by globally disabling
+Claude Code's auto-backgrounding (`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`). That
+was invasive (global, affects every MCP server) — so it was **reverted** in
+favour of *embracing* backgrounding:
+
+- A main-conversation MCP call past ~2 min auto-backgrounds; *"Claude receives
+  the task ID … and keeps working, and the result arrives as a task
+  notification when the call settles"* (code.claude.com/docs/en/mcp). That
+  completion notification **re-invokes the agent in-place** — the same mechanism
+  that resumes this repo's own background-task watches.
+- So the near-limit flow is **document → snooze → wait** (P2b): the agent
+  captures its progress into an R5.1 durable task, calls `snooze`, and **stops**
+  (the PreToolUse gate denies further tool work; guidance says wait). The
+  session idles — **no quota burned** — and when `snooze` completes at the reset,
+  its task notification resumes the agent in-place. The durable task is the
+  safety net if the session dies before then.
+- No global override needed. The only remaining config is per-server, non-invasive:
+  **`timeout: 23_400_000` (6.5 h)** on the golem `.mcp.json` entry — a wall-clock
+  cap above snooze's own 6 h cap (default `MCP_TOOL_TIMEOUT` is ~28 h, so this is
+  a tighter backstop). Applies even while backgrounded. The 60 s progress
+  **heartbeat** keeps the call under the idle timeout.
 
 ### Sourcing the reset time (increment 2a — SHIPPED)
 The proxy sees `anthropic-ratelimit-unified-*` on every response. An observe-only
