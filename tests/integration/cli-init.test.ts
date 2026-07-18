@@ -147,7 +147,7 @@ describe("golem init", () => {
     // The unrelated allow rule is preserved (merged, not replaced); init adds its
     // own Golem MCP rules alongside it.
     expect(settings.permissions).toStrictEqual({
-      allow: ["Bash(ls:*)", "mcp__golem"],
+      allow: ["Bash(ls:*)", "mcp__golem__*"],
       ask: ["mcp__golem__wiki_upsert"],
     });
     expect((settings.env as Record<string, unknown>).FOO).toBe("bar");
@@ -162,8 +162,8 @@ describe("golem init", () => {
     await golemInit({ projectDir, probe: okProbe });
     const settings = await readJson(".claude/settings.json");
     const perms = settings.permissions as { allow?: string[]; ask?: string[] };
-    // All Golem tools auto-approved via the bare server rule; wiki_upsert kept on ask.
-    expect(perms.allow).toContain("mcp__golem");
+    // All Golem tools auto-approved via the anchored wildcard rule; wiki_upsert kept on ask.
+    expect(perms.allow).toContain("mcp__golem__*");
     expect(perms.ask).toContain("mcp__golem__wiki_upsert");
 
     await golemUninit({ projectDir, probe: okProbe });
