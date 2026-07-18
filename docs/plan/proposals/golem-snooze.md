@@ -61,29 +61,37 @@ Persist the latest predicted reset to `.golem/state/` so `snooze` can default
 its `until` from it (or the caller passes it). This is the join with the
 **limit-prediction observability** backlog item.
 
-### The trigger (increment 2 — THE open decision)
+### The trigger (increment 2 — DECIDED: PreToolUse one-shot)
 Golem cannot push "call snooze now" into Claude's decision loop: the proxy is
-byte-faithful on responses (no injection seam). Candidate triggers, each with a
-different reliability/timing profile:
+byte-faithful on responses (no injection seam). So the trigger is a **PreToolUse
+hook** — Golem already runs one (the R5.4 autonomy gate), and PreToolUse fires
+before *every* tool call (built-in and MCP), which makes it the most reliable
+place to catch an approaching limit. Chosen 2026-07-18 (USER decision) over the
+Stop-hook (fires only at turn boundaries — can be late in a long turn), the
+guidance-rule self-trigger (relies on Claude choosing to poll), and manual-only.
 
-- **(a) Guidance rule — Claude self-triggers.** A `.claude/rules/golem-*.md`
-  tells Claude to check Golem's limit status and call `snooze` when near. Simple,
-  reuses the existing guidance mechanism — but relies on Claude *choosing* to
-  poll/remember, and each check costs a few tokens.
-- **(b) Stop-hook nudge.** A Stop hook checks the limit at turn boundaries and,
-  when near, blocks the stop with "call `snooze`" (nonstop's pattern).
-  Deterministic *at stops* — but may fire late inside one long turn.
-- **(c) PreToolUse-gate piggyback.** Golem already runs a PreToolUse hook (the
-  R5.4 autonomy gate). Extend it: before a tool call, if near-limit, `ask`/deny
-  with reason "snooze first." Fires very frequently (every tool call), so it
-  catches the approach reliably, and reuses machinery that already exists.
-- **(d) Surface-only + manual.** Golem predicts and surfaces "near limit"
-  (status line / notification); you (or a prompt you set before leaving) call
-  `snooze`. Simplest, most predictable, zero magic — but not hands-off.
+**Critical: one-shot, so it doesn't pollute the conversation.** Firing often is
+*not* the same as injecting often — the hook is silent (reads a small state
+file, emits nothing) except when it decides to nudge. A **one-shot flag** keyed
+to the current reset window (`nudged for reset-at-X`) means it injects a
+**single** redirect — deny the pending tool with reason "you're near the usage
+limit; call `mcp__golem__snooze` to wait it out" — regardless of how many times
+it fires. So the per-tool-call frequency drives *catching the limit in time*,
+not transcript noise.
 
-**Recommendation:** (c) for the automatic path (most reliable, reuses the gate),
-with (d) always available as the manual path. But this is the fork to confirm
-before building increment 2.
+Design notes:
+- **Exempt `mcp__golem__snooze` itself** from the gate (else the nudge denies the
+  very call it asked for — a loop).
+- **Piggyback the existing gate** when autonomy is wired (near-zero added cost);
+  when it isn't, this introduces a PreToolUse hook (per-tool-call check, still
+  silent unless nudging).
+- **Threshold with margin** (e.g. ~90 % window utilization, not 99 %) so the
+  nudge — and the snooze call it triggers — still has quota to be emitted.
+- The one-shot flag resets when the reset window rolls over, so the next window
+  gets exactly one nudge again.
+
+Manual invocation stays available at every level (you, or a prompt you leave,
+call `snooze`) — the automatic PreToolUse path is additive.
 
 ## Spike unknowns (verify before over-investing)
 1. **Does a heartbeating stdio tool actually hold** past the 30-min idle default
