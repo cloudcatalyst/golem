@@ -51,11 +51,12 @@ describe("golem init", () => {
     expect(settings.env).toStrictEqual({
       ANTHROPIC_BASE_URL: `http://localhost:${port}`,
       ENABLE_TOOL_SEARCH: "true",
+      CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS: "0",
     });
 
     const mcp = await readJson(".mcp.json");
     expect(mcp.mcpServers).toStrictEqual({
-      golem: { type: "stdio", command: "golem", args: ["mcp", "serve"] },
+      golem: { type: "stdio", command: "golem", args: ["mcp", "serve"], timeout: 23_400_000 },
     });
 
     for (const name of Object.keys(P0_SKILLS)) {

@@ -6,7 +6,8 @@
       "args": [
         "mcp",
         "serve"
-      ]
+      ],
+      "timeout": 23400000
     }
   }
 }
