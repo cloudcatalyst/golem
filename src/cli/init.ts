@@ -164,18 +164,22 @@ const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
 const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 const MCP_SERVER_KEY = "golem";
 /**
- * Pre-approve Golem's own MCP tools so they don't prompt on first use. The bare
- * `mcp__<server>` rule matches every current and future tool from that server
- * (Claude Code permissions docs, "MCP" section: `mcp__golem` "matches any tool
- * provided by the server" — the canonical all-tools form; the anchored glob
- * `mcp__<server>__*` is an equivalent alternative we deliberately don't use, to
- * keep one form across init + committed settings). `wiki_upsert` is held on
- * `ask` — it writes committed wiki files, and an `ask` rule prompts even when an
- * `allow` rule also matches (deny → ask → allow precedence). Note: allow rules
- * in a committed `.claude/settings.json` activate only after the one-time Claude
- * Code workspace-trust accept.
+ * Pre-approve Golem's own MCP tools so they don't prompt on first use. Uses the
+ * anchored wildcard `mcp__<server>__*` — the documented "all tools from this
+ * server" form (Claude Code permissions docs, "MCP" section). Switched to it
+ * from the bare `mcp__<server>` rule (2026-07-18) after observing that the bare
+ * form does NOT reliably auto-approve tools in practice: golem tools kept
+ * prompting on first use and had to be added one-by-one via "always allow"
+ * (`delegate`, then the new `snooze`). The `__*` is anchored to the server —
+ * only fully-unanchored globs like `mcp__*` are skipped as allow rules — so it
+ * is valid and covers every current and future golem tool at once. `wiki_upsert`
+ * is held on `ask` (it writes committed wiki files; an `ask` rule prompts even
+ * when an `allow` rule also matches — deny → ask → allow precedence). Note:
+ * these rules are read at Claude Code session start (and activate only after the
+ * one-time workspace-trust accept), so a running session must be restarted to
+ * pick up a newly-added rule — mid-session edits/`always allow` don't apply live.
  */
-const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}`;
+const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
 const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /**
  * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`

@@ -12,7 +12,7 @@
       "Skill(update-config:*)",
       "WebFetch",
       "WebSearch",
-      "mcp__golem",
+      "mcp__golem__*",
       "PowerShell(Get-Process | Where-Object { $_.Name -match 'ollama|node|golem' } | Sort-Object -Property CPU -Descending | Select-Object -First 15 Name, Id, CPU, @{N='WS_MB';E={[math]::Round\\($_.WorkingSet64/1MB\\)}} | Format-Table -AutoSize)",
       "PowerShell(& ollama ps 2>$null)",
       "PowerShell(& nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader 2>$null)",
@@ -21,7 +21,9 @@
       "Bash(golem task *)",
       "Bash(golem wiki *)",
       "Bash(ollama list *)",
-      "Bash(gh:*)"
+      "Bash(gh:*)",
+      "Bash(gh pr *)",
+      "mcp__golem__snooze"
     ],
     "ask": [
       "mcp__golem__wiki_upsert"
