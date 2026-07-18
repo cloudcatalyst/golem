@@ -59,6 +59,7 @@ import { extractWikilinks } from "../wiki/frontmatter.js";
 import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
+import { abortableSleep, DEFAULT_SNOOZE_MAX_MS, runSnooze, SnoozeInputError } from "./snooze.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
 
 export const GOLEM_MCP_SERVER_NAME = "golem";
@@ -395,6 +396,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   );
 
   registerDevicesTool(server);
+  registerSnoozeTool(server);
 
   // R4.3 — where the knowledge/coder tools record their per-call telemetry.
   const tel: ToolTelemetry | undefined =
@@ -1380,6 +1382,101 @@ function registerDevicesTool(server: McpServer): void {
           ...(facts.memoryMiB !== undefined ? { memory_mib: facts.memoryMiB } : {}),
         },
       };
+    },
+  );
+}
+
+/**
+ * Golem snooze (proposal docs/plan/proposals/golem-snooze.md): park the live
+ * session until a usage-limit reset, then continue in-place. Registered
+ * unconditionally — it needs no injected service, only the request's abort
+ * signal and progress token. See snooze.ts for the timing core; the heartbeat
+ * emits an MCP progress notification (when the client sent a progress token) so
+ * the deliberately long tool call is not idle-timed-out.
+ */
+function registerSnoozeTool(server: McpServer): void {
+  server.registerTool(
+    "snooze",
+    {
+      title: "Wait out a usage-limit reset in place",
+      description:
+        "Park this session until a usage/session limit resets, then continue the " +
+        "SAME conversation in-place. Holds this tool call open (emitting progress so " +
+        "it is not idle-timed-out) until `until` (an ISO reset time) or for " +
+        "`duration_ms`, capped at `max_ms`. No model tokens are consumed while it " +
+        "waits. Use it when you are about to hit — or have just hit — a usage limit " +
+        "and want to resume this conversation once quota returns rather than losing " +
+        "the session. Declines if the reset is further out than the cap (e.g. a " +
+        "multi-day weekly limit).",
+      inputSchema: {
+        until: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("ISO-8601 reset time to wait until (e.g. from a rate-limit reset header)"),
+        duration_ms: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe("Explicit wait duration in ms (alternative to `until`)"),
+        max_ms: z
+          .number()
+          .int()
+          .positive()
+          .optional()
+          .describe(`Hard cap on the wait in ms (default ${DEFAULT_SNOOZE_MAX_MS}, ~6h)`),
+      },
+      outputSchema: {
+        reset: z.boolean(),
+        waited_ms: z.number().int().nonnegative(),
+        target_ms: z.number().int().nonnegative(),
+        heartbeats: z.number().int().nonnegative(),
+        reason: z.string().optional(),
+      },
+    },
+    async ({ until, duration_ms, max_ms }, extra) => {
+      const progressToken = extra._meta?.progressToken;
+      let progress = 0;
+      try {
+        const outcome = await runSnooze(
+          {
+            ...(until !== undefined ? { until } : {}),
+            ...(duration_ms !== undefined ? { durationMs: duration_ms } : {}),
+            ...(max_ms !== undefined ? { maxMs: max_ms } : {}),
+          },
+          {
+            now: () => Date.now(),
+            sleep: abortableSleep,
+            signal: extra.signal,
+            heartbeat: async () => {
+              if (progressToken === undefined) return;
+              progress += 1;
+              await extra.sendNotification({
+                method: "notifications/progress",
+                params: { progressToken, progress },
+              });
+            },
+          },
+        );
+        const mins = Math.round(outcome.waitedMs / 60_000);
+        const text = outcome.reset
+          ? `**Golem** Snoozed ~${mins} min — the usage window should have reset; continuing here.`
+          : `**Golem** Snooze ended without a full wait (${outcome.reason ?? "stopped"}).`;
+        return {
+          content: [{ type: "text", text }],
+          structuredContent: {
+            reset: outcome.reset,
+            waited_ms: outcome.waitedMs,
+            target_ms: outcome.targetMs,
+            heartbeats: outcome.heartbeats,
+            ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+          },
+        };
+      } catch (err) {
+        if (err instanceof SnoozeInputError) return errorResult(err.message);
+        throw err;
+      }
     },
   );
 }
