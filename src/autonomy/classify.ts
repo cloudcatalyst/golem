@@ -28,6 +28,8 @@ const READ_TOOLS = new Set([
   "mcp__golem__expand",
   "mcp__golem__devices",
   "mcp__golem__wiki_read",
+  // snooze just WAITS (no read/write/outward side effect) — harmless to auto-allow.
+  "mcp__golem__snooze",
 ]);
 
 /** Tools that write locally (files / local drafts) but nothing outward. */

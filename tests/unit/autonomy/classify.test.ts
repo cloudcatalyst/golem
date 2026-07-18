@@ -7,7 +7,7 @@ import { classifyAction, classifyBash } from "../../../src/autonomy/index.js";
 
 describe("classifyAction (tools)", () => {
   it("classifies read-only tools as read", () => {
-    for (const t of ["Read", "Grep", "Glob", "WebFetch", "mcp__golem__search"]) {
+    for (const t of ["Read", "Grep", "Glob", "WebFetch", "mcp__golem__search", "mcp__golem__snooze"]) {
       expect(classifyAction(t, {})).toBe("read");
     }
   });
