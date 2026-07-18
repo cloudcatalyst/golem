@@ -37,7 +37,9 @@ import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 import { JsonlTelemetryStore, recordToolCall } from "../../src/telemetry/index.js";
 
-const P0_TOOLS = ["expand", "stats", "level", "devices"] as const;
+// Unconditionally-registered tools (need no injected service): the P0 trio +
+// `devices` + `snooze` (park-until-reset, proposal golem-snooze.md).
+const P0_TOOLS = ["expand", "stats", "level", "devices", "snooze"] as const;
 const ALL_PROMPTS = [
   "slider",
   "index",
@@ -272,6 +274,39 @@ describe("golem MCP server (in-memory transport)", () => {
       expect(text).toContain(`Hardware tier: ${structured.tier} (${structured.tier_name})`);
       expect(text).toContain(structured.detail);
       expect(text).toContain(structured.models.join(", "));
+    });
+  });
+
+  describe("snooze", () => {
+    it("returns immediately with reset:true when the reset time is already past", async () => {
+      const client = await connectInMemory(createStandaloneDeps());
+      const result = await client.callTool({
+        name: "snooze",
+        arguments: { until: "2020-01-01T00:00:00.000Z" },
+      });
+      expect(result.isError).toBeFalsy();
+      const s = result.structuredContent as { reset: boolean; waited_ms: number };
+      expect(s.reset).toBe(true);
+      expect(s.waited_ms).toBe(0);
+    });
+
+    it("errors when neither `until` nor `duration_ms` is given", async () => {
+      const client = await connectInMemory(createStandaloneDeps());
+      const result = await client.callTool({ name: "snooze", arguments: {} });
+      expect(result.isError).toBe(true);
+      expect(textOf(result).toLowerCase()).toMatch(/until|duration/);
+    });
+
+    it("declines (reset:false) when the reset is beyond the snooze cap", async () => {
+      const client = await connectInMemory(createStandaloneDeps());
+      const result = await client.callTool({
+        name: "snooze",
+        arguments: { duration_ms: 25_000_000 }, // > the ~6h default cap
+      });
+      expect(result.isError).toBeFalsy();
+      const s = result.structuredContent as { reset: boolean; reason?: string };
+      expect(s.reset).toBe(false);
+      expect(s.reason ?? "").toMatch(/beyond/i);
     });
   });
 
