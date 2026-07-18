@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   eligibleLocalAnswerText,
   LOCAL_ANSWER_MODEL_ID,
+  MAX_LOCAL_ANSWER_QUERY_CHARS,
   synthesizeLocalAnswerResponse,
 } from "../../../src/pipeline/local-answer-response.js";
 
@@ -79,6 +80,32 @@ describe("eligibleLocalAnswerText", () => {
   it("fails closed on a non-array tools value", () => {
     const body = { messages: [{ role: "user", content: "q" }], tools: "everything" };
     expect(eligibleLocalAnswerText(body)).toBeUndefined();
+  });
+
+  it("rejects a single-turn message that embeds its own large context (not a KB lookup)", () => {
+    // A WebFetch summarization call: a whole page pasted for the model to work
+    // against. Local-answer would otherwise do KB retrieval on the blob and
+    // substitute generic KB content, ignoring the page.
+    const page = `Summarize this page:\n\n${"lorem ipsum ".repeat(400)}`;
+    expect(page.length).toBeGreaterThan(MAX_LOCAL_ANSWER_QUERY_CHARS);
+    expect(
+      eligibleLocalAnswerText({ messages: [{ role: "user", content: page }] }),
+    ).toBeUndefined();
+    // Same, via a single text block.
+    expect(
+      eligibleLocalAnswerText({
+        messages: [{ role: "user", content: [{ type: "text", text: page }] }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("accepts a question right at the length boundary but rejects one past it", () => {
+    const atCap = "a".repeat(MAX_LOCAL_ANSWER_QUERY_CHARS);
+    const overCap = "a".repeat(MAX_LOCAL_ANSWER_QUERY_CHARS + 1);
+    expect(eligibleLocalAnswerText({ messages: [{ role: "user", content: atCap }] })).toBe(atCap);
+    expect(
+      eligibleLocalAnswerText({ messages: [{ role: "user", content: overCap }] }),
+    ).toBeUndefined();
   });
 
   it("rejects a missing messages array", () => {
