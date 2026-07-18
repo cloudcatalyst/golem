@@ -209,7 +209,7 @@ export const GUIDANCE_FEATURES: readonly GuidanceFeature[] = [
   {
     name: "snooze-hold",
     summary: "Park at the usage limit (document → snooze → resume in-place) instead of losing work",
-    seededByDefault: false,
+    seededByDefault: true,
     snippet: SNOOZE_HOLD,
   },
 ];

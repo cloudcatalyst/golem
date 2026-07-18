@@ -84,6 +84,8 @@ describe("golem init", () => {
     expect(cmds("UserPromptSubmit")).toContain("golem hook prompt-submit");
     // SessionStart auto-starts the proxy on project open (§47).
     expect(cmds("SessionStart")).toContain("golem hook session-start");
+    // PreToolUse: snooze document-and-hold nudge + autonomy gate (snooze P2b).
+    expect(cmds("PreToolUse")).toContain("golem hook pre-tool-use");
   });
 
   it("uninit removes the status line and blocked-state hooks", async () => {
@@ -225,6 +227,12 @@ describe("golem init", () => {
     );
     expect(wikiRule).toContain("Check the wiki first");
     expect(wikiRule).toContain("Managed by Golem");
+    // snooze-hold is seeded by default (snooze P2b activation).
+    const snoozeRule = await readFile(
+      path.join(projectDir, ".claude", "rules", "golem-snooze-hold.md"),
+      "utf8",
+    );
+    expect(snoozeRule).toContain("park at the usage limit");
     // Golem does NOT touch CLAUDE.md or write the personal file.
     await expect(readFile(path.join(projectDir, "CLAUDE.md"), "utf8")).rejects.toMatchObject({
       code: "ENOENT",
