@@ -9,6 +9,14 @@ export {
   forwardableResponseHeaders,
   isBypassRequest,
 } from "./headers.js";
+export {
+  type LimitPrediction,
+  type LimitWindow,
+  limitStatePath,
+  parseLimitPrediction,
+  readLimitState,
+  writeLimitState,
+} from "./limit-prediction.js";
 export { GolemProxy } from "./server.js";
 export {
   BYPASS_HEADER,

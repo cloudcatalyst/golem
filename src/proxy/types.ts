@@ -124,6 +124,18 @@ export interface ProxyServerOptions {
    * rethrow. Default: none (sniffing is skipped entirely when absent).
    */
   readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
+  /**
+   * Called (observe-only) with every upstream response's headers, before the
+   * body is piped. Used for limit PREDICTION (snooze proposal P2a): the
+   * `anthropic-ratelimit-unified-*` headers carry window utilization + reset.
+   * Never affects the forwarded response, must not rethrow. Default: none
+   * (skipped entirely when absent). Distinct from the removed `onUsageLimit`
+   * (Decision 37) — this observes every response, and only for prediction.
+   */
+  readonly onResponseHeaders?: (
+    headers: Readonly<Record<string, string | string[] | undefined>>,
+    request: ProxyRequest,
+  ) => void;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -135,6 +147,10 @@ export interface ProxyConfig {
   readonly pipeline: RequestPipeline;
   readonly onPipelineError?: (err: unknown, request: ProxyRequest) => void;
   readonly onResponseUsage?: (usage: ResponseUsage | null, request: ProxyRequest) => void;
+  readonly onResponseHeaders?: (
+    headers: Readonly<Record<string, string | string[] | undefined>>,
+    request: ProxyRequest,
+  ) => void;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -146,5 +162,8 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     pipeline: options.pipeline ?? identityPipeline,
     ...(options.onPipelineError !== undefined ? { onPipelineError: options.onPipelineError } : {}),
     ...(options.onResponseUsage !== undefined ? { onResponseUsage: options.onResponseUsage } : {}),
+    ...(options.onResponseHeaders !== undefined
+      ? { onResponseHeaders: options.onResponseHeaders }
+      : {}),
   };
 }

@@ -64,11 +64,15 @@ continues. This is the only mechanism we've found that resumes in-place.
   timeout (30 min default) during the wait; the `.mcp.json timeout` is the
   belt-and-suspenders fallback if no progress token is sent.
 
-### Sourcing the reset time
-The proxy already sees `anthropic-ratelimit-unified-*-reset` on every response.
-Persist the latest predicted reset to `.golem/state/` so `snooze` can default
-its `until` from it (or the caller passes it). This is the join with the
-**limit-prediction observability** backlog item.
+### Sourcing the reset time (increment 2a — SHIPPED)
+The proxy sees `anthropic-ratelimit-unified-*` on every response. An observe-only
+`onResponseHeaders` hook parses the session (5h) + weekly (7d) window
+utilization and reset (`src/proxy/limit-prediction.ts`) and persists the latest
+to `.golem/state/limit-state.json` (throttled to ≤ once/3 s). `snooze` can
+default its `until` from it, and the P2b trigger reads it to decide "near the
+limit". This is the join with the **limit-prediction observability** backlog
+item. NOTE: prediction/observability only — NOT the auto-resume detect+capture
+Decision 37 removed (reads every response, records state, never captures/spawns).
 
 ### The trigger (increment 2 — DECIDED: PreToolUse one-shot)
 Golem cannot push "call snooze now" into Claude's decision loop: the proxy is
