@@ -132,8 +132,21 @@ call `snooze`) — the automatic PreToolUse path is additive.
   gains a small "persist observed reset" side-write. Redaction/fidelity
   untouched (snooze never transforms request/response content).
 
-## Phasing
-- **P1 — the tool + config + manual trigger.** Ship `snooze`, wire the MCP config
-  in `init`, and let the user/Claude call it explicitly. Verify unknowns 1–2.
-- **P2 — automatic trigger + prediction wiring.** Build the chosen trigger and
-  persist the observed reset for `snooze` to default from. Verify unknown 3.
+## Phasing / status
+- **P1a — ✅ the `snooze` MCP tool** (heartbeat, cancel, cap). Empirically verified
+  to hold 2.5 min past the auto-background threshold with working heartbeats.
+- **P1b — ✅ per-server `.mcp.json` timeout.** (The global auto-background override
+  was tried then reverted — see "document-and-hold" above.)
+- **P2a — ✅ prediction:** proxy persists the observed session/weekly window
+  utilization + reset to `.golem/state/limit-state.json`.
+- **P2b — ✅ the trigger core:** `src/hooks/snooze-nudge.ts` + PreToolUse
+  integration (one-shot deny → document-and-hold, snooze exempt) + the
+  `snooze-hold` guidance rule + `snooze` classified harmless. Decision logic
+  drafted with the local `coder` model, then hardened.
+- **Remaining — ACTIVATION (open decision):** the nudge only fires where the
+  PreToolUse hook is wired (today: `golem autonomy wire`). Whether `golem init`
+  should wire it — and seed the `snooze-hold` guidance — **by default** (automatic
+  snooze, at the cost of a per-tool-call hook in every project) vs. keep it
+  opt-in, is the last call to make.
+- **Manual verification (unchanged):** does quota actually restore for the next
+  turn after a real reset, mid-session? Needs a real limit hit.

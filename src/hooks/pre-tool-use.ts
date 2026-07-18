@@ -19,7 +19,15 @@ import {
   decisionLabel,
   readAutonomyLevel,
 } from "../autonomy/index.js";
+import type { LimitPrediction } from "../proxy/limit-prediction.js";
+import { readLimitState } from "../proxy/index.js";
 import type { HookIo } from "./post-tool-use.js";
+import {
+  decideSnoozeNudge,
+  readSnoozeNudgeState,
+  snoozeNudgeReason,
+  writeSnoozeNudgeState,
+} from "./snooze-nudge.js";
 
 interface PreToolUsePayload {
   readonly cwd?: string;
@@ -33,6 +41,10 @@ export interface PreToolUseGateOptions {
   readonly nowIso?: string;
   /** Inject the level reader (tests); default reads `.golem/state/autonomy.json`. */
   readonly readLevel?: (projectDir: string) => Promise<AutonomyLevel>;
+  /** Inject the limit-prediction reader (tests); default reads `.golem/state/limit-state.json`. */
+  readonly readPrediction?: (projectDir: string) => Promise<LimitPrediction | null>;
+  /** Injected clock (epoch ms) for the snooze-nudge one-shot window check. */
+  readonly now?: () => number;
 }
 
 async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
@@ -69,6 +81,32 @@ export async function runPreToolUseHook(
     if (typeof toolName !== "string" || toolName.length === 0) return 0;
 
     const projectDir = options.projectDir ?? payload.cwd ?? process.cwd();
+
+    // Document-and-hold nudge (snooze P2b): as the session window fills, redirect
+    // the agent to park (document into a durable task → snooze → wait) — ONCE per
+    // reset window, before the autonomy gate. The snooze tool itself is exempt
+    // (never deny the very call that does the parking).
+    if (toolName !== "mcp__golem__snooze") {
+      const readPrediction = options.readPrediction ?? readLimitState;
+      const nowMs = options.now?.() ?? Date.now();
+      const prediction = await readPrediction(projectDir);
+      const nudged = await readSnoozeNudgeState(projectDir);
+      const nudge = decideSnoozeNudge(prediction, nudged, nowMs);
+      if (nudge.nudge && nudge.resetAtIso !== undefined && nudge.utilization !== undefined) {
+        await writeSnoozeNudgeState(projectDir, nudge.resetAtIso);
+        io.stdout.write(
+          `${JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: snoozeNudgeReason(nudge.resetAtIso, nudge.utilization),
+            },
+          })}\n`,
+        );
+        return 0;
+      }
+    }
+
     const readLevel = options.readLevel ?? readAutonomyLevel;
     const level = await readLevel(projectDir);
 
