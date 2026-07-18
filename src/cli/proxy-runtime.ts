@@ -19,7 +19,7 @@ import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
-import { GolemProxy } from "../proxy/index.js";
+import { GolemProxy, parseLimitPrediction, writeLimitState } from "../proxy/index.js";
 import {
   recordAvoidedUpstream,
   recordPipelineEvent,
@@ -162,6 +162,10 @@ export function buildProxyFromSettings(
     ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),
     ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
+  // Throttle limit-state persistence (P2a) so a busy SSE stream doesn't rewrite
+  // `.golem/state/limit-state.json` on every response.
+  let lastLimitPersistMs = 0;
+  const LIMIT_PERSIST_THROTTLE_MS = 3000;
   const proxy = new GolemProxy({
     upstreamBaseUrl: settings.proxy.upstream_base_url,
     connectTimeoutMs: settings.proxy.connect_timeout_ms,
@@ -185,6 +189,17 @@ export function buildProxyFromSettings(
           new Date().toISOString(),
         );
       })().catch(() => {});
+    },
+    // Limit prediction (snooze P2a): persist the observed session/weekly window
+    // utilization + reset to `.golem/state/limit-state.json`, throttled so a busy
+    // stream doesn't rewrite the file per response. Observe-only, fail-open.
+    onResponseHeaders: (headers) => {
+      const nowMs = Date.now();
+      if (nowMs - lastLimitPersistMs < LIMIT_PERSIST_THROTTLE_MS) return;
+      const prediction = parseLimitPrediction(headers, new Date(nowMs).toISOString());
+      if (prediction === null) return;
+      lastLimitPersistMs = nowMs;
+      void writeLimitState(dir, prediction).catch(() => {});
     },
   });
   return semantic !== undefined ? { proxy, semantic } : { proxy };
