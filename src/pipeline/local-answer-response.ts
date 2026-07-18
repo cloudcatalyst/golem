@@ -32,14 +32,36 @@ function extractPlainText(content: unknown): string | undefined {
 }
 
 /**
+ * Longest a single-turn user message may be to still count as a standalone
+ * retrieval question. A genuine "answer this from the project KB" question is a
+ * sentence or two; a request whose user message EMBEDS its own large context —
+ * a page to summarize, a file to explain, a document pasted for the model to
+ * work against — is not a KB lookup and must reach the model with that context
+ * intact.
+ *
+ * This gate exists because local-answer does KB retrieval on the query TEXT and
+ * ignores any context embedded alongside it, so firing on a
+ * document-carrying request substitutes generic KB content for the caller's
+ * actual input. Observed in the wild: WebFetch's internal summarization model
+ * call (a single-turn request carrying a fetched page) matched the project's
+ * own README above the confidence floor and was served that instead of a
+ * summary of the page. Length is a robust proxy for "this message carries its
+ * own content"; declining is always safe — it just forwards to the upstream
+ * model. ~1000 chars comfortably clears any real question while excluding
+ * embedded documents (kilobytes).
+ */
+export const MAX_LOCAL_ANSWER_QUERY_CHARS = 1000;
+
+/**
  * A parsed request body qualifies for the local-answer attempt only when it
  * is a single-turn, tool-free, plain-text user question: `messages.length
  * === 1`, role `user`, content is a bare string or a single `text` block,
- * and the request defines NO tools. Anything else (prior turns to escalate
- * mid-flow, tool_result content, multiple content blocks, images) returns
- * undefined — the caller must fall through to the normal upstream path. This
- * is the narrowing that keeps this sub-mode's trigger tighter than Decision
- * 25's general auto-draft.
+ * the request defines NO tools, and the text is a short standalone question
+ * (≤ {@link MAX_LOCAL_ANSWER_QUERY_CHARS}). Anything else (prior turns to
+ * escalate mid-flow, tool_result content, multiple content blocks, images, or
+ * a message that embeds its own large context) returns undefined — the caller
+ * must fall through to the normal upstream path. This is the narrowing that
+ * keeps this sub-mode's trigger tighter than Decision 25's general auto-draft.
  *
  * The tools check is load-bearing, not cosmetic: a request that DEFINES
  * `tools` (a `claude -p` one-shot in a wired project does) expects the model
@@ -56,7 +78,9 @@ export function eligibleLocalAnswerText(
   if (!Array.isArray(messages) || messages.length !== 1) return undefined;
   const message: unknown = messages[0];
   if (!isRecord(message) || message.role !== "user") return undefined;
-  return extractPlainText(message.content);
+  const text = extractPlainText(message.content);
+  if (text === undefined || text.length > MAX_LOCAL_ANSWER_QUERY_CHARS) return undefined;
+  return text;
 }
 
 export interface SynthesizedResponse {
