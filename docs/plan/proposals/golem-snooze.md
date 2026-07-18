@@ -45,15 +45,24 @@ continues. This is the only mechanism we've found that resumes in-place.
   promptly with `{ reset: false, reason }` rather than hanging the session —
   degrade to "no snooze," never to a stuck window.
 
-### Required config (increment 1)
-`golem init` sets, for the `golem` MCP server:
-- `CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT` raised (or `0`) so the heartbeat governs.
-- `CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0` — **critical.** The default (~2 min)
-  auto-backgrounds long tool calls *so the session stays usable*, which is the
-  opposite of parking: a backgrounded snooze would let Claude keep working and
-  keep burning quota. Snooze must **foreground-block**.
-- Requires **Claude Code v2.1.203+** (per-server timeout floor + stdio idle
-  timeout). `golem` should detect and warn on older versions.
+### Required config (increment 1b — SHIPPED)
+`golem init` sets:
+- **`CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0`** in `.claude/settings.json` env —
+  **critical, and verified against the docs** (code.claude.com/docs/en/mcp,
+  2026-07-18): a main-conversation MCP call still running after ~2 min *"moves
+  to a background task … Claude receives the task ID immediately and keeps
+  working"* — i.e. auto-background **defeats the pause** (Claude continues and
+  burns quota). There is **no per-server override**, so it is set globally.
+  Trade-off: other long MCP tool calls also foreground-block rather than
+  backgrounding — low impact, since nearly all tool calls finish under 2 min.
+  A no-op on Claude Code versions without the feature (so no version gate needed).
+- **`timeout: 23_400_000` (6.5 h)** on the golem server entry in `.mcp.json` —
+  a per-server wall-clock / idle-timeout floor above snooze's own 6 h cap, so a
+  full park completes even if the heartbeat's progress token isn't honored; it
+  also backstops a genuinely-stuck golem tool. Fast tools finish well under it.
+- The 60 s progress **heartbeat** (P1a) keeps the call under the stdio idle
+  timeout (30 min default) during the wait; the `.mcp.json timeout` is the
+  belt-and-suspenders fallback if no progress token is sent.
 
 ### Sourcing the reset time
 The proxy already sees `anthropic-ratelimit-unified-*-reset` on every response.

@@ -2,7 +2,9 @@
  * WS-E E2 — `golem init` / `golem uninit` engine.
  *
  * Wires an existing Claude Code project to Golem, idempotently:
- *   1. `.claude/settings.json`  — Claude Code → local proxy + ENABLE_TOOL_SEARCH.
+ *   1. `.claude/settings.json`  — Claude Code → local proxy + ENABLE_TOOL_SEARCH
+ *      + CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS=0 (so the `snooze` tool can park the
+ *      session — see ENV_MCP_AUTO_BG).
  *      Direct Anthropic uses `ANTHROPIC_BASE_URL`; `foundry` uses the Foundry env
  *      (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`).
  *   1b. `.golem/settings.local.json` — proxy `upstream_base_url` when fronting a
@@ -182,6 +184,25 @@ const MCP_SERVER_KEY = "golem";
 const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
 const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /**
+ * Disables Claude Code's auto-backgrounding of long MCP tool calls (v2.1.212+).
+ * REQUIRED for the `snooze` tool (proposal golem-snooze.md): a main-conversation
+ * call still running after ~2min otherwise moves to a background task and "Claude
+ * receives the task ID immediately and keeps working" (code.claude.com/docs/en/mcp)
+ * — which defeats the whole point of parking the session until the limit resets.
+ * There is NO per-server override, so it is set globally in `.claude/settings.json`
+ * env. Trade-off: other long MCP tool calls also foreground-block instead of
+ * backgrounding — low impact, since almost all tool calls finish well under 2min.
+ * A no-op on Claude Code versions without the feature.
+ */
+const ENV_MCP_AUTO_BG = "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS";
+/**
+ * Per-server wall-clock / idle-floor cap (ms) for the golem MCP server in
+ * `.mcp.json`. Sized above `snooze`'s own 6h cap (src/mcp/snooze.ts) so a full
+ * park completes, and the 60s heartbeat keeps the call under the idle timeout;
+ * it also backstops a genuinely-stuck golem tool. Fast tools finish well under it.
+ */
+const GOLEM_MCP_TIMEOUT_MS = 23_400_000; // 6.5h
+/**
  * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`
  * (user decision 2026-07-16). Committed, team-wide, auto-loaded every session;
  * Golem never edits the user's CLAUDE.md. See src/hooks/guidance.ts.
@@ -336,7 +357,12 @@ function pushEnvAction(
 
 /** The `.mcp.json` entry init installs (verification-notes §9 schema). */
 function golemMcpEntry(): JsonObject {
-  return { type: "stdio", command: "golem", args: ["mcp", "serve"] };
+  return {
+    type: "stdio",
+    command: "golem",
+    args: ["mcp", "serve"],
+    timeout: GOLEM_MCP_TIMEOUT_MS,
+  };
 }
 
 /** Per-artifact result of the "is this project wired to Golem?" checks (E3). */
@@ -455,6 +481,12 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // ALREADY wired for Foundry (env has CLAUDE_CODE_USE_FOUNDRY), preserve that mode
   // rather than adding a conflicting ANTHROPIC_BASE_URL. `proxyUpstream` (if set) is
   // written to the proxy config; Claude Code always points at the LOCAL proxy.
+  // snooze (golem-snooze.md) needs auto-backgrounding OFF so a parked session
+  // foreground-blocks instead of Claude continuing while it waits — set in every
+  // upstream mode. See ENV_MCP_AUTO_BG.
+  const autoBgChanged = env[ENV_MCP_AUTO_BG] !== "0";
+  env[ENV_MCP_AUTO_BG] = "0";
+
   const existingFoundry =
     env[ENV_USE_FOUNDRY] === "true" && typeof env[ENV_FOUNDRY_BASE_URL] === "string";
   const useFoundry =
@@ -476,7 +508,8 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
       env[ENV_USE_FOUNDRY] !== "true" ||
       currentFoundry !== foundryBaseUrl ||
       env[ENV_TOOL_SEARCH] !== "true" ||
-      env[ENV_BASE_URL] === baseUrl;
+      env[ENV_BASE_URL] === baseUrl ||
+      autoBgChanged;
     env[ENV_USE_FOUNDRY] = "true";
     env[ENV_FOUNDRY_BASE_URL] = foundryBaseUrl;
     env[ENV_TOOL_SEARCH] = "true";
@@ -496,7 +529,8 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
           "setting (or `headroom unwrap`) before running golem init.",
       );
     }
-    const envChanged = currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
+    const envChanged =
+      currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true" || autoBgChanged;
     env[ENV_BASE_URL] = baseUrl;
     env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
     pushEnvAction(actions, envChanged, settingsExisted, rel(projectDir, settingsPath), {
@@ -867,6 +901,12 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     }
     if (ENV_TOOL_SEARCH in envObj && envObj[ENV_TOOL_SEARCH] === "true") {
       delete envObj[ENV_TOOL_SEARCH];
+      changed = true;
+    }
+    // Only remove the auto-background override if it still holds init's value,
+    // so a user who set it themselves keeps it.
+    if (envObj[ENV_MCP_AUTO_BG] === "0") {
+      delete envObj[ENV_MCP_AUTO_BG];
       changed = true;
     }
     if (Object.keys(envObj).length === 0) delete settings.env;
