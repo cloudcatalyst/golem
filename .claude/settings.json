@@ -1,8 +1,7 @@
 {
   "env": {
     "ENABLE_TOOL_SEARCH": "true",
-    "ANTHROPIC_BASE_URL": "http://localhost:4930",
-    "CLAUDE_CODE_MCP_AUTO_BACKGROUND_MS": "0"
+    "ANTHROPIC_BASE_URL": "http://localhost:4930"
   },
   "permissions": {
     "allow": [
