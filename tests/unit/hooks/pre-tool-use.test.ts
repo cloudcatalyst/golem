@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AutonomyLevel } from "../../../src/autonomy/index.js";
 import { readActionLog } from "../../../src/autonomy/index.js";
 import { runPreToolUseHook } from "../../../src/hooks/pre-tool-use.js";
+import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
 
 /** Minimal HookIo capturing stdout/stderr, feeding a fixed stdin string. */
 function io(input: string) {
@@ -92,5 +93,59 @@ describe("runPreToolUseHook", () => {
     expect(log).toHaveLength(1);
     expect(log[0]?.tool).toBe("Read");
     expect(log[0]?.decision).toBe("allow");
+  });
+
+  // --- Document-and-hold nudge (P2b) ---
+  const NOW_MS = Date.parse("2026-07-18T00:00:00.000Z");
+  const nearLimit: LimitPrediction = {
+    observedAtIso: "2026-07-18T00:00:00.000Z",
+    fiveHour: { utilization: 0.95, resetAtIso: "2026-07-18T02:00:00.000Z" },
+  };
+  const withPrediction = (p: LimitPrediction | null) => ({
+    readPrediction: () => Promise.resolve(p),
+    now: () => NOW_MS,
+  });
+
+  it("denies a non-snooze tool near-limit, instructing document-and-hold", async () => {
+    const h = io(payload("Read", {}, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(nearLimit) });
+    const out = JSON.parse(h.stdout.text);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("mcp__golem__snooze");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("golem task add");
+  });
+
+  it("is one-shot: the second near-limit call in the same window is not denied", async () => {
+    const first = io(payload("Read", {}, dir));
+    await runPreToolUseHook(first, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+    });
+    expect(JSON.parse(first.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+
+    const second = io(payload("Read", {}, dir));
+    await runPreToolUseHook(second, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+    });
+    expect(second.stdout.text).toBe(""); // one-shot consumed; Read at manual → silent
+  });
+
+  it("exempts the snooze tool itself from the nudge", async () => {
+    const h = io(payload("mcp__golem__snooze", { until: "2026-07-18T02:00:00.000Z" }, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(nearLimit) });
+    expect(h.stdout.text).toBe(""); // not denied — never park the parking call
+  });
+
+  it("does not nudge below the utilization threshold", async () => {
+    const low: LimitPrediction = {
+      observedAtIso: "2026-07-18T00:00:00.000Z",
+      fiveHour: { utilization: 0.5, resetAtIso: "2026-07-18T02:00:00.000Z" },
+    };
+    const h = io(payload("Read", {}, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(low) });
+    expect(h.stdout.text).toBe("");
   });
 });
