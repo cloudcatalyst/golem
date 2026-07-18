@@ -172,6 +172,18 @@ export class GolemProxy {
     // before the first event arrives.
     res.flushHeaders();
 
+    // Limit prediction (snooze P2a): observe the upstream rate-limit headers.
+    // Header-only, never touches the body pipe below — fidelity preserved.
+    // Fire-and-forget; must never throw or delay the response.
+    const onResponseHeaders = this.config.onResponseHeaders;
+    if (onResponseHeaders !== undefined) {
+      try {
+        onResponseHeaders(upstream.headers, forward);
+      } catch {
+        // observe-only — a prediction error can never affect the forwarded response
+      }
+    }
+
     // R1.1: optional read-only usage sniffer (verification-notes §30-37) —
     // only constructed when a consumer is listening, so the byte pipe stays
     // the plain two-stream case by default.
