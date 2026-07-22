@@ -192,11 +192,15 @@ const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 const GOLEM_MCP_TIMEOUT_MS = 23_400_000; // 6.5h
 /**
  * The PreToolUse hook command — the same one `golem autonomy wire` installs. It
- * runs BOTH the autonomy gate (silent at the default `manual` level) and the
- * snooze document-and-hold nudge (P2b). `golem init` wires it so snooze's
- * near-limit redirect is active by default (USER decision 2026-07-18); the
- * autonomy gate stays inert until the level is raised. Matcher-less → fires on
- * every tool call (the nudge/gate self-filter).
+ * runs THREE things (in order): the snooze document-and-hold nudge (P2b), the
+ * coder-first enforcement (Decision 39), and the autonomy gate (Decision 40).
+ * `golem init` wires it so snooze's near-limit redirect is active by default
+ * (USER decision 2026-07-18). NOTE: the autonomy gate is ON by default and, even
+ * at the default `manual` level, forces an `ask` for outward/destructive actions
+ * (ADR-0002) — it is NOT fully silent at `manual`. It is a SEPARATE toggle from
+ * this wiring: `golem autonomy disable` turns the gate off (keeping the snooze +
+ * coder-first nudges). Matcher-less → fires on every tool call (each stage
+ * self-filters).
  */
 const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
 /**

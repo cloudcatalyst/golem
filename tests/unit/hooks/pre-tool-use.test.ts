@@ -198,4 +198,31 @@ describe("runPreToolUseHook", () => {
     await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...guided(true) });
     expect(h.stdout.text).toBe("");
   });
+
+  // --- Autonomy gate enable/disable (Decision 40) ---
+  const gate = (on: boolean) => ({ readGateEnabled: () => Promise.resolve(on) });
+
+  it("forces ask for an outward Bash when the gate is ENABLED (default)", async () => {
+    const h = io(payload("Bash", { command: "git push origin main" }, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...gate(true) });
+    expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("ask");
+  });
+
+  it("does NOT ask for an outward Bash when the gate is DISABLED (allow-list governs)", async () => {
+    const h = io(payload("Bash", { command: "git push origin main" }, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...gate(false) });
+    expect(h.stdout.text).toBe(""); // gate off → emit nothing → native/allow-list governs
+  });
+
+  it("disabling the gate does NOT disable the snooze nudge", async () => {
+    const h = io(payload("Read", {}, dir));
+    await runPreToolUseHook(h, {
+      projectDir: dir,
+      ...level("manual"),
+      ...gate(false),
+      ...withPrediction(nearLimit),
+    });
+    // snooze runs before the gate → still denies near-limit even with the gate off.
+    expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
 });
