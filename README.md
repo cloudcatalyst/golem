@@ -18,6 +18,22 @@ Claude Code is Golem's flagship, most-verified integration — byte-faithful
 proxying, native MCP tools, `/golem/*` skills — with the same pipeline
 designed to extend to other gateways. Native Windows, macOS, and Linux.
 
+## Install
+
+```sh
+# macOS / Linux
+curl -fsSL https://golem.run | sh
+
+# Windows (PowerShell)
+irm https://golem.run | iex
+```
+
+The installer is npm-first: it uses `npm i -g golem-run` when Node ≥ 22 is
+present, and falls back to a self-contained binary (no Node needed) otherwise
+(spec Decision 41). Then run `golem init` in your project. Already have Node?
+`npm i -g golem-run` works directly. Keep current with `golem update` (the VS
+Code extension also surfaces an update prompt). Release process: [RELEASING.md](RELEASING.md).
+
 - **Spec:** [docs/golem-spec.md](docs/golem-spec.md) (source of truth)
 - **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md) · [docs/plan/ROADMAP.md](docs/plan/ROADMAP.md)
 - **Live-doc findings:** [docs/plan/verification-notes.md](docs/plan/verification-notes.md)

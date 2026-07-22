@@ -44,12 +44,34 @@ async function golemJson(args) {
   }
 }
 
+/**
+ * The last `golem update --check --json` result. Polled on a slow cadence (not
+ * every refresh) — the CLI caches the registry answer for 24h, so this only ever
+ * hits the network about once a day; we just avoid spawning it every few seconds.
+ */
+let lastUpdate = null;
+
+async function fetchUpdate() {
+  lastUpdate = await golemJson(["update", "--check", "--json"]);
+}
+
 async function fetchModel() {
   const [stats, status] = await Promise.all([
     golemJson(["stats", "--json"]),
     golemJson(["status", "--json"]),
   ]);
-  return buildModel(stats, status);
+  return buildModel(stats, status, lastUpdate);
+}
+
+/** Run `golem update` in an integrated terminal so the user sees the upgrade. */
+function runUpdate() {
+  const term = vscode.window.createTerminal({ name: "Golem Update", cwd: cwd() });
+  term.show();
+  term.sendText("golem update");
+  // Re-check a little later so the badge clears once the upgrade lands.
+  setTimeout(() => {
+    fetchUpdate().then(refresh);
+  }, 15000);
 }
 
 let nonceCounter = 0;
@@ -75,6 +97,8 @@ class GolemViewProvider {
         await setProxy(true);
       } else if (msg.type === "proxyStop") {
         await setProxy(false);
+      } else if (msg.type === "update") {
+        runUpdate();
       }
     });
     refresh();
@@ -87,6 +111,7 @@ class GolemViewProvider {
 let statusBar;
 let provider;
 let timer;
+let updateTimer;
 /** The most recent model, so the status-bar menu knows whether the proxy is running. */
 let lastModel = null;
 
@@ -107,7 +132,10 @@ async function refresh() {
   if (statusBar) {
     statusBar.text = statusBarText(model);
     const localLine = model.localModelReachable ? "\nInference: local + upstream" : "";
-    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}${localLine}\nClick for actions`;
+    const updateLine = model.updateAvailable
+      ? `\nUpdate available: ${model.currentVersion || "?"} → ${model.latestVersion || "?"}`
+      : "";
+    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}${localLine}${updateLine}\nClick for actions`;
   }
   if (provider) provider.render(model);
 }
@@ -130,6 +158,7 @@ function activate(context) {
       vscode.commands.executeCommand("golem.panel.focus"),
     ),
     vscode.commands.registerCommand("golem.toggleProxy", () => setProxy(!lastModel?.proxyReachable)),
+    vscode.commands.registerCommand("golem.update", runUpdate),
     vscode.commands.registerCommand("golem.setSlider", async () => {
       const pick = await vscode.window.showQuickPick(
         ["0", "1", "2", "3", "4", "5"].map((l) => ({ label: `Level ${l}`, level: Number(l) })),
@@ -151,6 +180,12 @@ function activate(context) {
         { label: "$(window) Open Golem panel", action: "panel" },
         { label: "$(refresh) Refresh", action: "refresh" },
       ];
+      if (lastModel?.updateAvailable) {
+        items.unshift({
+          label: `$(arrow-up) Update Golem (${lastModel.currentVersion || "?"} → ${lastModel.latestVersion || "?"})`,
+          action: "update",
+        });
+      }
       const pick = await vscode.window.showQuickPick(items, {
         placeHolder: `Golem — proxy ${running ? "running" : "stopped"}`,
       });
@@ -158,19 +193,31 @@ function activate(context) {
       if (pick.action === "proxy") await setProxy(!running);
       else if (pick.action === "slider") await vscode.commands.executeCommand("golem.setSlider");
       else if (pick.action === "panel") await vscode.commands.executeCommand("golem.showPanel");
+      else if (pick.action === "update") runUpdate();
       else await refresh();
     }),
   );
 
   const pollSeconds = vscode.workspace.getConfiguration("golem").get("pollSeconds", 5);
   timer = setInterval(refresh, Math.max(2, pollSeconds) * 1000);
-  context.subscriptions.push({ dispose: () => clearInterval(timer) });
+  // Update check: once at startup, then every 6h (the CLI caches for 24h anyway).
+  updateTimer = setInterval(() => {
+    fetchUpdate().then(refresh);
+  }, 6 * 60 * 60 * 1000);
+  context.subscriptions.push({
+    dispose: () => {
+      clearInterval(timer);
+      clearInterval(updateTimer);
+    },
+  });
 
-  refresh();
+  // Prime the update state, then render.
+  fetchUpdate().finally(refresh);
 }
 
 function deactivate() {
   if (timer) clearInterval(timer);
+  if (updateTimer) clearInterval(updateTimer);
 }
 
 module.exports = { activate, deactivate };

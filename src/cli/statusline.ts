@@ -16,10 +16,13 @@
  * "cache slow ops" guidance) so the line can show local+upstream.
  */
 
+import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
+import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { openTelemetryStore } from "../telemetry/index.js";
+import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemDirExists, localModelReachableCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { SLIDER_LEVEL_NAMES } from "./slider.js";
@@ -47,6 +50,8 @@ export interface GolemState {
   readonly proxyRunning?: boolean;
   /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known. */
   readonly localModelReachable?: boolean;
+  /** A newer Golem is known available (from the cached update check), if known. */
+  readonly updateAvailable?: boolean;
 }
 
 /**
@@ -157,6 +162,7 @@ export function renderStatusLine(
   parts.push(`${brand}: ${cyan(levelName(golem.sliderLevel))}`);
   if (golem.proxyRunning === false) parts.push(dim("proxy off"));
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
+  if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
   // Cumulative Golem savings from telemetry.
   const before = golem.tokensBefore ?? 0;
@@ -224,6 +230,16 @@ export async function collectGolemState(
       state = { ...state, localModelReachable: await probe(dir, ollamaBaseUrl) };
     } catch {
       // local-model probe is best-effort; leave the field unknown
+    }
+    // Update indicator: cached-check read only — NEVER a network call on the
+    // per-turn status line. `golem update --check` (or the VS Code poll) refreshes it.
+    try {
+      const cached = await readCachedUpdateCheck(path.join(dir, ".golem", "state"));
+      if (cached?.latest != null && semverGt(cached.latest, VERSION)) {
+        state = { ...state, updateAvailable: true };
+      }
+    } catch {
+      // no cached check yet — leave unknown
     }
   }
   // Is the proxy actually running? Pid-file + kill(pid,0) only — instant, no
