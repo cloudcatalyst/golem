@@ -23,22 +23,38 @@ npm run release -- patch      # or: minor | major | 1.2.3
 This edits both `package.json` files, regenerates `src/version.ts`, and prints
 the remaining steps. It does **not** commit, tag, or publish.
 
-## Cut a release
+## Cut a release (automated)
+
+The [`Release` workflow](.github/workflows/release.yml) fires on a `vX.Y.Z` tag
+and does the rest: it re-runs the CI gate, checks the tag matches
+`package.json`, cross-compiles the standalone binaries with Bun, and creates a
+GitHub Release with the binaries + `SHA256SUMS` attached.
 
 ```sh
 npm run release -- <bump>            # bump the version everywhere
 npm run check                        # lint + typecheck + tests must be green
-npm run build                        # regenerates src/version.ts, compiles dist/
 git commit -am "chore(release): vX.Y.Z"
 git tag vX.Y.Z
+git push && git push --tags          # ← the tag push triggers the Release workflow
 ```
 
-## Publish the npm package (requires `npm login`)
+Re-run manually for an existing tag via **Actions → Release → Run workflow**.
+
+## Publishing (opt-in, via repo secrets)
+
+The workflow also has **optional** publish jobs that stay skipped until you add
+the secrets — nothing is published to npm or the Marketplace without them:
+
+- **`NPM_TOKEN`** (repo → Settings → Secrets → Actions) → the `npm-publish` job
+  runs `npm publish --access public` on tag.
+- **`VSCE_PAT`** (a VS Code Marketplace PAT) → the `vscode-publish` job publishes
+  the extension.
+
+To publish manually instead (requires `npm login`):
 
 ```sh
 npm publish --dry-run                # inspect the tarball contents first
 npm publish                          # publishes golem-run
-git push && git push --tags
 ```
 
 After the first publish, `golem update` and the `curl … | sh` / `irm … | iex`
@@ -46,20 +62,21 @@ installers start working (until then they fail gracefully — Decision 41b).
 
 ## Standalone binaries (no-Node install tier — Decision 41d)
 
-Requires Bun on the build host (see https://bun.sh). Not part of `npm run build`.
+The Release workflow builds these; to build locally you need Bun
+(https://bun.sh) — it is not part of `npm run build`:
 
 ```sh
 npm run build:binary                 # all targets → dist-bin/
 npm run build:binary bun-linux-x64   # a subset
 ```
 
-Upload `dist-bin/golem-<os>-<arch>[.exe]` to wherever `GOLEM_INSTALL_BASE/bin/`
-points (the nginx host in `deploy/nginx/`, or a GitHub Release the nginx `/bin/`
-location redirects to). The install scripts fetch `…/bin/golem-<os>-<arch>`.
+The install scripts fetch `GOLEM_INSTALL_BASE/bin/golem-<os>-<arch>`; the nginx
+`/bin/` location (`deploy/nginx/golem-run.conf`) redirects that to the Release's
+`latest/download/` assets by default, so no binaries live on the nginx box.
 
 > Not yet run end-to-end: no Bun / macOS / Linux hardware was available when this
-> was wired (verification-notes §70). Produce and smoke-test binaries in CI before
-> advertising the binary tier.
+> was wired (verification-notes §70). The first tagged release exercises the
+> binary build in CI — check that run before advertising the binary tier.
 
 ## Publish the VS Code extension (requires a Marketplace PAT)
 
