@@ -16,14 +16,17 @@ account is required.
 - **Activity-bar panel** ("Golem" → *Savings*): big saved-% number, tokens
   before→after, request count, upstream + proxy status, a 0–5 **slider** (click a
   level to change it), and a per-stage savings table.
-- **Status-bar item** (right side): shows the **exact output of `golem statusline`**
-  (e.g. `⬢ Golem: Balanced · saved 8% · →foundry`) — the same one-liner the
-  terminal renders, so the two can never drift. A filled hexagon means the proxy
-  is running; a hollow one + `proxy off` means it's configured but down. Click to
-  focus the panel.
+- **Status-bar item** (right side): a compact presence line,
+  `⬢ Golem · <level> → [local + ]<upstream>` — brand, slider level, and where
+  traffic is fronting (cumulative savings stay in the hover tooltip and panel,
+  not the bar). A filled hexagon (⬢) means the proxy is running; a hollow one (⬡)
+  means it's stopped. When Golem isn't transforming traffic — the proxy is
+  stopped, or running at level 0 (full bypass) — the level reads **Passthrough**.
+  The item is **hidden entirely in non-Golem projects** (those without a
+  `.golem/`), since the extension installs globally. Click to focus the panel.
 
-The panel refreshes every few seconds (`golem.pollSeconds`, default 5) via
-`golem stats --json` / `golem status --json`; the status bar via `golem statusline`.
+The panel and status bar refresh every few seconds (`golem.pollSeconds`,
+default 5) via `golem stats --json` / `golem status --json`.
 
 ## Run it
 
