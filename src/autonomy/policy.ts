@@ -21,8 +21,26 @@ export type AutonomyLevel = (typeof AUTONOMY_LEVELS)[number];
 /** The safe default: approve every step (Golem adds no auto-approval). */
 export const DEFAULT_AUTONOMY_LEVEL: AutonomyLevel = "manual";
 
+/**
+ * Whether the PreToolUse gate is active at all. ON by default (safe): a fresh
+ * project gets the gate. It is a SEPARATE toggle from the hook wiring, because
+ * the PreToolUse hook is now shared with the snooze/coder-first nudges (spec
+ * Decision 38/39) — wiring the hook must not force the gate on anyone who only
+ * wanted snooze. `golem autonomy disable` sets this false (a loud, deliberate
+ * opt-out, like slider level 0 — Decision 30); the nudges keep working.
+ */
+export const DEFAULT_AUTONOMY_GATE_ENABLED = true;
+
 const levelSchema = z.enum(AUTONOMY_LEVELS);
-const fileSchema = z.object({ level: levelSchema, ts: z.string().optional() }).passthrough();
+const fileSchema = z
+  .object({ level: levelSchema, enabled: z.boolean().optional(), ts: z.string().optional() })
+  .passthrough();
+
+/** The persisted autonomy state: the level + whether the gate is active. */
+export interface AutonomyState {
+  readonly level: AutonomyLevel;
+  readonly enabled: boolean;
+}
 
 /** One-line human description of what each level does. */
 export const AUTONOMY_LEVEL_HELP: Readonly<Record<AutonomyLevel, string>> = {
@@ -36,31 +54,73 @@ export function autonomyStatePath(projectDir: string): string {
 }
 
 /**
- * Read the effective level. Missing file → `manual`. A present-but-invalid file
- * ALSO → `manual` (fail closed), never throws.
+ * Read the full state. Missing OR present-but-invalid file → the most
+ * restrictive default (`manual`, gate ENABLED) — fail closed. Never throws.
  */
-export async function readAutonomyLevel(projectDir: string): Promise<AutonomyLevel> {
+export async function readAutonomyState(projectDir: string): Promise<AutonomyState> {
   try {
     const raw = await readFile(autonomyStatePath(projectDir), "utf8");
     const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
     const parsed = fileSchema.safeParse(JSON.parse(stripped));
-    return parsed.success ? parsed.data.level : DEFAULT_AUTONOMY_LEVEL;
+    if (!parsed.success)
+      return { level: DEFAULT_AUTONOMY_LEVEL, enabled: DEFAULT_AUTONOMY_GATE_ENABLED };
+    return {
+      level: parsed.data.level,
+      enabled: parsed.data.enabled ?? DEFAULT_AUTONOMY_GATE_ENABLED,
+    };
   } catch {
-    return DEFAULT_AUTONOMY_LEVEL;
+    return { level: DEFAULT_AUTONOMY_LEVEL, enabled: DEFAULT_AUTONOMY_GATE_ENABLED };
   }
 }
 
-/** Persist a level atomically (temp + rename). Best-effort; throws only on write failure. */
+/**
+ * Read the effective level. Missing file → `manual`. A present-but-invalid file
+ * ALSO → `manual` (fail closed), never throws.
+ */
+export async function readAutonomyLevel(projectDir: string): Promise<AutonomyLevel> {
+  return (await readAutonomyState(projectDir)).level;
+}
+
+/**
+ * Whether the gate is active. Missing/invalid → ON (fail closed to the safe,
+ * most-restrictive state); only an explicit `"enabled": false` turns it off.
+ */
+export async function readAutonomyGateEnabled(projectDir: string): Promise<boolean> {
+  return (await readAutonomyState(projectDir)).enabled;
+}
+
+/** Write the full state atomically (temp + rename). Throws only on write failure. */
+async function writeAutonomyState(
+  projectDir: string,
+  state: AutonomyState,
+  nowIso: string,
+): Promise<void> {
+  const file = autonomyStatePath(projectDir);
+  await mkdir(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  const body = { level: state.level, enabled: state.enabled, ts: nowIso };
+  await writeFile(tmp, `${JSON.stringify(body, null, 2)}\n`, "utf8");
+  await rename(tmp, file);
+}
+
+/** Persist a level, preserving the current gate-enabled flag. */
 export async function writeAutonomyLevel(
   projectDir: string,
   level: AutonomyLevel,
   nowIso: string = new Date().toISOString(),
 ): Promise<void> {
-  const file = autonomyStatePath(projectDir);
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await writeFile(tmp, `${JSON.stringify({ level, ts: nowIso }, null, 2)}\n`, "utf8");
-  await rename(tmp, file);
+  const cur = await readAutonomyState(projectDir);
+  await writeAutonomyState(projectDir, { level, enabled: cur.enabled }, nowIso);
+}
+
+/** Enable/disable the gate, preserving the current level. */
+export async function setAutonomyGateEnabled(
+  projectDir: string,
+  enabled: boolean,
+  nowIso: string = new Date().toISOString(),
+): Promise<void> {
+  const cur = await readAutonomyState(projectDir);
+  await writeAutonomyState(projectDir, { level: cur.level, enabled }, nowIso);
 }
 
 /** Validate a user-supplied level string, or throw a helpful error. */

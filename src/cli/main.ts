@@ -17,7 +17,8 @@ import {
   AUTONOMY_LEVELS,
   parseAutonomyLevel,
   readActionLog,
-  readAutonomyLevel,
+  readAutonomyState,
+  setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
 import { loadConfig, settingsFilePaths } from "../config/index.js";
@@ -1286,14 +1287,23 @@ autonomyCmd
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
-      const level = await readAutonomyLevel(opts.dir);
+      const { level, enabled } = await readAutonomyState(opts.dir);
       if (opts.json) {
         process.stdout.write(
-          `${JSON.stringify({ level, help: AUTONOMY_LEVEL_HELP[level] }, null, 2)}\n`,
+          `${JSON.stringify({ level, enabled, help: AUTONOMY_LEVEL_HELP[level] }, null, 2)}\n`,
         );
         return;
       }
-      process.stdout.write(`autonomy level: ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`);
+      process.stdout.write(
+        `autonomy gate: ${enabled ? "ENABLED" : "DISABLED"} — level ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`,
+      );
+      if (!enabled) {
+        process.stdout.write(
+          "⚠ The gate is OFF: Golem adds no approval prompts; your Claude Code allow-list + " +
+            "native prompts govern every action. Re-enable with `golem autonomy enable`.\n",
+        );
+        return;
+      }
       if (level !== "manual") {
         process.stdout.write(
           `⚠ Golem is auto-approving some steps at level "${level}". Destructive/outward ` +
@@ -1301,7 +1311,42 @@ autonomyCmd
         );
       }
       process.stdout.write(
-        "the gate only takes effect once wired: `golem autonomy wire` (remove: `unwire`).\n",
+        "the gate needs the PreToolUse hook wired (`golem init` does this by default; " +
+          "`golem autonomy wire`/`unwire` toggle it). Turn the gate off without unwiring: " +
+          "`golem autonomy disable`.\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("enable")
+  .description("Turn the autonomy approval gate ON (the default)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      await setAutonomyGateEnabled(opts.dir, true);
+      const { level } = await readAutonomyState(opts.dir);
+      process.stdout.write(
+        `autonomy gate ENABLED — level ${level} — ${AUTONOMY_LEVEL_HELP[level]}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+autonomyCmd
+  .command("disable")
+  .description("Turn the autonomy approval gate OFF (keeps snooze/coder-first nudges)")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (opts: { dir: string }) => {
+    try {
+      await setAutonomyGateEnabled(opts.dir, false);
+      process.stdout.write(
+        "autonomy gate DISABLED — Golem adds no approval prompts; your Claude Code allow-list + " +
+          "native prompts govern. The snooze + coder-first nudges still run. " +
+          "Re-enable with `golem autonomy enable`.\n",
       );
     } catch (err) {
       fail(err);

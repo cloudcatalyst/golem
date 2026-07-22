@@ -14,6 +14,19 @@ updated: 2026-07-16
 enforcement code). This ADR is that threat model; the code lands in the same
 R5.4 change but is designed against these constraints.
 
+> **Amendment (2026-07-22, spec Decision 40).** The gate is no longer "inert by
+> default (manual + not wired)": `golem init` wires the shared PreToolUse hook by
+> default for the snooze nudge (Decision 38), and that hook also runs this gate.
+> Because outward/destructive force an `ask` at *every* level — including
+> `manual` — the gate is effectively active for outward/destructive as soon as
+> the hook is wired. To keep "opted into snooze" from meaning "opted into gate
+> prompts", the gate now has a separate `enabled` flag (`.golem/state/autonomy.json`,
+> ON by default, fail-closed): `golem autonomy disable` turns the *whole* gate
+> off (snooze + coder-first nudges keep running); `enable` restores it. The
+> level semantics and invariants below are unchanged **while the gate is
+> enabled**; disabling is a whole-gate opt-out (like slider level 0, Decision 30),
+> not a per-level loosening.
+
 ## Context
 
 R5.4 adds a directive layer: the user states an *outcome* and Golem drives the
