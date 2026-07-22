@@ -7,7 +7,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
 import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
@@ -15,6 +14,7 @@ import {
   snoozeNudgeStatePath,
   writeSnoozeNudgeState,
 } from "../../../src/hooks/snooze-nudge.js";
+import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
 
 const NOW_MS = Date.parse("2026-07-18T00:00:00.000Z");
 const FUTURE = "2026-07-18T02:00:00.000Z";

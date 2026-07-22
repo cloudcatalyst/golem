@@ -37,7 +37,7 @@ const exists = async (p: string) =>
 describe("guidance feature registry", () => {
   it("covers base defaults (seeded) and opt-in features", () => {
     const byName = new Map(GUIDANCE_FEATURES.map((g) => [g.name, g]));
-    for (const n of ["ccr-refs", "wiki-kb-first", "local-coder", "local-answer"]) {
+    for (const n of ["ccr-refs", "wiki-kb-first", "local-coder", "local-answer", "snooze-hold"]) {
       expect(byName.get(n)?.seededByDefault).toBe(true);
     }
     for (const n of ["prompt-translation", "durable-tasks"]) {

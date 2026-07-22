@@ -19,8 +19,8 @@ import {
   decisionLabel,
   readAutonomyLevel,
 } from "../autonomy/index.js";
-import type { LimitPrediction } from "../proxy/limit-prediction.js";
 import { readLimitState } from "../proxy/index.js";
+import type { LimitPrediction } from "../proxy/limit-prediction.js";
 import type { HookIo } from "./post-tool-use.js";
 import {
   decideSnoozeNudge,
