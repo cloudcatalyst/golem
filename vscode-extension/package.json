@@ -2,30 +2,62 @@
   "name": "golem-vscode",
   "displayName": "Golem",
   "description": "Live Golem token-savings dashboard: compression stats, slider, and proxy status in a VS Code panel.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "golem-run",
-  "engines": { "vscode": "^1.80.0" },
-  "categories": ["Other"],
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other"
+  ],
   "main": "./extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "golem", "title": "Golem", "icon": "media/golem.svg" }
+        {
+          "id": "golem",
+          "title": "Golem",
+          "icon": "media/golem.svg"
+        }
       ]
     },
     "views": {
       "golem": [
-        { "id": "golem.panel", "name": "Savings", "type": "webview" }
+        {
+          "id": "golem.panel",
+          "name": "Savings",
+          "type": "webview"
+        }
       ]
     },
     "commands": [
-      { "command": "golem.showPanel", "title": "Golem: Show Panel" },
-      { "command": "golem.refresh", "title": "Golem: Refresh" },
-      { "command": "golem.setSlider", "title": "Golem: Set Slider Level" },
-      { "command": "golem.toggleProxy", "title": "Golem: Start/Stop Proxy" },
-      { "command": "golem.update", "title": "Golem: Update to Latest" },
-      { "command": "golem.menu", "title": "Golem: Actions Menu" }
+      {
+        "command": "golem.showPanel",
+        "title": "Golem: Show Panel"
+      },
+      {
+        "command": "golem.refresh",
+        "title": "Golem: Refresh"
+      },
+      {
+        "command": "golem.setSlider",
+        "title": "Golem: Set Slider Level"
+      },
+      {
+        "command": "golem.toggleProxy",
+        "title": "Golem: Start/Stop Proxy"
+      },
+      {
+        "command": "golem.update",
+        "title": "Golem: Update to Latest"
+      },
+      {
+        "command": "golem.menu",
+        "title": "Golem: Actions Menu"
+      }
     ],
     "configuration": {
       "title": "Golem",
