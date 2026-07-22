@@ -1,7 +1,7 @@
 name: Release
 
 # Cuts a release when a vX.Y.Z tag is pushed (spec Decision 41d):
-#   1. verify        — the same gate as CI, plus a tag↔package.json version check
+#   1. resolve       — resolve the tag and check it matches package.json (no CI re-run; ci.yml gates main)
 #   2. binaries      — cross-compile all standalone targets with Bun (one host)
 #   3. release       — create/update the GitHub Release and attach the binaries
 #   4. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
