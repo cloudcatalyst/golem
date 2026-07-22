@@ -21,6 +21,14 @@ import {
 } from "../autonomy/index.js";
 import { readLimitState } from "../proxy/index.js";
 import type { LimitPrediction } from "../proxy/limit-prediction.js";
+import {
+  coderFirstNudgeReason,
+  decideCoderFirstNudge,
+  isCodeDraftTarget,
+  readCoderFirstNudgeState,
+  writeCoderFirstNudgeState,
+} from "./coder-first-nudge.js";
+import { guidanceEnabled } from "./guidance.js";
 import type { HookIo } from "./post-tool-use.js";
 import {
   decideSnoozeNudge,
@@ -45,6 +53,8 @@ export interface PreToolUseGateOptions {
   readonly readPrediction?: (projectDir: string) => Promise<LimitPrediction | null>;
   /** Injected clock (epoch ms) for the snooze-nudge one-shot window check. */
   readonly now?: () => number;
+  /** Inject the guidance-active check (tests); default reads `.claude/rules/`. */
+  readonly isGuidanceEnabled?: (projectDir: string, name: string) => Promise<boolean>;
 }
 
 async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
@@ -104,6 +114,32 @@ export async function runPreToolUseHook(
           })}\n`,
         );
         return 0;
+      }
+    }
+
+    // Coder-first enforcement (Decision 39): when the `local-coder` guidance is
+    // active, DENY the first non-trivial hand-written code Write/Edit of a
+    // session and redirect the agent to draft with `coder` first — ONCE per
+    // session. "Enforced if guided": skipped entirely when the guidance is off.
+    const codeTarget = isCodeDraftTarget(toolName, payload.tool_input);
+    if (codeTarget.isCode) {
+      const guided = options.isGuidanceEnabled ?? guidanceEnabled;
+      if (await guided(projectDir, "local-coder")) {
+        const nudgedSession = await readCoderFirstNudgeState(projectDir);
+        const decision = decideCoderFirstNudge(codeTarget, nudgedSession, payload.session_id);
+        if (decision.nudge && decision.sessionKey !== undefined) {
+          await writeCoderFirstNudgeState(projectDir, decision.sessionKey);
+          io.stdout.write(
+            `${JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse",
+                permissionDecision: "deny",
+                permissionDecisionReason: coderFirstNudgeReason(),
+              },
+            })}\n`,
+          );
+          return 0;
+        }
       }
     }
 

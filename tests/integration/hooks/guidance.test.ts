@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   GUIDANCE_FEATURES,
+  guidanceEnabled,
   guidanceFeature,
   guidanceRuleBody,
   guidanceRulePath,
@@ -75,8 +76,42 @@ describe("guidance feature registry", () => {
     expect(snip.toLowerCase()).toContain("never escalate silently");
   });
 
+  it("local-coder names a concrete threshold + the coder-first enforcement", () => {
+    const snip = guidanceFeature("local-coder")?.snippet ?? "";
+    expect(snip).toContain("`coder`");
+    expect(snip).toContain("240"); // concrete non-trivial threshold
+    expect(snip.toLowerCase()).toContain("self-check");
+    expect(snip).toContain("ENFORCES"); // the PreToolUse gate backs the guidance
+    expect(snip).toContain("golem guidance disable local-coder");
+  });
+
   it("returns null for an unknown feature", () => {
     expect(guidanceFeature("nope")).toBeNull();
+  });
+});
+
+describe("guidanceEnabled (presence is the toggle)", () => {
+  it("is false when no rule file exists, true once written (either scope)", async () => {
+    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
+    const f = guidanceFeature("local-coder");
+    if (f === undefined || f === null) throw new Error("expected local-coder");
+    await writeGuidanceRule(projectDir, f, "project");
+    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(true);
+  });
+
+  it("detects the personal (.local.md / user) scope too", async () => {
+    const f = guidanceFeature("local-coder");
+    if (f === undefined || f === null) throw new Error("expected local-coder");
+    await writeGuidanceRule(projectDir, f, "user");
+    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(true);
+  });
+
+  it("goes back to false after the rule is removed", async () => {
+    const f = guidanceFeature("local-coder");
+    if (f === undefined || f === null) throw new Error("expected local-coder");
+    await writeGuidanceRule(projectDir, f, "project");
+    await removeGuidanceRule(projectDir, "local-coder", "both");
+    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
   });
 });
 

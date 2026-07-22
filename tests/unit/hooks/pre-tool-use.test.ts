@@ -156,4 +156,46 @@ describe("runPreToolUseHook", () => {
     await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(low) });
     expect(h.stdout.text).toBe("");
   });
+
+  // --- Coder-first enforcement (Decision 39) ---
+  const bigCode = { file_path: "src/x.ts", content: "x".repeat(400) };
+  const guided = (on: boolean) => ({ isGuidanceEnabled: () => Promise.resolve(on) });
+
+  it("denies the first non-trivial code write when local-coder guidance is active", async () => {
+    const h = io(payload("Write", bigCode, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...guided(true) });
+    const out = JSON.parse(h.stdout.text);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("`coder`");
+  });
+
+  it("is one-shot: the second code write in the same session is not denied by coder-first", async () => {
+    const first = io(payload("Write", bigCode, dir));
+    await runPreToolUseHook(first, { projectDir: dir, ...level("manual"), ...guided(true) });
+    expect(JSON.parse(first.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+
+    const second = io(payload("Write", bigCode, dir));
+    await runPreToolUseHook(second, { projectDir: dir, ...level("manual"), ...guided(true) });
+    // one-shot consumed → falls through to the autonomy gate; a write at manual
+    // level stays silent (defers to native prompt), so no coder-first deny.
+    expect(second.stdout.text).toBe("");
+  });
+
+  it("does NOT enforce coder-first when the guidance is disabled", async () => {
+    const h = io(payload("Write", bigCode, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...guided(false) });
+    expect(h.stdout.text).toBe(""); // guidance off → no enforcement
+  });
+
+  it("does not enforce coder-first on a trivial (small) code write", async () => {
+    const h = io(payload("Write", { file_path: "src/x.ts", content: "x" }, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...guided(true) });
+    expect(h.stdout.text).toBe("");
+  });
+
+  it("does not enforce coder-first on a non-code file", async () => {
+    const h = io(payload("Write", { file_path: "docs/x.md", content: "x".repeat(400) }, dir));
+    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...guided(true) });
+    expect(h.stdout.text).toBe("");
+  });
 });
