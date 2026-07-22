@@ -2,7 +2,7 @@
  * Decision 21c — golem statusline: defensive stdin parsing + pure rendering.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -153,6 +153,27 @@ describe("collectGolemState", () => {
     expect(state.tokensBefore).toBeUndefined();
     expect(state.tokensAfter).toBeUndefined();
     expect(state.blocked).toBeUndefined();
+  });
+
+  it("does not probe or create .golem in a non-Golem project (no .golem dir)", async () => {
+    let probed = false;
+    const state = await collectGolemState(dir, {
+      localReachable: async () => {
+        probed = true;
+        return true;
+      },
+    });
+    // The status line runs in every project; a repo that never opted into Golem
+    // must not be probed, nor gain a `.golem/` folder from the status line.
+    expect(probed).toBe(false);
+    expect(state.localModelReachable).toBeUndefined();
+    await expect(access(path.join(dir, ".golem"))).rejects.toBeDefined();
+  });
+
+  it("probes the local model once the project has a .golem dir", async () => {
+    await mkdir(path.join(dir, ".golem"), { recursive: true });
+    const state = await collectGolemState(dir, { localReachable: async () => true });
+    expect(state.localModelReachable).toBe(true);
   });
 
   describe("proxy running", () => {
