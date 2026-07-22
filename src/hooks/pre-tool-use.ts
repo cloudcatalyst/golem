@@ -17,6 +17,7 @@ import {
   classifyAction,
   decideGate,
   decisionLabel,
+  readAutonomyGateEnabled,
   readAutonomyLevel,
 } from "../autonomy/index.js";
 import { readLimitState } from "../proxy/index.js";
@@ -55,6 +56,8 @@ export interface PreToolUseGateOptions {
   readonly now?: () => number;
   /** Inject the guidance-active check (tests); default reads `.claude/rules/`. */
   readonly isGuidanceEnabled?: (projectDir: string, name: string) => Promise<boolean>;
+  /** Inject the gate-enabled check (tests); default reads `.golem/state/autonomy.json`. */
+  readonly readGateEnabled?: (projectDir: string) => Promise<boolean>;
 }
 
 async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
@@ -142,6 +145,13 @@ export async function runPreToolUseHook(
         }
       }
     }
+
+    // The autonomy gate (ADR-0002) is a SEPARATE toggle from the shared hook:
+    // enabled by default, but `golem autonomy disable` turns it off without
+    // losing the snooze/coder-first nudges above. Disabled → emit nothing, so
+    // Claude Code's native permission flow (allow-list + prompts) governs.
+    const gateEnabled = await (options.readGateEnabled ?? readAutonomyGateEnabled)(projectDir);
+    if (!gateEnabled) return 0;
 
     const readLevel = options.readLevel ?? readAutonomyLevel;
     const level = await readLevel(projectDir);
