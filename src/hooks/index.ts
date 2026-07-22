@@ -34,6 +34,7 @@ export {
   GUIDANCE_FEATURES,
   type GuidanceFeature,
   type GuidanceScope,
+  guidanceEnabled,
   guidanceFeature,
   guidanceRuleBody,
   guidanceRulePath,
