@@ -22,10 +22,23 @@ function upstreamLabel(url) {
   }
 }
 
-/** Build the view model from `golem stats --json` and `golem status --json`. */
-function buildModel(stats, status) {
+/**
+ * Build the view model from `golem stats --json`, `golem status --json`, and
+ * (optionally) `golem update --check --json`. The update arg wins; otherwise we
+ * fall back to the `update` block `golem status` embeds from its cached check.
+ */
+function buildModel(stats, status, update) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
+  // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
+  // `golem status --json`.update → {available,latest,current}.
+  const up =
+    (update && typeof update === "object" && update) ||
+    (st.update && typeof st.update === "object" && st.update) ||
+    null;
+  const updateAvailable = !!(up && (up.updateAvailable === true || up.available === true));
+  const latestVersion = up && up.latest ? String(up.latest) : null;
+  const currentVersion = up && up.current ? String(up.current) : st.version ? String(st.version) : null;
   const before = Number(s.tokens_before) || 0;
   const after = Number(s.tokens_after) || 0;
   const savedPct = before > 0 && after <= before ? Math.round(((before - after) / before) * 100) : 0;
@@ -63,6 +76,9 @@ function buildModel(stats, status) {
     proxyReachable: !!(st.proxy && st.proxy.reachable),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
     source: typeof s.source === "string" ? s.source : "live",
+    updateAvailable,
+    latestVersion,
+    currentVersion,
   };
 }
 
@@ -87,14 +103,17 @@ function buildModel(stats, status) {
  */
 function statusBarText(model) {
   const glyph = model.proxyReachable ? "⬢" : "⬡";
-  if (!model.proxyReachable) return `${glyph} Golem · proxy off`;
+  // The update nudge shows regardless of proxy state — it's about the install,
+  // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
+  const badge = model.updateAvailable ? " $(arrow-up)" : "";
+  if (!model.proxyReachable) return `${glyph} Golem · proxy off${badge}`;
   const levelLabel = model.sliderName
     ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
     : `L${model.slider}`;
   const destination = model.localModelReachable
     ? `local + ${model.upstreamLabel}`
     : model.upstreamLabel;
-  return `${glyph} Golem · ${levelLabel} → ${destination}`;
+  return `${glyph} Golem · ${levelLabel} → ${destination}${badge}`;
 }
 
 function esc(s) {
@@ -161,6 +180,13 @@ function renderHtml(model, nonce) {
   </span></div>
   <div class="row"><span>Upstream</span><span class="pill">${esc(model.upstreamLabel)}</span></div>
   <div class="row"><span>Stats source</span><span class="sub">${esc(model.source)}</span></div>
+  <div class="row"><span>Version</span><span>${
+    model.updateAvailable
+      ? `<span class="warn">${esc(model.currentVersion || "")} → ${esc(
+          model.latestVersion || "",
+        )}</span><button class="toggle" id="updateBtn">Update</button>`
+      : `<span class="sub">${esc(model.currentVersion || "unknown")}</span>`
+  }</span></div>
 
   <h2>Slider (level ${model.slider}${model.sliderName ? ` · ${esc(model.sliderName)}` : ""})</h2>
   <div>${sliderButtons}</div>
@@ -177,6 +203,8 @@ function renderHtml(model, nonce) {
     }
     const pt = document.getElementById('proxyToggle');
     if (pt) pt.addEventListener('click', () => vscode.postMessage({ type: pt.dataset.running === '1' ? 'proxyStop' : 'proxyStart' }));
+    const ub = document.getElementById('updateBtn');
+    if (ub) ub.addEventListener('click', () => vscode.postMessage({ type: 'update' }));
   </script>
 </body></html>`;
 }

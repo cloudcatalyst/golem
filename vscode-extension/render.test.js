@@ -115,6 +115,65 @@ test("statusBarText — local segment appears whenever a local model is reachabl
   );
 });
 
+test("buildModel reads update state from the explicit update arg", () => {
+  const m = buildModel({}, {}, { updateAvailable: true, latest: "0.2.0", current: "0.1.0" });
+  assert.equal(m.updateAvailable, true);
+  assert.equal(m.latestVersion, "0.2.0");
+  assert.equal(m.currentVersion, "0.1.0");
+});
+
+test("buildModel falls back to status.update when no explicit update arg", () => {
+  // `golem status --json` embeds {available,latest,current} (note: `available`).
+  const status = { update: { available: true, latest: "1.3.0", current: "1.2.0" } };
+  const m = buildModel({}, status);
+  assert.equal(m.updateAvailable, true);
+  assert.equal(m.latestVersion, "1.3.0");
+});
+
+test("buildModel: no update info → not available", () => {
+  const m = buildModel({}, {});
+  assert.equal(m.updateAvailable, false);
+  assert.equal(m.latestVersion, null);
+});
+
+test("statusBarText appends the update codicon only when an update is available", () => {
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic", updateAvailable: true }),
+    "⬢ Golem · L1 → anthropic $(arrow-up)",
+  );
+  // Shows even when the proxy is off (it's about the install, not the traffic).
+  assert.equal(
+    statusBarText({ proxyReachable: false, updateAvailable: true }),
+    "⬡ Golem · proxy off $(arrow-up)",
+  );
+  // Absent when up to date.
+  assert.doesNotMatch(
+    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic" }),
+    /arrow-up/,
+  );
+});
+
+test("renderHtml shows an Update button when available and escapes versions", () => {
+  const up = renderHtml(
+    buildModel({}, {}, { updateAvailable: true, latest: "0.2.0", current: "0.1.0" }),
+    "nu1",
+  );
+  assert.match(up, /id="updateBtn">Update</);
+  assert.match(up, /0\.1\.0/);
+  assert.match(up, /0\.2\.0/);
+
+  const evil = renderHtml(
+    buildModel({}, {}, { updateAvailable: true, latest: "<b>x</b>", current: "0.1.0" }),
+    "nu2",
+  );
+  assert.doesNotMatch(evil, /<b>x<\/b>/);
+  assert.match(evil, /&lt;b&gt;x&lt;\/b&gt;/);
+
+  // No button when up to date.
+  const same = renderHtml(buildModel({}, { version: "0.1.0" }), "nu3");
+  assert.doesNotMatch(same, /id="updateBtn"/);
+});
+
 test("renderHtml contains CSP nonce, slider buttons, and escapes", () => {
   const html = renderHtml(buildModel({ tokens_before: 100, tokens_after: 50 }, {}), "abc123");
   assert.match(html, /nonce-abc123/);

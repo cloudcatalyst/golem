@@ -23,7 +23,10 @@
     "vscode-extension/media"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "sync-version": "node scripts/sync-version.mjs",
+    "build": "node scripts/sync-version.mjs && tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
+    "build:binary": "node scripts/build-binary.mjs",
+    "release": "node scripts/release.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write .",

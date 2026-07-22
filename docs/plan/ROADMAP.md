@@ -123,6 +123,19 @@ Decision 21b **companion app** the user has explicitly deferred.
 | R6.3 | Remote steering / permission-granting — companion app + locally-hosted web (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
 | R6.4 | Cost-governance benchmarks vs Claude's cost doc (continuous once picked up). | 🛠️ | 21f |
 
+### R7 — Distribution, versioning & self-update — 🛠️ IN PROGRESS (2026-07-22)
+The golem.run onboarding one-liner + how installs stay current (spec Decision 41,
+verification-notes §70). Not on hold — active, npm-first, Bun standalone as the
+no-Node fallback. Sequenced as separate PRs.
+
+| # | Task | Type | Source |
+|---|---|---|---|
+| R7.1 | Version single source of truth — `sync-version.mjs` → `src/version.ts` from `package.json`; `release.mjs` bumps both package.jsons in lockstep. | 🛠️ | Dec 41a |
+| R7.2 | Tiered install scripts (`install/install.sh` + `.ps1`, npm→binary→Node bootstrap) + nginx UA-sniffing config (`deploy/nginx/golem-run.conf`). | 🛠️ | Dec 41b/41c |
+| R7.3 | Standalone binary via `bun build --compile` (`scripts/build-binary.mjs`) + CI release workflow. Local build unverified (no Bun/mac/linux in-session). | 🛠️🔬 | Dec 41d |
+| R7.4 | Self-update: `golem update [--check --json]` (install-method aware) + `updateAvailable` in status/statusline + extension status-bar badge & `golem.update`. | 🛠️ | Dec 41e |
+| R7.5 | First `npm publish` + Marketplace publish + tag `v0.1.0` (USER-triggered; machinery + `RELEASING.md` shipped, publish deferred to the user). | 🚀 | Dec 41 |
+
 ---
 
 ## Concentrated decision/research backlog

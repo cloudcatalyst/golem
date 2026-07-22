@@ -1,6 +1,7 @@
 # Node
 node_modules/
 dist/
+dist-bin/
 *.tsbuildinfo
 npm-debug.log*
 
@@ -10,7 +11,10 @@ npm-debug.log*
 # Coverage
 coverage/
 
-# Golem local state
+# Golem local state (repo root + any nested .golem/, e.g. under vscode-extension/)
+**/.golem/state/
+**/.golem/telemetry/
+**/.golem/knowledge/
 .golem/settings.local.json
 .golem/proxy.pid
 .golem/state/

@@ -13,6 +13,7 @@
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
+import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { probeAndCacheLocalModel } from "./local-model.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
@@ -55,6 +56,15 @@ export interface StatusReport {
    */
   readonly local_model: {
     readonly reachable: boolean;
+  };
+  /**
+   * Update status, from the LAST cached `golem update --check` (read-only, no
+   * network here — status must never hang). Absent until a check has run.
+   */
+  readonly update?: {
+    readonly available: boolean;
+    readonly current: string;
+    readonly latest: string | null;
   };
   readonly warnings: readonly string[];
 }
@@ -122,6 +132,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     localProbe(projectDir, settings.inference.ollama_base_url).catch(() => false),
   ]);
 
+  // Update status from the cached check only (no network — never hang status).
+  // Recompute "available" against the version we're actually running.
+  const cachedUpdate = await readCachedUpdateCheck(path.join(projectDir, ".golem", "state"));
+
   const config: Record<string, ConfigKeyStatus> = {};
   for (const [dotted, entry] of Object.entries(provenance)) {
     const [section, key] = dotted.split(".", 2) as [string, string];
@@ -151,8 +165,30 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     slider: sliderJson(slider),
     config,
     local_model: { reachable: localReachable },
-    warnings: slider.level === 0 ? [...warnings, REDACTION_OFF_WARNING] : warnings,
+    ...(cachedUpdate !== null
+      ? {
+          update: {
+            available:
+              cachedUpdate.latest !== null && semverGt(cachedUpdate.latest, options.version),
+            current: options.version,
+            latest: cachedUpdate.latest,
+          },
+        }
+      : {}),
+    warnings:
+      cachedUpdate?.latest != null && semverGt(cachedUpdate.latest, options.version)
+        ? [...updateWarnings(cachedUpdate.latest, slider.level), ...warnings]
+        : slider.level === 0
+          ? [...warnings, REDACTION_OFF_WARNING]
+          : warnings,
   };
+}
+
+/** Warning lines when a newer version is known (plus the level-0 redaction one). */
+function updateWarnings(latest: string, sliderLevel: number): string[] {
+  const w = [`A newer Golem is available (${latest}). Run \`golem update\`.`];
+  if (sliderLevel === 0) w.push(REDACTION_OFF_WARNING);
+  return w;
 }
 
 /** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
@@ -198,6 +234,13 @@ export function renderStatus(report: StatusReport): string {
   // Inference topology: a reachable local model makes Golem local+upstream —
   // available via the `coder` MCP tool at any level (Decision 30/31).
   lines.push(`Inference: ${report.local_model.reachable ? "local + upstream" : "upstream only"}`);
+  if (report.update !== undefined) {
+    lines.push(
+      report.update.available
+        ? `Update: ${report.update.current} → ${report.update.latest} available (run \`golem update\`)`
+        : `Update: up to date (${report.update.current})`,
+    );
+  }
   lines.push("");
 
   lines.push("Config (value — layer):");

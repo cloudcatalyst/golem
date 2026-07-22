@@ -24,6 +24,7 @@
       { "command": "golem.refresh", "title": "Golem: Refresh" },
       { "command": "golem.setSlider", "title": "Golem: Set Slider Level" },
       { "command": "golem.toggleProxy", "title": "Golem: Start/Stop Proxy" },
+      { "command": "golem.update", "title": "Golem: Update to Latest" },
       { "command": "golem.menu", "title": "Golem: Actions Menu" }
     ],
     "configuration": {
