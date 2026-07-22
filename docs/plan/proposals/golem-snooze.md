@@ -1,5 +1,14 @@
 # Proposal: Golem snooze — park a live session until the usage limit resets
 
+> **Status: SHIPPED (2026-07-22), spec Decision 38.** Landed across PRs #10–#16
+> (snooze MCP tool, limit-prediction observability, document-and-hold PreToolUse
+> trigger, on-by-default activation). Kept as the verified design record; the
+> authoritative entry is Decision 38 in `docs/golem-spec.md`. One item remains
+> unautomatable: confirm quota actually restores for the next turn after a real
+> reset mid-session.
+>
+> _Original proposal below._
+>
 > **Status: PROPOSED (2026-07-18), spike-first.** The in-place successor to the
 > abandoned auto-resume (Decision 37). Auto-resume couldn't deliver "resume in my
 > open session" because a proxy can't drive Claude Code's interactive TUI; the
