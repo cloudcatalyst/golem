@@ -10,7 +10,7 @@
  * turn (the doc's "cache slow ops" guidance, verification-notes §28).
  */
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 export interface LocalModelState {
@@ -23,6 +23,22 @@ export const LOCAL_CACHE_TTL_MS = 60_000;
 
 export function localModelCachePath(projectDir: string): string {
   return join(projectDir, ".golem", "state", "local-model.json");
+}
+
+/**
+ * True iff `<projectDir>/.golem` already exists — i.e. the project opted into
+ * Golem (`golem init` creates it). The status line runs in EVERY Claude Code
+ * project (it may be a global `statusLine`), so best-effort writers must gate on
+ * this: never bootstrap a `.golem/` folder in a repo that never used Golem.
+ * Cheap single stat; never throws.
+ */
+export async function golemDirExists(projectDir: string): Promise<boolean> {
+  try {
+    await access(join(projectDir, ".golem"));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Bounded, never-throwing probe of an Ollama-style endpoint. */
@@ -53,6 +69,10 @@ export async function readLocalModelCache(projectDir: string): Promise<LocalMode
 }
 
 export async function writeLocalModelCache(projectDir: string, reachable: boolean): Promise<void> {
+  // Never create `.golem/` from a best-effort cache write. Only write when the
+  // project already opted into Golem (has `.golem/`); otherwise the status line —
+  // which runs in every project — would litter non-Golem repos with a `.golem/`.
+  if (!(await golemDirExists(projectDir))) return;
   const path = localModelCachePath(projectDir);
   try {
     await mkdir(dirname(path), { recursive: true });

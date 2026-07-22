@@ -20,7 +20,7 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { openTelemetryStore } from "../telemetry/index.js";
-import { localModelReachableCached } from "./local-model.js";
+import { golemDirExists, localModelReachableCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { SLIDER_LEVEL_NAMES } from "./slider.js";
 
@@ -213,11 +213,18 @@ export async function collectGolemState(
     // defaults
   }
   let state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
-  try {
-    const probe = opts.localReachable ?? localModelReachableCached;
-    state = { ...state, localModelReachable: await probe(dir, ollamaBaseUrl) };
-  } catch {
-    // local-model probe is best-effort; leave the field unknown
+  // Only probe the local model in a Golem project. The status line may be a
+  // global Claude Code `statusLine` that runs in every project; probing (which
+  // also caches to `.golem/state/`) unconditionally would both waste a per-turn
+  // localhost round-trip and create a `.golem/` folder in repos that never
+  // opted into Golem (reported 2026-07-22).
+  if (await golemDirExists(dir)) {
+    try {
+      const probe = opts.localReachable ?? localModelReachableCached;
+      state = { ...state, localModelReachable: await probe(dir, ollamaBaseUrl) };
+    } catch {
+      // local-model probe is best-effort; leave the field unknown
+    }
   }
   // Is the proxy actually running? Pid-file + kill(pid,0) only — instant, no
   // network probe (the status line runs on every turn).
