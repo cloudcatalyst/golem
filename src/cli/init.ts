@@ -191,6 +191,15 @@ const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
  */
 const GOLEM_MCP_TIMEOUT_MS = 23_400_000; // 6.5h
 /**
+ * The PreToolUse hook command — the same one `golem autonomy wire` installs. It
+ * runs BOTH the autonomy gate (silent at the default `manual` level) and the
+ * snooze document-and-hold nudge (P2b). `golem init` wires it so snooze's
+ * near-limit redirect is active by default (USER decision 2026-07-18); the
+ * autonomy gate stays inert until the level is raised. Matcher-less → fires on
+ * every tool call (the nudge/gate self-filter).
+ */
+const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
+/**
  * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`
  * (user decision 2026-07-16). Committed, team-wide, auto-loaded every session;
  * Golem never edits the user's CLAUDE.md. See src/hooks/guidance.ts.
@@ -657,6 +666,9 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   actions.push(
     await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
   );
+  // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
+  // default `manual` level). See PRE_TOOL_USE_HOOK_COMMAND.
+  actions.push(await addEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
 
   // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
   // capture every fetch into the KB (non-blocking post-capture) — §44.
@@ -963,6 +975,9 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
   actions.push(
     await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
+  );
+  actions.push(
+    await removeEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
   );
 
   // 5b. Remove the WebFetch KB-cache hooks + the SessionStart auto-start hook.

@@ -85,6 +85,14 @@
             "async": false
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "golem hook pre-tool-use"
+          }
+        ]
       }
     ],
     "SessionStart": [
