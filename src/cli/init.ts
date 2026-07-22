@@ -668,9 +668,7 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   );
   // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
   // default `manual` level). See PRE_TOOL_USE_HOOK_COMMAND.
-  actions.push(
-    await addEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
-  );
+  actions.push(await addEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
 
   // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
   // capture every fetch into the KB (non-blocking post-capture) — §44.

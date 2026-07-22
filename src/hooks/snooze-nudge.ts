@@ -93,10 +93,7 @@ export async function readSnoozeNudgeState(projectDir: string): Promise<string |
 }
 
 /** Record the reset we just nudged for (atomic temp+rename in the state dir). */
-export async function writeSnoozeNudgeState(
-  projectDir: string,
-  resetAtIso: string,
-): Promise<void> {
+export async function writeSnoozeNudgeState(projectDir: string, resetAtIso: string): Promise<void> {
   const file = snoozeNudgeStatePath(projectDir);
   await mkdir(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;

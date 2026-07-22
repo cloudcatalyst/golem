@@ -108,7 +108,11 @@ describe("runPreToolUseHook", () => {
 
   it("denies a non-snooze tool near-limit, instructing document-and-hold", async () => {
     const h = io(payload("Read", {}, dir));
-    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(nearLimit) });
+    await runPreToolUseHook(h, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+    });
     const out = JSON.parse(h.stdout.text);
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("mcp__golem__snooze");
@@ -135,7 +139,11 @@ describe("runPreToolUseHook", () => {
 
   it("exempts the snooze tool itself from the nudge", async () => {
     const h = io(payload("mcp__golem__snooze", { until: "2026-07-18T02:00:00.000Z" }, dir));
-    await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...withPrediction(nearLimit) });
+    await runPreToolUseHook(h, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+    });
     expect(h.stdout.text).toBe(""); // not denied — never park the parking call
   });
 
