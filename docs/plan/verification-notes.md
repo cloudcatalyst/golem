@@ -2434,3 +2434,70 @@ catch-up (all files look "changed"); then a no-op run is **1.4 s** (was ~6–7 m
 and a single-file edit syncs in **3.7 s** (3 chunks). Full suite green (1036);
 core incremental logic already covered by `tests/unit/cli/auto-index.test.ts` +
 `tests/integration/knowledge-incremental.test.ts`.
+
+## §70 — Distribution, versioning & self-update facts (2026-07-22, for Decision 41)
+
+Verified ahead of building the one-line installer, standalone binary, and
+self-update (Decision 41). Local toolchain at time of writing: Node **v24.13.1**,
+npm **11.12.1**, Bun **not installed** on this Windows dev box, OS
+MINGW64_NT-10.0-26200.
+
+**1. npm publish status.** `npm view golem-run` and `npm view golem-vscode` both
+return **E404 — not found** (2026-07-22). Neither the CLI package nor the VS Code
+extension has ever been published. So the `curl … | sh` / `irm … | iex` one-liner
+has nothing to install until the first `npm publish`; the installer must fail
+gracefully (clear "not yet published" message) until then, and the self-update
+registry check must tolerate a 404 as "no releases yet," not error.
+
+**2. User-Agent strings for the nginx content-negotiation `map`.** Confirmed
+behaviour (Microsoft docs + curl/wget defaults):
+- `curl` sends `curl/<ver>` (e.g. `curl/8.x`); `wget` sends `Wget/<ver>`.
+- PowerShell `Invoke-RestMethod`/`Invoke-WebRequest` (what `irm` is) sends a UA
+  that **always contains the substring "PowerShell"**: Windows PowerShell 5.1 →
+  `Mozilla/5.0 (Windows NT …) WindowsPowerShell/5.1.<build>`; PowerShell 7+
+  (pwsh) → `Mozilla/5.0 (Windows NT …) PowerShell/7.<x>`. Both include
+  `Mozilla/5.0`, so the map MUST test for `powershell` **before** any generic
+  `Mozilla` browser rule.
+- Browsers send `Mozilla/5.0 … AppleWebKit/… Chrome/… Safari/…` with **no**
+  "PowerShell"/"curl"/"wget" token → fall through to the HTML landing page.
+- Design: case-insensitive `map $http_user_agent`: `~*powershell → install.ps1`,
+  `~*(curl|wget|libcurl|fetch|httpie) → install.sh`, `default → landing`. Explicit
+  `/install.ps1` and `/install.sh` paths remain as an unambiguous fallback.
+
+**3. Bun `bun build --compile` (https://bun.com/docs/bundler/executables,
+fetched 2026-07-22).** Cross-compile targets we care about:
+`bun-windows-x64`, `bun-windows-arm64`, `bun-darwin-x64`, `bun-darwin-arm64`,
+`bun-linux-x64`, `bun-linux-arm64` (plus `-baseline`/`-modern`/`-musl` variants).
+Notes that shape our build:
+- `--define VERSION='"x.y.z"'` inlines a build-time constant → the binary can
+  report its version without reading package.json (which `--compile` does NOT
+  autoload at runtime by default).
+- The Bun runtime is always baked in; `--target=node` is unsupported. So the
+  binary carries Bun, not Node — behaviour parity with our Node build must be
+  covered by the e2e smoke, not assumed.
+- `.wasm` and `.node` embed only via explicit `with { type: "file" }` import
+  attributes. Our only WASM path is the **optional** `web-tree-sitter`
+  syntax-aware chunker (devDep, off by default) — it will NOT be embedded, so the
+  standalone binary silently lacks syntax-aware chunking (degrades to the default
+  chunker, acceptable). Flag if syntax-aware chunking ever becomes default.
+- Windows metadata flags (`--windows-icon`, version props) can't be used when
+  **cross**-compiling — set those only on a native Windows build runner.
+- **NOT YET RUN:** no Bun on this box and no macOS/Linux hardware in-session, so
+  the actual compiled binaries are produced + smoke-tested only in CI (release
+  workflow). Treat the standalone channel as build-wired-but-unverified-locally
+  until a release run is green (precedent: the non-Windows Ollama rows, §
+  r1.6-ollama-verification-blocked).
+
+**4. Single source of truth for version.** `VERSION` is hardcoded in
+`src/index.ts` (`"0.1.0"`), duplicated in `package.json` and
+`vscode-extension/package.json`. Plan: `package.json` is canonical; a build-time
+`scripts/sync-version.mjs` generates `src/version.ts` from it (re-exported by
+`src/index.ts`); a `scripts/release.mjs` bumps both package.json files in lockstep.
+
+**5. VS Code extension self-update.** VS Code auto-updates Marketplace-installed
+extensions; there is no supported API for an extension to update *itself*. The
+extension's job (Decision 41) is therefore to surface the **CLI** update state it
+already has cheap access to (it shells `golem … --json` every poll): call
+`golem update --check --json`, and on `updateAvailable` show a status-bar badge +
+a `golem.update` command that runs the upgrade in an integrated terminal. The
+extension binary keeps updating via the Marketplace as normal.
