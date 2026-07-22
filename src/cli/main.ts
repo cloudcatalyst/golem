@@ -17,7 +17,6 @@ import {
   AUTONOMY_LEVELS,
   parseAutonomyLevel,
   readActionLog,
-  readAutonomyLevel,
   readAutonomyState,
   setAutonomyGateEnabled,
   writeAutonomyLevel,
