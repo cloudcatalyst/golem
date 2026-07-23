@@ -180,12 +180,16 @@ response-transform seam, then Gemini. Sliced b1→b4.
   `openai` provider (bearer key via `GOLEM_UPSTREAM_API_KEY`, `upstream_base_url`
   + `upstream_model`). Provider wiring locked with tests. OpenAI emits native
   `tool_calls`, so it live-verifies b3's tool path (a user-side check with a key).
-- **b4-gemini: NEXT, checkpoint-gated.** Gemini is a full SECOND translator
-  (different schema: `contents`/`parts`/`functionCall`, `role:"model"`) plus a
-  proxy-seam extension (query-param `?key=` auth + dynamic model-in-path /
-  `alt=sse`, which `mapUpstreamHeaders` can't do). API verified (§77); not
-  live-testable in-session. Recommend confirming before building (size + seam
-  change + no live test). **Case (b) core — OpenAI + Ollama — is complete.**
+- **b4-gemini: DONE 2026-07-23** (debrief `2026-07-23-R6.1b4-gemini.md`). Full
+  Gemini `generateContent` translator (`src/providers/gemini-{translate,stream}.ts`):
+  request/response/streaming + tools (`tool_use`↔`functionCall`,
+  `tool_result`↔`functionResponse`). Seam extended with a per-request `path`
+  override so Gemini's query-param `?key=` auth + model-in-path + `alt=sse` work
+  (OpenAI unaffected). Provider `gemini` wired. Unit- + proxy-integration-verified
+  (path override + round-trip); **not live-tested** (no Gemini key). §77.
+- **Case (b) COMPLETE: OpenAI, Ollama (local/LAN), Gemini.** R6.1 case (a) +
+  case (b) both shipped; the only R6.1 remainder is live end-to-end checks with
+  real cloud credentials (user-side).
 
 ---
 

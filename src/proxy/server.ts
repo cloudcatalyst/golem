@@ -169,7 +169,7 @@ export class GolemProxy {
     let requestHeaders = upstreamHeaders;
     let translateStreaming = false;
     if (translate !== undefined) {
-      let translated: { body: Buffer; stream: boolean };
+      let translated: { body: Buffer; stream: boolean; path?: string };
       try {
         translated = translate.translateRequest(forward.body);
       } catch (err) {
@@ -182,7 +182,7 @@ export class GolemProxy {
       }
       requestBody = translated.body;
       translateStreaming = translated.stream;
-      requestPath = translate.path;
+      requestPath = translated.path ?? translate.path;
       requestHeaders = { ...upstreamHeaders, "content-type": "application/json" };
     }
 
