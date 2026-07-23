@@ -2626,3 +2626,32 @@ search of Microsoft Learn + MS Community Hub on Azure Foundry.
 - **Cross-check needed at build time:** does Azure Foundry Claude honour Anthropic
   prompt-cache `cache_control` blocks the same way? Unverified here — treat as
   caching until measured (fail-safe: no semantic rewrite, byte-faithful).
+
+## §74 — R6.1 case (b) b1: OpenAI-schema translation LIVE-verified against Ollama (2026-07-23)
+
+Unlike case (a), the OpenAI-schema translation is live-testable with no cloud
+credential — Ollama's OpenAI-compatible endpoint runs locally. Ran a real
+`GolemProxy` (translating provider wiring) against `http://localhost:11434/v1`
+with `qwen2.5-coder:7b`:
+
+- **Request:** `POST /v1/messages` with an Anthropic body (`model:
+  claude-sonnet-4-5`, `max_tokens:64`, one user message). The proxy translated it
+  to an OpenAI Chat Completions body (`stream:false`, model overridden to
+  `qwen2.5-coder:7b`) and POSTed to `/v1/chat/completions`.
+- **Response:** HTTP 200, a well-formed **Anthropic Messages** object —
+  `{type:"message", role:"assistant", model:"qwen2.5-coder:7b",
+  content:[{type:"text", text:"PONG"}], stop_reason:"end_turn",
+  usage:{input_tokens:37, output_tokens:3}}`. The model id is the **real serving
+  model**, never a `claude-*` name (honesty rail).
+- **Confirms:** the response-transform seam (buffer → translate → write Anthropic
+  JSON) works end-to-end on a real backend; the non-streaming path is sound.
+  Ollama returns real `usage`, so token accounting survives translation.
+- **b1 scope limits (by design, next slices):** NON-STREAMING only — `stream` is
+  forced off, so a real Claude Code client (which sends `stream:true`) is not yet
+  served; that is **b2** (Anthropic SSE ↔ OpenAI deltas). Text content only;
+  tool-use mapping is **b3**. OpenAI/Gemini cloud providers are later slices
+  (Gemini has its own schema; OpenAI reuses this exact translator + a `bearer`
+  key via `GOLEM_UPSTREAM_API_KEY`).
+- **Model override is required** for translating providers: Claude Code sends a
+  `claude-*` model Ollama lacks, so `proxy.upstream_model` (e.g. `qwen2.5-coder:7b`)
+  overrides it; the proxy warns at startup if it is unset.

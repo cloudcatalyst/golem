@@ -157,10 +157,16 @@ non-caching. Anthropic default path byte-identical (no mapper); +14 tests, 1184
 green. **Live-unverified** — no real Azure Foundry / OpenRouter credentials
 in-session (a user-side end-to-end check remains, like R7.3's binaries).
 
-**Case (b): NEXT** — per the user's actual goal (2026-07-23): OpenAI/ChatGPT +
+**Case (b): IN PROGRESS** — per the user's goal (2026-07-23): OpenAI/ChatGPT +
 Ollama (local & LAN) via one OpenAI-Chat-Completions adapter + the
-response-transform seam, then Gemini. The high-scrutiny build; Anthropic path
-must stay untouched (recorded-shape tests).
+response-transform seam, then Gemini. Sliced b1→b4.
+- **b1 DONE 2026-07-23** (debrief `2026-07-23-R6.1b1.md`): non-streaming
+  Anthropic↔OpenAI translation + the `translateUpstream` proxy seam (the only
+  path that parses a response body; Anthropic path stays a raw pipe); providers
+  `openai`/`ollama`, `proxy.upstream_model`. **Live-verified against local
+  Ollama** (verification-notes §74). +12 tests, 1196 green.
+- **b2 (SSE streaming), b3 (tool-use mapping), b4 (OpenAI/Gemini cloud): NEXT.**
+  Anthropic path must stay untouched (recorded-shape tests).
 
 ---
 
