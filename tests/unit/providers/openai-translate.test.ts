@@ -40,7 +40,7 @@ describe("anthropicToOpenAIChat", () => {
     ]);
   });
 
-  it("flattens content blocks to text (b1 best-effort for tool_result)", () => {
+  it("splits a user turn's text and tool_result into separate messages (b3)", () => {
     const out = anthropicToOpenAIChat(
       buf({
         model: "m",
@@ -55,7 +55,12 @@ describe("anthropicToOpenAIChat", () => {
         ],
       }),
     );
-    expect(out.messages[0]).toEqual({ role: "user", content: "line one\ntool said x" });
+    // tool_result → role:tool (emitted first, answering the prior tool call);
+    // text → role:user.
+    expect(out.messages).toEqual([
+      { role: "tool", tool_call_id: "t1", content: "tool said x" },
+      { role: "user", content: "line one" },
+    ]);
   });
 
   it("uses the request model when no override is given", () => {
@@ -122,5 +127,115 @@ describe("openAIChatToAnthropic", () => {
 
   it("throws on a response with no choices", () => {
     expect(() => openAIChatToAnthropic(buf({ choices: [] }), fallback)).toThrow();
+  });
+
+  it("maps response tool_calls to Anthropic tool_use blocks (b3)", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        id: "c1",
+        model: "m",
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                { id: "call_1", function: { name: "get_weather", arguments: '{"city":"SF"}' } },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 5, completion_tokens: 3 },
+      }),
+      fallback,
+    );
+    expect(out.stop_reason).toBe("tool_use");
+    expect(out.content).toEqual([
+      { type: "tool_use", id: "call_1", name: "get_weather", input: { city: "SF" } },
+    ]);
+  });
+
+  it("keeps leading text before tool_use, and defaults bad JSON args to {}", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        choices: [
+          {
+            message: {
+              content: "let me check",
+              tool_calls: [{ id: "c2", function: { name: "f", arguments: "not json" } }],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+      fallback,
+    );
+    expect(out.content).toEqual([
+      { type: "text", text: "let me check" },
+      { type: "tool_use", id: "c2", name: "f", input: {} },
+    ]);
+  });
+});
+
+describe("tool-use request mapping (b3)", () => {
+  it("maps tools and tool_choice", () => {
+    const schema = { type: "object", properties: { city: { type: "string" } } };
+    const auto = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        tools: [{ name: "get_weather", description: "Get weather", input_schema: schema }],
+        tool_choice: { type: "auto" },
+        messages: [{ role: "user", content: "weather?" }],
+      }),
+    );
+    expect(auto.tools).toEqual([
+      {
+        type: "function",
+        function: { name: "get_weather", description: "Get weather", parameters: schema },
+      },
+    ]);
+    expect(auto.tool_choice).toBe("auto");
+
+    const choice = (tc: unknown) =>
+      anthropicToOpenAIChat(buf({ model: "m", tool_choice: tc, messages: [] })).tool_choice;
+    expect(choice({ type: "any" })).toBe("required");
+    expect(choice({ type: "none" })).toBe("none");
+    expect(choice({ type: "tool", name: "get_weather" })).toEqual({
+      type: "function",
+      function: { name: "get_weather" },
+    });
+  });
+
+  it("expands tool_use → assistant tool_calls and tool_result → role:tool", () => {
+    const out = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              { type: "text", text: "let me check" },
+              { type: "tool_use", id: "tu_1", name: "get_weather", input: { city: "SF" } },
+            ],
+          },
+          { role: "user", content: [{ type: "tool_result", tool_use_id: "tu_1", content: "72F" }] },
+        ],
+      }),
+    );
+    expect(out.messages).toEqual([
+      {
+        role: "assistant",
+        content: "let me check",
+        tool_calls: [
+          {
+            id: "tu_1",
+            type: "function",
+            function: { name: "get_weather", arguments: '{"city":"SF"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "tu_1", content: "72F" },
+    ]);
   });
 });

@@ -1,21 +1,18 @@
 /**
- * R6.1 case (b) slice b2 — streaming translation: an OpenAI Chat Completions
- * SSE stream → an Anthropic Messages SSE stream, incrementally (spec Decision 22).
+ * R6.1 case (b) — streaming translation: an OpenAI Chat Completions SSE stream →
+ * an Anthropic Messages SSE stream, incrementally (spec Decision 22). Slice b2
+ * did text; **b3** adds streaming tool-use.
  *
- * Claude Code almost always sends `stream: true`, so this is the slice that makes
- * an OpenAI-schema upstream (OpenAI / Ollama, local or LAN) actually usable in
- * the editor. The two event protocols differ:
- *
- *   OpenAI:   `data: {choices:[{delta:{content}, finish_reason}], usage?}` … `data: [DONE]`
+ *   OpenAI:   `data: {choices:[{delta:{content|tool_calls}, finish_reason}], usage?}` … `data: [DONE]`
  *   Anthropic: event: message_start / content_block_start /
  *              content_block_delta* / content_block_stop / message_delta / message_stop
  *
- * This `Transform` consumes OpenAI SSE bytes (chunked arbitrarily on any
- * boundary) and emits well-formed Anthropic SSE bytes. It is stateful but
- * self-contained and unit-tested by feeding chunk sequences. It NEVER runs on
- * the Anthropic passthrough — only when a translating upstream streams.
- *
- * b2 scope: a single text content block (index 0). Tool-use streaming is b3.
+ * Anthropic content blocks are STRICTLY SEQUENTIAL (start i → deltas → stop i →
+ * start i+1); OpenAI streams text first, then each tool call's `arguments` in
+ * fragments. So this Transform keeps exactly one block open at a time and closes
+ * it before opening the next. Text → a `text` block (`text_delta`); each OpenAI
+ * tool-call index → a `tool_use` block (`input_json_delta` carrying the raw
+ * `arguments` fragments). It NEVER runs on the Anthropic passthrough.
  */
 
 import { Transform, type TransformCallback } from "node:stream";
@@ -30,21 +27,36 @@ interface OpenAIChunk {
   readonly id?: string;
   readonly model?: string;
   readonly choices?: ReadonlyArray<{
-    readonly delta?: { readonly content?: string | null };
+    readonly delta?: {
+      readonly content?: string | null;
+      readonly tool_calls?: ReadonlyArray<{
+        readonly index: number;
+        readonly id?: string;
+        readonly function?: { readonly name?: string; readonly arguments?: string };
+      }>;
+    };
     readonly finish_reason?: string | null;
   }>;
   readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number };
 }
 
+/** The currently-open Anthropic content block: none, the text block, or a tool by OpenAI index. */
+type Current = null | { kind: "text" } | { kind: "tool"; oaiIndex: number };
+
 export class OpenAIChatSSETranslator extends Transform {
   #buf = "";
   #started = false;
-  #contentStarted = false;
   #stopReason = "end_turn";
   #inputTokens = 0;
   #outputTokens = 0;
   #id: string;
   #model: string;
+
+  // Sequential-block bookkeeping.
+  #current: Current = null;
+  #currentIndex = -1;
+  #blockCount = 0;
+  readonly #toolMeta = new Map<number, { id: string; name: string }>();
 
   constructor(fallback: { readonly id: string; readonly model: string }) {
     super();
@@ -54,7 +66,6 @@ export class OpenAIChatSSETranslator extends Transform {
 
   override _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
     this.#buf += chunk.toString("utf8");
-    // SSE frames are newline-delimited; process complete lines, keep the tail.
     let nl = this.#buf.indexOf("\n");
     while (nl !== -1) {
       const line = this.#buf.slice(0, nl).trimEnd();
@@ -66,12 +77,14 @@ export class OpenAIChatSSETranslator extends Transform {
   }
 
   override _flush(cb: TransformCallback): void {
-    // Process any trailing partial line, then close the Anthropic message.
     const tail = this.#buf.trim();
     if (tail.length > 0) this.#handleLine(tail);
     this.#ensureStarted();
-    if (this.#contentStarted)
-      this.push(sse("content_block_stop", { type: "content_block_stop", index: 0 }));
+    if (this.#current === null) {
+      // No content at all — emit a valid empty text block.
+      this.#switchTo({ kind: "text" });
+    }
+    this.#closeCurrent();
     this.push(
       sse("message_delta", {
         type: "message_delta",
@@ -84,7 +97,7 @@ export class OpenAIChatSSETranslator extends Transform {
   }
 
   #handleLine(line: string): void {
-    if (line === "" || !line.startsWith("data:")) return; // ignore comments/blank/`event:` lines
+    if (line === "" || !line.startsWith("data:")) return;
     const payload = line.slice("data:".length).trim();
     if (payload === "" || payload === "[DONE]") return;
     let chunk: OpenAIChunk;
@@ -102,49 +115,107 @@ export class OpenAIChatSSETranslator extends Transform {
         this.#outputTokens = chunk.usage.completion_tokens;
     }
     const choice = chunk.choices?.[0];
-    const text = choice?.delta?.content;
+    const delta = choice?.delta;
+
+    const text = delta?.content;
     if (typeof text === "string" && text.length > 0) {
-      this.#ensureStarted();
+      this.#switchTo({ kind: "text" });
       this.push(
         sse("content_block_delta", {
           type: "content_block_delta",
-          index: 0,
+          index: this.#currentIndex,
           delta: { type: "text_delta", text },
         }),
       );
     }
-    if (choice?.finish_reason != null) {
-      this.#stopReason = mapStopReason(choice.finish_reason);
+
+    for (const tc of delta?.tool_calls ?? []) {
+      const oaiIndex = tc.index;
+      const prev = this.#toolMeta.get(oaiIndex) ?? { id: this.#id, name: "" };
+      const meta = {
+        id: typeof tc.id === "string" && tc.id.length > 0 ? tc.id : prev.id,
+        name:
+          typeof tc.function?.name === "string" && tc.function.name.length > 0
+            ? tc.function.name
+            : prev.name,
+      };
+      this.#toolMeta.set(oaiIndex, meta);
+      this.#switchTo({ kind: "tool", oaiIndex });
+      const args = tc.function?.arguments;
+      if (typeof args === "string" && args.length > 0) {
+        this.push(
+          sse("content_block_delta", {
+            type: "content_block_delta",
+            index: this.#currentIndex,
+            delta: { type: "input_json_delta", partial_json: args },
+          }),
+        );
+      }
     }
+
+    if (choice?.finish_reason != null) this.#stopReason = mapStopReason(choice.finish_reason);
   }
 
-  /** Emit message_start + content_block_start exactly once, lazily. */
+  /** Emit message_start exactly once, lazily (using the id/model seen so far). */
   #ensureStarted(): void {
-    if (!this.#started) {
-      this.#started = true;
-      this.push(
-        sse("message_start", {
-          type: "message_start",
-          message: {
-            id: this.#id,
-            type: "message",
-            role: "assistant",
-            model: this.#model,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: this.#inputTokens, output_tokens: 0 },
-          },
-        }),
-      );
+    if (this.#started) return;
+    this.#started = true;
+    this.push(
+      sse("message_start", {
+        type: "message_start",
+        message: {
+          id: this.#id,
+          type: "message",
+          role: "assistant",
+          model: this.#model,
+          content: [],
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: this.#inputTokens, output_tokens: 0 },
+        },
+      }),
+    );
+  }
+
+  #closeCurrent(): void {
+    if (this.#current === null) return;
+    this.push(sse("content_block_stop", { type: "content_block_stop", index: this.#currentIndex }));
+    this.#current = null;
+  }
+
+  /** Ensure the requested block is the open one, closing any other first (sequential blocks). */
+  #switchTo(target: { kind: "text" } | { kind: "tool"; oaiIndex: number }): void {
+    this.#ensureStarted();
+    if (this.#current !== null) {
+      if (this.#current.kind === target.kind) {
+        if (target.kind === "text") return;
+        if (
+          this.#current.kind === "tool" &&
+          this.#current.oaiIndex === (target as { oaiIndex: number }).oaiIndex
+        ) {
+          return;
+        }
+      }
+      this.#closeCurrent();
     }
-    if (!this.#contentStarted) {
-      this.#contentStarted = true;
+    this.#currentIndex = this.#blockCount++;
+    if (target.kind === "text") {
+      this.#current = { kind: "text" };
       this.push(
         sse("content_block_start", {
           type: "content_block_start",
-          index: 0,
+          index: this.#currentIndex,
           content_block: { type: "text", text: "" },
+        }),
+      );
+    } else {
+      const meta = this.#toolMeta.get(target.oaiIndex) ?? { id: this.#id, name: "" };
+      this.#current = { kind: "tool", oaiIndex: target.oaiIndex };
+      this.push(
+        sse("content_block_start", {
+          type: "content_block_start",
+          index: this.#currentIndex,
+          content_block: { type: "tool_use", id: meta.id, name: meta.name, input: {} },
         }),
       );
     }

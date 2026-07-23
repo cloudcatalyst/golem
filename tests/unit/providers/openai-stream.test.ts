@@ -112,4 +112,59 @@ describe("OpenAI → Anthropic SSE translation", () => {
       model: "fb-model",
     });
   });
+
+  it("streams a tool call: content_block_start(tool_use) + input_json_delta fragments (b3)", async () => {
+    const sse = await run([
+      'data: {"id":"c1","model":"m","choices":[{"delta":{"role":"assistant"}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather","arguments":"{\\"ci"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"ty\\":\\"SF\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(events(sse)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+    // The tool_use block carries id + name; index 0 (no text preceded it).
+    expect(firstData(sse, "content_block_start")).toMatchObject({
+      index: 0,
+      content_block: { type: "tool_use", id: "call_1", name: "get_weather", input: {} },
+    });
+    // input_json_delta fragments concatenate to the full arguments JSON.
+    const partials = [
+      ...sse.matchAll(/"input_json_delta","partial_json":"((?:[^"\\]|\\.)*)"/g),
+    ].map((m) => JSON.parse(`"${m[1]}"`));
+    expect(partials.join("")).toBe('{"city":"SF"}');
+    expect(firstData(sse, "message_delta").delta).toMatchObject({ stop_reason: "tool_use" });
+  });
+
+  it("sequences text then a tool call as separate blocks (indices 0 then 1)", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"content":"ok "}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c9","function":{"name":"f","arguments":"{}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(events(sse)).toEqual([
+      "message_start",
+      "content_block_start", // text, index 0
+      "content_block_delta", // text_delta "ok "
+      "content_block_stop", // close text block before opening the tool block
+      "content_block_start", // tool_use, index 1
+      "content_block_delta", // input_json_delta "{}"
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+    const starts = [...sse.matchAll(/event: content_block_start\ndata: (.+)/g)].map((m) =>
+      JSON.parse(m[1] as string),
+    );
+    expect(starts[0]).toMatchObject({ index: 0, content_block: { type: "text" } });
+    expect(starts[1]).toMatchObject({ index: 1, content_block: { type: "tool_use", name: "f" } });
+  });
 });
