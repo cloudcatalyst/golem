@@ -106,6 +106,104 @@ describe("WebFetch capture (PostToolUse)", () => {
   });
 });
 
+describe("WebFetch capture — raw-page mode (Decision 42)", () => {
+  const url = "https://example.com/api";
+  // A raw fetcher standing in for fetchRawPage: returns the page, not the answer.
+  const rawFetcher = async (u: string) => ({
+    content: `RAW PAGE for ${u} — the full documentation text.`,
+    headers: { etag: 'W/"v1"', cacheControl: "max-age=3600" } as const,
+  });
+
+  it("caches the RAW page (not the WebFetch answer) and marks it raw", async () => {
+    // tool_response is Claude Code's prompt-specific ANSWER — must NOT be cached.
+    const io = fakeIo(postInput(url, "Answer: the auth param is X."));
+    const code = await runWebFetchPost(io, {
+      projectDir,
+      nowIso: "2026-07-23T00:00:00Z",
+      nowMs: Date.parse("2026-07-23T00:00:00Z"),
+      buildKnowledge,
+      fetchRaw: rawFetcher,
+      fetchRawEnabled: async () => true,
+    });
+    expect(code).toBe(0);
+
+    const entry = await new WebCache(webCacheDir(projectDir)).get(url);
+    expect(entry?.content).toContain("RAW PAGE"); // the page, not the answer
+    expect(entry?.content).not.toContain("the auth param is X"); // answer discarded
+    expect(entry?.raw).toBe(true);
+    expect(entry?.etag).toBe('W/"v1"'); // validators seeded from the real fetch
+    expect(entry?.expiresAt).toBeDefined(); // from max-age=3600
+  });
+
+  it("caches NOTHING when the raw fetch fails (never the answer)", async () => {
+    const io = fakeIo(postInput(url, "Answer: X."));
+    await runWebFetchPost(io, {
+      projectDir,
+      nowIso: "2026-07-23T00:00:00Z",
+      fetchRaw: async () => {
+        throw new Error("403 Forbidden");
+      },
+      fetchRawEnabled: async () => true,
+    });
+    expect(await new WebCache(webCacheDir(projectDir)).get(url)).toBeNull();
+  });
+
+  it("falls back to caching the answer when raw mode is disabled", async () => {
+    const io = fakeIo(postInput(url, "Legacy answer body."));
+    await runWebFetchPost(io, {
+      projectDir,
+      nowIso: "2026-07-23T00:00:00Z",
+      fetchRaw: rawFetcher,
+      fetchRawEnabled: async () => false, // gate off → legacy answer capture
+    });
+    const entry = await new WebCache(webCacheDir(projectDir)).get(url);
+    expect(entry?.content).toContain("Legacy answer body.");
+    expect(entry?.raw).toBeUndefined();
+  });
+});
+
+describe("WebFetch gate — raw requirement (Decision 42)", () => {
+  const url = "https://example.com/legacy";
+
+  it("ignores a legacy answer-entry (no raw marker) when raw mode is on → re-fetch", async () => {
+    await new WebCache(webCacheDir(projectDir)).put(url, "STALE ANSWER", "2026-07-23T00:00:00Z");
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs: Date.parse("2026-07-23T00:30:00Z"),
+      ttlHours: 168,
+      fetchRawEnabled: async () => true,
+    });
+    expect(io.out).toStrictEqual([]); // treated as a miss → the fetch proceeds
+  });
+
+  it("serves a raw entry when raw mode is on", async () => {
+    await new WebCache(webCacheDir(projectDir)).put(url, "RAW BODY", "2026-07-23T00:00:00Z", {
+      raw: true,
+    });
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs: Date.parse("2026-07-23T00:30:00Z"),
+      ttlHours: 168,
+      fetchRawEnabled: async () => true,
+    });
+    expect(io.out[0]).toContain("RAW BODY");
+  });
+
+  it("still serves a legacy entry when raw mode is off (backward compatible)", async () => {
+    await new WebCache(webCacheDir(projectDir)).put(url, "LEGACY BODY", "2026-07-23T00:00:00Z");
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs: Date.parse("2026-07-23T00:30:00Z"),
+      ttlHours: 168,
+      fetchRawEnabled: async () => false,
+    });
+    expect(io.out[0]).toContain("LEGACY BODY");
+  });
+});
+
 describe("WebFetch gate (PreToolUse)", () => {
   it("serves a fresh cached URL (deny + content), skipping the fetch", async () => {
     const url = "https://example.com/cached";

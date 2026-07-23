@@ -19,9 +19,11 @@
 import { z } from "zod";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import {
+  fetchRawPage,
   findDraftByUrl,
   type IncrementalIngest,
   isFresh,
+  type RawPage,
   supportsIncremental,
   WebCache,
   type WebCacheEntry,
@@ -129,6 +131,17 @@ export interface WebFetchHookOptions {
   readonly revalidate?: RevalidateFn;
   /** Per-project gate for {@link revalidate}; CLI reads `knowledge.webcache_revalidate`. */
   readonly revalidateEnabled?: (projectDir: string) => Promise<boolean>;
+  /**
+   * Decision 42: fetch the RAW page ourselves (default {@link fetchRawPage} via
+   * the CLI wiring; tests inject a fake). When present AND {@link fetchRawEnabled}
+   * allows it, the PostToolUse hook caches/ingests the raw page instead of Claude
+   * Code's prompt-specific WebFetch answer. A raw fetch that throws caches
+   * nothing (an honest miss) — the answer is never stored. Absent → legacy
+   * answer-capture behavior.
+   */
+  readonly fetchRaw?: (url: string) => Promise<RawPage>;
+  /** Per-project gate for {@link fetchRaw}; CLI reads `knowledge.webcache_fetch_raw`. */
+  readonly fetchRawEnabled?: (projectDir: string) => Promise<boolean>;
 }
 
 /** Default {@link RevalidateFn}: a conditional GET that reads status + headers only (body cancelled). */
@@ -240,6 +253,16 @@ export async function runWebFetchPre(
     const entry = await cache.get(url);
     if (entry === null) return 0; // not cached → let the fetch proceed
 
+    // Decision 42: when raw mode is on, a legacy answer-entry (no `raw` marker)
+    // is treated as a miss so it gets re-fetched and re-cached as the raw page —
+    // never keep serving a stale prompt-specific answer. Cheap raw entries skip
+    // the config read; only a legacy entry consults the gate.
+    if (entry.raw !== true) {
+      const requireRaw =
+        options.fetchRawEnabled !== undefined && (await options.fetchRawEnabled(projectDir));
+      if (requireRaw) return 0;
+    }
+
     const ttl = options.ttlHours ?? DEFAULT_WEB_CACHE_TTL_HOURS;
     const nowMs = options.nowMs ?? Date.now();
     if (!isFresh(entry, ttl, nowMs)) return 0; // past the hard TTL cap → re-fetch
@@ -306,16 +329,51 @@ export async function runWebFetchPost(
     const parsed = payloadSchema.safeParse(JSON.parse(await readAll(io.stdin)));
     if (!parsed.success) return 0;
     const url = urlOf(parsed.data.tool_input);
-    const text = textOf(parsed.data.tool_response);
-    if (url === null || text === null || text.length === 0) return 0;
+    if (url === null) return 0;
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
     const nowIso = options.nowIso ?? new Date().toISOString();
-    // Redact BEFORE storing/ingesting (hard rule): pipeline stage first
-    // (defaults to pipelineRedact), built-in secret strip always on top.
-    const content = stripKnownSecrets((options.redact ?? pipelineRedact)(text));
+    const nowMs = options.nowMs ?? Date.now();
+    const redact = options.redact ?? pipelineRedact;
 
-    await (options.cache ?? new WebCache(webCacheDir(projectDir))).put(url, content, nowIso);
+    // Decision 42: prefer caching the RAW page (fetched by Golem itself) over
+    // Claude Code's prompt-specific WebFetch answer. Active only when a fetcher
+    // is wired (CLI injects fetchRawPage) AND the per-project gate allows it.
+    const rawEnabled =
+      options.fetchRaw !== undefined &&
+      (options.fetchRawEnabled === undefined || (await options.fetchRawEnabled(projectDir)));
+
+    let content: string;
+    let meta: WebCacheMeta;
+    if (rawEnabled && options.fetchRaw !== undefined) {
+      let raw: RawPage;
+      try {
+        raw = await options.fetchRaw(url);
+      } catch (err) {
+        // A failed raw fetch caches NOTHING — a bare miss re-fetches later, which
+        // is honest, whereas storing the answer would resurrect the very bug this
+        // fixes (a prompt-specific answer served as "the page").
+        io.stderr.write(
+          `golem hook web-fetch-post: raw fetch of ${url} failed (${
+            err instanceof Error ? err.message : String(err)
+          }); caching nothing\n`,
+        );
+        return 0;
+      }
+      // Redact BEFORE storing/ingesting (hard rule): pipeline stage first
+      // (defaults to pipelineRedact), built-in secret strip always on top.
+      content = stripKnownSecrets(redact(raw.content));
+      meta = { ...metaFrom({ status: 200, ...raw.headers }, nowMs), raw: true };
+    } else {
+      // Legacy path (fetch-raw off / not wired): cache the WebFetch answer.
+      const text = textOf(parsed.data.tool_response);
+      if (text === null || text.length === 0) return 0;
+      content = stripKnownSecrets(redact(text));
+      meta = {};
+    }
+    if (content.length === 0) return 0; // nothing worth storing (empty page / all-redacted)
+
+    await (options.cache ?? new WebCache(webCacheDir(projectDir))).put(url, content, nowIso, meta);
 
     // Also ingest into the vector KB for semantic search (same embedder as
     // auto-index, so the collection isn't corrupted by mixed dimensions).

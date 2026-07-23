@@ -2501,3 +2501,30 @@ already has cheap access to (it shells `golem … --json` every poll): call
 `golem update --check --json`, and on `updateAvailable` show a status-bar badge +
 a `golem.update` command that runs the upgrade in an integrated terminal. The
 extension binary keeps updating via the Marketplace as normal.
+
+## §71 — WebFetch returns a prompt-specific answer, not the raw page (2026-07-23, for Decision 42)
+
+Confirmed the premise behind the WebFetch raw-caching fix (Decision 42), building
+on the hooks facts already recorded in §41:
+
+- **Claude Code's WebFetch `tool_response` is the fetched page run through a
+  summarization model against the call's `prompt`** — an *answer*, not the raw
+  markdown. `tool_input` carries `{url, prompt}` (§41). Caching that answer keyed
+  by URL alone (what the pre-Decision-42 PostToolUse hook did) serves it back to a
+  later fetch of the same URL with a *different* prompt.
+- **The PostToolUse hook only ever receives the answer** — there is no field
+  carrying the raw page. So caching the raw page requires Golem to fetch the URL
+  **itself** (global `fetch`, already used by `defaultRevalidate`), then extract
+  text with the existing `extractHtmlText` / `extractPdfText` (§ R3.2).
+- **Two distinct WebFetch interception points, easily conflated:**
+  1. the **hook path** — `PreToolUse`/`PostToolUse(WebFetch)` around the tool
+     (cache serve + capture); Decision 42 operates here.
+  2. the **proxy path** — Claude Code's WebFetch makes an *internal
+     summarization model call*, and that LLM request transits Golem's proxy,
+     where local-answer can hijack it. The `MAX_LOCAL_ANSWER_QUERY_CHARS = 1000`
+     length-gate guards this path.
+  On a cache **miss** the tool still runs, so its internal call still transits the
+  proxy — Decision 42's Option B (PostToolUse alongside) therefore does **not**
+  supersede the length-gate. (Option A — serve raw from the pre-hook and skip the
+  tool entirely — would, since the internal call never happens; recorded as a
+  follow-up.)

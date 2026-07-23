@@ -49,6 +49,7 @@ import {
 import type { HardwareTier, InferenceService } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
+import { fetchRawPage } from "../knowledge/index.js";
 import { JsonFileSliderStore, serveStdio } from "../mcp/index.js";
 import {
   appendExample,
@@ -1841,6 +1842,16 @@ const hookCmd = buildHookCommand({
       return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
     } catch {
       return false; // config unreadable → behave as if disabled (pure-TTL)
+    }
+  },
+  // Decision 42: fetch + cache the RAW page ourselves instead of Claude Code's
+  // prompt-specific WebFetch answer. On by default; gated by the config key.
+  fetchRaw: fetchRawPage,
+  fetchRawEnabled: async (projectDir) => {
+    try {
+      return (await loadConfig({ projectDir })).settings.knowledge.webcache_fetch_raw;
+    } catch {
+      return true; // config unreadable → default on (Decision 42 default)
     }
   },
 });
