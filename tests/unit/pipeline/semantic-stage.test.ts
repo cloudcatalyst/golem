@@ -62,6 +62,7 @@ function makePipeline(
   opts: {
     upstreamBaseUrl?: string;
     forceSemanticOnCaching?: boolean;
+    assumeCachingUpstream?: boolean;
     headroomCcrStore?: CcrStore;
   } = {},
 ) {
@@ -75,6 +76,9 @@ function makePipeline(
     upstreamBaseUrl: opts.upstreamBaseUrl ?? "https://openrouter.ai/api/v1",
     ...(opts.forceSemanticOnCaching !== undefined
       ? { forceSemanticOnCaching: opts.forceSemanticOnCaching }
+      : {}),
+    ...(opts.assumeCachingUpstream !== undefined
+      ? { assumeCachingUpstream: opts.assumeCachingUpstream }
       : {}),
     ...(semantic !== undefined ? { semantic } : {}),
     ...(onEvent !== undefined ? { onEvent } : {}),
@@ -174,6 +178,37 @@ describe("pipeline semantic stage (slider ≥2)", () => {
       });
       await pipe.process(messagesRequest(SAMPLE));
       expect(compress).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("R6.1 case (a) — assumeCachingUpstream override (verification-notes §73)", () => {
+    it("does NOT invoke the semantic compressor on a Claude-via-Azure host when assumed caching", async () => {
+      // The URL heuristic would treat this non-anthropic.com host as NON-caching
+      // and let the lossy stage run — the provider override marks it caching so
+      // Claude-via-Azure's prompt cache is not broken (fail-safe).
+      const compress = vi.fn(async () => null);
+      const pipe = makePipeline(3, { compress }, undefined, {
+        upstreamBaseUrl: "https://acme.services.ai.azure.com/anthropic",
+        assumeCachingUpstream: true,
+      });
+      await pipe.process(messagesRequest(SAMPLE));
+      expect(compress).not.toHaveBeenCalled();
+    });
+
+    it("the override wins over the URL heuristic in both directions (false forces non-caching)", async () => {
+      const compress = vi.fn(async (msgs: ReadonlyArray<Readonly<Record<string, unknown>>>) => ({
+        messages: msgs,
+        tokensBefore: 100,
+        tokensAfter: 90,
+        transformsApplied: [],
+      }));
+      // anthropic.com would normally be caching (semantic off); forcing false runs it.
+      const pipe = makePipeline(3, { compress }, undefined, {
+        upstreamBaseUrl: "https://api.anthropic.com",
+        assumeCachingUpstream: false,
+      });
+      await pipe.process(messagesRequest(SAMPLE));
+      expect(compress).toHaveBeenCalledTimes(1);
     });
   });
 

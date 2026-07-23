@@ -56,6 +56,15 @@ function isCachingUpstream(upstreamBaseUrl: string | undefined): boolean {
   }
 }
 
+/**
+ * Effective caching decision for the lossy-stage gate: an explicit
+ * {@link GolemPipelineOptions.assumeCachingUpstream} (set from the selected
+ * provider, R6.1 case (a)) wins; otherwise fall back to the URL heuristic.
+ */
+function effectiveCaching(options: GolemPipelineOptions): boolean {
+  return options.assumeCachingUpstream ?? isCachingUpstream(options.upstreamBaseUrl);
+}
+
 /** A telemetry record emitted once per processed request (A4 consumes it). */
 export interface PipelineEvent {
   readonly projectId: string;
@@ -110,6 +119,17 @@ export interface GolemPipelineOptions {
    * {@link isCachingUpstream}). Absent → treated as the caching default.
    */
   readonly upstreamBaseUrl?: string;
+  /**
+   * R6.1 case (a): explicit override of the {@link isCachingUpstream} URL
+   * heuristic. Set by proxy-runtime from the selected `upstream_provider`
+   * (verification-notes §73): a non-Anthropic Anthropic-protocol gateway
+   * (Azure Foundry / OpenRouter serving Claude) is prompt-cache-capable but
+   * has a non-`anthropic.com` host the URL heuristic would misclassify as
+   * non-caching — so it is set `true` here (fail-safe: no lossy semantic
+   * rewrite, byte-faithful). `undefined` → fall back to the URL heuristic
+   * (the Anthropic default and custom `api.anthropic.com`-style URLs).
+   */
+  readonly assumeCachingUpstream?: boolean;
   /**
    * OPT-IN research flag (R2.6, verification-notes §58/§59): bypass the
    * {@link isCachingUpstream} gate for the semantic stage specifically, so it
@@ -308,7 +328,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       if (
         stages.semanticCompression !== "off" &&
         options.semantic !== undefined &&
-        (!isCachingUpstream(options.upstreamBaseUrl) || options.forceSemanticOnCaching === true) &&
+        (!effectiveCaching(options) || options.forceSemanticOnCaching === true) &&
         Array.isArray(body.messages)
       ) {
         const messagesInSemantic = body.messages as ReadonlyArray<
@@ -343,7 +363,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       if (
         stages.semanticCompression !== "off" &&
         options.contextSubstitution !== undefined &&
-        !isCachingUpstream(options.upstreamBaseUrl) &&
+        !effectiveCaching(options) &&
         Array.isArray(body.messages)
       ) {
         const messagesInSub = body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;

@@ -136,6 +136,19 @@ export interface ProxyServerOptions {
     headers: Readonly<Record<string, string | string[] | undefined>>,
     request: ProxyRequest,
   ) => void;
+  /**
+   * R6.1 case (a): rewrite the headers sent upstream (e.g. strip the client's
+   * Anthropic credential and inject a different provider's key under its
+   * expected header — see src/providers). Applied to the forwarded headers
+   * immediately before the upstream request, OUTSIDE the pipeline, so it also
+   * covers `x-golem-bypass` requests (the upstream still needs valid creds).
+   * A transport/routing concern only — it never touches the body, so SSE and
+   * tool-use fidelity is untouched. Default: none (the Anthropic passthrough
+   * forwards the client's own auth verbatim).
+   */
+  readonly mapUpstreamHeaders?: (
+    headers: Record<string, string | string[]>,
+  ) => Record<string, string | string[]>;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -151,6 +164,9 @@ export interface ProxyConfig {
     headers: Readonly<Record<string, string | string[] | undefined>>,
     request: ProxyRequest,
   ) => void;
+  readonly mapUpstreamHeaders?: (
+    headers: Record<string, string | string[]>,
+  ) => Record<string, string | string[]>;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -164,6 +180,9 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     ...(options.onResponseUsage !== undefined ? { onResponseUsage: options.onResponseUsage } : {}),
     ...(options.onResponseHeaders !== undefined
       ? { onResponseHeaders: options.onResponseHeaders }
+      : {}),
+    ...(options.mapUpstreamHeaders !== undefined
+      ? { mapUpstreamHeaders: options.mapUpstreamHeaders }
       : {}),
   };
 }
