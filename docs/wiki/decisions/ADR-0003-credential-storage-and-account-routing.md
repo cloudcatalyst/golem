@@ -9,12 +9,14 @@ updated: 2026-07-23
 
 # ADR-0003 — R6.2 credential storage, account switching & multi-provider routing
 
-**Status: PROPOSED (2026-07-23).** This is the written threat model + ToS review
-that **gates R6.2 code** (the standing WS-F rule; the same "threat model reviewed
-before enforcement code" bar ADR-0002 set for R5.4). **No R6.2 code lands until
-this ADR is accepted and the ToS scope decision below is made by the user**
-(spec Decision 21d: credential/quota routing "must not design a ToS-violating
-feature — flag for explicit review").
+**Status: ACCEPTED (2026-07-23, USER decision).** This is the written threat
+model + ToS review that gated R6.2 code (the standing WS-F rule; the same
+"threat model reviewed before enforcement code" bar ADR-0002 set for R5.4).
+**ToS scope decision (USER, 2026-07-23): "legitimate account/provider switching
+only" — the automated quota-evasion half is OUT (not built).** R6.2 v1 (explicit
+account switching) is built against these constraints; per-request
+capability/availability routing (21e) and any route-on-exhaustion behaviour stay
+out of scope pending a separate decision.
 
 ## Context
 
