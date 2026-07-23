@@ -2501,3 +2501,35 @@ already has cheap access to (it shells `golem … --json` every poll): call
 `golem update --check --json`, and on `updateAvailable` show a status-bar badge +
 a `golem.update` command that runs the upgrade in an integrated terminal. The
 extension binary keeps updating via the Marketplace as normal.
+
+## §71 — WebFetch returns a prompt-specific answer, not the raw page (2026-07-23, for Decision 42)
+
+Confirmed the premise behind the WebFetch raw-caching fix (Decision 42), building
+on the hooks facts already recorded in §41:
+
+- **Claude Code's WebFetch `tool_response` is the fetched page run through a
+  summarization model against the call's `prompt`** — an *answer*, not the raw
+  markdown. `tool_input` carries `{url, prompt}` (§41). Caching that answer keyed
+  by URL alone (what the pre-Decision-42 PostToolUse hook did) serves it back to a
+  later fetch of the same URL with a *different* prompt.
+- **The PostToolUse hook only ever receives the answer** — there is no field
+  carrying the raw page. So caching the raw page requires Golem to fetch the URL
+  **itself** (global `fetch`, already used by `defaultRevalidate`), then extract
+  text with the existing `extractHtmlText` / `extractPdfText` (§ R3.2).
+- **Two distinct WebFetch interception points, easily conflated:**
+  1. the **hook path** — `PreToolUse`/`PostToolUse(WebFetch)` around the tool
+     (cache serve + capture); Decision 42 operates here.
+  2. the **proxy path** — Claude Code's WebFetch makes an *internal
+     summarization model call*, and that LLM request transits Golem's proxy,
+     where local-answer can hijack it. The `MAX_LOCAL_ANSWER_QUERY_CHARS = 1000`
+     length-gate guards this path.
+- **Decision 42 shipped as Option A (PreToolUse replace):** the pre-hook fetches
+  the raw page itself on a miss and serves it via `deny`, so the tool — and its
+  internal summarization call — **never runs on the happy path**. That does NOT
+  fully retire the length-gate: when Golem's own fetch fails the hook falls open,
+  the tool runs, and its internal call transits the proxy after all. So the gate
+  stays as the safety net for the fail-open case (pages Golem can't fetch itself);
+  Option A only narrows how often the proxy-path hijack window is reachable.
+- **The self-fetch is on the tool's critical (blocking) path** under Option A, so
+  `fetchRawPage` bounds the request with `AbortSignal.timeout` (default 15 s) — a
+  hang would otherwise stall the WebFetch tool. A timeout throws → fail-open.

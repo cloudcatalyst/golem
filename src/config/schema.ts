@@ -163,6 +163,15 @@ export const SETTINGS_LEAVES = {
      * pure-TTL (a changed page can be served stale until the TTL lapses).
      */
     webcache_revalidate: z.boolean(),
+    /**
+     * Decision 42: on a WebFetch, fetch the RAW page ourselves in the
+     * PostToolUse hook and cache/ingest THAT — instead of caching Claude Code's
+     * prompt-specific WebFetch answer (which is wrong for a later fetch with a
+     * different prompt, and a poor KB source). On by default; set false to fall
+     * back to the legacy answer-capture behavior. A raw fetch that fails caches
+     * nothing (an honest miss), never the answer.
+     */
+    webcache_fetch_raw: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -230,6 +239,7 @@ export interface KnowledgeSettings {
   readonly rerank_enabled: boolean;
   readonly memory_federation_enabled: boolean;
   readonly webcache_revalidate: boolean;
+  readonly webcache_fetch_raw: boolean;
 }
 
 export interface TelemetrySettings {
@@ -282,6 +292,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     rerank_enabled: false,
     memory_federation_enabled: false,
     webcache_revalidate: false,
+    webcache_fetch_raw: true,
   },
   telemetry: {
     enabled: true,
