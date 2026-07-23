@@ -19,6 +19,14 @@
  * from the `GOLEM_UPSTREAM_API_KEY` environment variable by the CLI wiring.
  */
 
+export { createGeminiToAnthropicSSE, GeminiSSETranslator } from "./gemini-stream.js";
+export {
+  anthropicToGemini,
+  type GeminiRequest,
+  geminiPath,
+  geminiToAnthropic,
+  mapGeminiFinish,
+} from "./gemini-translate.js";
 export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
 export {
   type AnthropicMessageResponse,
@@ -33,9 +41,9 @@ export {
  * Upstreams Golem can front.
  * - Case (a) — Anthropic wire protocol, byte-faithful: `anthropic` (default),
  *   `azure-foundry`, `openrouter`, `custom`.
- * - Case (b) — OpenAI Chat Completions schema, requires translation (slice b1,
- *   non-streaming): `openai`, `ollama` (Ollama's OpenAI-compatible endpoint,
- *   local or over the LAN).
+ * - Case (b) — needs request/response translation (not byte-faithful):
+ *   `openai`, `ollama` (OpenAI Chat Completions schema), `gemini` (Google
+ *   `generateContent` schema).
  */
 export const UPSTREAM_PROVIDERS = [
   "anthropic",
@@ -44,17 +52,22 @@ export const UPSTREAM_PROVIDERS = [
   "custom",
   "openai",
   "ollama",
+  "gemini",
 ] as const;
 
 export type UpstreamProvider = (typeof UPSTREAM_PROVIDERS)[number];
 
 /**
- * Whether the provider speaks the OpenAI Chat Completions schema and therefore
- * needs request/response translation (case b) rather than a byte-faithful
- * passthrough (case a).
+ * Whether the provider needs request/response translation (case b) rather than a
+ * byte-faithful passthrough (case a).
  */
 export function isTranslatingProvider(provider: UpstreamProvider): boolean {
-  return provider === "openai" || provider === "ollama";
+  return provider === "openai" || provider === "ollama" || provider === "gemini";
+}
+
+/** Whether the provider uses the Gemini `generateContent` schema (a distinct translator). */
+export function isGeminiProvider(provider: UpstreamProvider): boolean {
+  return provider === "gemini";
 }
 
 /**
@@ -86,6 +99,10 @@ export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthSchem
       return "bearer";
     case "ollama":
       // Ollama ignores auth by default (local / trusted LAN); inject none.
+      return "inherit";
+    case "gemini":
+      // Gemini authenticates with a `?key=` query param carried in the path, not
+      // a header — so no header mapping (inherit = none injected).
       return "inherit";
   }
 }

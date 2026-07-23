@@ -173,13 +173,24 @@ export interface ProxyServerOptions {
  * than forwarding a mismatched shape.
  */
 export interface UpstreamTranslator {
-  /** Full upstream request path (relative to the base URL origin). */
+  /**
+   * Default upstream request path (relative to the base URL origin) — used when
+   * {@link translateRequest} does not return a per-request `path`. OpenAI uses
+   * this fixed path; Gemini overrides it per request (its path embeds the model,
+   * the `:generateContent`/`:streamGenerateContent` method, `alt=sse`, and the
+   * `?key=` query-param credential).
+   */
   readonly path: string;
   /**
-   * Anthropic request body → upstream (OpenAI) request body bytes, plus whether
-   * the client asked to stream (drives the response path below).
+   * Anthropic request body → upstream request body bytes, plus whether the
+   * client asked to stream (drives the response path below) and an optional
+   * per-request `path` override (Gemini).
    */
-  translateRequest(body: Buffer | null): { readonly body: Buffer; readonly stream: boolean };
+  translateRequest(body: Buffer | null): {
+    readonly body: Buffer;
+    readonly stream: boolean;
+    readonly path?: string;
+  };
   /** Upstream (OpenAI) NON-streaming response body → Anthropic response body bytes (b1). */
   translateResponse(body: Buffer): Buffer;
   /**

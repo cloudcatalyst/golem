@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultAuthScheme,
+  isGeminiProvider,
   isTranslatingProvider,
   makeAuthMapper,
   resolveAuthScheme,
@@ -28,9 +29,17 @@ describe("translating providers (case b)", () => {
     expect(defaultAuthScheme("ollama")).toBe("inherit");
   });
 
-  it("treats openai/ollama as NON-caching (semantic stage may engage)", () => {
+  it("treats openai/ollama/gemini as NON-caching (semantic stage may engage)", () => {
     expect(upstreamAssumesCaching("openai")).toBe(false);
     expect(upstreamAssumesCaching("ollama")).toBe(false);
+    expect(upstreamAssumesCaching("gemini")).toBe(false);
+  });
+
+  it("classifies gemini as translating, gemini-schema, and no header auth (query-param key)", () => {
+    expect(isTranslatingProvider("gemini")).toBe(true);
+    expect(isGeminiProvider("gemini")).toBe(true);
+    expect(isGeminiProvider("openai")).toBe(false);
+    expect(defaultAuthScheme("gemini")).toBe("inherit");
   });
 
   it("derives the chat-completions path from the base URL, preserving any prefix", () => {

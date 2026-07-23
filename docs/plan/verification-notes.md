@@ -2755,3 +2755,18 @@ and needs a proxy-seam extension:**
 - **Not live-verifiable here** (no Gemini key). Scoped as slice **b4-gemini** —
   its own translator + the seam extension above; recommend a checkpoint before
   building (size + seam change + no live test).
+- **UPDATE — b4-gemini BUILT 2026-07-23 (user go-ahead).** Shipped
+  `src/providers/gemini-translate.ts` (+ `gemini-stream.ts`): request
+  (`contents`/`role:model`/`parts`, `systemInstruction`, `generationConfig`,
+  `tools[{functionDeclarations}]`, `toolConfig.functionCallingConfig`;
+  `tool_use`→`functionCall`, `tool_result`→`functionResponse` with the name
+  recovered from the request's tool_use blocks), non-streaming + streaming
+  response (`candidates[].content.parts` → text / `tool_use`), `geminiPath`
+  (model+method+`alt=sse`+`?key=`). Seam extended: `UpstreamTranslator.
+  translateRequest` may return a per-request `path` (Gemini overrides it;
+  OpenAI leaves it). Provider `gemini` wired (query-param key via
+  `GOLEM_UPSTREAM_API_KEY`, non-caching, no header auth). **Unit- + proxy-
+  integration-verified** (the per-request path override incl. `?key=` and
+  Gemini↔Anthropic round-trip through the real proxy); **NOT live-tested** —
+  no Gemini key in-session (a user-side end-to-end check remains). Base URL:
+  `https://generativelanguage.googleapis.com/v1beta`.
