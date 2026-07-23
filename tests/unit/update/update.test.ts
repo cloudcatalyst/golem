@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -94,6 +94,19 @@ describe("checkForUpdate", () => {
     expect(JSON.parse(await readFile(path.join(dir, "update-check.json"), "utf8")).latest).toBe(
       "0.2.0",
     );
+  });
+
+  it("writes nothing when no cacheDir is given (caller gate for non-Golem projects)", async () => {
+    const result = await checkForUpdate({
+      current: "0.1.0",
+      method: "npm",
+      fetchLatest: async () => "0.2.0",
+    });
+    expect(result.updateAvailable).toBe(true);
+    // No cacheDir → no cache file created anywhere. `golem update` relies on this
+    // to avoid bootstrapping `.golem/` in a project that isn't using Golem.
+    const entries = await readdir(dir);
+    expect(entries).toHaveLength(0);
   });
 
   it("reports up-to-date when latest == current", async () => {

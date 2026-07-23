@@ -78,6 +78,7 @@ import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
+import { golemDirExists } from "./local-model.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "./notes.js";
 import {
@@ -798,10 +799,17 @@ program
   .action(async (opts: { dir: string; check: boolean; force: boolean; json: boolean }) => {
     try {
       const method = detectInstallMethod();
+      // Only cache the verdict inside an EXISTING `.golem/` — never create one in
+      // a project that isn't using Golem. (The VS Code extension polls
+      // `golem update --check` in every window; without this it littered
+      // unrelated repos with `.golem/state/update-check.json`.)
+      const cacheDir = (await golemDirExists(opts.dir))
+        ? path.join(opts.dir, ".golem", "state")
+        : undefined;
       const result = await checkForUpdate({
         current: VERSION,
         method,
-        cacheDir: path.join(opts.dir, ".golem", "state"),
+        ...(cacheDir !== undefined ? { cacheDir } : {}),
         force: opts.force,
       });
 
