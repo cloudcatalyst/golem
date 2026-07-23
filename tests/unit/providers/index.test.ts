@@ -7,10 +7,40 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultAuthScheme,
+  isTranslatingProvider,
   makeAuthMapper,
   resolveAuthScheme,
   upstreamAssumesCaching,
+  upstreamChatCompletionsPath,
 } from "../../../src/providers/index.js";
+
+describe("translating providers (case b)", () => {
+  it("classifies openai/ollama as translating and the case-(a) set as not", () => {
+    expect(isTranslatingProvider("openai")).toBe(true);
+    expect(isTranslatingProvider("ollama")).toBe(true);
+    for (const p of ["anthropic", "azure-foundry", "openrouter", "custom"] as const) {
+      expect(isTranslatingProvider(p)).toBe(false);
+    }
+  });
+
+  it("auth defaults: openai bearer, ollama none (inherit)", () => {
+    expect(defaultAuthScheme("openai")).toBe("bearer");
+    expect(defaultAuthScheme("ollama")).toBe("inherit");
+  });
+
+  it("treats openai/ollama as NON-caching (semantic stage may engage)", () => {
+    expect(upstreamAssumesCaching("openai")).toBe(false);
+    expect(upstreamAssumesCaching("ollama")).toBe(false);
+  });
+
+  it("derives the chat-completions path from the base URL, preserving any prefix", () => {
+    expect(upstreamChatCompletionsPath("http://gpubox.lan:11434/v1")).toBe("/v1/chat/completions");
+    expect(upstreamChatCompletionsPath("https://api.openai.com/v1")).toBe("/v1/chat/completions");
+    expect(upstreamChatCompletionsPath("https://host/openai/v1/")).toBe(
+      "/openai/v1/chat/completions",
+    );
+  });
+});
 
 describe("auth scheme resolution", () => {
   it("gives each provider a sensible default", () => {
