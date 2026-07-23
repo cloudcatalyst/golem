@@ -126,9 +126,14 @@ memos were retired to git history). R5.4's threat model is ADR-0002.
 | R5.4 | ~~Cruise-control autonomy modes with approval gates.~~ — **DONE** 2026-07-16: threat model written first (ADR-0002); `src/autonomy/` (levels manual/assisted/outcome, conservative classifier, gate) + `PreToolUse` hook (`golem hook pre-tool-use`) + `golem autonomy show/set/wire/unwire/log`. Default-deny/fail-closed proven — never auto-approves destructive/outward, errors → native prompt. Opt-in (not auto-wired by init); surfaced in the R5.2 report. +27 tests, 1004 green. See debriefs/2026-07-16-R5.4.md. | ✅ | 20d / WS-F4 |
 | R5.5 | ~~Writing-style adaptation & prompt translation (local-LLM, fully inspectable).~~ — **DONE (spike)** 2026-07-16: `src/prompt/` — `translatePrompt` (local rewrite, always shown/never sent/off proxy path, few-shot on accepted examples), `golem prompt translate/accept`. Scoring loop deliberately NOT built — demand-gated (see debrief). +6 tests, 1018 green. See debriefs/2026-07-16-R5.5.md. | ✅ | 20g |
 
-### R6 — Multi-provider & remote — ⛔ ON HOLD (security/ToS-gated)
-Formerly R5. Same hold + per-task design-memo gate as R5; R6.3 is the
-Decision 21b **companion app** the user has explicitly deferred.
+### R6 — Multi-provider & remote — ✅ CORE SHIPPED (2026-07-23); R6.3 deferred, 21e future
+Formerly R5; hold lifted 2026-07-23 by explicit user call. **R6.1 (a+b), R6.2
+(account switching), and R6.4 shipped** in one session (PRs #31–#40, suite
+1159→1237, no frozen-interface change, Anthropic path untouched). Retrospective:
+`docs/wiki/syntheses/r6-multi-provider-batch.md`. **Still open:** R6.3 companion
+app (user-deferred; highest-severity, needs its own threat-model ADR), 21e
+per-request routing + route-on-exhaustion (future decision; quota-evasion is
+ToS-OUT per ADR-0003), and live cloud end-to-end checks (need real keys).
 
 **Design memos written (2026-07-23, PROPOSED — no code):**
 `docs/plan/proposals/r6-multi-provider-remote-memos.md` covers R6.1/R6.2/R6.4
