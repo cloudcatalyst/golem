@@ -176,7 +176,16 @@ response-transform seam, then Gemini. Sliced b1→b4.
   with sequential blocks). Unit-verified exhaustively; live tool-call round-trip
   needs a backend model that emits native `tool_calls` (Ollama `qwen2.5-coder`
   returned the call as text — verification-notes §76).
-- **b4 (OpenAI + Gemini cloud): NEXT.** Anthropic path stays untouched.
+- **OpenAI: functional 2026-07-23** — no new code; the b1–b3 translator + the
+  `openai` provider (bearer key via `GOLEM_UPSTREAM_API_KEY`, `upstream_base_url`
+  + `upstream_model`). Provider wiring locked with tests. OpenAI emits native
+  `tool_calls`, so it live-verifies b3's tool path (a user-side check with a key).
+- **b4-gemini: NEXT, checkpoint-gated.** Gemini is a full SECOND translator
+  (different schema: `contents`/`parts`/`functionCall`, `role:"model"`) plus a
+  proxy-seam extension (query-param `?key=` auth + dynamic model-in-path /
+  `alt=sse`, which `mapUpstreamHeaders` can't do). API verified (§77); not
+  live-testable in-session. Recommend confirming before building (size + seam
+  change + no live test). **Case (b) core — OpenAI + Ollama — is complete.**
 
 ---
 
