@@ -6,9 +6,26 @@
 
 const vscode = require("vscode");
 const { execFile } = require("node:child_process");
+const fs = require("node:fs");
+const nodePath = require("node:path");
 const { buildModel, statusBarText, renderHtml } = require("./render.js");
 
 const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+
+/**
+ * Is the current workspace a Golem project? `golem init` writes
+ * `.golem/settings.json`; that file is the opt-in marker. The extension is
+ * installed globally (into VS Code's extensions dir), so it activates in EVERY
+ * window — we must stay invisible in projects that never opted into Golem
+ * rather than show a status bar / spawn the CLI everywhere.
+ */
+function isGolemProject() {
+  try {
+    return fs.existsSync(nodePath.join(cwd(), ".golem", "settings.json"));
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Run `golem <args>` in the workspace folder; resolve raw stdout or null.
@@ -123,6 +140,13 @@ async function setProxy(running) {
 }
 
 async function refresh() {
+  // Non-Golem project: the extension installs globally, so stay invisible here —
+  // hide the status bar and don't spawn the CLI in every unrelated window.
+  if (!isGolemProject()) {
+    lastModel = null;
+    if (statusBar) statusBar.hide();
+    return;
+  }
   // The status bar renders its own compact line from `model` (see
   // render.statusBarText) — intentionally distinct from `golem statusline` (the
   // terminal line): provider-focused (`→ <provider>`), no savings. Cumulative
@@ -136,6 +160,7 @@ async function refresh() {
       ? `\nUpdate available: ${model.currentVersion || "?"} → ${model.latestVersion || "?"}`
       : "";
     statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}${localLine}${updateLine}\nClick for actions`;
+    statusBar.show();
   }
   if (provider) provider.render(model);
 }
@@ -149,7 +174,8 @@ function activate(context) {
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBar.text = "⬢ Golem";
   statusBar.command = "golem.menu"; // click → actions menu (toggle proxy, slider, panel)
-  statusBar.show();
+  // Visibility is driven by refresh(): shown only in a Golem project, hidden
+  // elsewhere (the extension is installed globally). Don't show() unconditionally.
   context.subscriptions.push(statusBar);
 
   context.subscriptions.push(

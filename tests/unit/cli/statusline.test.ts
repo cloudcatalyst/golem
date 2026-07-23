@@ -98,15 +98,31 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain(String.fromCharCode(27));
   });
 
-  it("shows a hollow icon + 'proxy off' and HIDES the upstream when not running", () => {
+  it("renders a stopped proxy as hollow 'Passthrough' and still shows the destination", () => {
     const line = renderStatusLine(
       {},
       { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
     );
-    expect(line).toContain("⬡ Golem: Lossless");
-    expect(line).toContain("proxy off");
-    // Nothing is going to the upstream when the proxy is off — don't imply it is.
-    expect(line).not.toContain("→foundry");
+    // Proxy off = not transforming traffic → "Passthrough" (not the level name).
+    expect(line).toContain("⬡ Golem: Passthrough");
+    expect(line).not.toContain("Lossless");
+    expect(line).not.toContain("proxy off");
+    // The configured destination is still shown (passthrough goes straight there).
+    expect(line).toContain("→foundry");
+  });
+
+  it("renders slider level 0 (running) as filled 'Passthrough' with local+upstream", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 0,
+        upstreamLabel: "anthropic",
+        proxyRunning: true,
+        localModelReachable: true,
+      },
+    );
+    expect(line).toContain("⬢ Golem: Passthrough");
+    expect(line).toContain("→local+anthropic");
   });
 
   it("omits sections whose data is absent", () => {

@@ -89,8 +89,10 @@ function buildModel(stats, status, update) {
  * form `→ <provider>`. It deliberately OMITS cumulative savings, which live in
  * the hover tooltip (see extension.js) and the panel instead.
  *
- * When the proxy is off, the upstream is not shown — nothing is going there, so
- * `→ foundry` would mislead (mirrors the terminal statusline's rule).
+ * When Golem isn't transforming traffic — the proxy is stopped, or it's running
+ * at slider level 0 (full bypass, Decision 30) — the level reads "Passthrough".
+ * The destination is still shown in every state (it's the configured upstream);
+ * a hollow glyph (⬡) signals a stopped proxy.
  *
  * When a local model is reachable, `local` is folded into the destination
  * ahead of the upstream provider (`→ local + <provider>`) at ANY slider level —
@@ -106,13 +108,19 @@ function statusBarText(model) {
   // The update nudge shows regardless of proxy state — it's about the install,
   // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
   const badge = model.updateAvailable ? " $(arrow-up)" : "";
-  if (!model.proxyReachable) return `${glyph} Golem · proxy off${badge}`;
-  const levelLabel = model.sliderName
-    ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
-    : `L${model.slider}`;
-  const destination = model.localModelReachable
-    ? `local + ${model.upstreamLabel}`
-    : model.upstreamLabel;
+  // "Passthrough" whenever Golem isn't transforming traffic: the proxy is
+  // stopped, or it's running at slider level 0 (full bypass, Decision 30).
+  const passthrough = !model.proxyReachable || model.slider === 0;
+  const levelLabel = passthrough
+    ? "Passthrough"
+    : model.sliderName
+      ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
+      : `L${model.slider}`;
+  // Destination shown in every state (including passthrough/off) — it's the
+  // configured upstream. `local` folds in ahead of it whenever a local model is
+  // reachable, at ANY level (Decision 30).
+  const upstream = model.upstreamLabel || "upstream";
+  const destination = model.localModelReachable ? `local + ${upstream}` : upstream;
   return `${glyph} Golem · ${levelLabel} → ${destination}${badge}`;
 }
 
