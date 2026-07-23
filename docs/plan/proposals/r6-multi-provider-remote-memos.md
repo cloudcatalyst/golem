@@ -265,10 +265,14 @@ credentials and route (Decision 21d). Two capabilities:
 
 ### Status
 
-**PROPOSED, blocked on two gates.** Do **not** start before (a) the ToS review
-returns a clear in-scope answer, and (b) a credential-storage threat-model ADR
-is written and reviewed. Sequence **after R6.1** (needs its adapters). This is
-the highest-severity R6 task after R6.3.
+**PROPOSED, blocked on two gates.** R6.1 (its dependency) is now shipped, and the
+credential/ToS **threat-model ADR is drafted** — `decisions/ADR-0003`
+(2026-07-23, PROPOSED): env-var-first secrets (never a setting, no
+plaintext-on-disk), fail-closed selection, audit log, no tool surface; ToS scope
+= legitimate account/provider switching IN, automated quota-evasion OUT. **Code
+still blocked** until (a) the USER makes the ToS scope decision and (b) accepts
+the ADR (the ADR-0002 "threat model reviewed before code" bar). This is the
+highest-severity R6 task after R6.3.
 
 ---
 
