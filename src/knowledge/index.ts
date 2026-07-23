@@ -84,6 +84,8 @@ export {
   NotImplementedYetError,
   supportsIncremental,
 } from "./knowledge-base.js";
+export type { RawPage, RawPageHeaders } from "./raw-fetch.js";
+export { fetchRawPage } from "./raw-fetch.js";
 export { rerankHits } from "./rerank.js";
 export { chunkCodeSyntaxAware } from "./tree-sitter-chunker.js";
 export type { WebCacheEntry, WebCacheMeta } from "./web-cache.js";

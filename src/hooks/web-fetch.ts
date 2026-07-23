@@ -19,9 +19,11 @@
 import { z } from "zod";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import {
+  fetchRawPage,
   findDraftByUrl,
   type IncrementalIngest,
   isFresh,
+  type RawPage,
   supportsIncremental,
   WebCache,
   type WebCacheEntry,
@@ -129,6 +131,17 @@ export interface WebFetchHookOptions {
   readonly revalidate?: RevalidateFn;
   /** Per-project gate for {@link revalidate}; CLI reads `knowledge.webcache_revalidate`. */
   readonly revalidateEnabled?: (projectDir: string) => Promise<boolean>;
+  /**
+   * Decision 42: fetch the RAW page ourselves (default {@link fetchRawPage} via
+   * the CLI wiring; tests inject a fake). When present AND {@link fetchRawEnabled}
+   * allows it, the PostToolUse hook caches/ingests the raw page instead of Claude
+   * Code's prompt-specific WebFetch answer. A raw fetch that throws caches
+   * nothing (an honest miss) — the answer is never stored. Absent → legacy
+   * answer-capture behavior.
+   */
+  readonly fetchRaw?: (url: string) => Promise<RawPage>;
+  /** Per-project gate for {@link fetchRaw}; CLI reads `knowledge.webcache_fetch_raw`. */
+  readonly fetchRawEnabled?: (projectDir: string) => Promise<boolean>;
 }
 
 /** Default {@link RevalidateFn}: a conditional GET that reads status + headers only (body cancelled). */
@@ -183,18 +196,18 @@ function metaFrom(res: RevalidateResponse, nowMs: number): WebCacheMeta {
   };
 }
 
-/** Write the deny-with-cached-content response for a cache hit. */
-async function serveCached(
+/** Write a `deny` PreToolUse decision that hands Claude `content` as the reason. */
+async function writeServedDeny(
   io: HookIo,
   projectDir: string,
   url: string,
-  entry: WebCacheEntry,
-  nowMs: number,
+  content: string,
+  intro: string,
 ): Promise<void> {
   const served =
-    entry.content.length > MAX_SERVED_CHARS
-      ? `${entry.content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
-      : entry.content;
+    content.length > MAX_SERVED_CHARS
+      ? `${content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
+      : content;
 
   // Lazy-backfill pointer (T3): note an existing distill draft, if any.
   // Self-contained — a lookup failure here must never regress the serve.
@@ -210,21 +223,130 @@ async function serveCached(
     // best-effort only
   }
 
-  const reason =
-    `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), ` +
-    `skipping the web fetch. Content follows:\n\n${served}${draftNote}`;
   io.stdout.write(
     `${JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
         permissionDecision: "deny",
-        permissionDecisionReason: reason,
+        permissionDecisionReason: `${intro}\n\n${served}${draftNote}`,
       },
     })}\n`,
   );
 }
 
-/** PreToolUse(WebFetch): serve a fresh cached URL and skip the fetch, else allow. */
+/** Serve a fresh cache hit (deny + cached content), skipping the fetch. */
+async function serveCached(
+  io: HookIo,
+  projectDir: string,
+  url: string,
+  entry: WebCacheEntry,
+  nowMs: number,
+): Promise<void> {
+  await writeServedDeny(
+    io,
+    projectDir,
+    url,
+    entry.content,
+    `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), skipping the web fetch. Content follows:`,
+  );
+}
+
+/**
+ * Serve a page Golem just fetched itself (Decision 42, Option A): the RAW page,
+ * not WebFetch's prompt-specific summarizer output. Skips the WebFetch tool.
+ */
+async function serveFetched(
+  io: HookIo,
+  projectDir: string,
+  url: string,
+  content: string,
+): Promise<void> {
+  await writeServedDeny(
+    io,
+    projectDir,
+    url,
+    content,
+    "✓ Golem fetched this page directly and served its raw content (skipping WebFetch's summarizer, so the text is prompt-independent and now cached). Content follows:",
+  );
+}
+
+/** Best-effort ingest of a fetched page into the vector KB (same embedder as auto-index). */
+async function ingestWebPage(
+  options: WebFetchHookOptions,
+  projectDir: string,
+  url: string,
+  content: string,
+  fetchedAt: string,
+): Promise<void> {
+  if (options.buildKnowledge === undefined) return;
+  const kb = await options.buildKnowledge(projectDir);
+  if (kb !== null && supportsIncremental(kb)) {
+    await (kb as KnowledgeBase & IncrementalIngest).ingestText(projectDir, `web:${url}`, content, {
+      url,
+      fetchedAt,
+      kind: "web",
+    });
+  }
+}
+
+/**
+ * Decision 42 (Option A): on a cache miss, fetch the RAW page ourselves, cache +
+ * ingest it, and serve it back via a `deny` — so Claude Code's WebFetch never
+ * runs. Returns true when served; false when the caller should fail open and let
+ * WebFetch run (fetch failed, or the extracted page was empty). Only the network
+ * fetch is treated as fail-open; a cache/serve error propagates to the caller's
+ * outer fail-safe.
+ */
+async function fetchCacheAndServe(
+  io: HookIo,
+  projectDir: string,
+  cache: WebCache,
+  url: string,
+  options: WebFetchHookOptions,
+  nowMs: number,
+  nowIso: string,
+): Promise<boolean> {
+  const fetchRaw = options.fetchRaw;
+  if (fetchRaw === undefined) return false; // caller guarantees this; narrows the type
+
+  let raw: RawPage;
+  try {
+    raw = await fetchRaw(url);
+  } catch (err) {
+    io.stderr.write(
+      `golem hook web-fetch-pre: raw fetch of ${url} failed (${
+        err instanceof Error ? err.message : String(err)
+      }); allowing WebFetch\n`,
+    );
+    return false; // fail-open: let Claude Code's WebFetch handle it
+  }
+
+  // Redact BEFORE storing/serving (hard rule): pipeline stage first, built-in strip on top.
+  const content = stripKnownSecrets((options.redact ?? pipelineRedact)(raw.content));
+  if (content.length === 0) return false; // empty extraction → let WebFetch try
+
+  const meta: WebCacheMeta = { ...metaFrom({ status: 200, ...raw.headers }, nowMs), raw: true };
+  await cache.put(url, content, nowIso, meta);
+
+  // Ingest is best-effort — a KB failure must never block serving the page.
+  try {
+    await ingestWebPage(options, projectDir, url, content, nowIso);
+  } catch {
+    // best-effort only
+  }
+
+  await serveFetched(io, projectDir, url, content);
+  return true;
+}
+
+/**
+ * PreToolUse(WebFetch). Decision 42, Option A: raw mode makes this the canonical
+ * fetch-cache-serve engine — on a cache miss (or a stale/changed/legacy entry) it
+ * fetches the RAW page itself, caches + ingests it, and serves it via `deny`, so
+ * Claude Code's WebFetch never runs. A failed self-fetch falls open (WebFetch
+ * runs). With raw mode off it degrades to the legacy behavior: serve a fresh
+ * cached entry, else allow the fetch (the post hook captures the answer).
+ */
 export async function runWebFetchPre(
   io: HookIo,
   options: WebFetchHookOptions = {},
@@ -237,12 +359,33 @@ export async function runWebFetchPre(
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
     const cache = options.cache ?? new WebCache(webCacheDir(projectDir));
-    const entry = await cache.get(url);
-    if (entry === null) return 0; // not cached → let the fetch proceed
-
     const ttl = options.ttlHours ?? DEFAULT_WEB_CACHE_TTL_HOURS;
     const nowMs = options.nowMs ?? Date.now();
-    if (!isFresh(entry, ttl, nowMs)) return 0; // past the hard TTL cap → re-fetch
+    const nowIso = options.nowIso ?? new Date().toISOString();
+
+    // Raw mode: a fetcher is wired (CLI injects fetchRawPage) AND the per-project
+    // gate allows it. When on, this hook owns caching and serves the raw page.
+    const rawMode =
+      options.fetchRaw !== undefined &&
+      (options.fetchRawEnabled === undefined || (await options.fetchRawEnabled(projectDir)));
+
+    // "Should we self-fetch and serve the raw page for this miss?" In raw mode we
+    // do; otherwise we fall open and let the post hook capture WebFetch's answer.
+    const serveMiss = (): Promise<boolean> =>
+      rawMode
+        ? fetchCacheAndServe(io, projectDir, cache, url, options, nowMs, nowIso)
+        : Promise.resolve(false);
+
+    const entry = await cache.get(url);
+
+    // Miss, past-TTL, or (in raw mode) a legacy answer-entry with no `raw` marker →
+    // treat as a miss so we never keep serving a stale prompt-specific answer.
+    const usableHit =
+      entry !== null && isFresh(entry, ttl, nowMs) && (!rawMode || entry.raw === true);
+    if (!usableHit) {
+      await serveMiss(); // served the raw page (raw mode) or fell open — either way exit 0
+      return 0;
+    }
 
     // Optional conditional revalidation (opt-in): confirm the cached copy is
     // still current before serving it, so a changed page isn't served stale.
@@ -267,16 +410,15 @@ export async function runWebFetchPre(
         if (res !== null) {
           if (parseCacheControl(res.cacheControl).noStore) {
             await cache.delete(url);
-            return 0; // uncacheable now → re-fetch
+            await serveMiss(); // uncacheable now → re-fetch ourselves (raw mode) or fall open
+            return 0;
           }
           if (res.status === 200) {
-            // Changed: drop the stale entry outright, then let the fetch proceed
-            // (re-cache + re-ingest via the post hook). We deliberately do NOT
-            // stash the new validators onto the old content — if the re-fetch is
-            // cancelled/declined, a bare miss just re-fetches later, whereas old
-            // content wearing new validators would be served as fresh by a future
-            // 304. Fresh validators repopulate on the next revalidation.
+            // Changed: drop the stale entry, then re-fetch. We deliberately do NOT
+            // stash the new validators onto the old content — a cancelled re-fetch
+            // must never leave old content that a future 304 serves as fresh.
             await cache.delete(url);
+            await serveMiss();
             return 0;
           }
           if (res.status === 304) {
@@ -297,7 +439,16 @@ export async function runWebFetchPre(
   }
 }
 
-/** PostToolUse(WebFetch): redact + cache + ingest the fetched content. Store-only. */
+/**
+ * PostToolUse(WebFetch): store-only capture of WebFetch's answer. Store-only.
+ *
+ * Decision 42, Option A: in raw mode the PRE hook is the canonical cache writer
+ * (it fetches + serves the raw page, so the tool usually never runs). This hook
+ * therefore fires only when the pre hook fell open — a failed self-fetch — and in
+ * that case it deliberately caches NOTHING: storing WebFetch's prompt-specific
+ * answer is exactly the bug Decision 42 fixes. It caches the answer only when raw
+ * mode is OFF (the legacy behavior).
+ */
 export async function runWebFetchPost(
   io: HookIo,
   options: WebFetchHookOptions = {},
@@ -306,34 +457,27 @@ export async function runWebFetchPost(
     const parsed = payloadSchema.safeParse(JSON.parse(await readAll(io.stdin)));
     if (!parsed.success) return 0;
     const url = urlOf(parsed.data.tool_input);
-    const text = textOf(parsed.data.tool_response);
-    if (url === null || text === null || text.length === 0) return 0;
+    if (url === null) return 0;
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
+
+    // Raw mode → the pre hook owns caching; never cache WebFetch's answer here.
+    const rawMode =
+      options.fetchRaw !== undefined &&
+      (options.fetchRawEnabled === undefined || (await options.fetchRawEnabled(projectDir)));
+    if (rawMode) return 0;
+
+    // Legacy path (raw mode off): cache + ingest WebFetch's answer, redacted.
+    const text = textOf(parsed.data.tool_response);
+    if (text === null || text.length === 0) return 0;
     const nowIso = options.nowIso ?? new Date().toISOString();
     // Redact BEFORE storing/ingesting (hard rule): pipeline stage first
     // (defaults to pipelineRedact), built-in secret strip always on top.
     const content = stripKnownSecrets((options.redact ?? pipelineRedact)(text));
+    if (content.length === 0) return 0;
 
     await (options.cache ?? new WebCache(webCacheDir(projectDir))).put(url, content, nowIso);
-
-    // Also ingest into the vector KB for semantic search (same embedder as
-    // auto-index, so the collection isn't corrupted by mixed dimensions).
-    if (options.buildKnowledge !== undefined) {
-      const kb = await options.buildKnowledge(projectDir);
-      if (kb !== null && supportsIncremental(kb)) {
-        await (kb as KnowledgeBase & IncrementalIngest).ingestText(
-          projectDir,
-          `web:${url}`,
-          content,
-          {
-            url,
-            fetchedAt: nowIso,
-            kind: "web",
-          },
-        );
-      }
-    }
+    await ingestWebPage(options, projectDir, url, content, nowIso);
     return 0; // store-only: never write stdout
   } catch (err) {
     io.stderr.write(

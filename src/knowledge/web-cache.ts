@@ -26,12 +26,21 @@ const entrySchema = z.object({
   lastModified: z.string().optional(),
   /** Absolute ISO time before which the entry is fresh (from Cache-Control max-age / Expires). */
   expiresAt: z.string().optional(),
+  /**
+   * Decision 42: `true` marks an entry holding the RAW page (fetched by Golem
+   * itself), as opposed to a legacy entry holding Claude Code's prompt-specific
+   * WebFetch answer. Absent on entries written before Decision 42. The pre-hook
+   * serves only raw entries, so a legacy answer-entry is re-fetched as raw.
+   */
+  raw: z.boolean().optional(),
 });
 
 export type WebCacheEntry = z.infer<typeof entrySchema>;
 
-/** Revalidation metadata mergeable onto an entry (all optional). */
-export type WebCacheMeta = Partial<Pick<WebCacheEntry, "etag" | "lastModified" | "expiresAt">>;
+/** Revalidation metadata + the raw marker, mergeable onto an entry (all optional). */
+export type WebCacheMeta = Partial<
+  Pick<WebCacheEntry, "etag" | "lastModified" | "expiresAt" | "raw">
+>;
 
 /** Where a project's web-fetch cache lives. */
 export function webCacheDir(projectDir: string): string {
@@ -99,6 +108,7 @@ export class WebCache {
       ...(meta?.etag !== undefined ? { etag: meta.etag } : {}),
       ...(meta?.lastModified !== undefined ? { lastModified: meta.lastModified } : {}),
       ...(meta?.expiresAt !== undefined ? { expiresAt: meta.expiresAt } : {}),
+      ...(meta?.raw !== undefined ? { raw: meta.raw } : {}),
     };
     await writeFile(this.#fileFor(url), `${JSON.stringify(entry)}\n`, "utf8");
   }
@@ -116,10 +126,12 @@ export class WebCache {
     const etag = meta.etag ?? entry.etag;
     const lastModified = meta.lastModified ?? entry.lastModified;
     const expiresAt = meta.expiresAt ?? entry.expiresAt;
+    const raw = meta.raw ?? entry.raw;
     await this.put(url, entry.content, entry.fetchedAt, {
       ...(etag !== undefined ? { etag } : {}),
       ...(lastModified !== undefined ? { lastModified } : {}),
       ...(expiresAt !== undefined ? { expiresAt } : {}),
+      ...(raw !== undefined ? { raw } : {}),
     });
   }
 

@@ -31,6 +31,10 @@ export interface HookCommandOptions extends PostToolUseOptions {
   readonly revalidate?: WebFetchHookOptions["revalidate"];
   /** Per-project gate for `revalidate` (cli reads `knowledge.webcache_revalidate`). */
   readonly revalidateEnabled?: WebFetchHookOptions["revalidateEnabled"];
+  /** Raw-page fetcher (cli injects fetchRawPage) — Decision 42. */
+  readonly fetchRaw?: WebFetchHookOptions["fetchRaw"];
+  /** Per-project gate for `fetchRaw` (cli reads `knowledge.webcache_fetch_raw`). */
+  readonly fetchRawEnabled?: WebFetchHookOptions["fetchRawEnabled"];
 }
 
 /** Build the `hook` command group with the `post-tool-use` sub-command. */
@@ -112,6 +116,8 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
     ...(options.revalidateEnabled !== undefined
       ? { revalidateEnabled: options.revalidateEnabled }
       : {}),
+    ...(options.fetchRaw !== undefined ? { fetchRaw: options.fetchRaw } : {}),
+    ...(options.fetchRawEnabled !== undefined ? { fetchRawEnabled: options.fetchRawEnabled } : {}),
   });
 
   hook
