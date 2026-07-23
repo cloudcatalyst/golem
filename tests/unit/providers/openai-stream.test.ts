@@ -7,8 +7,12 @@ import { describe, expect, it } from "vitest";
 import { createOpenAIToAnthropicSSE } from "../../../src/providers/index.js";
 
 /** Feed the given raw chunks through the translator and collect the output text. */
-async function run(chunks: string[]): Promise<string> {
-  const t = createOpenAIToAnthropicSSE({ id: "msg_fb", model: "fb-model" });
+async function run(chunks: string[], mapReasoning?: boolean): Promise<string> {
+  const t = createOpenAIToAnthropicSSE({
+    id: "msg_fb",
+    model: "fb-model",
+    ...(mapReasoning !== undefined ? { mapReasoning } : {}),
+  });
   const out: Buffer[] = [];
   t.on("data", (c: Buffer) => out.push(Buffer.from(c)));
   const done = new Promise<void>((resolve) => t.on("end", () => resolve()));
@@ -141,6 +145,49 @@ describe("OpenAI → Anthropic SSE translation", () => {
     ].map((m) => JSON.parse(`"${m[1]}"`));
     expect(partials.join("")).toBe('{"city":"SF"}');
     expect(firstData(sse, "message_delta").delta).toMatchObject({ stop_reason: "tool_use" });
+  });
+
+  it("maps streamed reasoning_content to a leading thinking block (b4-kimi)", async () => {
+    const sse = await run([
+      'data: {"id":"c1","model":"kimi-k3","choices":[{"delta":{"reasoning_content":"let me "}}]}\n\n',
+      'data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(events(sse)).toEqual([
+      "message_start",
+      "content_block_start", // thinking, index 0
+      "content_block_delta", // thinking_delta "let me "
+      "content_block_delta", // thinking_delta "think"
+      "content_block_stop", // close thinking before opening text
+      "content_block_start", // text, index 1
+      "content_block_delta", // text_delta "answer"
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+    const starts = [...sse.matchAll(/event: content_block_start\ndata: (.+)/g)].map((m) =>
+      JSON.parse(m[1] as string),
+    );
+    expect(starts[0]).toMatchObject({ index: 0, content_block: { type: "thinking" } });
+    expect(starts[1]).toMatchObject({ index: 1, content_block: { type: "text" } });
+    const thinking = [...sse.matchAll(/"thinking_delta","thinking":"([^"]*)"/g)].map((m) => m[1]);
+    expect(thinking.join("")).toBe("let me think");
+  });
+
+  it("suppresses thinking blocks when mapReasoning is false", async () => {
+    const sse = await run(
+      [
+        'data: {"choices":[{"delta":{"reasoning_content":"hidden"}}]}\n\n',
+        'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ],
+      false,
+    );
+    expect(sse).not.toContain("thinking");
+    const texts = [...sse.matchAll(/"text_delta","text":"([^"]*)"/g)].map((m) => m[1]);
+    expect(texts.join("")).toBe("answer");
   });
 
   it("sequences text then a tool call as separate blocks (indices 0 then 1)", async () => {
