@@ -2533,3 +2533,55 @@ on the hooks facts already recorded in §41:
 - **The self-fetch is on the tool's critical (blocking) path** under Option A, so
   `fetchRawPage` bounds the request with `AbortSignal.timeout` (default 15 s) — a
   hang would otherwise stall the WebFetch tool. A timeout throws → fail-open.
+
+## §72 — Claude Code cost doc re-verified for R6.4 (2026-07-23, for Decision 21f)
+
+Re-fetched https://code.claude.com/docs/en/costs (2026-07-23) — Decision 21f
+originally cited it on 2026-07-04. The doc has moved on; the R6.4 benchmark must
+build against these current figures, not the 2026-07-04 memory.
+
+- **Baselines (updated).** "Across enterprise deployments, the average cost is
+  around **\$13 per developer per active day and \$150-250 per developer per
+  month**, with costs **remaining below \$30 per active day for 90% of users**."
+  The ~\$13/day figure Decision 21f cited persists; the \$150-250/month and
+  "<\$30/day for 90%" bounds are new and worth carrying as reference constants.
+  Guidance: "start with a small pilot group and use the tracking tools … to
+  establish a baseline before wider rollout" — i.e. the doc itself frames these
+  as *starting points*, not a delta to claim against (matches the memo's
+  honest-attribution caveat).
+- **Agent-team multiplier now qualified.** "Agent teams use approximately **7x
+  more tokens** than standard sessions **when teammates run in plan mode**,
+  because each teammate maintains its own context window." The 7× is unchanged
+  but now scoped to plan-mode teammates; Golem does not spawn agent teams, so
+  this is a reference number, not something Golem measures.
+- **Metrics the doc tracks (goal ii).** `/usage` Session block: total cost,
+  API/wall duration, code changes, and per-model input/output/**cache
+  read/cache write** token counts. On paid plans it "attributes recent usage to
+  **skills, subagents, plugins, and individual MCP servers**, with each shown as
+  a percentage of the total," **flags behaviors** (long context, cache misses)
+  when one "accounts for **10% or more** of recent usage," and toggles **last
+  24 hours vs last 7 days** (`d`/`w`; VS Code Day/Week). Figures are
+  "computed from **local session history on this machine**" — other devices /
+  claude.ai excluded.
+  - **Honest gap for R6.4:** Golem's telemetry attributes *Golem's own* MCP
+    tools (R4.3 `aggregateToolUsage`) and pipeline savings — it does **not** see
+    Claude Code's per-subagent/skill/plugin split (that lives in `/usage`, from
+    local session history Golem never parses). The benchmark surfaces Golem's
+    contribution against the doc's baselines; it is **not** a replacement for
+    `/usage` per-user billing and must say so.
+- **Reduction techniques Golem already automates (goal i).** The doc's own
+  headline example — "**Offload processing to hooks** … a hook can grep for
+  `ERROR` and return only matching lines, reducing context from tens of
+  thousands of tokens to hundreds" (a PreToolUse test-output filter) — is
+  exactly Golem's CCR oversized-output swap (B2). Others that map: "choose the
+  right model / delegate verbose operations to subagents" → Golem `coder` local
+  drafting; "prompt caching" (auto) → Golem's byte-faithful cache-stable path;
+  "usage tracking via `/usage`" → Golem A4 telemetry + `golem stats`; "reduce
+  MCP server overhead / prefer CLI tools" → Golem's deferred-tool + CLI-first
+  posture; "**keep CLAUDE.md under 200 lines**" → a cheap, checkable leanness
+  metric the benchmark can compute directly.
+- **Cost-safety.** All savings the benchmark reports must stay net-of-cache
+  (§30/§54, Decision 23/31): on Anthropic, lossless compression is ~0%; the real
+  levers Golem can honestly count are CCR offload, local drafting, and
+  `avoidedUpstream` — not gross-token compression. Reuse `effectiveInputTokens`
+  (cache write 1.25×, read 0.1×) for any input-cost figure.

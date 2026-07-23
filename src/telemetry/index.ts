@@ -14,7 +14,18 @@ import type { ResponseUsage } from "../proxy/types.js";
 import { JsonlTelemetryStore } from "./jsonl-store.js";
 import type { TelemetryEvent, TelemetryStore, UsageTotals } from "./types.js";
 
-export { JsonlTelemetryStore, telemetryFilePath } from "./jsonl-store.js";
+export {
+  type BenchWindow,
+  buildCostBenchmark,
+  CLAUDE_MD_RECOMMENDED_MAX_LINES,
+  COST_DOC_BASELINES,
+  type CostBenchmarkReport,
+  type GolemSavings,
+  renderCostBenchmark,
+  type ToolAttribution,
+  windowStartMs,
+} from "./cost-benchmark.js";
+export { JsonlTelemetryStore, readTelemetryEvents, telemetryFilePath } from "./jsonl-store.js";
 export type {
   AvoidedUpstreamStats,
   TelemetryEvent,
