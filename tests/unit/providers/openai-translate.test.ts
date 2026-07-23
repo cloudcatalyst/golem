@@ -207,6 +207,18 @@ describe("tool-use request mapping (b3)", () => {
     });
   });
 
+  it("passes reasoning_effort through when set (b4-kimi)", () => {
+    expect(
+      anthropicToOpenAIChat(buf({ model: "m", messages: [] }), {
+        model: "kimi-k3",
+        reasoningEffort: "high",
+      }).reasoning_effort,
+    ).toBe("high");
+    expect(
+      anthropicToOpenAIChat(buf({ model: "m", messages: [] })).reasoning_effort,
+    ).toBeUndefined();
+  });
+
   it("expands tool_use → assistant tool_calls and tool_result → role:tool", () => {
     const out = anthropicToOpenAIChat(
       buf({
@@ -237,5 +249,97 @@ describe("tool-use request mapping (b3)", () => {
       },
       { role: "tool", tool_call_id: "tu_1", content: "72F" },
     ]);
+  });
+});
+
+describe("vision passthrough (b4-kimi)", () => {
+  it("maps a base64 image block to an OpenAI image_url data URI, alongside text", () => {
+    const out = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(out.messages[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "what is this?" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+    });
+  });
+
+  it("passes a URL image through and drops an unsupported file source", () => {
+    const url = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "image", source: { type: "url", url: "https://x/y.png" } }],
+          },
+        ],
+      }),
+    );
+    expect(url.messages[0]?.content).toEqual([
+      { type: "image_url", image_url: { url: "https://x/y.png" } },
+    ]);
+
+    // A Files-API `file` source has no OpenAI equivalent → dropped; text stays a string.
+    const file = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "hi" },
+              { type: "image", source: { type: "file", file_id: "f1" } },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(file.messages[0]).toEqual({ role: "user", content: "hi" });
+  });
+});
+
+describe("reasoning_content → thinking (b4-kimi)", () => {
+  const fallback = { id: "msg_x", model: "kimi-k3" };
+  it("prepends a thinking block before the text (non-streaming)", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        choices: [
+          {
+            message: { reasoning_content: "let me reason", content: "the answer" },
+            finish_reason: "stop",
+          },
+        ],
+      }),
+      fallback,
+    );
+    expect(out.content).toEqual([
+      { type: "thinking", thinking: "let me reason" },
+      { type: "text", text: "the answer" },
+    ]);
+  });
+
+  it("suppresses the thinking block when mapReasoning is false", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        choices: [{ message: { reasoning_content: "r", content: "a" }, finish_reason: "stop" }],
+      }),
+      fallback,
+      { mapReasoning: false },
+    );
+    expect(out.content).toEqual([{ type: "text", text: "a" }]);
   });
 });

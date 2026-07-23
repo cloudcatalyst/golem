@@ -78,6 +78,20 @@ export const SETTINGS_LEAVES = {
      */
     upstream_model: z.string().min(1).optional(),
     /**
+     * R6.1 case (b) b4-kimi: reasoning depth for a reasoning upstream (Kimi k3,
+     * o-series) — `low`/`high`/`max`. Sent as OpenAI `reasoning_effort`; omit
+     * for non-reasoning backends (some reject the field). No effect on the
+     * Anthropic-native path.
+     */
+    upstream_reasoning_effort: z.enum(["low", "high", "max"]).optional(),
+    /**
+     * R6.1 case (b) b4-kimi: map a reasoning upstream's `reasoning_content` (the
+     * thinking trace) to Anthropic `thinking` blocks so the editor shows it.
+     * Default on; only fires when the upstream actually returns reasoning
+     * content. Set false if a client mishandles unrequested thinking blocks.
+     */
+    map_reasoning_to_thinking: z.boolean(),
+    /**
      * R6.2 (spec Decision 21d; ADR-0003): the account registry for switching
      * between the user's own accounts/providers. Each entry is NON-SECRET
      * identity only (id, provider, base_url, optional model/auth_scheme); the
@@ -271,6 +285,8 @@ export interface ProxySettings {
   readonly upstream_provider: UpstreamProvider;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
   readonly upstream_model?: string;
+  readonly upstream_reasoning_effort?: "low" | "high" | "max";
+  readonly map_reasoning_to_thinking: boolean;
   readonly accounts?: readonly UpstreamAccount[];
   readonly active_account?: string;
   readonly request_timeout_ms: number;
@@ -332,6 +348,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     upstream_base_url: "https://api.anthropic.com",
     upstream_provider: "anthropic",
     upstream_auth_scheme: "inherit",
+    map_reasoning_to_thinking: true,
     request_timeout_ms: 600_000,
     connect_timeout_ms: 10_000,
   },
