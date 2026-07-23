@@ -2655,3 +2655,33 @@ with `qwen2.5-coder:7b`:
 - **Model override is required** for translating providers: Claude Code sends a
   `claude-*` model Ollama lacks, so `proxy.upstream_model` (e.g. `qwen2.5-coder:7b`)
   overrides it; the proxy warns at startup if it is unset.
+
+## §75 — R6.1 case (b) b2: streaming translation LIVE-verified against Ollama (2026-07-23)
+
+b2 adds SSE streaming translation (OpenAI deltas → Anthropic event stream) — the
+slice that makes real Claude Code traffic (`stream:true`) work against an
+OpenAI-schema upstream. Live-tested the same way as b1, streaming:
+
+- **Request:** `POST /v1/messages` with `stream:true`. The translator now HONORS
+  the client's stream flag (b1 forced it off) and adds
+  `stream_options:{include_usage:true}`; the proxy detects the streaming request
+  and pipes the upstream OpenAI SSE through `OpenAIChatSSETranslator` to the
+  client live (never buffered).
+- **Response:** HTTP 200 `text/event-stream`, a well-formed Anthropic event
+  sequence — `message_start` → `content_block_start` → `content_block_delta`×N →
+  `content_block_stop` → `message_delta` (`stop_reason:end_turn`,
+  `usage:{input_tokens:37, output_tokens:3}`) → `message_stop`. Streamed text
+  reassembled to `PONG`.
+- **Protocol mapping confirmed:** OpenAI `choices[].delta.content` →
+  `content_block_delta{text_delta}`; `finish_reason` → Anthropic `stop_reason`
+  (via `mapStopReason`); the final OpenAI `usage` chunk (requested via
+  `stream_options`, and emitted by Ollama) → `message_delta.usage`. `[DONE]` and
+  partial-line chunk boundaries handled (the Transform buffers an incomplete tail
+  and re-parses).
+- **Known accounting caveat:** Anthropic puts `input_tokens` in `message_start`,
+  but OpenAI streaming reports usage only at the END — so `message_start.usage`
+  carries `input_tokens:0` and the real counts land in `message_delta.usage`.
+  Some clients under-count input tokens as a result; acceptable for a local
+  Ollama run and documented. (A fix would buffer the head, defeating streaming.)
+- **b2 scope:** single text content block. Streaming tool-use (OpenAI
+  `delta.tool_calls` → Anthropic `input_json_delta`) is **b3**.

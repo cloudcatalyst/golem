@@ -167,9 +167,11 @@ export class GolemProxy {
     let requestPath = this.basePath + forward.url;
     let requestBody = forward.body;
     let requestHeaders = upstreamHeaders;
+    let translateStreaming = false;
     if (translate !== undefined) {
+      let translated: { body: Buffer; stream: boolean };
       try {
-        requestBody = translate.translateRequest(forward.body);
+        translated = translate.translateRequest(forward.body);
       } catch (err) {
         this.respondProxyError(
           res,
@@ -178,6 +180,8 @@ export class GolemProxy {
         );
         return;
       }
+      requestBody = translated.body;
+      translateStreaming = translated.stream;
       requestPath = translate.path;
       requestHeaders = { ...upstreamHeaders, "content-type": "application/json" };
     }
@@ -201,21 +205,48 @@ export class GolemProxy {
       return;
     }
 
-    // Translating upstream (b1, non-streaming): buffer the response, convert it
-    // to the Anthropic shape, and write that. This is the ONLY path that parses
-    // a response body — the Anthropic passthrough below stays a raw byte pipe.
+    // Translating upstream (R6.1 case b): convert the response to the Anthropic
+    // shape. This is the ONLY path that parses/reserializes a response body — the
+    // Anthropic passthrough below stays a raw byte pipe. An upstream error is
+    // surfaced unchanged in either mode.
     if (translate !== undefined) {
+      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+        let raw: Buffer;
+        try {
+          raw = Buffer.from(await upstream.body.arrayBuffer());
+        } catch {
+          res.destroy();
+          return;
+        }
+        res.writeHead(upstream.statusCode, forwardableResponseHeaders(upstream.headers));
+        res.end(raw);
+        return;
+      }
+
+      if (translateStreaming) {
+        // b2: pipe the OpenAI SSE stream through the translator to the client
+        // live, so tokens arrive incrementally. Never buffered.
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.flushHeaders();
+        try {
+          await pipeline(upstream.body, translate.createStreamTranslator(), res);
+        } catch {
+          res.destroy();
+          upstream.body.destroy();
+        }
+        return;
+      }
+
+      // b1: non-streaming — buffer, translate, write the Anthropic JSON body.
       let raw: Buffer;
       try {
         raw = Buffer.from(await upstream.body.arrayBuffer());
       } catch {
         res.destroy();
-        return;
-      }
-      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-        // Surface the upstream's own error body/status unchanged.
-        res.writeHead(upstream.statusCode, forwardableResponseHeaders(upstream.headers));
-        res.end(raw);
         return;
       }
       let translated: Buffer;

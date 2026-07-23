@@ -27,7 +27,8 @@ describe("anthropicToOpenAIChat", () => {
       { model: "qwen2.5-coder:7b" },
     );
     expect(out.model).toBe("qwen2.5-coder:7b"); // override wins (Ollama has no claude-*)
-    expect(out.stream).toBe(false);
+    expect(out.stream).toBe(true); // b2: the client's stream flag is honored
+    expect(out.stream_options).toEqual({ include_usage: true });
     expect(out.max_tokens).toBe(256);
     expect(out.temperature).toBe(0.2);
     expect(out.top_p).toBe(0.9);
