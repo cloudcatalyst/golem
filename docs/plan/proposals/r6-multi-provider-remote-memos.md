@@ -165,8 +165,13 @@ response-transform seam, then Gemini. Sliced b1→b4.
   path that parses a response body; Anthropic path stays a raw pipe); providers
   `openai`/`ollama`, `proxy.upstream_model`. **Live-verified against local
   Ollama** (verification-notes §74). +12 tests, 1196 green.
-- **b2 (SSE streaming), b3 (tool-use mapping), b4 (OpenAI/Gemini cloud): NEXT.**
-  Anthropic path must stay untouched (recorded-shape tests).
+- **b2 DONE 2026-07-23** (debrief `2026-07-23-R6.1b2.md`): SSE streaming
+  translation (`OpenAIChatSSETranslator`, OpenAI deltas → Anthropic event
+  stream), piped live by the proxy; the request now honors `stream:true`.
+  **Live-verified vs Ollama** (verification-notes §75) — this is the slice that
+  makes real Claude Code traffic usable against an OpenAI-schema upstream.
+- **b3 (tool-use mapping), b4 (OpenAI/Gemini cloud): NEXT.** Anthropic path stays
+  untouched (recorded-shape tests).
 
 ---
 

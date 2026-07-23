@@ -21,6 +21,7 @@ import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import {
   anthropicToOpenAIChat,
+  createOpenAIToAnthropicSSE,
   isTranslatingProvider,
   makeAuthMapper,
   openAIChatToAnthropic,
@@ -194,33 +195,28 @@ export function buildProxyFromSettings(
         "GOLEM_UPSTREAM_API_KEY; forwarding the client's own auth unchanged for now.\n",
     );
   }
-  // R6.1 case (b) slice b1: for an OpenAI-schema upstream (OpenAI / Ollama),
-  // translate request+response bodies (NON-STREAMING). The pipeline still runs
-  // in Anthropic terms before this; translation is the last step.
+  // R6.1 case (b): for an OpenAI-schema upstream (OpenAI / Ollama), translate
+  // request+response bodies. Non-streaming (b1) uses translateResponse; streaming
+  // (b2) uses createStreamTranslator. The pipeline still runs in Anthropic terms
+  // before this; translation is the last step.
   const upstreamModel = settings.proxy.upstream_model;
+  const translateFallback = {
+    id: "msg_golem_translated",
+    model: upstreamModel ?? upstreamProvider,
+  };
   const translateUpstream = isTranslatingProvider(upstreamProvider)
     ? {
         path: upstreamChatCompletionsPath(settings.proxy.upstream_base_url),
-        translateRequest: (body: Buffer | null): Buffer =>
-          Buffer.from(
-            JSON.stringify(
-              anthropicToOpenAIChat(
-                body,
-                upstreamModel !== undefined ? { model: upstreamModel } : {},
-              ),
-            ),
-            "utf8",
-          ),
+        translateRequest: (body: Buffer | null): { body: Buffer; stream: boolean } => {
+          const req = anthropicToOpenAIChat(
+            body,
+            upstreamModel !== undefined ? { model: upstreamModel } : {},
+          );
+          return { body: Buffer.from(JSON.stringify(req), "utf8"), stream: req.stream };
+        },
         translateResponse: (body: Buffer): Buffer =>
-          Buffer.from(
-            JSON.stringify(
-              openAIChatToAnthropic(body, {
-                id: "msg_golem_translated",
-                model: upstreamModel ?? upstreamProvider,
-              }),
-            ),
-            "utf8",
-          ),
+          Buffer.from(JSON.stringify(openAIChatToAnthropic(body, translateFallback)), "utf8"),
+        createStreamTranslator: () => createOpenAIToAnthropicSSE(translateFallback),
       }
     : undefined;
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {

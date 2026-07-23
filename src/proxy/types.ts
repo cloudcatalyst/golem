@@ -20,6 +20,8 @@
  * new field/name — never confused with the removed `localResponse` seam.
  */
 
+import type { Transform } from "node:stream";
+
 /** Header that forces pure passthrough. Stripped before forwarding upstream. */
 export const BYPASS_HEADER = "x-golem-bypass";
 
@@ -163,17 +165,28 @@ export interface ProxyServerOptions {
 
 /**
  * Translates between the Anthropic Messages protocol the client speaks and an
- * OpenAI-schema upstream (R6.1 case b, b1 = non-streaming). Both methods throw
- * on an untranslatable body; the proxy turns that into a clean proxy error
- * rather than forwarding a mismatched shape.
+ * OpenAI-schema upstream (R6.1 case b). `translateRequest` reports whether the
+ * request is streaming so the proxy picks the matching response path:
+ * non-streaming → buffer + {@link translateResponse} (b1); streaming →
+ * {@link createStreamTranslator} piped live (b2). The translate methods throw on
+ * an untranslatable body; the proxy turns that into a clean proxy error rather
+ * than forwarding a mismatched shape.
  */
 export interface UpstreamTranslator {
   /** Full upstream request path (relative to the base URL origin). */
   readonly path: string;
-  /** Anthropic request body → upstream (OpenAI) request body bytes. */
-  translateRequest(body: Buffer | null): Buffer;
-  /** Upstream (OpenAI) non-streaming response body → Anthropic response body bytes. */
+  /**
+   * Anthropic request body → upstream (OpenAI) request body bytes, plus whether
+   * the client asked to stream (drives the response path below).
+   */
+  translateRequest(body: Buffer | null): { readonly body: Buffer; readonly stream: boolean };
+  /** Upstream (OpenAI) NON-streaming response body → Anthropic response body bytes (b1). */
   translateResponse(body: Buffer): Buffer;
+  /**
+   * A fresh stream transform: OpenAI SSE bytes in → Anthropic SSE bytes out (b2).
+   * The proxy pipes `upstream.body` through this to the client. One per response.
+   */
+  createStreamTranslator(): Transform;
 }
 
 /** Fully-resolved proxy configuration. */

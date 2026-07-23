@@ -19,9 +19,11 @@
  * from the `GOLEM_UPSTREAM_API_KEY` environment variable by the CLI wiring.
  */
 
+export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
 export {
   type AnthropicMessageResponse,
   anthropicToOpenAIChat,
+  mapStopReason,
   type OpenAIChatMessage,
   type OpenAIChatRequest,
   openAIChatToAnthropic,
