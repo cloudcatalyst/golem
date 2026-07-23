@@ -148,9 +148,19 @@ The honest framing for the review: R6.1's cost is almost entirely case (b).
 
 ### Status
 
-**PROPOSED.** Recommended as the **first** R6 build (it unblocks R6.2 and R2.6,
-and case (a) is low-risk). Needs the verification-notes pass + an explicit build
-ask. Anthropic path untouched is the acceptance invariant.
+**Case (a): DONE 2026-07-23** (verification-notes §73; debrief
+`2026-07-23-R6.1a.md`). Shipped the `upstream_provider`/`upstream_auth_scheme`
+config, `src/providers/` (auth-scheme resolution + header mapper + caching
+assumption), the additive `mapUpstreamHeaders` proxy seam, and the
+`assumeCachingUpstream` fix so Claude-via-Azure isn't misclassified as
+non-caching. Anthropic default path byte-identical (no mapper); +14 tests, 1184
+green. **Live-unverified** — no real Azure Foundry / OpenRouter credentials
+in-session (a user-side end-to-end check remains, like R7.3's binaries).
+
+**Case (b): NEXT** — per the user's actual goal (2026-07-23): OpenAI/ChatGPT +
+Ollama (local & LAN) via one OpenAI-Chat-Completions adapter + the
+response-transform seam, then Gemini. The high-scrutiny build; Anthropic path
+must stay untouched (recorded-shape tests).
 
 ---
 

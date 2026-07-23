@@ -2585,3 +2585,44 @@ build against these current figures, not the 2026-07-04 memory.
   levers Golem can honestly count are CCR offload, local drafting, and
   `avoidedUpstream` — not gross-token compression. Reuse `effectiveInputTokens`
   (cache write 1.25×, read 0.1×) for any input-cost figure.
+
+## §73 — R6.1 gateway protocols: which speak Anthropic-native vs OpenAI (2026-07-23, for Decision 22/R6.1)
+
+Verified for the R6.1 "provider adapters" case (a)-vs-(b) split (the memo,
+`proposals/r6-multi-provider-remote-memos.md`). Checked the live OpenRouter API
+reference (fetched 2026-07-23, served from Golem's own raw-fetch cache) and a web
+search of Microsoft Learn + MS Community Hub on Azure Foundry.
+
+- **Azure AI Foundry (Claude models) = Anthropic-native (case a).** Foundry's
+  Claude deployments respond ONLY to the native Anthropic Messages API, served at
+  **`https://<resource>.services.ai.azure.com/anthropic/v1/messages`**. An
+  OpenAI-style `/v1/chat/completions` request returns **404**. Auth: **`api-key`**
+  (or `x-api-key`) header, or Microsoft Entra ID **`Authorization: Bearer <token>`**.
+  Keep the Anthropic headers (`anthropic-version: 2023-06-01`, …). **Gotcha:** the
+  `model` field must equal the *Foundry deployment name* (e.g. `claude-opus-4-5`),
+  not Anthropic's dated model id. **Feature parity:** some Anthropic features
+  return 400 on Azure-hosted deployments; Claude Code already detects "Hosted on
+  Azure" and adapts. Sources: Microsoft Learn Q&A 5663566; techcommunity Azure AI
+  Foundry blog 4525212; litellm azure_anthropic docs.
+- **OpenRouter = OpenAI-schema primary, but ALSO exposes an Anthropic Messages
+  endpoint.** The overview documents the normalized **OpenAI Chat Completions**
+  body at `https://openrouter.ai/api/v1/chat/completions` (auth
+  `Authorization: Bearer <OPENROUTER_API_KEY>`), but the API-reference nav lists a
+  dedicated **"Anthropic Messages"** endpoint — so an Anthropic-native path is
+  available too (verify its exact base path + tool-use fidelity before relying on
+  it). Reaching non-Claude models / the normalized surface is OpenAI-schema =
+  **case (b)**.
+- **Implication for the build.** **Case (a) is small and byte-faithful-safe:**
+  the wire protocol is unchanged (Anthropic Messages), so SSE / tool-use blocks
+  pass through exactly as today — the only real work is (i) a per-provider
+  **upstream base URL** (Azure appends `/anthropic`, so the proxy's existing
+  "append request target to `upstreamBaseUrl` verbatim" gives
+  `…/anthropic/v1/messages` for a `/v1/messages` request — no path rewriting), and
+  (ii) **auth-header mapping** (Anthropic `x-api-key`; Azure `api-key` or Bearer;
+  OpenRouter Bearer). `isCachingUpstream` should conservatively treat these as
+  caching (Azure Foundry Claude prompt-cache behaviour unverified → assume caching
+  per Decision 31; semantic stage stays off). **Case (b)** (OpenAI translation +
+  the response-transform seam) remains the large, separate build the memo scopes.
+- **Cross-check needed at build time:** does Azure Foundry Claude honour Anthropic
+  prompt-cache `cache_control` blocks the same way? Unverified here — treat as
+  caching until measured (fail-safe: no semantic rewrite, byte-faithful).
