@@ -30,6 +30,7 @@ import {
   isTranslatingProvider,
   makeAuthMapper,
   openAIChatToAnthropic,
+  resolveActiveUpstream,
   resolveAuthScheme,
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
@@ -148,15 +149,40 @@ export function buildProxyFromSettings(
   // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
   // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.
   const forceSemanticOnCaching = settings.compression.force_semantic_on_caching;
-  // R6.1 case (a): the selected Anthropic-protocol provider governs the
-  // semantic stage's caching assumption (verification-notes §73). undefined for
-  // `anthropic` so the pipeline keeps its URL heuristic.
-  const assumeCachingUpstream = upstreamAssumesCaching(settings.proxy.upstream_provider);
+  // R6.2 (ADR-0003): resolve the ACTIVE account (or the legacy top-level config).
+  // Secrets are never a setting — the credential comes from the environment.
+  // A named-but-unknown active_account falls back to the top-level config with a
+  // warning (never a silent switch to a different account — fail-closed).
+  const { resolved: upstream, warning: accountWarning } = resolveActiveUpstream(
+    {
+      legacy: {
+        provider: settings.proxy.upstream_provider,
+        base_url: settings.proxy.upstream_base_url,
+        ...(settings.proxy.upstream_model !== undefined
+          ? { model: settings.proxy.upstream_model }
+          : {}),
+        auth_scheme: resolveAuthScheme(
+          settings.proxy.upstream_provider,
+          settings.proxy.upstream_auth_scheme,
+        ),
+      },
+      ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
+      ...(settings.proxy.active_account !== undefined
+        ? { activeAccount: settings.proxy.active_account }
+        : {}),
+      legacyApiKey: process.env.GOLEM_UPSTREAM_API_KEY,
+    },
+    process.env,
+  );
+  if (accountWarning !== undefined) process.stderr.write(`golem proxy: ${accountWarning}\n`);
+  // R6.1 case (a): the selected provider governs the semantic stage's caching
+  // assumption (verification-notes §73). undefined for `anthropic` → URL heuristic.
+  const assumeCachingUpstream = upstreamAssumesCaching(upstream.provider);
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: resolvePolicy,
     projectId: dir,
-    upstreamBaseUrl: settings.proxy.upstream_base_url,
+    upstreamBaseUrl: upstream.baseUrl,
     forceSemanticOnCaching,
     ...(assumeCachingUpstream !== undefined ? { assumeCachingUpstream } : {}),
     contextSubstitution: {
@@ -184,28 +210,30 @@ export function buildProxyFromSettings(
     ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
   // R6.1 case (a): auth-header mapping for a non-Anthropic Anthropic-protocol
-  // upstream. The credential is a secret read from the environment, never from
+  // upstream. The credential is a secret read from the environment (the active
+  // account's per-account var, or GOLEM_UPSTREAM_API_KEY), never from
   // settings.json. `inherit` (the Anthropic default) yields no mapper, so the
   // passthrough forwards the client's own auth verbatim.
-  const upstreamProvider = settings.proxy.upstream_provider;
-  const authScheme = resolveAuthScheme(upstreamProvider, settings.proxy.upstream_auth_scheme);
-  const upstreamApiKey = process.env.GOLEM_UPSTREAM_API_KEY;
+  const upstreamProvider = upstream.provider;
+  const authScheme = upstream.authScheme;
+  const upstreamApiKey = upstream.apiKey;
   const mapUpstreamHeaders = makeAuthMapper(authScheme, upstreamApiKey);
+  const accountLabel = upstream.accountId === null ? "" : ` (account "${upstream.accountId}")`;
   if (
     upstreamProvider !== "anthropic" &&
     authScheme !== "inherit" &&
     (upstreamApiKey === undefined || upstreamApiKey === "")
   ) {
     process.stderr.write(
-      `golem proxy: upstream_provider "${upstreamProvider}" needs a credential — set ` +
-        "GOLEM_UPSTREAM_API_KEY; forwarding the client's own auth unchanged for now.\n",
+      `golem proxy: upstream_provider "${upstreamProvider}"${accountLabel} needs a credential — ` +
+        "set the account's GOLEM_UPSTREAM_API_KEY[__<ID>]; forwarding the client's own auth for now.\n",
     );
   }
   // R6.1 case (b): translate request+response bodies for a non-Anthropic schema.
   // Non-streaming uses translateResponse; streaming uses createStreamTranslator.
   // The pipeline still runs in Anthropic terms before this; translation is last.
-  const upstreamModel = settings.proxy.upstream_model;
-  const upstreamBase = settings.proxy.upstream_base_url;
+  const upstreamModel = upstream.model;
+  const upstreamBase = upstream.baseUrl;
   const translateFallback = {
     id: "msg_golem_translated",
     model: upstreamModel ?? upstreamProvider,
@@ -264,7 +292,7 @@ export function buildProxyFromSettings(
   let lastLimitPersistMs = 0;
   const LIMIT_PERSIST_THROTTLE_MS = 3000;
   const proxy = new GolemProxy({
-    upstreamBaseUrl: settings.proxy.upstream_base_url,
+    upstreamBaseUrl: upstream.baseUrl,
     connectTimeoutMs: settings.proxy.connect_timeout_ms,
     headersTimeoutMs: settings.proxy.request_timeout_ms,
     bodyTimeoutMs: settings.proxy.request_timeout_ms,
