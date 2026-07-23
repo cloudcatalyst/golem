@@ -69,6 +69,14 @@ export const SETTINGS_LEAVES = {
      * a secret): set it via the `GOLEM_UPSTREAM_API_KEY` environment variable.
      */
     upstream_auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES),
+    /**
+     * R6.1 case (b): the model id to send to a translating (OpenAI-schema)
+     * upstream. Claude Code sends a `claude-*` model an OpenAI/Ollama backend
+     * does not have, so it is overridden here (e.g. `qwen2.5-coder:7b` for
+     * Ollama, `gpt-5.2` for OpenAI). Required in practice for `openai`/`ollama`;
+     * ignored by Anthropic-protocol providers (they receive the model as-is).
+     */
+    upstream_model: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
@@ -236,6 +244,7 @@ export interface ProxySettings {
   readonly upstream_base_url: string;
   readonly upstream_provider: UpstreamProvider;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
+  readonly upstream_model?: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
 }

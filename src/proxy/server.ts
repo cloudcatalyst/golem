@@ -158,13 +158,37 @@ export class GolemProxy {
       ? this.config.mapUpstreamHeaders({ ...forward.headers })
       : forward.headers;
 
+    // R6.1 case (b) slice b1: translate the request body to the OpenAI schema
+    // for a translating upstream (OpenAI / Ollama). The pipeline (redaction →
+    // compression) has already run in Anthropic terms above, so translation is
+    // the final step and never sees un-redacted content. A translation failure
+    // is a clean proxy error, not a mismatched-shape forward.
+    const translate = this.config.translateUpstream;
+    let requestPath = this.basePath + forward.url;
+    let requestBody = forward.body;
+    let requestHeaders = upstreamHeaders;
+    if (translate !== undefined) {
+      try {
+        requestBody = translate.translateRequest(forward.body);
+      } catch (err) {
+        this.respondProxyError(
+          res,
+          400,
+          `golem proxy: could not translate request to the upstream schema (${String(err)})`,
+        );
+        return;
+      }
+      requestPath = translate.path;
+      requestHeaders = { ...upstreamHeaders, "content-type": "application/json" };
+    }
+
     let upstream: Dispatcher.ResponseData;
     try {
       upstream = await this.pool.request({
-        path: this.basePath + forward.url,
+        path: requestPath,
         method: forward.method as Dispatcher.HttpMethod,
-        headers: upstreamHeaders,
-        body: forward.body,
+        headers: requestHeaders,
+        body: requestBody,
         signal: abort.signal,
       });
     } catch (err) {
@@ -174,6 +198,42 @@ export class GolemProxy {
       }
       const mapped = mapUpstreamError(err);
       this.respondProxyError(res, mapped.status, undefined, mapped.body);
+      return;
+    }
+
+    // Translating upstream (b1, non-streaming): buffer the response, convert it
+    // to the Anthropic shape, and write that. This is the ONLY path that parses
+    // a response body — the Anthropic passthrough below stays a raw byte pipe.
+    if (translate !== undefined) {
+      let raw: Buffer;
+      try {
+        raw = Buffer.from(await upstream.body.arrayBuffer());
+      } catch {
+        res.destroy();
+        return;
+      }
+      if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+        // Surface the upstream's own error body/status unchanged.
+        res.writeHead(upstream.statusCode, forwardableResponseHeaders(upstream.headers));
+        res.end(raw);
+        return;
+      }
+      let translated: Buffer;
+      try {
+        translated = translate.translateResponse(raw);
+      } catch (err) {
+        this.respondProxyError(
+          res,
+          502,
+          `golem proxy: could not translate the upstream response (${String(err)})`,
+        );
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(translated),
+      });
+      res.end(translated);
       return;
     }
 

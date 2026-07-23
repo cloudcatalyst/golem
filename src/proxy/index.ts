@@ -28,5 +28,6 @@ export {
   type RequestPipeline,
   type ResponseUsage,
   resolveProxyConfig,
+  type UpstreamTranslator,
 } from "./types.js";
 export { UsageSniffer } from "./usage-sniffer.js";
