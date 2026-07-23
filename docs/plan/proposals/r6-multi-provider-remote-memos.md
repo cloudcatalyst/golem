@@ -265,14 +265,14 @@ credentials and route (Decision 21d). Two capabilities:
 
 ### Status
 
-**PROPOSED, blocked on two gates.** R6.1 (its dependency) is now shipped, and the
-credential/ToS **threat-model ADR is drafted** — `decisions/ADR-0003`
-(2026-07-23, PROPOSED): env-var-first secrets (never a setting, no
-plaintext-on-disk), fail-closed selection, audit log, no tool surface; ToS scope
-= legitimate account/provider switching IN, automated quota-evasion OUT. **Code
-still blocked** until (a) the USER makes the ToS scope decision and (b) accepts
-the ADR (the ADR-0002 "threat model reviewed before code" bar). This is the
-highest-severity R6 task after R6.3.
+**Account switching (21d): DONE 2026-07-23** (ADR-0003 ACCEPTED; USER ToS scope =
+legitimate switching only; debrief `2026-07-23-R6.2-account-switching.md`).
+Shipped `proxy.accounts` + `active_account`, per-account env secrets (never a
+setting), `resolveActiveUpstream` (fail-closed), `golem account list/use` +
+audit log, proxy wiring; **live-verified** vs an Ollama account (§78).
+**Quota-evasion OUT (ToS).** **Deferred/out:** per-request capability/availability
+routing (21e) + route-on-exhaustion (own decision), and an OS-keychain credential
+backend (env-var-first shipped; keychain a verified-future option per ADR-0003).
 
 ---
 

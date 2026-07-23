@@ -25,7 +25,7 @@
 
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
-import type { UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
+import type { UpstreamAccount, UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
 import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
 
 const portSchema = z.number().int().min(1).max(65535);
@@ -77,6 +77,32 @@ export const SETTINGS_LEAVES = {
      * ignored by Anthropic-protocol providers (they receive the model as-is).
      */
     upstream_model: z.string().min(1).optional(),
+    /**
+     * R6.2 (spec Decision 21d; ADR-0003): the account registry for switching
+     * between the user's own accounts/providers. Each entry is NON-SECRET
+     * identity only (id, provider, base_url, optional model/auth_scheme); the
+     * credential for account `<id>` is read from the env var
+     * `GOLEM_UPSTREAM_API_KEY__<ID>` — secrets are never a setting. Legitimate
+     * switching only; there is no automated quota-evasion (ADR-0003 ToS scope).
+     */
+    accounts: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          provider: z.enum(UPSTREAM_PROVIDERS),
+          base_url: z.string().url(),
+          model: z.string().min(1).optional(),
+          auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * R6.2: which `accounts` entry is active (its config overrides the top-level
+     * `upstream_*`). Unset → the top-level config. Set but unknown → the
+     * top-level config + a loud warning (never a silent switch to a different
+     * account — ADR-0003 fail-closed). Switch it with `golem account use <id>`.
+     */
+    active_account: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
@@ -245,6 +271,8 @@ export interface ProxySettings {
   readonly upstream_provider: UpstreamProvider;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
   readonly upstream_model?: string;
+  readonly accounts?: readonly UpstreamAccount[];
+  readonly active_account?: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
 }

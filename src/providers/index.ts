@@ -19,6 +19,14 @@
  * from the `GOLEM_UPSTREAM_API_KEY` environment variable by the CLI wiring.
  */
 
+export {
+  type LegacyUpstream,
+  perAccountEnvVar,
+  type ResolvedUpstream,
+  type ResolveResult,
+  resolveActiveUpstream,
+  type UpstreamAccount,
+} from "./accounts.js";
 export { createGeminiToAnthropicSSE, GeminiSSETranslator } from "./gemini-stream.js";
 export {
   anthropicToGemini,

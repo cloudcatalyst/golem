@@ -2770,3 +2770,34 @@ and needs a proxy-seam extension:**
   Gemini↔Anthropic round-trip through the real proxy); **NOT live-tested** —
   no Gemini key in-session (a user-side end-to-end check remains). Base URL:
   `https://generativelanguage.googleapis.com/v1beta`.
+
+## §78 — R6.2 v1 account switching, live-verified (2026-07-23, ADR-0003 accepted)
+
+ADR-0003 accepted with the USER's ToS scope decision: **legitimate
+account/provider switching only** (automated quota-evasion OUT). Built R6.2 v1:
+
+- **Config:** `proxy.accounts` (non-secret registry: id, provider, base_url,
+  model?, auth_scheme?) + `proxy.active_account` selector. Secrets are **never a
+  setting** — an account's credential is env `GOLEM_UPSTREAM_API_KEY__<ID>`
+  (uppercased/sanitized), the legacy single account keeps `GOLEM_UPSTREAM_API_KEY`.
+- **Resolver** (`resolveActiveUpstream`, pure): active unset → legacy top-level
+  config; active found → that account (provider/base/model/auth + its env key);
+  active set-but-unknown → **legacy + a loud warning, never a silent switch to a
+  different registry account** (ADR-0003 fail-closed). A missing per-account key
+  is surfaced (the request 401s / warns), never swapped for another key.
+- **CLI:** `golem account list` (shows registry, active marker, and whether each
+  key env var is SET — never the value) and `golem account use <id>|none`
+  (fail-closed: rejects an unknown id; appends a switch entry to
+  `.golem/state/account-log.jsonl` — the ADR audit log). No MCP/tool surface
+  reads or sets accounts (config/CLI only).
+- **Proxy wiring:** `buildProxyFromSettings` resolves the active account up front
+  and feeds its provider/base/model/auth/key into the existing R6.1 auth-mapping
+  + translation seams — one active account per proxy run (no per-request routing;
+  21e stays future).
+- **LIVE-verified:** built a proxy from settings with `active_account:"local"`
+  (an Ollama account) and hit it — HTTP 200, served by `qwen2.5-coder:7b`. So the
+  full path (registry → resolver → provider selection → translation → upstream)
+  works end-to-end, not just in unit tests.
+- **Explicitly NOT built (ToS):** automated rotation to evade rate limits;
+  route-on-exhaustion. A 429 from the active account surfaces to the client as
+  today — no hidden retry on another account.

@@ -76,6 +76,7 @@ import {
 } from "../telemetry/index.js";
 import { checkForUpdate, detectInstallMethod } from "../update/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
+import { collectAccounts, renderAccounts, useAccount } from "./accounts.js";
 import {
   embedderSignature,
   ensureProjectIndexed,
@@ -1010,6 +1011,48 @@ benchCmd
       });
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderCostBenchmark(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const accountCmd = program
+  .command("account")
+  .description("Switch between configured upstream accounts/providers (R6.2, spec Decision 21d)");
+
+accountCmd
+  .command("list")
+  .alias("show")
+  .description(
+    "List configured accounts, which is active, and whether each credential env var is set",
+  )
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await collectAccounts(opts.dir);
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderAccounts(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+accountCmd
+  .command("use")
+  .description("Switch the active account (use 'none' to clear and revert to the top-level config)")
+  .argument("<id>", "an account id from proxy.accounts, or 'none' to clear")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (id: string, opts: { dir: string }) => {
+    try {
+      const target = id === "none" ? null : id;
+      const { active } = await useAccount(opts.dir, target, new Date().toISOString());
+      process.stdout.write(
+        active === null
+          ? "active account cleared — using the top-level upstream config.\n"
+          : `active account: ${active} (restart the proxy to apply: golem proxy restart)\n`,
       );
     } catch (err) {
       fail(err);
