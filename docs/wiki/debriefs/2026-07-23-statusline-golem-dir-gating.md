@@ -1,15 +1,15 @@
 ---
 title: Status surfaces gate on `.golem/` — no folder in non-Golem projects; "Passthrough" for the off state
 type: debrief
-tags: [statusline, vscode-extension, local-model, passthrough, dogfooding, decision-30]
-sources: [src/cli/local-model.ts, src/cli/statusline.ts, vscode-extension/extension.js, vscode-extension/render.js]
+tags: [statusline, vscode-extension, local-model, update-check, passthrough, dogfooding, decision-30]
+sources: [src/cli/local-model.ts, src/cli/statusline.ts, src/cli/main.ts, src/update/index.ts, vscode-extension/extension.js, vscode-extension/render.js]
 created: 2026-07-23
 updated: 2026-07-23
 ---
 
 # Status surfaces gate on `.golem/`; "Passthrough" for the off state
 
-Two user-reported UX fixes to how Golem surfaces its state (PR #20, PR #25).
+User-reported UX fixes to how Golem surfaces its state (PR #20, PR #25, PR #27).
 
 ## The durable principle
 
@@ -61,6 +61,33 @@ into one label: the proxy is stopped, **or** it's running at slider **level 0**
   provider-focused line, **not** the verbatim `golem statusline` output (the two
   renderers deliberately differ — savings live in the bar's tooltip/panel).
 
+## Part 3 — the update-check leak, same principle (PR #27)
+
+The self-update feature (Decision 41, see
+debriefs/2026-07-22-decision-41-distribution.md) added a **second** automatic
+writer that the Part 1 fix didn't cover. `golem update --check` caches its
+verdict to `<dir>/.golem/state/update-check.json`, and the VS Code extension
+polls it in **every** window (installs globally) — on activation and every 6h —
+so `.golem/` reappeared in non-Golem repos, this time as `update-check.json`.
+
+Fix, mirroring Part 1:
+
+- `golem update` (`src/cli/main.ts`) passes a project `cacheDir` only when
+  `.golem/` already exists; otherwise it runs the check without caching
+  (`checkForUpdate`/`writeCache` in `src/update/index.ts` only write when a
+  `cacheDir` is given, so omitting it creates nothing).
+- The extension's `fetchUpdate()` is a no-op in non-Golem projects — the same
+  `isGolemProject()` gate `refresh()` already used, so it spawns **no** CLI in
+  unrelated windows.
+
+**Full audit done here:** every `<project>/.golem/` writer in `src/` was
+checked. Only two fire *automatically* in every project — the local-model cache
+(Part 1) and this update-check cache (Part 3). All others run only via
+`golem init`, the proxy pipeline, init-wired hooks, or an explicit `golem <cmd>`
+run *in* that project. An explicit command creating `.golem/` is a deliberate
+opt-in, not a background surprise, and is left as-is — the rule targets surfaces
+that run **without** the user asking.
+
 ## Notes
 
 - Existing repos already polluted with a stray `.golem/` are not auto-cleaned;
@@ -68,9 +95,9 @@ into one label: the proxy is stopped, **or** it's running at slider **level 0**
 - Both changes were drafted with the `coder` tool first per the local-coder
   practice — the local draft got the shape but dropped `mkdir`/glyph/badge
   handling, so the value was in the review half again (cf. [[Dogfooding Golem]]).
-- CI note: PR #25 was admin-merged because GitHub Actions refused to start all
-  jobs (account billing block), not on a red test run — local `tsc`/lint/format/
-  vitest/extension `node --test` were all green.
+- CI note: PR #25 and #27 were admin-merged because GitHub Actions refused to
+  start any jobs (account billing block), not on a red test run — local
+  `tsc`/lint/format/vitest/extension `node --test` were all green.
 
 ## Interfaces
 
