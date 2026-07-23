@@ -69,6 +69,13 @@ async function golemJson(args) {
 let lastUpdate = null;
 
 async function fetchUpdate() {
+  // Don't spawn the CLI in non-Golem windows — `golem update --check` would
+  // otherwise create `.golem/state/update-check.json` in repos that never
+  // opted into Golem (the extension installs globally and polls this).
+  if (!isGolemProject()) {
+    lastUpdate = null;
+    return;
+  }
   lastUpdate = await golemJson(["update", "--check", "--json"]);
 }
 
