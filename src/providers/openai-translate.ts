@@ -39,6 +39,7 @@ const anthropicRequest = z
     temperature: z.number().optional(),
     top_p: z.number().optional(),
     stop_sequences: z.array(z.string()).optional(),
+    stream: z.boolean().optional(),
   })
   .catchall(z.unknown());
 
@@ -76,7 +77,10 @@ export interface OpenAIChatMessage {
 export interface OpenAIChatRequest {
   readonly model: string;
   readonly messages: OpenAIChatMessage[];
-  readonly stream: false;
+  /** Honors the client's request: streaming (b2) or not (b1). */
+  readonly stream: boolean;
+  /** When streaming, ask the upstream to emit a final usage chunk (OpenAI; ignored by lenient servers). */
+  readonly stream_options?: { readonly include_usage: true };
   readonly max_tokens?: number;
   readonly temperature?: number;
   readonly top_p?: number;
@@ -111,9 +115,12 @@ export function anthropicToOpenAIChat(
     throw new Error("no upstream model: set proxy.upstream_model for this provider");
   }
 
-  const out: OpenAIChatRequest = { model, messages, stream: false };
+  // Honor the client's stream flag (b2). Streaming also asks for a usage chunk.
+  const stream = parsed.stream === true;
+  const out: OpenAIChatRequest = { model, messages, stream };
   return {
     ...out,
+    ...(stream ? { stream_options: { include_usage: true as const } } : {}),
     ...(parsed.max_tokens !== undefined ? { max_tokens: parsed.max_tokens } : {}),
     ...(parsed.temperature !== undefined ? { temperature: parsed.temperature } : {}),
     ...(parsed.top_p !== undefined ? { top_p: parsed.top_p } : {}),
@@ -146,7 +153,7 @@ const openAIResponse = z
   .catchall(z.unknown());
 
 /** OpenAI finish_reason → Anthropic stop_reason. */
-function mapStopReason(finish: string | null | undefined): string {
+export function mapStopReason(finish: string | null | undefined): string {
   switch (finish) {
     case "length":
       return "max_tokens";
