@@ -25,6 +25,8 @@
 
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
+import type { UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
+import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
@@ -48,6 +50,25 @@ export const SETTINGS_LEAVES = {
     port: portSchema,
     /** Upstream Anthropic-compatible API base URL. */
     upstream_base_url: z.string().url(),
+    /**
+     * R6.1 case (a): which Anthropic-**protocol** upstream Golem fronts
+     * (spec Decisions 22/32, verification-notes §73). All of these speak the
+     * Anthropic Messages API, so the proxy stays byte-faithful; the provider
+     * only selects auth-header mapping (see {@link upstream_auth_scheme}) and
+     * the semantic-stage caching assumption. `anthropic` (default) is the
+     * transparent passthrough. Genuine OpenAI/Gemini/Ollama translation is
+     * case (b), not this key.
+     */
+    upstream_provider: z.enum(UPSTREAM_PROVIDERS),
+    /**
+     * R6.1 case (a): how the upstream credential is presented — `inherit`
+     * (forward the client's own auth unchanged; the Anthropic default),
+     * `x-api-key`, `api-key` (Azure Foundry), or `bearer` (OpenRouter /
+     * Azure Entra). `inherit` on a non-Anthropic provider falls back to that
+     * provider's default scheme. The credential itself is NOT a setting (it is
+     * a secret): set it via the `GOLEM_UPSTREAM_API_KEY` environment variable.
+     */
+    upstream_auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES),
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
@@ -213,6 +234,8 @@ export interface SliderSettings {
 export interface ProxySettings {
   readonly port: number;
   readonly upstream_base_url: string;
+  readonly upstream_provider: UpstreamProvider;
+  readonly upstream_auth_scheme: UpstreamAuthScheme;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
 }
@@ -270,6 +293,8 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   proxy: {
     port: 4653,
     upstream_base_url: "https://api.anthropic.com",
+    upstream_provider: "anthropic",
+    upstream_auth_scheme: "inherit",
     request_timeout_ms: 600_000,
     connect_timeout_ms: 10_000,
   },

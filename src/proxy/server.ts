@@ -148,12 +148,22 @@ export class GolemProxy {
       return;
     }
 
+    // R6.1 case (a): map auth/headers for a non-Anthropic Anthropic-protocol
+    // upstream (strip the client's Anthropic credential, inject the configured
+    // provider's). Transport-only, never touches the body — SSE/tool-use
+    // fidelity is untouched. Default (Anthropic passthrough) has no mapper, so
+    // this is literally a no-op there. Applied outside the pipeline so bypass
+    // requests still reach the configured upstream with valid credentials.
+    const upstreamHeaders = this.config.mapUpstreamHeaders
+      ? this.config.mapUpstreamHeaders({ ...forward.headers })
+      : forward.headers;
+
     let upstream: Dispatcher.ResponseData;
     try {
       upstream = await this.pool.request({
         path: this.basePath + forward.url,
         method: forward.method as Dispatcher.HttpMethod,
-        headers: forward.headers,
+        headers: upstreamHeaders,
         body: forward.body,
         signal: abort.signal,
       });

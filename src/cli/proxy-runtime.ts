@@ -19,6 +19,7 @@ import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
+import { makeAuthMapper, resolveAuthScheme, upstreamAssumesCaching } from "../providers/index.js";
 import { GolemProxy, parseLimitPrediction, writeLimitState } from "../proxy/index.js";
 import {
   recordAvoidedUpstream,
@@ -132,12 +133,17 @@ export function buildProxyFromSettings(
   // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
   // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.
   const forceSemanticOnCaching = settings.compression.force_semantic_on_caching;
+  // R6.1 case (a): the selected Anthropic-protocol provider governs the
+  // semantic stage's caching assumption (verification-notes §73). undefined for
+  // `anthropic` so the pipeline keeps its URL heuristic.
+  const assumeCachingUpstream = upstreamAssumesCaching(settings.proxy.upstream_provider);
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: resolvePolicy,
     projectId: dir,
     upstreamBaseUrl: settings.proxy.upstream_base_url,
     forceSemanticOnCaching,
+    ...(assumeCachingUpstream !== undefined ? { assumeCachingUpstream } : {}),
     contextSubstitution: {
       ccrStore,
       lookup: async () => {
@@ -162,6 +168,24 @@ export function buildProxyFromSettings(
     ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),
     ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
+  // R6.1 case (a): auth-header mapping for a non-Anthropic Anthropic-protocol
+  // upstream. The credential is a secret read from the environment, never from
+  // settings.json. `inherit` (the Anthropic default) yields no mapper, so the
+  // passthrough forwards the client's own auth verbatim.
+  const upstreamProvider = settings.proxy.upstream_provider;
+  const authScheme = resolveAuthScheme(upstreamProvider, settings.proxy.upstream_auth_scheme);
+  const upstreamApiKey = process.env.GOLEM_UPSTREAM_API_KEY;
+  const mapUpstreamHeaders = makeAuthMapper(authScheme, upstreamApiKey);
+  if (
+    upstreamProvider !== "anthropic" &&
+    authScheme !== "inherit" &&
+    (upstreamApiKey === undefined || upstreamApiKey === "")
+  ) {
+    process.stderr.write(
+      `golem proxy: upstream_provider "${upstreamProvider}" needs a credential — set ` +
+        "GOLEM_UPSTREAM_API_KEY; forwarding the client's own auth unchanged for now.\n",
+    );
+  }
   // Throttle limit-state persistence (P2a) so a busy SSE stream doesn't rewrite
   // `.golem/state/limit-state.json` on every response.
   let lastLimitPersistMs = 0;
@@ -172,6 +196,7 @@ export function buildProxyFromSettings(
     headersTimeoutMs: settings.proxy.request_timeout_ms,
     bodyTimeoutMs: settings.proxy.request_timeout_ms,
     pipeline,
+    ...(mapUpstreamHeaders !== undefined ? { mapUpstreamHeaders } : {}),
     onPipelineError: (err) => {
       process.stderr.write(
         `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
