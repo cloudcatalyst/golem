@@ -106,101 +106,139 @@ describe("WebFetch capture (PostToolUse)", () => {
   });
 });
 
-describe("WebFetch capture — raw-page mode (Decision 42)", () => {
+describe("WebFetch raw-page engine — Option A (Decision 42)", () => {
   const url = "https://example.com/api";
   // A raw fetcher standing in for fetchRawPage: returns the page, not the answer.
   const rawFetcher = async (u: string) => ({
     content: `RAW PAGE for ${u} — the full documentation text.`,
     headers: { etag: 'W/"v1"', cacheControl: "max-age=3600" } as const,
   });
+  const cache = () => new WebCache(webCacheDir(projectDir));
+  const preOpts = (over: Record<string, unknown> = {}) => ({
+    projectDir,
+    nowIso: "2026-07-23T00:00:00Z",
+    nowMs: Date.parse("2026-07-23T00:00:00Z"),
+    ttlHours: 168,
+    buildKnowledge,
+    fetchRaw: rawFetcher,
+    fetchRawEnabled: async () => true,
+    ...over,
+  });
 
-  it("caches the RAW page (not the WebFetch answer) and marks it raw", async () => {
-    // tool_response is Claude Code's prompt-specific ANSWER — must NOT be cached.
+  it("on a MISS: fetches the raw page, caches it (raw:true + validators), and serves it", async () => {
+    const io = fakeIo(preInput(url));
+    const code = await runWebFetchPre(io, preOpts());
+    expect(code).toBe(0);
+
+    // Served to Claude via a deny, and it's the raw page.
+    const decision = JSON.parse(io.out[0] ?? "{}");
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("RAW PAGE");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("fetched this page");
+
+    // Cached as raw, with validators seeded from the real fetch.
+    const entry = await cache().get(url);
+    expect(entry?.content).toContain("RAW PAGE");
+    expect(entry?.raw).toBe(true);
+    expect(entry?.etag).toBe('W/"v1"');
+    expect(entry?.expiresAt).toBeDefined(); // from max-age=3600
+
+    // ...and ingested so search finds it.
+    const hits = await openKnowledgeBase({ projectDir }).search(
+      "full documentation text",
+      projectDir,
+      3,
+    );
+    expect(hits[0]?.chunk.sourcePath).toBe(`web:${url}`);
+  });
+
+  it("falls OPEN (lets WebFetch run) and caches nothing when the raw fetch fails", async () => {
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(
+      io,
+      preOpts({
+        fetchRaw: async () => {
+          throw new Error("403 Forbidden");
+        },
+      }),
+    );
+    expect(io.out).toStrictEqual([]); // no deny → WebFetch proceeds
+    expect(await cache().get(url)).toBeNull(); // nothing cached
+  });
+
+  it("treats a legacy answer-entry (no raw marker) as a miss → re-fetches the raw page", async () => {
+    await cache().put(url, "STALE ANSWER", "2026-07-23T00:00:00Z"); // legacy, no raw flag
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, preOpts({ nowMs: Date.parse("2026-07-23T00:30:00Z") }));
+    // Served the freshly-fetched raw page, and the cache is now a raw entry.
+    expect(io.out[0]).toContain("RAW PAGE");
+    const entry = await cache().get(url);
+    expect(entry?.raw).toBe(true);
+    expect(entry?.content).not.toContain("STALE ANSWER");
+  });
+
+  it("serves a fresh raw entry from cache without re-fetching", async () => {
+    await cache().put(url, "CACHED RAW BODY", "2026-07-23T00:00:00Z", { raw: true });
+    let fetched = false;
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(
+      io,
+      preOpts({
+        nowMs: Date.parse("2026-07-23T00:30:00Z"),
+        fetchRaw: async () => {
+          fetched = true;
+          return { content: "SHOULD NOT FETCH", headers: {} };
+        },
+      }),
+    );
+    expect(fetched).toBe(false); // fresh hit → no self-fetch
+    expect(io.out[0]).toContain("CACHED RAW BODY");
+  });
+
+  it("re-fetches the raw page when revalidation reports the entry changed (200)", async () => {
+    await cache().put(url, "OLD RAW", "2026-07-22T00:00:00Z", { raw: true, etag: 'W/"old"' });
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(
+      io,
+      preOpts({
+        nowMs: Date.parse("2026-07-23T00:30:00Z"),
+        revalidate: async () => ({ status: 200, etag: 'W/"new"' }),
+        revalidateEnabled: async () => true,
+      }),
+    );
+    expect(io.out[0]).toContain("RAW PAGE"); // served the freshly re-fetched page
+    const entry = await cache().get(url);
+    expect(entry?.content).toContain("RAW PAGE");
+    expect(entry?.etag).toBe('W/"v1"'); // validators from the re-fetch, not the stale 'old'
+  });
+
+  it("PostToolUse is a no-op in raw mode (never caches WebFetch's answer)", async () => {
     const io = fakeIo(postInput(url, "Answer: the auth param is X."));
-    const code = await runWebFetchPost(io, {
+    await runWebFetchPost(io, {
       projectDir,
       nowIso: "2026-07-23T00:00:00Z",
-      nowMs: Date.parse("2026-07-23T00:00:00Z"),
       buildKnowledge,
       fetchRaw: rawFetcher,
       fetchRawEnabled: async () => true,
     });
-    expect(code).toBe(0);
-
-    const entry = await new WebCache(webCacheDir(projectDir)).get(url);
-    expect(entry?.content).toContain("RAW PAGE"); // the page, not the answer
-    expect(entry?.content).not.toContain("the auth param is X"); // answer discarded
-    expect(entry?.raw).toBe(true);
-    expect(entry?.etag).toBe('W/"v1"'); // validators seeded from the real fetch
-    expect(entry?.expiresAt).toBeDefined(); // from max-age=3600
+    expect(await cache().get(url)).toBeNull(); // answer NOT cached
   });
 
-  it("caches NOTHING when the raw fetch fails (never the answer)", async () => {
-    const io = fakeIo(postInput(url, "Answer: X."));
-    await runWebFetchPost(io, {
-      projectDir,
-      nowIso: "2026-07-23T00:00:00Z",
-      fetchRaw: async () => {
-        throw new Error("403 Forbidden");
-      },
-      fetchRawEnabled: async () => true,
-    });
-    expect(await new WebCache(webCacheDir(projectDir)).get(url)).toBeNull();
-  });
+  it("with raw mode OFF: PreToolUse falls open on a miss and PostToolUse caches the answer", async () => {
+    const preIo = fakeIo(preInput(url));
+    await runWebFetchPre(preIo, preOpts({ fetchRawEnabled: async () => false }));
+    expect(preIo.out).toStrictEqual([]); // legacy: miss → allow the fetch
 
-  it("falls back to caching the answer when raw mode is disabled", async () => {
-    const io = fakeIo(postInput(url, "Legacy answer body."));
-    await runWebFetchPost(io, {
+    const postIo = fakeIo(postInput(url, "Legacy answer body."));
+    await runWebFetchPost(postIo, {
       projectDir,
       nowIso: "2026-07-23T00:00:00Z",
       fetchRaw: rawFetcher,
-      fetchRawEnabled: async () => false, // gate off → legacy answer capture
-    });
-    const entry = await new WebCache(webCacheDir(projectDir)).get(url);
-    expect(entry?.content).toContain("Legacy answer body.");
-    expect(entry?.raw).toBeUndefined();
-  });
-});
-
-describe("WebFetch gate — raw requirement (Decision 42)", () => {
-  const url = "https://example.com/legacy";
-
-  it("ignores a legacy answer-entry (no raw marker) when raw mode is on → re-fetch", async () => {
-    await new WebCache(webCacheDir(projectDir)).put(url, "STALE ANSWER", "2026-07-23T00:00:00Z");
-    const io = fakeIo(preInput(url));
-    await runWebFetchPre(io, {
-      projectDir,
-      nowMs: Date.parse("2026-07-23T00:30:00Z"),
-      ttlHours: 168,
-      fetchRawEnabled: async () => true,
-    });
-    expect(io.out).toStrictEqual([]); // treated as a miss → the fetch proceeds
-  });
-
-  it("serves a raw entry when raw mode is on", async () => {
-    await new WebCache(webCacheDir(projectDir)).put(url, "RAW BODY", "2026-07-23T00:00:00Z", {
-      raw: true,
-    });
-    const io = fakeIo(preInput(url));
-    await runWebFetchPre(io, {
-      projectDir,
-      nowMs: Date.parse("2026-07-23T00:30:00Z"),
-      ttlHours: 168,
-      fetchRawEnabled: async () => true,
-    });
-    expect(io.out[0]).toContain("RAW BODY");
-  });
-
-  it("still serves a legacy entry when raw mode is off (backward compatible)", async () => {
-    await new WebCache(webCacheDir(projectDir)).put(url, "LEGACY BODY", "2026-07-23T00:00:00Z");
-    const io = fakeIo(preInput(url));
-    await runWebFetchPre(io, {
-      projectDir,
-      nowMs: Date.parse("2026-07-23T00:30:00Z"),
-      ttlHours: 168,
       fetchRawEnabled: async () => false,
     });
-    expect(io.out[0]).toContain("LEGACY BODY");
+    const entry = await cache().get(url);
+    expect(entry?.content).toContain("Legacy answer body.");
+    expect(entry?.raw).toBeUndefined();
   });
 });
 

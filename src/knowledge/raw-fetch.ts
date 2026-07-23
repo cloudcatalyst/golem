@@ -31,6 +31,9 @@ export interface RawPage {
   readonly headers: RawPageHeaders;
 }
 
+/** Default request timeout — this fetch blocks the WebFetch tool (Decision 42, Option A). */
+export const DEFAULT_RAW_FETCH_TIMEOUT_MS = 15_000;
+
 /** Does the URL's path (ignoring query/hash) end in `.pdf`? */
 function isPdfPath(url: string): boolean {
   try {
@@ -43,11 +46,16 @@ function isPdfPath(url: string): boolean {
 /**
  * Fetch `url` and return its raw text (HTML stripped to visible text, PDFs
  * extracted, anything else verbatim) plus the response's cache headers.
- * Throws on a network failure or a non-2xx status — the caller treats a throw
- * as "cache nothing" rather than poisoning the cache.
+ * Throws on a network failure, a timeout, or a non-2xx status — the caller
+ * treats a throw as "don't cache / fall open" rather than poisoning the cache.
+ * `timeoutMs` bounds the request because this fetch runs on the WebFetch
+ * tool's critical path (Decision 42, Option A) — a hang would stall the tool.
  */
-export async function fetchRawPage(url: string): Promise<RawPage> {
-  const res = await fetch(url, { redirect: "follow" });
+export async function fetchRawPage(
+  url: string,
+  timeoutMs: number = DEFAULT_RAW_FETCH_TIMEOUT_MS,
+): Promise<RawPage> {
+  const res = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
   if (!res.ok) {
     throw new Error(`fetchRawPage: ${url} returned ${res.status} ${res.statusText}`);
   }

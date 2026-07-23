@@ -2523,8 +2523,13 @@ on the hooks facts already recorded in §41:
      summarization model call*, and that LLM request transits Golem's proxy,
      where local-answer can hijack it. The `MAX_LOCAL_ANSWER_QUERY_CHARS = 1000`
      length-gate guards this path.
-  On a cache **miss** the tool still runs, so its internal call still transits the
-  proxy — Decision 42's Option B (PostToolUse alongside) therefore does **not**
-  supersede the length-gate. (Option A — serve raw from the pre-hook and skip the
-  tool entirely — would, since the internal call never happens; recorded as a
-  follow-up.)
+- **Decision 42 shipped as Option A (PreToolUse replace):** the pre-hook fetches
+  the raw page itself on a miss and serves it via `deny`, so the tool — and its
+  internal summarization call — **never runs on the happy path**. That does NOT
+  fully retire the length-gate: when Golem's own fetch fails the hook falls open,
+  the tool runs, and its internal call transits the proxy after all. So the gate
+  stays as the safety net for the fail-open case (pages Golem can't fetch itself);
+  Option A only narrows how often the proxy-path hijack window is reachable.
+- **The self-fetch is on the tool's critical (blocking) path** under Option A, so
+  `fetchRawPage` bounds the request with `AbortSignal.timeout` (default 15 s) — a
+  hang would otherwise stall the WebFetch tool. A timeout throws → fail-open.
