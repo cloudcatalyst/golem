@@ -2719,3 +2719,39 @@ Chat Completions + Anthropic Messages schemas:
 - **b3 scope:** images still dropped; parallel tool calls handled (multiple
   OpenAI `tool_calls` indices → sequential Anthropic tool_use blocks), assuming
   each call's argument fragments arrive contiguously (OpenAI's actual behaviour).
+
+## §77 — R6.1 case (b): OpenAI functional; Gemini API verified (2026-07-23)
+
+**OpenAI is already functional via the b1–b3 translator — no new code.** The
+`openai` provider is a translating provider (`isTranslatingProvider`), auth
+`bearer` (key via `GOLEM_UPSTREAM_API_KEY`), non-caching; set
+`proxy.upstream_base_url=https://api.openai.com/v1` + `proxy.upstream_model`
+(e.g. `gpt-5.2`). Same for a cloud OpenRouter OpenAI endpoint. Not live-tested
+here (no OpenAI key in-session) — but OpenAI DOES emit native `tool_calls`, so it
+is the backend that will live-verify the b3 tool path. Ollama (local/LAN) is the
+already-live-verified translating provider (§74/§75).
+
+**Gemini — verified against https://ai.google.dev/api/generate-content (fetched
+2026-07-23). It is a full SECOND translator, materially larger than one b-slice,
+and needs a proxy-seam extension:**
+- **Endpoint/auth differ from OpenAI:** `POST
+  https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent`
+  (streaming: `:streamGenerateContent?alt=sse`). Auth is an **API key as a query
+  param** (`?key=…`), not a header — so the current `mapUpstreamHeaders` seam
+  cannot carry it, and the path embeds the model + method + `alt=sse`. The
+  `UpstreamTranslator` (today a fixed `path` + header auth) needs extending to a
+  **dynamic path (per stream/model) + query-param auth**.
+- **Request schema:** `contents[{role:"user"|"model", parts:[{text}|{functionCall}|
+  {functionResponse}]}]`; `systemInstruction` (text only); `generationConfig`
+  {`maxOutputTokens`,`temperature`,`topP`,`stopSequences`}; `tools[{function_declarations:
+  [{name,description,parameters}]}]`; `toolConfig.function_calling_config.mode`
+  (`auto`/`ANY`). Note `role:"model"` (not `assistant`) and `functionResponse`
+  (not a separate tool role).
+- **Response:** `candidates[{content.parts:[{text}|{functionCall{name,args}}],
+  finishReason}]`; `usageMetadata{promptTokenCount, candidatesTokenCount}`.
+- **Streaming:** SSE (`alt=sse`), each event a full `GenerateContentResponse`
+  chunk — so the Anthropic-event state machine (b2/b3) applies, but reading
+  Gemini's `candidates[].content.parts` deltas, not OpenAI deltas.
+- **Not live-verifiable here** (no Gemini key). Scoped as slice **b4-gemini** —
+  its own translator + the seam extension above; recommend a checkpoint before
+  building (size + seam change + no live test).
