@@ -76,6 +76,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
 - decisions/ADR-0001-file-watcher.md — accepted: `node:fs.watch` (native recursive on Windows/macOS, manual per-directory on Linux) behind a swappable `FileWatcher` interface, `chokidar` deferred unless proven necessary
 - decisions/ADR-0002-autonomy-approval-gates.md — accepted: R5.4 threat model — autonomy levels (manual/assisted/outcome, no full-auto), PreToolUse gate emitting allow/ask, conservative fail-closed classifier, default-deny proofs; enforcement never auto-allows destructive/outward
+- decisions/ADR-0003-credential-storage-and-account-routing.md — PROPOSED: R6.2 gate — multi-account credential threat model (secrets never a setting; env-var-first, no plaintext-on-disk; fail-closed; audit log; no tool surface) + ToS scope (legitimate account/provider switching IN; automated quota-evasion OUT). Blocks R6.2 code until accepted + the USER ToS decision
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there
 - debriefs/2026-07-11-R1.1.md — shipped `UsageSniffer`/`aggregateUsageByLevel` usage-telemetry infra + the gzip response-decoding fix it required
