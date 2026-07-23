@@ -154,13 +154,16 @@ export function renderStatusLine(
   const parts: string[] = [];
   // Lead with the brand + level NAME, and an icon that signals whether Golem is
   // actually carrying traffic: filled green hexagon when the proxy is running,
-  // hollow dim hexagon when it is configured but off.
-  // Unknown (undefined) is treated as active so we never falsely signal "off";
-  // only a confirmed-dead proxy shows the hollow icon + note.
+  // hollow dim hexagon when it is off. Unknown (undefined) is treated as active
+  // so we never falsely signal "off"; only a confirmed-dead proxy is hollow.
   const active = golem.proxyRunning !== false;
   const brand = active ? green("⬢ Golem") : dim("⬡ Golem");
-  parts.push(`${brand}: ${cyan(levelName(golem.sliderLevel))}`);
-  if (golem.proxyRunning === false) parts.push(dim("proxy off"));
+  // "Passthrough" whenever Golem isn't transforming traffic: the proxy is down,
+  // or it's running at level 0 (full bypass, Decision 30). Both read the same —
+  // traffic passes straight through to the upstream, untransformed.
+  const passthrough = !active || golem.sliderLevel === 0;
+  const label = passthrough ? "Passthrough" : levelName(golem.sliderLevel);
+  parts.push(`${brand}: ${cyan(label)}`);
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
@@ -172,16 +175,13 @@ export function renderStatusLine(
     parts.push(green(`saved ${pct}% (${fmtTokens(before)}→${fmtTokens(after)})`));
   }
 
-  // Which upstream the traffic is fronting — only when the proxy is actually
-  // running. When it's off, nothing is going to that upstream, so showing it
-  // (e.g. "→foundry") is misleading. A reachable local model prefixes "local+"
-  // since Golem is then a local+upstream hybrid at any level (Decision 30).
-  if (active) {
-    const dest = golem.localModelReachable
-      ? `→local+${golem.upstreamLabel}`
-      : `→${golem.upstreamLabel}`;
-    parts.push(cyan(dest));
-  }
+  // Where traffic is (or, in passthrough/off, would be) fronting — shown in
+  // every state as the configured destination. A reachable local model prefixes
+  // "local+" since Golem is a local+upstream hybrid at any level (Decision 30).
+  const dest = golem.localModelReachable
+    ? `→local+${golem.upstreamLabel}`
+    : `→${golem.upstreamLabel}`;
+  parts.push(cyan(dest));
 
   // Live session context usage.
   if (session.contextUsedPct !== undefined) {

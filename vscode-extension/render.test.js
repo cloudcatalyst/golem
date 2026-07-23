@@ -79,10 +79,16 @@ test("statusBarText — compact, provider-focused, no savings", () => {
     statusBarText({ proxyReachable: true, slider: 2, upstreamLabel: "anthropic", savedPct: 91 }),
     /saved|%|91/,
   );
-  // Proxy off: brand + state only, no upstream (nothing is fronting it).
+  // Proxy off = not transforming traffic → "Passthrough" (hollow glyph); the
+  // configured destination is still shown.
   assert.equal(
     statusBarText({ proxyReachable: false, slider: 1, upstreamLabel: "foundry" }),
-    "⬡ Golem · proxy off",
+    "⬡ Golem · Passthrough → foundry",
+  );
+  // Running at slider level 0 (full bypass) also reads "Passthrough" (filled glyph).
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 0, upstreamLabel: "anthropic" }),
+    "⬢ Golem · Passthrough → anthropic",
   );
 });
 
@@ -103,7 +109,7 @@ test("statusBarText — local segment appears whenever a local model is reachabl
     }),
     "⬢ Golem · L1 → local + anthropic",
   );
-  // Proxy off short-circuits before the local segment is ever considered.
+  // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
     statusBarText({
       proxyReachable: false,
@@ -111,7 +117,7 @@ test("statusBarText — local segment appears whenever a local model is reachabl
       upstreamLabel: "anthropic",
       localModelReachable: true,
     }),
-    "⬡ Golem · proxy off",
+    "⬡ Golem · Passthrough → local + anthropic",
   );
 });
 
@@ -143,8 +149,8 @@ test("statusBarText appends the update codicon only when an update is available"
   );
   // Shows even when the proxy is off (it's about the install, not the traffic).
   assert.equal(
-    statusBarText({ proxyReachable: false, updateAvailable: true }),
-    "⬡ Golem · proxy off $(arrow-up)",
+    statusBarText({ proxyReachable: false, upstreamLabel: "anthropic", updateAvailable: true }),
+    "⬡ Golem · Passthrough → anthropic $(arrow-up)",
   );
   // Absent when up to date.
   assert.doesNotMatch(
