@@ -23,14 +23,19 @@ developer's second brain" article)?
 
 Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 landed in **R4** (all
 seven tasks done, 2026-07-16). **R5 — Autonomy & orchestration** then shipped,
-followed by the PRE-R6 loose-ends closeout (2026-07-17). The multi-provider /
-remote cluster (R6, incl. the companion app) stays **on hold**.
+followed by the PRE-R6 loose-ends closeout (2026-07-17), a run of standalone
+UX/reliability decisions (snooze, coder-first enforcement, autonomy-gate toggle —
+Decisions 38–40, 2026-07-22), and **R7 — Distribution, versioning & self-update**
+(Decision 41, shipped 2026-07-22/23; first publish R7.5 left to the user). The
+multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
 
-## Where we are (validated 2026-07-16)
+## Where we are (validated 2026-07-23)
 
 - **Baseline green:** `tsc --noEmit`, `biome check`, and `vitest run`
-  (886 tests) all pass.
-- **R1–R3 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
+  (1159 tests) all pass locally. **CI is billing-blocked** (GitHub Actions refuses
+  to start jobs) — recent PRs merged on green *local* runs; unblocking it is a
+  USER account step.
+- **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
   dogfooded daily; compression is honestly scoped as situational (Decision 23);
   positioning is the universal pre-LLM processor (Decision 32).
 
@@ -55,6 +60,15 @@ them, Decision 36).
   wiki federation + weekly synthesis (W4), note→distill shaping, MEMORY-scope
   federation via the Headroom memory sidecar (C4), LanceDB no-go spike (R3.7 —
   recommended the `#flush()` stream-write fix, scheduled as R4.6).
+- **R4 / R5** (2026-07-16): co-developer core and autonomy/orchestration — see
+  their sections below.
+- **Post-R5 standalone decisions** (2026-07-18 → 07-23): Golem snooze
+  (Decision 38), coder-first enforcement (Decision 39), autonomy-gate toggle
+  (Decision 40), and **WebFetch raw-page caching** (Decision 42 — the pre-hook
+  fetches the raw page itself and serves it, so the cache holds pages not
+  prompt-specific answers; debrief `2026-07-23-webfetch-raw-cache.md`).
+- **R7 — Distribution, versioning & self-update** (Decision 41, 2026-07-22/23):
+  see the R7 section below; first publish (R7.5) deferred to the user.
 
 ## Carried-over loose ends (visible, not lost)
 
@@ -123,32 +137,41 @@ Decision 21b **companion app** the user has explicitly deferred.
 | R6.3 | Remote steering / permission-granting — companion app + locally-hosted web (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
 | R6.4 | Cost-governance benchmarks vs Claude's cost doc (continuous once picked up). | 🛠️ | 21f |
 
-### R7 — Distribution, versioning & self-update — 🛠️ IN PROGRESS (2026-07-22)
+### R7 — Distribution, versioning & self-update — ✅ SHIPPED (2026-07-22 → 07-23); R7.5 USER-gated
 The golem.run onboarding one-liner + how installs stay current (spec Decision 41,
-verification-notes §70). Not on hold — active, npm-first, Bun standalone as the
-no-Node fallback. Sequenced as separate PRs.
+verification-notes §70). npm-first, Bun standalone as the no-Node fallback.
+R7.1–R7.4 landed across PRs #21 (install one-liner + version SoT + self-update)
+and #22 (tag-triggered Release workflow), with follow-up status-surface hardening
+in #20/#25/#26/#27/#28. Retrospective: `docs/wiki/debriefs/2026-07-22-decision-41-distribution.md`
++ `2026-07-23-statusline-golem-dir-gating.md`. **R7.5 (first publish) stays
+deferred to the user** — machinery is in place; the `v0.1.1` tag exists but
+`golem-run` is still unpublished (npm 404).
 
 | # | Task | Type | Source |
 |---|---|---|---|
-| R7.1 | Version single source of truth — `sync-version.mjs` → `src/version.ts` from `package.json`; `release.mjs` bumps both package.jsons in lockstep. | 🛠️ | Dec 41a |
-| R7.2 | Tiered install scripts (`install/install.sh` + `.ps1`, npm→binary→Node bootstrap) + nginx UA-sniffing config (`deploy/nginx/golem-run.conf`). | 🛠️ | Dec 41b/41c |
-| R7.3 | Standalone binary via `bun build --compile` (`scripts/build-binary.mjs`) + CI release workflow. Local build unverified (no Bun/mac/linux in-session). | 🛠️🔬 | Dec 41d |
-| R7.4 | Self-update: `golem update [--check --json]` (install-method aware) + `updateAvailable` in status/statusline + extension status-bar badge & `golem.update`. | 🛠️ | Dec 41e |
-| R7.5 | First `npm publish` + Marketplace publish + tag `v0.1.0` (USER-triggered; machinery + `RELEASING.md` shipped, publish deferred to the user). | 🚀 | Dec 41 |
+| R7.1 | ~~Version single source of truth — `sync-version.mjs` → `src/version.ts` from `package.json`; `release.mjs` bumps both package.jsons in lockstep.~~ — **DONE** (#21, Dec 41a): `sync-version.mjs` wired into `npm run build`; `release.mjs` bumps root + `vscode-extension/package.json` in lockstep; `RELEASING.md` shipped. | ✅ | Dec 41a |
+| R7.2 | ~~Tiered install scripts (`install/install.sh` + `.ps1`, npm→binary→Node bootstrap) + nginx UA-sniffing config (`deploy/nginx/golem-run.conf`).~~ — **DONE** (#21, Dec 41b/41c): both installers run the npm→binary→(opt-in) Node-bootstrap ladder and degrade gracefully while unpublished; `golem-run.conf` maps PowerShell/curl/browser UAs (PS matched before the generic Mozilla rule). Standing up the nginx host + confirming the UA map is a USER infra step. | ✅ | Dec 41b/41c |
+| R7.3 | ~~Standalone binary via `bun build --compile` (`scripts/build-binary.mjs`) + CI release workflow.~~ — **DONE (build-wired)** (#22, Dec 41d): cross-compile script + tag-triggered Release workflow shipped. **Binaries still unverified per-OS** (no Bun/mac/linux in-session; and CI itself is billing-blocked) — the 🔬 smoke-test remains, verification-notes §70. | 🔬 | Dec 41d |
+| R7.4 | ~~Self-update: `golem update [--check --json]` (install-method aware) + `updateAvailable` in status/statusline + extension status-bar badge & `golem.update`.~~ — **DONE** (#21, Dec 41e; hardened in #20/#25/#26/#27/#28): install-method-aware `golem update`, cached/offline-tolerant check surfaced in status/statusline + VS Code badge; follow-ups fixed the `.golem/` footprint leaks in non-Golem projects and the Passthrough off-state label. | ✅ | Dec 41e |
+| R7.5 | First `npm publish` + Marketplace publish + tag `v0.1.0` (USER-triggered; machinery + `RELEASING.md` shipped, publish deferred to the user). **Still pending — `v0.1.1` tagged locally, npm 404 (unpublished).** | 🚀 | Dec 41 |
 
 ---
 
 ## Concentrated decision/research backlog
 
-The gates that block downstream work, in priority order:
+Most earlier gates have cleared: **R4.7 drafter quality** shipped (baseline
+measured, 2026-07-16), **Decision 33 local-answer** flipped to ACCEPTED
+(2026-07-17), and **R5.4 autonomy** shipped (2026-07-16, refined by Decision 40).
+What remains:
 
-1. **🔬 R4.7 drafter quality** — the co-developer thesis stands or falls on
-   whether local drafts are good enough to be worth reviewing; measure, don't
-   assume.
-2. **🧭 Decision 33 human review** — one real served local answer, reviewed,
-   then flip to ACCEPTED (or retire it).
-3. **🔒 R5.4 + all of R6** — autonomy, account-switching, remote approval each
-   need a written memo + review before code, after the R4 hold lifts.
+1. **🔒 All of R6** (multi-provider adapters, account/quota routing, remote
+   steering + companion app, cost benchmarks) — on hold; each needs a written
+   memo + review before code.
+2. **🔬 R7.3 standalone-binary verification** — the Bun `--compile` binaries are
+   build-wired but never run per-OS (no Bun/mac/linux in-session; CI itself is
+   billing-blocked). Smoke-test each before relying on the binary channel.
+3. **🚀 R7.5 first publish** (USER) + the golem.run nginx host stand-up (USER) —
+   machinery shipped; the outward, credentialed acts are the user's.
 
 ## Deferred / not scheduled
 
