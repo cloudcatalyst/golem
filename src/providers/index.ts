@@ -19,10 +19,41 @@
  * from the `GOLEM_UPSTREAM_API_KEY` environment variable by the CLI wiring.
  */
 
-/** Anthropic-protocol upstreams Golem can front in case (a). */
-export const UPSTREAM_PROVIDERS = ["anthropic", "azure-foundry", "openrouter", "custom"] as const;
+export {
+  type AnthropicMessageResponse,
+  anthropicToOpenAIChat,
+  type OpenAIChatMessage,
+  type OpenAIChatRequest,
+  openAIChatToAnthropic,
+} from "./openai-translate.js";
+
+/**
+ * Upstreams Golem can front.
+ * - Case (a) — Anthropic wire protocol, byte-faithful: `anthropic` (default),
+ *   `azure-foundry`, `openrouter`, `custom`.
+ * - Case (b) — OpenAI Chat Completions schema, requires translation (slice b1,
+ *   non-streaming): `openai`, `ollama` (Ollama's OpenAI-compatible endpoint,
+ *   local or over the LAN).
+ */
+export const UPSTREAM_PROVIDERS = [
+  "anthropic",
+  "azure-foundry",
+  "openrouter",
+  "custom",
+  "openai",
+  "ollama",
+] as const;
 
 export type UpstreamProvider = (typeof UPSTREAM_PROVIDERS)[number];
+
+/**
+ * Whether the provider speaks the OpenAI Chat Completions schema and therefore
+ * needs request/response translation (case b) rather than a byte-faithful
+ * passthrough (case a).
+ */
+export function isTranslatingProvider(provider: UpstreamProvider): boolean {
+  return provider === "openai" || provider === "ollama";
+}
 
 /**
  * How the upstream credential is presented.
@@ -48,6 +79,11 @@ export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthSchem
     case "custom":
       // A self-hosted Anthropic-compatible gateway commonly reuses x-api-key;
       // forward the client's creds by default and let the user override.
+      return "inherit";
+    case "openai":
+      return "bearer";
+    case "ollama":
+      // Ollama ignores auth by default (local / trusted LAN); inject none.
       return "inherit";
   }
 }
@@ -112,5 +148,19 @@ export function makeAuthMapper(
  * existing `force_semantic_on_caching` opt-in (R2.6).
  */
 export function upstreamAssumesCaching(provider: UpstreamProvider): boolean | undefined {
-  return provider === "anthropic" ? undefined : true;
+  if (provider === "anthropic") return undefined; // URL heuristic (default + custom anthropic URL)
+  // OpenAI/Ollama are genuinely non-caching — resent history is re-billed at
+  // full price, so the lossy semantic stage may pay there (Decision 23/31).
+  if (isTranslatingProvider(provider)) return false;
+  return true; // Anthropic-protocol Claude gateways: prompt-cache-capable, fail-safe
+}
+
+/**
+ * The OpenAI Chat Completions path for a translating provider's base URL, e.g.
+ * `http://gpubox.lan:11434/v1` → `/v1/chat/completions`. Preserves any path
+ * prefix the base URL carries; the proxy POSTs the translated body here.
+ */
+export function upstreamChatCompletionsPath(baseUrl: string): string {
+  const prefix = new URL(baseUrl).pathname.replace(/\/+$/, "");
+  return `${prefix}/chat/completions`;
 }

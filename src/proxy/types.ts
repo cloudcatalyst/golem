@@ -149,6 +149,31 @@ export interface ProxyServerOptions {
   readonly mapUpstreamHeaders?: (
     headers: Record<string, string | string[]>,
   ) => Record<string, string | string[]>;
+  /**
+   * R6.1 case (b) slice b1: front an OpenAI-schema upstream (OpenAI / Ollama)
+   * by translating the request and response bodies, NON-STREAMING. When set,
+   * the proxy POSTs the translated body to {@link UpstreamTranslator.path},
+   * buffers the upstream response, and writes the translated Anthropic body —
+   * the "response-transform seam". This is the ONLY code path that parses a
+   * response body; it is opt-in and NEVER set for an Anthropic upstream, whose
+   * response stays a raw byte pipe (byte-faithful hard rule). Default: none.
+   */
+  readonly translateUpstream?: UpstreamTranslator;
+}
+
+/**
+ * Translates between the Anthropic Messages protocol the client speaks and an
+ * OpenAI-schema upstream (R6.1 case b, b1 = non-streaming). Both methods throw
+ * on an untranslatable body; the proxy turns that into a clean proxy error
+ * rather than forwarding a mismatched shape.
+ */
+export interface UpstreamTranslator {
+  /** Full upstream request path (relative to the base URL origin). */
+  readonly path: string;
+  /** Anthropic request body → upstream (OpenAI) request body bytes. */
+  translateRequest(body: Buffer | null): Buffer;
+  /** Upstream (OpenAI) non-streaming response body → Anthropic response body bytes. */
+  translateResponse(body: Buffer): Buffer;
 }
 
 /** Fully-resolved proxy configuration. */
@@ -167,6 +192,7 @@ export interface ProxyConfig {
   readonly mapUpstreamHeaders?: (
     headers: Record<string, string | string[]>,
   ) => Record<string, string | string[]>;
+  readonly translateUpstream?: UpstreamTranslator;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -183,6 +209,9 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
       : {}),
     ...(options.mapUpstreamHeaders !== undefined
       ? { mapUpstreamHeaders: options.mapUpstreamHeaders }
+      : {}),
+    ...(options.translateUpstream !== undefined
+      ? { translateUpstream: options.translateUpstream }
       : {}),
   };
 }

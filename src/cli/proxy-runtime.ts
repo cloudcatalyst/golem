@@ -19,7 +19,15 @@ import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
-import { makeAuthMapper, resolveAuthScheme, upstreamAssumesCaching } from "../providers/index.js";
+import {
+  anthropicToOpenAIChat,
+  isTranslatingProvider,
+  makeAuthMapper,
+  openAIChatToAnthropic,
+  resolveAuthScheme,
+  upstreamAssumesCaching,
+  upstreamChatCompletionsPath,
+} from "../providers/index.js";
 import { GolemProxy, parseLimitPrediction, writeLimitState } from "../proxy/index.js";
 import {
   recordAvoidedUpstream,
@@ -186,6 +194,41 @@ export function buildProxyFromSettings(
         "GOLEM_UPSTREAM_API_KEY; forwarding the client's own auth unchanged for now.\n",
     );
   }
+  // R6.1 case (b) slice b1: for an OpenAI-schema upstream (OpenAI / Ollama),
+  // translate request+response bodies (NON-STREAMING). The pipeline still runs
+  // in Anthropic terms before this; translation is the last step.
+  const upstreamModel = settings.proxy.upstream_model;
+  const translateUpstream = isTranslatingProvider(upstreamProvider)
+    ? {
+        path: upstreamChatCompletionsPath(settings.proxy.upstream_base_url),
+        translateRequest: (body: Buffer | null): Buffer =>
+          Buffer.from(
+            JSON.stringify(
+              anthropicToOpenAIChat(
+                body,
+                upstreamModel !== undefined ? { model: upstreamModel } : {},
+              ),
+            ),
+            "utf8",
+          ),
+        translateResponse: (body: Buffer): Buffer =>
+          Buffer.from(
+            JSON.stringify(
+              openAIChatToAnthropic(body, {
+                id: "msg_golem_translated",
+                model: upstreamModel ?? upstreamProvider,
+              }),
+            ),
+            "utf8",
+          ),
+      }
+    : undefined;
+  if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {
+    process.stderr.write(
+      `golem proxy: upstream_provider "${upstreamProvider}" needs proxy.upstream_model ` +
+        "(the backend model id, e.g. qwen2.5-coder:7b); requests will fail until it is set.\n",
+    );
+  }
   // Throttle limit-state persistence (P2a) so a busy SSE stream doesn't rewrite
   // `.golem/state/limit-state.json` on every response.
   let lastLimitPersistMs = 0;
@@ -197,6 +240,7 @@ export function buildProxyFromSettings(
     bodyTimeoutMs: settings.proxy.request_timeout_ms,
     pipeline,
     ...(mapUpstreamHeaders !== undefined ? { mapUpstreamHeaders } : {}),
+    ...(translateUpstream !== undefined ? { translateUpstream } : {}),
     onPipelineError: (err) => {
       process.stderr.write(
         `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
