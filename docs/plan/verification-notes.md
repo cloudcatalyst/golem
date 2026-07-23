@@ -2685,3 +2685,37 @@ OpenAI-schema upstream. Live-tested the same way as b1, streaming:
   Ollama run and documented. (A fix would buffer the head, defeating streaming.)
 - **b2 scope:** single text content block. Streaming tool-use (OpenAI
   `delta.tool_calls` → Anthropic `input_json_delta`) is **b3**.
+
+## §76 — R6.1 case (b) b3: tool-use translation (2026-07-23)
+
+b3 maps tools both ways: request `tools`/`tool_choice` + `tool_use`↔`tool_calls`
++ `tool_result`↔`role:"tool"`, and response `tool_calls`→`tool_use` (non-stream
+and streaming `input_json_delta`). Mapping details confirmed against the OpenAI
+Chat Completions + Anthropic Messages schemas:
+
+- **Request:** Anthropic `tools:[{name,description,input_schema}]` → OpenAI
+  `tools:[{type:"function",function:{name,description,parameters:input_schema}}]`.
+  `tool_choice`: `auto`→`"auto"`, `any`→`"required"`, `none`→`"none"`,
+  `{type:"tool",name}`→`{type:"function",function:{name}}`. An assistant turn's
+  `tool_use` blocks → an assistant message with `tool_calls`
+  (`function.arguments` = `JSON.stringify(input)`); a user turn's `tool_result`
+  blocks → one `role:"tool"` message each (emitted BEFORE any user text, since
+  they answer the prior assistant's calls) with `tool_call_id = tool_use_id`.
+- **Response (non-streaming):** `message.tool_calls` → Anthropic `tool_use`
+  content blocks (`input = JSON.parse(arguments)`, `{}` on invalid JSON), after
+  any leading text block; `finish_reason:"tool_calls"` → `stop_reason:"tool_use"`.
+- **Response (streaming):** Anthropic content blocks are STRICTLY SEQUENTIAL, so
+  the translator keeps one block open and closes it before the next: text →
+  `text` block; each OpenAI `delta.tool_calls[i]` → a `tool_use` block whose
+  `arguments` fragments become `input_json_delta.partial_json` (concatenate to
+  the full JSON). `id`/`name` captured from the first fragment.
+- **LIVE (best-effort) against Ollama `qwen2.5-coder:7b`:** a request WITH tools
+  was accepted (HTTP 200) and the response translated, but the model returned the
+  call as **text** (a JSON blob) rather than a native OpenAI `tool_calls` —
+  `stop_reason:end_turn`, no `tool_use` block. So the `tool_calls`→`tool_use`
+  path is **unit-verified, not live-verified** against this model: whether native
+  tool-calls appear depends on the backend model/server, not on Golem's mapping.
+  (Ollama tool-call support is model- and version-dependent.)
+- **b3 scope:** images still dropped; parallel tool calls handled (multiple
+  OpenAI `tool_calls` indices → sequential Anthropic tool_use blocks), assuming
+  each call's argument fragments arrive contiguously (OpenAI's actual behaviour).

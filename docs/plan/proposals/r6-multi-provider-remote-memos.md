@@ -170,8 +170,13 @@ response-transform seam, then Gemini. Sliced b1→b4.
   stream), piped live by the proxy; the request now honors `stream:true`.
   **Live-verified vs Ollama** (verification-notes §75) — this is the slice that
   makes real Claude Code traffic usable against an OpenAI-schema upstream.
-- **b3 (tool-use mapping), b4 (OpenAI/Gemini cloud): NEXT.** Anthropic path stays
-  untouched (recorded-shape tests).
+- **b3 DONE 2026-07-23** (debrief `2026-07-23-R6.1b3.md`): full tool-use mapping —
+  request `tools`/`tool_choice`, `tool_use`↔`tool_calls`, `tool_result`↔`role:tool`;
+  response `tool_calls`→`tool_use` (non-streaming + streaming `input_json_delta`
+  with sequential blocks). Unit-verified exhaustively; live tool-call round-trip
+  needs a backend model that emits native `tool_calls` (Ollama `qwen2.5-coder`
+  returned the call as text — verification-notes §76).
+- **b4 (OpenAI + Gemini cloud): NEXT.** Anthropic path stays untouched.
 
 ---
 
