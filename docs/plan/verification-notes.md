@@ -2801,3 +2801,13 @@ account/provider switching only** (automated quota-evasion OUT). Built R6.2 v1:
 - **Explicitly NOT built (ToS):** automated rotation to evade rate limits;
   route-on-exhaustion. A 429 from the active account surfaces to the client as
   today — no hidden retry on another account.
+- **Follow-on (same day): status surfaces now reflect the active upstream.**
+  `collectGolemState` (statusline/status/session-report) resolved only
+  `proxy.upstream_base_url` — so with an active account it showed the *legacy*
+  upstream, and the URL-derived label was cryptic for the new providers
+  (`localhost:11434`). Now it runs `resolveActiveUpstream` (env-less; the label
+  needs no key) and labels via `providerUpstreamLabel`: the **account id** when
+  one is active, else the provider name for `openai`/`ollama`/`gemini`, else the
+  URL label (anthropic/foundry/openrouter/host). So `⬢ Golem →local` /
+  `→ollama` / `→gemini` honestly shows what the proxy fronts (the Decision-30
+  "always-on upstream status" extended to the R6 multi-provider reality).

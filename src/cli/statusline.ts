@@ -21,6 +21,11 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
+import {
+  resolveActiveUpstream,
+  resolveAuthScheme,
+  type UpstreamProvider,
+} from "../providers/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemDirExists, localModelReachableCached } from "./local-model.js";
@@ -121,6 +126,30 @@ export function upstreamLabel(url: string): string {
   }
 }
 
+/**
+ * R6.2: the honest upstream label given the resolved provider + active account.
+ * An active account shows its id (that's what the user switched to); otherwise a
+ * translating provider (openai/ollama/gemini) shows its name, and the
+ * Anthropic-family providers fall back to the URL-based {@link upstreamLabel}.
+ */
+export function providerUpstreamLabel(
+  provider: UpstreamProvider,
+  baseUrl: string,
+  accountId: string | null,
+): string {
+  if (accountId !== null) return accountId;
+  switch (provider) {
+    case "openai":
+      return "openai";
+    case "ollama":
+      return "ollama";
+    case "gemini":
+      return "gemini";
+    default:
+      return upstreamLabel(baseUrl); // anthropic / azure-foundry / openrouter / custom
+  }
+}
+
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
@@ -208,17 +237,40 @@ export async function collectGolemState(
   opts: { localReachable?: (dir: string, baseUrl: string) => Promise<boolean> } = {},
 ): Promise<GolemState> {
   let sliderLevel = 1;
-  let upstream = "https://api.anthropic.com";
+  let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
-    upstream = settings.proxy.upstream_base_url;
     ollamaBaseUrl = settings.inference.ollama_base_url;
+    // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
+    // just the top-level base URL (env-less resolution — the label needs no key).
+    const { resolved } = resolveActiveUpstream(
+      {
+        legacy: {
+          provider: settings.proxy.upstream_provider,
+          base_url: settings.proxy.upstream_base_url,
+          ...(settings.proxy.upstream_model !== undefined
+            ? { model: settings.proxy.upstream_model }
+            : {}),
+          auth_scheme: resolveAuthScheme(
+            settings.proxy.upstream_provider,
+            settings.proxy.upstream_auth_scheme,
+          ),
+        },
+        ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
+        ...(settings.proxy.active_account !== undefined
+          ? { activeAccount: settings.proxy.active_account }
+          : {}),
+        legacyApiKey: undefined,
+      },
+      {},
+    );
+    label = providerUpstreamLabel(resolved.provider, resolved.baseUrl, resolved.accountId);
   } catch {
     // defaults
   }
-  let state: GolemState = { sliderLevel, upstreamLabel: upstreamLabel(upstream) };
+  let state: GolemState = { sliderLevel, upstreamLabel: label };
   // Only probe the local model in a Golem project. The status line may be a
   // global Claude Code `statusLine` that runs in every project; probing (which
   // also caches to `.golem/state/`) unconditionally would both waste a per-turn

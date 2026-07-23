@@ -12,9 +12,11 @@ import {
   collectGolemState,
   isBlockedFresh,
   parseSessionInput,
+  providerUpstreamLabel,
   renderStatusLine,
   upstreamLabel,
 } from "../../../src/cli/statusline.js";
+import { writeSetting } from "../../../src/config/index.js";
 import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
 
@@ -59,6 +61,25 @@ describe("upstreamLabel", () => {
     expect(upstreamLabel("https://openrouter.ai/api")).toBe("openrouter");
     expect(upstreamLabel("https://gw.example.com")).toBe("gw.example.com");
     expect(upstreamLabel("not-a-url")).toBe("upstream");
+  });
+});
+
+describe("providerUpstreamLabel (R6.2)", () => {
+  it("shows the account id when one is active", () => {
+    expect(providerUpstreamLabel("openai", "https://api.openai.com/v1", "work")).toBe("work");
+  });
+  it("names a translating provider when no account is active", () => {
+    expect(providerUpstreamLabel("ollama", "http://gpubox.lan:11434/v1", null)).toBe("ollama");
+    expect(providerUpstreamLabel("gemini", "https://generativelanguage.googleapis.com", null)).toBe(
+      "gemini",
+    );
+    expect(providerUpstreamLabel("openai", "https://api.openai.com/v1", null)).toBe("openai");
+  });
+  it("falls back to the URL label for Anthropic-family providers", () => {
+    expect(providerUpstreamLabel("anthropic", "https://api.anthropic.com", null)).toBe("anthropic");
+    expect(providerUpstreamLabel("azure-foundry", "https://x.services.ai.azure.com", null)).toBe(
+      "foundry",
+    );
   });
 });
 
@@ -190,6 +211,27 @@ describe("collectGolemState", () => {
     await mkdir(path.join(dir, ".golem"), { recursive: true });
     const state = await collectGolemState(dir, { localReachable: async () => true });
     expect(state.localModelReachable).toBe(true);
+  });
+
+  it("reflects the ACTIVE account in the upstream label (R6.2)", async () => {
+    await writeSetting(
+      "project",
+      "proxy.accounts",
+      [{ id: "local", provider: "ollama", base_url: "http://gpubox.lan:11434/v1" }],
+      { projectDir: dir },
+    );
+    await writeSetting("project", "proxy.active_account", "local", { projectDir: dir });
+    const state = await collectGolemState(dir, { localReachable: async () => false });
+    expect(state.upstreamLabel).toBe("local"); // the account id, not the top-level base URL
+  });
+
+  it("labels a translating provider set at the top level (no account)", async () => {
+    await writeSetting("project", "proxy.upstream_provider", "ollama", { projectDir: dir });
+    await writeSetting("project", "proxy.upstream_base_url", "http://localhost:11434/v1", {
+      projectDir: dir,
+    });
+    const state = await collectGolemState(dir, { localReachable: async () => false });
+    expect(state.upstreamLabel).toBe("ollama");
   });
 
   describe("proxy running", () => {
