@@ -20,8 +20,13 @@ import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import {
+  anthropicToGemini,
   anthropicToOpenAIChat,
+  createGeminiToAnthropicSSE,
   createOpenAIToAnthropicSSE,
+  geminiPath,
+  geminiToAnthropic,
+  isGeminiProvider,
   isTranslatingProvider,
   makeAuthMapper,
   openAIChatToAnthropic,
@@ -29,6 +34,7 @@ import {
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
+import type { UpstreamTranslator } from "../proxy/index.js";
 import { GolemProxy, parseLimitPrediction, writeLimitState } from "../proxy/index.js";
 import {
   recordAvoidedUpstream,
@@ -195,34 +201,62 @@ export function buildProxyFromSettings(
         "GOLEM_UPSTREAM_API_KEY; forwarding the client's own auth unchanged for now.\n",
     );
   }
-  // R6.1 case (b): for an OpenAI-schema upstream (OpenAI / Ollama), translate
-  // request+response bodies. Non-streaming (b1) uses translateResponse; streaming
-  // (b2) uses createStreamTranslator. The pipeline still runs in Anthropic terms
-  // before this; translation is the last step.
+  // R6.1 case (b): translate request+response bodies for a non-Anthropic schema.
+  // Non-streaming uses translateResponse; streaming uses createStreamTranslator.
+  // The pipeline still runs in Anthropic terms before this; translation is last.
   const upstreamModel = settings.proxy.upstream_model;
+  const upstreamBase = settings.proxy.upstream_base_url;
   const translateFallback = {
     id: "msg_golem_translated",
     model: upstreamModel ?? upstreamProvider,
   };
-  const translateUpstream = isTranslatingProvider(upstreamProvider)
-    ? {
-        path: upstreamChatCompletionsPath(settings.proxy.upstream_base_url),
-        translateRequest: (body: Buffer | null): { body: Buffer; stream: boolean } => {
-          const req = anthropicToOpenAIChat(
-            body,
-            upstreamModel !== undefined ? { model: upstreamModel } : {},
-          );
-          return { body: Buffer.from(JSON.stringify(req), "utf8"), stream: req.stream };
-        },
-        translateResponse: (body: Buffer): Buffer =>
-          Buffer.from(JSON.stringify(openAIChatToAnthropic(body, translateFallback)), "utf8"),
-        createStreamTranslator: () => createOpenAIToAnthropicSSE(translateFallback),
-      }
-    : undefined;
+  const modelOpt = upstreamModel !== undefined ? { model: upstreamModel } : {};
+
+  let translateUpstream: UpstreamTranslator | undefined;
+  if (isGeminiProvider(upstreamProvider)) {
+    // Gemini: distinct schema; auth is a `?key=` query param carried in the
+    // per-request path, so the base `path` is a placeholder that translateRequest
+    // always overrides.
+    translateUpstream = {
+      path: geminiPath(upstreamBase, upstreamModel ?? "", false, upstreamApiKey),
+      translateRequest: (body: Buffer | null) => {
+        const { body: g, stream, model } = anthropicToGemini(body, modelOpt);
+        return {
+          body: Buffer.from(JSON.stringify(g), "utf8"),
+          stream,
+          path: geminiPath(upstreamBase, model, stream, upstreamApiKey),
+        };
+      },
+      translateResponse: (body: Buffer): Buffer =>
+        Buffer.from(JSON.stringify(geminiToAnthropic(body, translateFallback)), "utf8"),
+      createStreamTranslator: () => createGeminiToAnthropicSSE(translateFallback),
+    };
+  } else if (isTranslatingProvider(upstreamProvider)) {
+    // OpenAI / Ollama: OpenAI Chat Completions schema.
+    translateUpstream = {
+      path: upstreamChatCompletionsPath(upstreamBase),
+      translateRequest: (body: Buffer | null) => {
+        const req = anthropicToOpenAIChat(body, modelOpt);
+        return { body: Buffer.from(JSON.stringify(req), "utf8"), stream: req.stream };
+      },
+      translateResponse: (body: Buffer): Buffer =>
+        Buffer.from(JSON.stringify(openAIChatToAnthropic(body, translateFallback)), "utf8"),
+      createStreamTranslator: () => createOpenAIToAnthropicSSE(translateFallback),
+    };
+  }
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {
     process.stderr.write(
       `golem proxy: upstream_provider "${upstreamProvider}" needs proxy.upstream_model ` +
         "(the backend model id, e.g. qwen2.5-coder:7b); requests will fail until it is set.\n",
+    );
+  }
+  if (
+    isGeminiProvider(upstreamProvider) &&
+    (upstreamApiKey === undefined || upstreamApiKey === "")
+  ) {
+    process.stderr.write(
+      'golem proxy: upstream_provider "gemini" needs a credential — set ' +
+        "GOLEM_UPSTREAM_API_KEY (sent as the ?key= query param); requests will 401 until it is set.\n",
     );
   }
   // Throttle limit-state persistence (P2a) so a busy SSE stream doesn't rewrite
