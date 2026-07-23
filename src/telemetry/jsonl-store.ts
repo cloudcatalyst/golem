@@ -32,6 +32,29 @@ export function telemetryFilePath(projectDir: string): string {
   return path.join(projectDir, ".golem", "telemetry", "events.jsonl");
 }
 
+/**
+ * Read and parse every recorded event for a project (R6.4 — the cost-governance
+ * benchmark needs raw, timestamped events to window by 24h/7d, which the
+ * kind-specific `aggregate*` rollups do not expose). A missing file yields an
+ * empty list; corrupt/partial lines are skipped, same as {@link parseEvent}
+ * everywhere else. Read-only — never used on the request critical path.
+ */
+export async function readTelemetryEvents(projectDir: string): Promise<readonly TelemetryEvent[]> {
+  let raw: string;
+  try {
+    raw = await readFile(telemetryFilePath(projectDir), "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+  const events: TelemetryEvent[] = [];
+  for (const line of raw.split("\n")) {
+    const ev = parseEvent(line);
+    if (ev !== null) events.push(ev);
+  }
+  return events;
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }

@@ -130,12 +130,20 @@ memos were retired to git history). R5.4's threat model is ADR-0002.
 Formerly R5. Same hold + per-task design-memo gate as R5; R6.3 is the
 Decision 21b **companion app** the user has explicitly deferred.
 
+**Design memos written (2026-07-23, PROPOSED — no code):**
+`docs/plan/proposals/r6-multi-provider-remote-memos.md` covers R6.1/R6.2/R6.4
+(R6.3 excluded per the user's deferral). Each stays PROPOSED until its
+`verification-notes.md` pass + 🔒 gates clear + a separate explicit build ask.
+Recommended order: R6.4 (no gate) → R6.1 case (a) → R6.1 case (b) → R6.2 (after
+R6.1 + ToS review + a credential threat-model ADR). **R6.4 shipped 2026-07-23**
+(`golem bench cost`); R6.1/R6.2 remain PROPOSED.
+
 | # | Task | Type | Source |
 |---|---|---|---|
 | R6.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Positioning-unblocked by Decision 32; build still needs its memo + explicit ask. | 🧭🛠️ | Dec 22/32 |
 | R6.2 | Account switching + multi-LLM/quota routing. | 🔒 | 21d/21e |
 | R6.3 | Remote steering / permission-granting — companion app + locally-hosted web (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
-| R6.4 | Cost-governance benchmarks vs Claude's cost doc (continuous once picked up). | 🛠️ | 21f |
+| R6.4 | ~~Cost-governance benchmarks vs Claude's cost doc (continuous once picked up).~~ — **DONE (first cut)** 2026-07-23: `golem bench cost [--window 24h\|7d\|all] [--project] [--json]` composes existing telemetry (R1.1 net-of-cache `usage`, R2.2/R2.3 `avoidedUpstream`, CCR activity, R4.3 per-tool events) into a report framed against the re-verified cost-doc baselines (verification-notes §72) — honestly scoped (Golem's own contribution, not a `/usage` replacement; baselines are reference, not a claimed delta) + a CLAUDE.md-leanness check. Pure `buildCostBenchmark` + `readTelemetryEvents` reader; no frozen-interface change, no proxy-path change. +11 tests, 1170 green. See debriefs/2026-07-23-R6.4.md. | ✅ | 21f |
 
 ### R7 — Distribution, versioning & self-update — ✅ SHIPPED (2026-07-22 → 07-23); R7.5 USER-gated
 The golem.run onboarding one-liner + how installs stay current (spec Decision 41,
@@ -165,8 +173,11 @@ measured, 2026-07-16), **Decision 33 local-answer** flipped to ACCEPTED
 What remains:
 
 1. **🔒 All of R6** (multi-provider adapters, account/quota routing, remote
-   steering + companion app, cost benchmarks) — on hold; each needs a written
-   memo + review before code.
+   steering + companion app, cost benchmarks) — on hold. Design memos for
+   R6.1/R6.2/R6.4 are now written (`proposals/r6-multi-provider-remote-memos.md`,
+   PROPOSED); each still needs its verification pass, 🔒 gates, and a separate
+   explicit build ask before code. R6.3 remains deferred (needs its own
+   threat-model ADR, not just a memo).
 2. **🔬 R7.3 standalone-binary verification** — the Bun `--compile` binaries are
    build-wired but never run per-OS (no Bun/mac/linux in-session; CI itself is
    billing-blocked). Smoke-test each before relying on the binary channel.

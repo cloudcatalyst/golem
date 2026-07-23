@@ -11,7 +11,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import path from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import {
@@ -66,7 +66,14 @@ import {
   isResumable,
   runQueueLocally,
 } from "../tasks/index.js";
-import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
+import {
+  type BenchWindow,
+  buildCostBenchmark,
+  openTelemetryStore,
+  readTelemetryEvents,
+  renderCostBenchmark,
+  type ToolUsageStats,
+} from "../telemetry/index.js";
 import { checkForUpdate, detectInstallMethod } from "../update/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import {
@@ -957,6 +964,52 @@ program
       const report = await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const benchCmd = program.command("bench").description("Golem benchmarks (spec Decision 21f)");
+
+benchCmd
+  .command("cost")
+  .description(
+    "Cost-governance benchmark: Golem's measured savings vs Claude Code's cost-doc baselines",
+  )
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--project <id>", "limit the benchmark to this project id")
+  .option("--window <window>", "time window: 24h | 7d | all", "7d")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; project?: string; window: string; json: boolean }) => {
+    try {
+      if (opts.window !== "24h" && opts.window !== "7d" && opts.window !== "all") {
+        throw new InitError(`invalid --window "${opts.window}" (expected 24h | 7d | all)`);
+      }
+      const window: BenchWindow = opts.window;
+      // Best-effort: telemetry / CLAUDE.md read failures degrade the report,
+      // never fail the command.
+      let events: Awaited<ReturnType<typeof readTelemetryEvents>> = [];
+      try {
+        events = await readTelemetryEvents(opts.dir);
+      } catch {
+        events = [];
+      }
+      let claudeMdLines: number | undefined;
+      try {
+        const text = await readFile(path.join(opts.dir, "CLAUDE.md"), "utf8");
+        claudeMdLines = text.split("\n").length;
+      } catch {
+        claudeMdLines = undefined;
+      }
+      const report = buildCostBenchmark(events, {
+        ...(opts.project !== undefined ? { projectId: opts.project } : {}),
+        window,
+        nowMs: Date.now(),
+        ...(claudeMdLines !== undefined ? { claudeMdLines } : {}),
+      });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderCostBenchmark(report),
       );
     } catch (err) {
       fail(err);
