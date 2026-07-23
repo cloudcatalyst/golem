@@ -29,6 +29,8 @@ interface OpenAIChunk {
   readonly choices?: ReadonlyArray<{
     readonly delta?: {
       readonly content?: string | null;
+      // b4-kimi: reasoning models stream the thinking trace here.
+      readonly reasoning_content?: string | null;
       readonly tool_calls?: ReadonlyArray<{
         readonly index: number;
         readonly id?: string;
@@ -40,8 +42,8 @@ interface OpenAIChunk {
   readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number };
 }
 
-/** The currently-open Anthropic content block: none, the text block, or a tool by OpenAI index. */
-type Current = null | { kind: "text" } | { kind: "tool"; oaiIndex: number };
+/** The currently-open Anthropic content block. */
+type Current = null | { kind: "thinking" } | { kind: "text" } | { kind: "tool"; oaiIndex: number };
 
 export class OpenAIChatSSETranslator extends Transform {
   #buf = "";
@@ -51,6 +53,7 @@ export class OpenAIChatSSETranslator extends Transform {
   #outputTokens = 0;
   #id: string;
   #model: string;
+  readonly #mapReasoning: boolean;
 
   // Sequential-block bookkeeping.
   #current: Current = null;
@@ -58,10 +61,15 @@ export class OpenAIChatSSETranslator extends Transform {
   #blockCount = 0;
   readonly #toolMeta = new Map<number, { id: string; name: string }>();
 
-  constructor(fallback: { readonly id: string; readonly model: string }) {
+  constructor(fallback: {
+    readonly id: string;
+    readonly model: string;
+    readonly mapReasoning?: boolean;
+  }) {
     super();
     this.#id = fallback.id;
     this.#model = fallback.model;
+    this.#mapReasoning = fallback.mapReasoning !== false;
   }
 
   override _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
@@ -116,6 +124,21 @@ export class OpenAIChatSSETranslator extends Transform {
     }
     const choice = chunk.choices?.[0];
     const delta = choice?.delta;
+
+    // b4-kimi: the thinking trace streams first (a reasoning model thinks before
+    // it answers) → a leading Anthropic `thinking` block. No signature is emitted
+    // (synthesized, non-Anthropic origin; display-only).
+    const reasoning = delta?.reasoning_content;
+    if (this.#mapReasoning && typeof reasoning === "string" && reasoning.length > 0) {
+      this.#switchTo({ kind: "thinking" });
+      this.push(
+        sse("content_block_delta", {
+          type: "content_block_delta",
+          index: this.#currentIndex,
+          delta: { type: "thinking_delta", thinking: reasoning },
+        }),
+      );
+    }
 
     const text = delta?.content;
     if (typeof text === "string" && text.length > 0) {
@@ -184,11 +207,13 @@ export class OpenAIChatSSETranslator extends Transform {
   }
 
   /** Ensure the requested block is the open one, closing any other first (sequential blocks). */
-  #switchTo(target: { kind: "text" } | { kind: "tool"; oaiIndex: number }): void {
+  #switchTo(
+    target: { kind: "thinking" } | { kind: "text" } | { kind: "tool"; oaiIndex: number },
+  ): void {
     this.#ensureStarted();
     if (this.#current !== null) {
       if (this.#current.kind === target.kind) {
-        if (target.kind === "text") return;
+        if (target.kind !== "tool") return; // thinking/text: a single block, already open
         if (
           this.#current.kind === "tool" &&
           this.#current.oaiIndex === (target as { oaiIndex: number }).oaiIndex
@@ -199,7 +224,16 @@ export class OpenAIChatSSETranslator extends Transform {
       this.#closeCurrent();
     }
     this.#currentIndex = this.#blockCount++;
-    if (target.kind === "text") {
+    if (target.kind === "thinking") {
+      this.#current = { kind: "thinking" };
+      this.push(
+        sse("content_block_start", {
+          type: "content_block_start",
+          index: this.#currentIndex,
+          content_block: { type: "thinking", thinking: "" },
+        }),
+      );
+    } else if (target.kind === "text") {
       this.#current = { kind: "text" };
       this.push(
         sse("content_block_start", {
@@ -226,6 +260,7 @@ export class OpenAIChatSSETranslator extends Transform {
 export function createOpenAIToAnthropicSSE(fallback: {
   readonly id: string;
   readonly model: string;
+  readonly mapReasoning?: boolean;
 }): OpenAIChatSSETranslator {
   return new OpenAIChatSSETranslator(fallback);
 }

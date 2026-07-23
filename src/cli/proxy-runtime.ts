@@ -260,16 +260,25 @@ export function buildProxyFromSettings(
       createStreamTranslator: () => createGeminiToAnthropicSSE(translateFallback),
     };
   } else if (isTranslatingProvider(upstreamProvider)) {
-    // OpenAI / Ollama: OpenAI Chat Completions schema.
+    // OpenAI / Ollama: OpenAI Chat Completions schema. b4-kimi: pass through
+    // reasoning_effort and map the reasoning trace ↔ Anthropic thinking blocks.
+    const reasoningEffort = settings.proxy.upstream_reasoning_effort;
+    const mapReasoning = settings.proxy.map_reasoning_to_thinking;
+    const reqOpts = reasoningEffort !== undefined ? { ...modelOpt, reasoningEffort } : modelOpt;
+    const respOpts = { mapReasoning };
     translateUpstream = {
       path: upstreamChatCompletionsPath(upstreamBase),
       translateRequest: (body: Buffer | null) => {
-        const req = anthropicToOpenAIChat(body, modelOpt);
+        const req = anthropicToOpenAIChat(body, reqOpts);
         return { body: Buffer.from(JSON.stringify(req), "utf8"), stream: req.stream };
       },
       translateResponse: (body: Buffer): Buffer =>
-        Buffer.from(JSON.stringify(openAIChatToAnthropic(body, translateFallback)), "utf8"),
-      createStreamTranslator: () => createOpenAIToAnthropicSSE(translateFallback),
+        Buffer.from(
+          JSON.stringify(openAIChatToAnthropic(body, translateFallback, respOpts)),
+          "utf8",
+        ),
+      createStreamTranslator: () =>
+        createOpenAIToAnthropicSSE({ ...translateFallback, mapReasoning }),
     };
   }
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {

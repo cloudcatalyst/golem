@@ -2811,3 +2811,44 @@ account/provider switching only** (automated quota-evasion OUT). Built R6.2 v1:
   URL label (anthropic/foundry/openrouter/host). So `⬢ Golem →local` /
   `→ollama` / `→gemini` honestly shows what the proxy fronts (the Decision-30
   "always-on upstream status" extended to the R6 multi-provider reality).
+
+## §79 — Kimi K3 upstream + reasoning/vision translator enhancements (2026-07-24)
+
+Investigated integrating **Kimi K3** (Moonshot AI) as an upstream, verified
+against https://platform.kimi.ai/docs/guide/kimi-k3-quickstart (fetched
+2026-07-24, served from Golem's raw-fetch cache) + a corroborating web search.
+
+- **Kimi K3 is OpenAI-Chat-Completions compatible** → it already works via
+  Golem's `openai` translating provider, **no new provider code**. Base URL
+  `https://api.moonshot.ai/v1`, model id `kimi-k3`, auth
+  `Authorization: Bearer $MOONSHOT_API_KEY` (bearer — Golem's `openai` default);
+  streaming SSE + OpenAI tool-call schema. Config: `upstream_provider=openai`,
+  `upstream_base_url=https://api.moonshot.ai/v1`, `upstream_model=kimi-k3`,
+  `GOLEM_UPSTREAM_API_KEY=<key>` (or an account). **$1 min top-up** before a key
+  works. Not live-tested here (no Moonshot key).
+- **K3 is a reasoning + vision model**, so three translator gaps were closed so
+  it (and any reasoning/vision OpenAI-schema backend) is first-class:
+  1. **`reasoning_content` ↔ Anthropic `thinking`.** Non-streaming: a leading
+     `{type:"thinking",thinking}` block; streaming: a `thinking` content block
+     (`thinking_delta`) before the text block, sequential-block-safe. **No
+     `signature` is emitted** — the block is synthesized from a non-Anthropic
+     model (display-only); our request-side translator drops `thinking` blocks,
+     so it never needs replaying upstream. Gated by `proxy.map_reasoning_to_thinking`
+     (default on) in case a client mishandles unrequested thinking blocks.
+  2. **`reasoning_effort` passthrough** — `proxy.upstream_reasoning_effort`
+     (`low`/`high`/`max`) → OpenAI top-level `reasoning_effort`; omitted when
+     unset (some non-reasoning backends reject it). K3's server default is `max`
+     (priciest — reasoning billed as output at \$15/M).
+  3. **Vision passthrough** — Anthropic `image` blocks → OpenAI `image_url`
+     parts (base64 → `data:` URI, `url` → url). Anthropic Files-API `file`
+     sources have no OpenAI equivalent and are dropped. Message content becomes
+     an array only when images are present (text-only stays a string).
+- **Verification:** unit + regression only — my local Ollama model
+  (`qwen2.5-coder:7b`) is neither a reasoning nor a vision model, so the new
+  paths can't be live-exercised here; the existing Ollama text/stream path was
+  re-smoked and is unaffected (no `reasoning_content` → no spurious thinking
+  block). A live check needs a reasoning/vision backend (Kimi K3 with a key).
+- **Multi-turn caveat:** the K3 doc says feed the full assistant message
+  (incl. reasoning) back each turn; Golem rebuilds each request from Anthropic
+  history and drops `thinking` on the way out, so the trace is not preserved
+  across turns (K3 recomputes). Acceptable; noted.

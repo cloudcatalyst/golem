@@ -187,9 +187,15 @@ response-transform seam, then Gemini. Sliced b1→b4.
   override so Gemini's query-param `?key=` auth + model-in-path + `alt=sse` work
   (OpenAI unaffected). Provider `gemini` wired. Unit- + proxy-integration-verified
   (path override + round-trip); **not live-tested** (no Gemini key). §77.
-- **Case (b) COMPLETE: OpenAI, Ollama (local/LAN), Gemini.** R6.1 case (a) +
-  case (b) both shipped; the only R6.1 remainder is live end-to-end checks with
-  real cloud credentials (user-side).
+- **Case (b) COMPLETE: OpenAI, Ollama (local/LAN), Gemini** — and **Kimi K3**
+  (Moonshot), which is OpenAI-compatible so it needs no new provider (2026-07-24,
+  §79). Alongside it, the OpenAI translator gained **reasoning + vision**
+  first-class support (debrief `2026-07-24-R6.1b4-kimi-reasoning-vision.md`):
+  `reasoning_content`↔Anthropic `thinking` (config `map_reasoning_to_thinking`),
+  `reasoning_effort` passthrough (config `upstream_reasoning_effort`), and image
+  passthrough (Anthropic `image`→OpenAI `image_url`). R6.1 case (a) + case (b)
+  both shipped; the only R6.1 remainder is live end-to-end checks with real cloud
+  credentials (user-side).
 
 ---
 

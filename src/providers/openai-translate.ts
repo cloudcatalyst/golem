@@ -95,13 +95,21 @@ export interface OpenAIToolCall {
   readonly function: { readonly name: string; readonly arguments: string };
 }
 
+/** An OpenAI content part (multimodal). b4-kimi: images pass through. */
+export type OpenAIContentPart =
+  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "image_url"; readonly image_url: { readonly url: string } };
+
 /** An OpenAI Chat Completions message. */
 export interface OpenAIChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
-  readonly content: string | null;
+  readonly content: string | OpenAIContentPart[] | null;
   readonly tool_call_id?: string;
   readonly tool_calls?: OpenAIToolCall[];
 }
+
+/** Reasoning depth for reasoning models (Kimi k3, o-series). */
+export type OpenAIReasoningEffort = "low" | "high" | "max";
 
 export interface OpenAITool {
   readonly type: "function";
@@ -131,6 +139,45 @@ export interface OpenAIChatRequest {
   readonly stop?: string[];
   readonly tools?: OpenAITool[];
   readonly tool_choice?: OpenAIToolChoice;
+  /** b4-kimi: reasoning depth for reasoning models (Kimi k3 etc.); omitted otherwise. */
+  readonly reasoning_effort?: OpenAIReasoningEffort;
+}
+
+/**
+ * Map an Anthropic `image` block to an OpenAI `image_url` part. Base64 → a
+ * `data:` URI; a URL source passes through. An Anthropic Files-API `file`
+ * source has no OpenAI equivalent and is dropped (documented limitation).
+ */
+function imagePart(b: Block): OpenAIContentPart | null {
+  if (b.type !== "image") return null;
+  const src = b.source as
+    | { type?: string; media_type?: string; data?: string; url?: string }
+    | undefined;
+  if (src === undefined) return null;
+  if (src.type === "base64" && typeof src.data === "string") {
+    const mt = typeof src.media_type === "string" ? src.media_type : "image/png";
+    return { type: "image_url", image_url: { url: `data:${mt};base64,${src.data}` } };
+  }
+  if (src.type === "url" && typeof src.url === "string") {
+    return { type: "image_url", image_url: { url: src.url } };
+  }
+  return null;
+}
+
+/**
+ * Combine collected text + image parts into OpenAI message content: a plain
+ * string when there are no images (back-compat + most turns), else a parts
+ * array. `null` when there is nothing at all.
+ */
+function combineContent(
+  textParts: string[],
+  imageParts: OpenAIContentPart[],
+): string | OpenAIContentPart[] | null {
+  if (imageParts.length === 0) return textParts.length > 0 ? textParts.join("\n") : null;
+  const parts: OpenAIContentPart[] = [];
+  if (textParts.length > 0) parts.push({ type: "text", text: textParts.join("\n") });
+  parts.push(...imageParts);
+  return parts;
 }
 
 /**
@@ -150,10 +197,14 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
     const blocks = m.content as Block[];
     if (m.role === "assistant") {
       const textParts: string[] = [];
+      const imageParts: OpenAIContentPart[] = [];
       const toolCalls: OpenAIToolCall[] = [];
       for (const b of blocks) {
         if (b.type === "text" && typeof b.text === "string") {
           textParts.push(b.text);
+        } else if (b.type === "image") {
+          const p = imagePart(b);
+          if (p !== null) imageParts.push(p);
         } else if (b.type === "tool_use") {
           toolCalls.push({
             id: String(b.id ?? ""),
@@ -164,16 +215,20 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
       }
       const msg: OpenAIChatMessage = {
         role: "assistant",
-        content: textParts.length > 0 ? textParts.join("\n") : null,
+        content: combineContent(textParts, imageParts),
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
       out.push(msg);
     } else {
       const textParts: string[] = [];
+      const imageParts: OpenAIContentPart[] = [];
       const toolMsgs: OpenAIChatMessage[] = [];
       for (const b of blocks) {
         if (b.type === "text" && typeof b.text === "string") {
           textParts.push(b.text);
+        } else if (b.type === "image") {
+          const p = imagePart(b);
+          if (p !== null) imageParts.push(p);
         } else if (b.type === "tool_result") {
           toolMsgs.push({
             role: "tool",
@@ -183,7 +238,8 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
         }
       }
       for (const tm of toolMsgs) out.push(tm);
-      if (textParts.length > 0) out.push({ role: "user", content: textParts.join("\n") });
+      const content = combineContent(textParts, imageParts);
+      if (content !== null) out.push({ role: "user", content });
     }
   }
   return out;
@@ -216,7 +272,7 @@ function translateToolChoice(tc: { type: string } | undefined): OpenAIToolChoice
  */
 export function anthropicToOpenAIChat(
   body: Buffer | null,
-  opts: { readonly model?: string } = {},
+  opts: { readonly model?: string; readonly reasoningEffort?: OpenAIReasoningEffort } = {},
 ): OpenAIChatRequest {
   if (body === null) throw new Error("empty request body");
   const parsed = anthropicRequest.parse(JSON.parse(body.toString("utf8")));
@@ -255,6 +311,7 @@ export function anthropicToOpenAIChat(
     ...(parsed.stop_sequences !== undefined ? { stop: parsed.stop_sequences } : {}),
     ...(tools !== undefined && tools.length > 0 ? { tools } : {}),
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
+    ...(opts.reasoningEffort !== undefined ? { reasoning_effort: opts.reasoningEffort } : {}),
   };
 }
 
@@ -278,6 +335,8 @@ const openAIResponse = z
             .object({
               role: z.string().optional(),
               content: z.string().nullable().optional(),
+              // b4-kimi: reasoning models return the thinking trace here.
+              reasoning_content: z.string().nullable().optional(),
               tool_calls: z.array(openAIToolCall).optional(),
             })
             .catchall(z.unknown()),
@@ -307,8 +366,9 @@ export function mapStopReason(finish: string | null | undefined): string {
   }
 }
 
-/** An Anthropic content block we emit (text, or tool_use). */
+/** An Anthropic content block we emit (thinking, text, or tool_use). */
 export type AnthropicOutBlock =
+  | { readonly type: "thinking"; readonly thinking: string }
   | { readonly type: "text"; readonly text: string }
   | {
       readonly type: "tool_use";
@@ -338,11 +398,18 @@ export interface AnthropicMessageResponse {
 export function openAIChatToAnthropic(
   body: Buffer,
   fallback: { readonly id: string; readonly model: string },
+  opts: { readonly mapReasoning?: boolean } = {},
 ): AnthropicMessageResponse {
   const parsed = openAIResponse.parse(JSON.parse(body.toString("utf8")));
   const choice = parsed.choices[0];
   const text = choice?.message.content ?? "";
   const content: AnthropicOutBlock[] = [];
+  // b4-kimi: a reasoning model's thinking trace → a leading Anthropic thinking
+  // block (no signature — synthesized, non-Anthropic origin; display-only).
+  const reasoning = choice?.message.reasoning_content;
+  if (opts.mapReasoning !== false && typeof reasoning === "string" && reasoning.length > 0) {
+    content.push({ type: "thinking", thinking: reasoning });
+  }
   if (typeof text === "string" && text.length > 0) content.push({ type: "text", text });
   for (const tc of choice?.message.tool_calls ?? []) {
     content.push({
