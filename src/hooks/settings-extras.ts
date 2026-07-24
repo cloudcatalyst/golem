@@ -16,6 +16,17 @@ export const NOTIFICATION_COMMAND = "golem hook notification";
 export const PROMPT_SUBMIT_COMMAND = "golem hook prompt-submit";
 export const STATUS_LINE_COMMAND = "golem statusline";
 /**
+ * Seconds between timer-driven status-line refreshes (Claude Code's
+ * `statusLine.refreshInterval`, verified 2026-07-24 against
+ * code.claude.com/docs/en/statusline: min 1, unit seconds). Without it the line
+ * only re-runs on conversation events (a new assistant message, /compact, mode
+ * change), so external state changes — e.g. the slider set from the VS Code
+ * extension — would not appear on an idle terminal until the next turn. A small
+ * interval makes those near-live; `golem statusline` caches its slow ops (the
+ * local-model probe) so the poll is cheap.
+ */
+export const STATUS_LINE_REFRESH_INTERVAL_SEC = 2;
+/**
  * "auto" mode (Claude Code's research-preview background-safety-check
  * approval path) evaluates each tool call independently of `permissions.allow`
  * — a project's `Bash(golem:*)`/`mcp__golem` allow-rules can still re-prompt
@@ -154,8 +165,28 @@ export async function writeStatusLine(options: HookSettingsOptions): Promise<Ini
   const settings = existing ?? {};
 
   const current = settings.statusLine;
+  const desired = {
+    type: "command",
+    command: STATUS_LINE_COMMAND,
+    refreshInterval: STATUS_LINE_REFRESH_INTERVAL_SEC,
+  };
   if (isRecord(current) && current.command === STATUS_LINE_COMMAND) {
-    return { kind: "skip", path: rel(projectDir, file), detail: "status line already installed" };
+    // Already ours. Upgrade in place if the refresh interval drifted — older
+    // installs had none, so the line only updated on conversation activity and
+    // missed external slider changes. Preserve any extra keys (e.g. padding).
+    if (
+      current.type === "command" &&
+      current.refreshInterval === STATUS_LINE_REFRESH_INTERVAL_SEC
+    ) {
+      return { kind: "skip", path: rel(projectDir, file), detail: "status line already installed" };
+    }
+    settings.statusLine = { ...current, ...desired };
+    if (options.dryRun !== true) await writeJsonObject(file, settings);
+    return {
+      kind: "modify",
+      path: rel(projectDir, file),
+      detail: `statusLine refreshInterval = ${STATUS_LINE_REFRESH_INTERVAL_SEC}s`,
+    };
   }
   if (isRecord(current) && typeof current.command === "string") {
     // Someone else owns the status line — do not clobber.
@@ -166,7 +197,7 @@ export async function writeStatusLine(options: HookSettingsOptions): Promise<Ini
     };
   }
 
-  settings.statusLine = { type: "command", command: STATUS_LINE_COMMAND };
+  settings.statusLine = desired;
   if (options.dryRun !== true) await writeJsonObject(file, settings);
   return {
     kind: existing === null ? "create" : "modify",

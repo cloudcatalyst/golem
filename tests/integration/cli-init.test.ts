@@ -71,7 +71,11 @@ describe("golem init", () => {
 
     // Status line (21c) + blocked-state event hooks (21b) are installed.
     const cs = await readJson(".claude/settings.json");
-    expect(cs.statusLine).toStrictEqual({ type: "command", command: "golem statusline" });
+    expect(cs.statusLine).toStrictEqual({
+      type: "command",
+      command: "golem statusline",
+      refreshInterval: 2,
+    });
     // defaultMode = "default" so project allow-rules (Bash(golem:*), mcp__golem)
     // are authoritative instead of "auto" mode's separate background check.
     expect(cs.defaultMode).toBe("default");
