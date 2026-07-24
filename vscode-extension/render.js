@@ -23,6 +23,89 @@ function upstreamLabel(url) {
 }
 
 /**
+ * Short family label for a Claude model id (`claude-opus-4-8[1m]` -> `opus`).
+ * Mirrors the CLI's `friendlyModelLabel` (src/providers/model-display.ts) so the
+ * extension and terminal show the same thing. Non-Claude / unknown ids pass
+ * through unchanged.
+ */
+function friendlyModelLabel(modelId) {
+  if (typeof modelId !== "string") return modelId;
+  const lower = modelId.toLowerCase();
+  for (const family of ["opus", "sonnet", "haiku", "fable"]) {
+    if (lower.includes(family)) return family;
+  }
+  return modelId;
+}
+
+/**
+ * Short family label for a local (Ollama) model id — the leading family name
+ * before any size/variant/tag, e.g. `qwen2.5-coder:7b` -> `qwen`,
+ * `llama3.1:8b` -> `llama`, `deepseek-coder-v2:16b` -> `deepseek`. Strips the
+ * `:tag`, then takes the alphabetic prefix of the first `-`-segment. Falls back
+ * to the original id when it can't simplify.
+ */
+function friendlyLocalModelLabel(modelId) {
+  if (typeof modelId !== "string" || modelId === "") return modelId;
+  const beforeTag = modelId.split(":")[0]; // drop ":7b"
+  const firstSeg = beforeTag.split("-")[0]; // drop "-coder", "-v2"
+  const family = (firstSeg.match(/^[a-zA-Z]+/) || [firstSeg])[0]; // drop trailing "2.5"
+  return family || modelId;
+}
+
+/** First upper, rest lower — `opus` → `Opus`, `qwen` → `Qwen`. */
+function cap(s) {
+  return typeof s === "string" && s.length > 0 ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
+}
+
+/**
+ * Versioned Claude model label for the one-liner — `claude-opus-4-8[1m]` →
+ * `Opus 4.8`, `claude-haiku-4-5-20251001` → `Haiku 4.5` (trailing date dropped).
+ * Mirrors the CLI's `friendlyModelVersionLabel` (src/providers/model-display.ts)
+ * so the extension and terminal show the same thing. Unknown ids pass through.
+ */
+function friendlyModelVersionLabel(modelId) {
+  if (typeof modelId !== "string") return modelId;
+  const lower = modelId.toLowerCase();
+  const family = ["opus", "sonnet", "haiku", "fable"].find((f) => lower.includes(f));
+  if (!family) return modelId;
+  const rest = lower
+    .slice(lower.indexOf(family) + family.length)
+    .replace(/\[[^\]]*\]/g, "")
+    .replace(/^-/, "");
+  const version = [];
+  for (const seg of rest.split("-")) {
+    if (/^\d+$/.test(seg) && seg.length < 8) version.push(seg);
+    else break;
+  }
+  return version.length > 0 ? `${cap(family)} ${version.join(".")}` : cap(family);
+}
+
+/**
+ * Versioned local (Ollama) model label — `qwen2.5-coder:7b` → `Qwen 2.5`,
+ * `llama3.1:8b` → `Llama 3.1`, `deepseek-coder-v2:16b` → `Deepseek`. Mirrors the
+ * CLI's `localModelVersionLabel`. Empty in → empty out.
+ */
+function localModelVersionLabel(modelId) {
+  if (typeof modelId !== "string" || modelId === "") return modelId;
+  const beforeTag = modelId.split(":")[0];
+  const familyMatch = beforeTag.match(/^[a-zA-Z]+/);
+  if (!familyMatch) return modelId;
+  const family = cap(familyMatch[0]);
+  const versionMatch = beforeTag.slice(familyMatch[0].length).match(/^[0-9]+(?:\.[0-9]+)*/);
+  return versionMatch ? `${family} ${versionMatch[0]}` : family;
+}
+
+/**
+ * The slider level label, "Passthrough" whenever Golem isn't transforming
+ * traffic (proxy stopped, or level 0 full bypass — Decision 30). Shared by the
+ * status bar and the hover summary so they never disagree.
+ */
+function levelLabel(model) {
+  if (!model.proxyReachable || model.slider === 0) return "Passthrough";
+  return model.sliderName ? cap(model.sliderName) : `L${model.slider}`;
+}
+
+/**
  * Build the view model from `golem stats --json`, `golem status --json`, and
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
@@ -56,11 +139,28 @@ function buildModel(stats, status, update) {
     }
   }
 
+  // R6.2: prefer the account-aware `status.upstream` block (provider/account/
+  // model that the proxy actually fronts). Fall back to the legacy config path
+  // only for an older CLI that predates the block — that path is account-BLIND
+  // (it reads the top-level base URL), so it can misreport when an account is
+  // active; the block is the fix.
+  const u = st.upstream && typeof st.upstream === "object" ? st.upstream : null;
   const upstream =
+    (u && u.base_url) ||
     (st.config &&
       st.config["proxy.upstream_base_url"] &&
       st.config["proxy.upstream_base_url"].value) ||
     "https://api.anthropic.com";
+  const account = u && typeof u.account === "string" ? u.account : null;
+  const provider = u && typeof u.provider === "string" ? u.provider : null;
+  const defaultModel = u && u.default_model ? String(u.default_model) : null;
+  const lastServedModel = u && u.last_served_model ? String(u.last_served_model) : null;
+  // Live/current model: what was last served (shortened to a family label like
+  // `opus`), else the configured default (shown verbatim — an explicit id).
+  const model = lastServedModel ? friendlyModelLabel(lastServedModel) : defaultModel;
+  // Label prefers the account id (that's what the user switched to), matching
+  // the CLI's providerUpstreamLabel; else the URL-derived host/provider name.
+  const label = account || upstreamLabel(upstream);
 
   return {
     requests: Number(s.requests) || 0,
@@ -72,9 +172,34 @@ function buildModel(stats, status, update) {
     slider: st.slider && typeof st.slider.level === "number" ? st.slider.level : 1,
     sliderName: (st.slider && st.slider.name) || "",
     upstream,
-    upstreamLabel: upstreamLabel(upstream),
+    upstreamLabel: label,
+    account,
+    provider,
+    model,
+    defaultModel,
+    lastServedModel,
     proxyReachable: !!(st.proxy && st.proxy.reachable),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
+    localCoderModel:
+      st.local_model && typeof st.local_model.coder_model === "string"
+        ? st.local_model.coder_model
+        : null,
+    // The local (Ollama) base URL for the hover summary's `Local:` line — from
+    // the status `local_model` block, falling back to the config value.
+    localBaseUrl:
+      (st.local_model && typeof st.local_model.base_url === "string" && st.local_model.base_url) ||
+      (st.config &&
+        st.config["inference.ollama_base_url"] &&
+        st.config["inference.ollama_base_url"].value) ||
+      null,
+    // The savings window actually applied by `golem stats --window` (24h/7d/all),
+    // for the summary's `saved …%` label. Null for an older CLI (all-time).
+    savingsWindow:
+      typeof s.window_applied === "string"
+        ? s.window_applied
+        : typeof s.window === "string"
+          ? s.window
+          : null,
     source: typeof s.source === "string" ? s.source : "live",
     updateAvailable,
     latestVersion,
@@ -100,28 +225,37 @@ function buildModel(stats, status, update) {
  * / local-first at level 3), Decision 30. The arrow always precedes the
  * destination, whether it's one provider or local-plus-provider.
  *
- * (Model name is not yet displayed: no source is available to the extension —
- * it would slot in as `→ <provider> (<model>)` once one exists.)
+ * R6.2: the current model (last-served, else configured default) is shown as
+ * `→ <provider> (<model>)`, e.g. `→ kimi (kimi-k3)`. Omitted when no model is
+ * known (a plain Anthropic passthrough stays `→ anthropic`).
  */
 function statusBarText(model) {
   const glyph = model.proxyReachable ? "⬢" : "⬡";
   // The update nudge shows regardless of proxy state — it's about the install,
   // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
   const badge = model.updateAvailable ? " $(arrow-up)" : "";
-  // "Passthrough" whenever Golem isn't transforming traffic: the proxy is
-  // stopped, or it's running at slider level 0 (full bypass, Decision 30).
-  const passthrough = !model.proxyReachable || model.slider === 0;
-  const levelLabel = passthrough
-    ? "Passthrough"
-    : model.sliderName
-      ? model.sliderName.charAt(0).toUpperCase() + model.sliderName.slice(1)
-      : `L${model.slider}`;
-  // Destination shown in every state (including passthrough/off) — it's the
-  // configured upstream. `local` folds in ahead of it whenever a local model is
-  // reachable, at ANY level (Decision 30).
+  return `${glyph} Golem · ${levelLabel(model)} → ${destinationLabel(model)}${badge}`;
+}
+
+/**
+ * The one-liner destination — `local (Qwen 2.5) + anthropic (Opus 4.8)`. Each
+ * backend carries its own versioned `(model)`; the `local (…)` segment is
+ * present only when a local model is reachable (Decision 30 — Golem is then a
+ * local+upstream hybrid at any level). Shown in every state (including
+ * passthrough/off): it's the configured destination traffic goes to.
+ */
+function destinationLabel(model) {
   const upstream = model.upstreamLabel || "upstream";
-  const destination = model.localModelReachable ? `local + ${upstream}` : upstream;
-  return `${glyph} Golem · ${levelLabel} → ${destination}${badge}`;
+  // Versioned upstream model: last-served when known (`Opus 4.8`), else the
+  // configured default shown verbatim (an explicit id like `kimi-k3`).
+  const upVer = model.lastServedModel
+    ? friendlyModelVersionLabel(model.lastServedModel)
+    : model.defaultModel;
+  const upstreamSeg = upVer ? `${upstream} (${upVer})` : upstream;
+  if (!model.localModelReachable) return upstreamSeg;
+  const localVer = model.localCoderModel ? localModelVersionLabel(model.localCoderModel) : "";
+  const localSeg = localVer ? `local (${localVer})` : "local";
+  return `${localSeg} + ${upstreamSeg}`;
 }
 
 function esc(s) {
@@ -175,7 +309,7 @@ function renderHtml(model, nonce) {
   <div class="big">${model.savedPct}%</div>
   <div class="sub">saved · ${fmtTokens(model.before)} → ${fmtTokens(model.after)} tokens · ${
     model.requests
-  } req</div>
+  } req${model.savingsWindow ? ` · ${esc(model.savingsWindow)}` : ""}</div>
 
   <h2>Status</h2>
   <div class="row"><span>Proxy</span><span>
@@ -186,7 +320,16 @@ function renderHtml(model, nonce) {
       model.proxyReachable ? "Stop" : "Start"
     }</button>
   </span></div>
-  <div class="row"><span>Upstream</span><span class="pill">${esc(model.upstreamLabel)}</span></div>
+  <div class="row"><span>Upstream</span><span class="pill">${esc(
+    model.upstreamLabel,
+  )}${model.provider && model.provider !== model.upstreamLabel ? ` · ${esc(model.provider)}` : ""}${
+    model.model ? ` · ${esc(model.model)}` : ""
+  }</span></div>
+  <div class="row"><span>Inference</span><span class="sub">${
+    model.localModelReachable
+      ? `local + upstream${model.localCoderModel ? ` · coder ${esc(model.localCoderModel)}` : ""}`
+      : "upstream only"
+  }</span></div>
   <div class="row"><span>Stats source</span><span class="sub">${esc(model.source)}</span></div>
   <div class="row"><span>Version</span><span>${
     model.updateAvailable
@@ -217,4 +360,16 @@ function renderHtml(model, nonce) {
 </body></html>`;
 }
 
-module.exports = { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml };
+module.exports = {
+  fmtTokens,
+  upstreamLabel,
+  friendlyModelLabel,
+  friendlyLocalModelLabel,
+  friendlyModelVersionLabel,
+  localModelVersionLabel,
+  levelLabel,
+  destinationLabel,
+  buildModel,
+  statusBarText,
+  renderHtml,
+};

@@ -8,7 +8,7 @@ const vscode = require("vscode");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs");
 const nodePath = require("node:path");
-const { buildModel, statusBarText, renderHtml } = require("./render.js");
+const { buildModel, statusBarText, renderHtml, levelLabel, fmtTokens } = require("./render.js");
 
 const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
@@ -81,7 +81,10 @@ async function fetchUpdate() {
 
 async function fetchModel() {
   const [stats, status] = await Promise.all([
-    golemJson(["stats", "--json"]),
+    // Rolling 24h savings window (Decision 23 — savings is situational); the CLI
+    // widens to 7d/all when the last day recorded nothing, and reports which
+    // window it used via `window_applied`.
+    golemJson(["stats", "--json", "--window", "24h"]),
     golemJson(["status", "--json"]),
   ]);
   return buildModel(stats, status, lastUpdate);
@@ -146,6 +149,40 @@ async function setProxy(running) {
   await refresh();
 }
 
+/**
+ * Show a quick-pick of configured upstream accounts and switch to the chosen
+ * one. `golem account use` auto-restarts a running proxy, so the switch applies
+ * immediately; we just refresh afterwards. The synthetic default (e.g.
+ * `anthropic`) is a first-class entry — selecting it reverts to the top-level
+ * config.
+ */
+async function pickAccount() {
+  const report = await golemJson(["account", "list", "--json", "--dir", cwd()]);
+  const accounts = report && Array.isArray(report.accounts) ? report.accounts : [];
+  if (accounts.length === 0) {
+    vscode.window.showInformationMessage("Golem: no upstream accounts configured.");
+    return;
+  }
+  const items = accounts.map((a) => {
+    const model = a.model ? ` · ${a.model}` : "";
+    const dflt = a.is_default ? " (default)" : "";
+    const key = a.key_set ? "" : " · key missing";
+    return {
+      label: `${a.active ? "$(check) " : ""}${a.id}${dflt}`,
+      description: `${a.provider}${model}${key}`,
+      detail: a.base_url,
+      id: a.id,
+      active: !!a.active,
+    };
+  });
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: "Golem — switch upstream account",
+  });
+  if (!pick || pick.active) return; // cancelled, or already active
+  await golemText(["account", "use", pick.id, "--dir", cwd()]);
+  await refresh();
+}
+
 async function refresh() {
   // Non-Golem project: the extension installs globally, so stay invisible here —
   // hide the status bar and don't spawn the CLI in every unrelated window.
@@ -162,11 +199,28 @@ async function refresh() {
   lastModel = model;
   if (statusBar) {
     statusBar.text = statusBarText(model);
-    const localLine = model.localModelReachable ? "\nInference: local + upstream" : "";
+    // Hover summary — the fuller three-line view the compact status bar omits:
+    //   Mode: <level> · saved <pct>% (<in> → <sent>) <window>
+    //   Local: <ollama url> (<full model>)        (only when a local model is up)
+    //   Upstream: <base url> (<full model>)
+    // Cost is intentionally absent (deferred until per-backend cost tracking).
+    // Full model ids here (not the compact versioned labels), since there's room.
+    const modeLine = `Mode: ${levelLabel(model)} · saved ${model.savedPct}% (${fmtTokens(
+      model.before,
+    )} → ${fmtTokens(model.after)})${model.savingsWindow ? ` ${model.savingsWindow}` : ""}`;
+    const localLine = model.localModelReachable
+      ? `\nLocal: ${model.localBaseUrl || "local"}${
+          model.localCoderModel ? ` (${model.localCoderModel})` : ""
+        }`
+      : "";
+    const upstreamFull = model.lastServedModel || model.defaultModel;
+    const upstreamLine = `\nUpstream: ${model.upstream || model.upstreamLabel}${
+      upstreamFull ? ` (${upstreamFull})` : ""
+    }`;
     const updateLine = model.updateAvailable
       ? `\nUpdate available: ${model.currentVersion || "?"} → ${model.latestVersion || "?"}`
       : "";
-    statusBar.tooltip = `Golem → ${model.upstreamLabel} · ${model.savedPct}% saved · slider L${model.slider}${localLine}${updateLine}\nClick for actions`;
+    statusBar.tooltip = `${modeLine}${localLine}${upstreamLine}${updateLine}`;
     statusBar.show();
   }
   if (provider) provider.render(model);
@@ -192,6 +246,7 @@ function activate(context) {
     ),
     vscode.commands.registerCommand("golem.toggleProxy", () => setProxy(!lastModel?.proxyReachable)),
     vscode.commands.registerCommand("golem.update", runUpdate),
+    vscode.commands.registerCommand("golem.setAccount", pickAccount),
     vscode.commands.registerCommand("golem.setSlider", async () => {
       const pick = await vscode.window.showQuickPick(
         ["0", "1", "2", "3", "4", "5"].map((l) => ({ label: `Level ${l}`, level: Number(l) })),
@@ -210,6 +265,7 @@ function activate(context) {
           action: "proxy",
         },
         { label: "$(arrow-both) Set slider level…", action: "slider" },
+        { label: "$(account) Switch upstream account…", action: "account" },
         { label: "$(window) Open Golem panel", action: "panel" },
         { label: "$(refresh) Refresh", action: "refresh" },
       ];
@@ -225,6 +281,7 @@ function activate(context) {
       if (!pick) return;
       if (pick.action === "proxy") await setProxy(!running);
       else if (pick.action === "slider") await vscode.commands.executeCommand("golem.setSlider");
+      else if (pick.action === "account") await vscode.commands.executeCommand("golem.setAccount");
       else if (pick.action === "panel") await vscode.commands.executeCommand("golem.showPanel");
       else if (pick.action === "update") runUpdate();
       else await refresh();

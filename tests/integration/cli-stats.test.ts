@@ -10,10 +10,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectStats, LIVE_STATS_NOTE, renderStats, statsSourceFor } from "../../src/cli/stats.js";
+import {
+  collectStats,
+  collectWindowedStats,
+  LIVE_STATS_NOTE,
+  renderStats,
+  statsSourceFor,
+} from "../../src/cli/stats.js";
 import { NativeLosslessCompression, STAGE_DEDUP } from "../../src/compression/index.js";
 import type { Message } from "../../src/interfaces/compression.js";
 import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
+import type { TelemetryEvent } from "../../src/telemetry/index.js";
 
 const LEVEL_1 = sliderPolicyForLevel(1);
 const PROJECT = "stats-test-project";
@@ -137,5 +144,62 @@ describe("golem stats", () => {
     const report = await collectStats(fake, undefined, { projectId: null, byTool: {} });
     expect(report.tool_usage).toBeUndefined();
     expect(renderStats(report)).not.toContain("local tools:");
+  });
+});
+
+describe("collectWindowedStats (rolling savings window, Decision 23)", () => {
+  const NOW = Date.parse("2026-07-24T12:00:00.000Z");
+  function reqEvent(ts: string, before: number, after: number): TelemetryEvent {
+    return {
+      ts,
+      projectId: PROJECT,
+      level: 1,
+      kind: "request",
+      requestTokens: { tokensBefore: before, tokensAfter: after },
+      stageSavings: {},
+      ccrRefsStored: 0,
+    };
+  }
+  // 1h ago (inside 24h), 3d ago (inside 7d only), and 8 weeks ago (all-time only).
+  const events = [
+    reqEvent("2026-07-24T11:00:00.000Z", 1000, 400),
+    reqEvent("2026-07-21T12:00:00.000Z", 2000, 1000),
+    reqEvent("2026-05-29T12:00:00.000Z", 5000, 4000),
+  ];
+
+  it("scopes the numbers to the requested 24h window", () => {
+    const report = collectWindowedStats(events, { window: "24h", nowMs: NOW, projectId: PROJECT });
+    expect(report.requests).toBe(1);
+    expect(report.tokens_before).toBe(1000);
+    expect(report.tokens_after).toBe(400);
+    expect(report.window).toBe("24h");
+    expect(report.window_applied).toBe("24h");
+  });
+
+  it("includes the 7d event when the window is 7d", () => {
+    const report = collectWindowedStats(events, { window: "7d", nowMs: NOW, projectId: PROJECT });
+    expect(report.requests).toBe(2);
+    expect(report.tokens_before).toBe(3000);
+    expect(report.window_applied).toBe("7d");
+  });
+
+  it("widens 24h → 7d → all when the narrower window recorded nothing", () => {
+    // Only the 8-weeks-ago event exists → 24h and 7d are empty, so it falls back to all.
+    const report = collectWindowedStats([events[2] as TelemetryEvent], {
+      window: "24h",
+      nowMs: NOW,
+      projectId: PROJECT,
+    });
+    expect(report.requests).toBe(1);
+    expect(report.window).toBe("24h");
+    expect(report.window_applied).toBe("all");
+  });
+
+  it("labels the applied window in the human render (requested→applied when they differ)", () => {
+    const report = collectWindowedStats([events[2] as TelemetryEvent], {
+      window: "24h",
+      nowMs: NOW,
+    });
+    expect(renderStats(report)).toContain("24h→all");
   });
 });

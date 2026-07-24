@@ -18,6 +18,7 @@ import {
 } from "../../../src/cli/statusline.js";
 import { writeSetting } from "../../../src/config/index.js";
 import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
+import { writeServedModel } from "../../../src/proxy/index.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
 
 describe("parseSessionInput", () => {
@@ -98,8 +99,9 @@ describe("isBlockedFresh (stale 'waiting' self-heals)", () => {
 });
 
 describe("renderStatusLine", () => {
-  it("renders the core line without color, leading with the level name", () => {
+  it("renders the core one-liner without color: brand · level → destination", () => {
     const line = renderStatusLine(
+      // Session signals are captured but intentionally not rendered yet (deferred).
       { contextUsedPct: 8, costUsd: 0.0123, fiveHourPct: 23 },
       {
         sliderLevel: 3,
@@ -109,14 +111,81 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem: Aggressive");
-    expect(line).toContain("→foundry");
-    expect(line).toContain("saved 34% (12.3k→8.1k)");
-    expect(line).toContain("ctx 8%");
-    expect(line).toContain("5h 23%");
-    expect(line).toContain("$0.012");
+    expect(line).toContain("⬢ Golem · Aggressive");
+    expect(line).toContain("→ foundry");
+    // Savings moved to the fuller summary; ctx/5h/$ are deferred off the line.
+    expect(line).not.toContain("saved");
+    expect(line).not.toContain("ctx");
+    expect(line).not.toContain("5h");
+    expect(line).not.toContain("$");
     // no-color mode emits no escape bytes
     expect(line).not.toContain(String.fromCharCode(27));
+  });
+
+  it("names each backend with its own versioned model (Decision 23 format)", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-4-8[1m]",
+        localModelReachable: true,
+        localCoderModel: "qwen2.5-coder:7b",
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("⬢ Golem · Lossless → local (Qwen 2.5) + anthropic (Opus 4.8)");
+  });
+
+  it("shows the configured model in the destination when nothing served yet", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "kimi",
+        upstreamProvider: "openai",
+        upstreamModel: "kimi-k3",
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("→ kimi (kimi-k3)");
+  });
+
+  it("prefers the last-served model over the configured default", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "kimi",
+        upstreamProvider: "openai",
+        upstreamModel: "kimi-k3",
+        lastServedModel: "kimi-k3-turbo",
+      },
+    );
+    expect(line).toContain("→ kimi (kimi-k3-turbo)");
+  });
+
+  it("prefixes a bare 'local' when the local model is up but its id is unknown", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "kimi",
+        upstreamModel: "kimi-k3",
+        localModelReachable: true,
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("→ local + kimi (kimi-k3)");
+  });
+
+  it("omits the parenthetical for a plain Anthropic passthrough (no model known)", () => {
+    const line = renderStatusLine(
+      {},
+      { sliderLevel: 1, upstreamLabel: "anthropic", upstreamProvider: "anthropic" },
+    );
+    expect(line).toContain("→ anthropic");
+    expect(line).not.toContain("(");
   });
 
   it("renders a stopped proxy as hollow 'Passthrough' and still shows the destination", () => {
@@ -125,14 +194,14 @@ describe("renderStatusLine", () => {
       { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
     );
     // Proxy off = not transforming traffic → "Passthrough" (not the level name).
-    expect(line).toContain("⬡ Golem: Passthrough");
+    expect(line).toContain("⬡ Golem · Passthrough");
     expect(line).not.toContain("Lossless");
     expect(line).not.toContain("proxy off");
     // The configured destination is still shown (passthrough goes straight there).
-    expect(line).toContain("→foundry");
+    expect(line).toContain("→ foundry");
   });
 
-  it("renders slider level 0 (running) as filled 'Passthrough' with local+upstream", () => {
+  it("renders slider level 0 (running) as filled 'Passthrough' with local + upstream", () => {
     const line = renderStatusLine(
       {},
       {
@@ -142,17 +211,24 @@ describe("renderStatusLine", () => {
         localModelReachable: true,
       },
     );
-    expect(line).toContain("⬢ Golem: Passthrough");
-    expect(line).toContain("→local+anthropic");
+    expect(line).toContain("⬢ Golem · Passthrough");
+    expect(line).toContain("→ local + anthropic");
   });
 
-  it("omits sections whose data is absent", () => {
-    const line = renderStatusLine({}, { sliderLevel: 2, upstreamLabel: "anthropic" });
-    expect(line).toContain("⬢ Golem: Balanced");
-    expect(line).not.toContain("saved");
-    expect(line).not.toContain("ctx");
-    expect(line).not.toContain("5h");
-    expect(line).not.toContain("$");
+  it("appends the waiting/update badges after the destination", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 2,
+        upstreamLabel: "anthropic",
+        proxyRunning: true,
+        blocked: true,
+        updateAvailable: true,
+      },
+    );
+    expect(line).toContain("⬢ Golem · Balanced → anthropic");
+    expect(line).toContain("⏸ waiting");
+    expect(line).toContain("⇧ update");
   });
 
   it("emits ANSI escapes when color is on", () => {
@@ -162,14 +238,6 @@ describe("renderStatusLine", () => {
       { color: true },
     );
     expect(line).toContain(String.fromCharCode(27));
-  });
-
-  it("does not show savings when nothing has been recorded", () => {
-    const line = renderStatusLine(
-      {},
-      { sliderLevel: 1, upstreamLabel: "foundry", tokensBefore: 0, tokensAfter: 0 },
-    );
-    expect(line).not.toContain("saved");
   });
 });
 
@@ -197,7 +265,7 @@ describe("collectGolemState", () => {
     const state = await collectGolemState(dir, {
       localReachable: async () => {
         probed = true;
-        return true;
+        return { reachable: true };
       },
     });
     // The status line runs in every project; a repo that never opted into Golem
@@ -209,20 +277,55 @@ describe("collectGolemState", () => {
 
   it("probes the local model once the project has a .golem dir", async () => {
     await mkdir(path.join(dir, ".golem"), { recursive: true });
-    const state = await collectGolemState(dir, { localReachable: async () => true });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: true }),
+    });
     expect(state.localModelReachable).toBe(true);
   });
 
-  it("reflects the ACTIVE account in the upstream label (R6.2)", async () => {
+  it("reflects the ACTIVE account in the upstream label + provider/model (R6.2)", async () => {
     await writeSetting(
       "project",
       "proxy.accounts",
-      [{ id: "local", provider: "ollama", base_url: "http://gpubox.lan:11434/v1" }],
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          model: "kimi-k3",
+        },
+      ],
       { projectDir: dir },
     );
-    await writeSetting("project", "proxy.active_account", "local", { projectDir: dir });
-    const state = await collectGolemState(dir, { localReachable: async () => false });
-    expect(state.upstreamLabel).toBe("local"); // the account id, not the top-level base URL
+    await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
+    expect(state.upstreamLabel).toBe("kimi"); // the account id, not the top-level base URL
+    expect(state.upstreamProvider).toBe("openai");
+    expect(state.upstreamModel).toBe("kimi-k3");
+  });
+
+  it("reads the last-served model from served-model.json (R6.2)", async () => {
+    await writeSetting(
+      "project",
+      "proxy.accounts",
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          model: "kimi-k3",
+        },
+      ],
+      { projectDir: dir },
+    );
+    await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
+    await writeServedModel(dir, { model: "kimi-k3-0724", servedAtIso: "2026-07-24T00:00:00.000Z" });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
+    expect(state.lastServedModel).toBe("kimi-k3-0724");
   });
 
   it("labels a translating provider set at the top level (no account)", async () => {
@@ -230,7 +333,9 @@ describe("collectGolemState", () => {
     await writeSetting("project", "proxy.upstream_base_url", "http://localhost:11434/v1", {
       projectDir: dir,
     });
-    const state = await collectGolemState(dir, { localReachable: async () => false });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
     expect(state.upstreamLabel).toBe("ollama");
   });
 
@@ -314,10 +419,11 @@ describe("collectGolemState", () => {
     await writeFile(sessionStatePath(dir), "{bad json", "utf8");
 
     await expect(
-      collectGolemState(dir, { localReachable: async () => false }),
+      collectGolemState(dir, { localReachable: async () => ({ reachable: false }) }),
     ).resolves.toStrictEqual({
       sliderLevel: 1,
       upstreamLabel: "anthropic",
+      upstreamProvider: "anthropic",
       proxyRunning: false,
       localModelReachable: false,
     });

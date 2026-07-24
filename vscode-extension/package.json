@@ -47,6 +47,10 @@
         "title": "Golem: Set Slider Level"
       },
       {
+        "command": "golem.setAccount",
+        "title": "Golem: Switch Upstream Account"
+      },
+      {
         "command": "golem.toggleProxy",
         "title": "Golem: Start/Stop Proxy"
       },

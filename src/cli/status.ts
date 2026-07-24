@@ -13,10 +13,13 @@
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
+import { friendlyModelLabel, resolveUpstreamDisplay } from "../providers/index.js";
+import { readServedModel } from "../proxy/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
-import { probeAndCacheLocalModel } from "./local-model.js";
+import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
+import { upstreamLabel } from "./statusline.js";
 
 /** One effective setting: value + which layer supplied it. */
 export interface ConfigKeyStatus {
@@ -41,6 +44,25 @@ export interface StatusReport {
     readonly url: string;
     readonly reachable: boolean;
   };
+  /**
+   * The active upstream's non-secret identity (R6.2 display): the account /
+   * provider / base URL / configured model the proxy fronts, plus the
+   * last-served model when the proxy has recorded one. Derived from the same
+   * account resolution the proxy uses (`resolveUpstreamDisplay`), so it reflects
+   * the ACTIVE account, not just the top-level base URL.
+   */
+  readonly upstream: {
+    readonly provider: string;
+    /** Active account id, or null when the legacy top-level config is in use. */
+    readonly account: string | null;
+    readonly base_url: string;
+    /** Configured default model, or null for a byte-faithful Anthropic upstream. */
+    readonly default_model: string | null;
+    /** Last model the proxy actually served (from served-model.json), if any. */
+    readonly last_served_model?: string | null;
+    /** When that model was served (ISO), if known. */
+    readonly last_served_at?: string | null;
+  };
   readonly slider: {
     readonly level: number;
     readonly name: string;
@@ -52,10 +74,15 @@ export interface StatusReport {
   /**
    * Whether a local model (Ollama) is reachable. When true, Golem is a
    * local+upstream hybrid — the local model is available via the `coder` MCP
-   * tool at any slider level (Decision 30/31).
+   * tool at any slider level (Decision 30/31) — and `coder_model` names the
+   * concrete model that role runs at this machine's hardware tier.
    */
   readonly local_model: {
     readonly reachable: boolean;
+    /** The `coder`/`drafter` model (e.g. `qwen2.5-coder:7b`) when reachable. */
+    readonly coder_model?: string;
+    /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
+    readonly base_url: string;
   };
   /**
    * Update status, from the LAST cached `golem update --check` (read-only, no
@@ -78,8 +105,8 @@ export interface StatusOptions {
   /** Test injection (forwarded to loadConfig). */
   readonly userDir?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
-  /** Test injection for the local-model reachability probe (avoids real network in tests). */
-  readonly localProbe?: (projectDir: string, baseUrl: string) => Promise<boolean>;
+  /** Test injection for the local-model probe (avoids real network in tests). */
+  readonly localProbe?: (projectDir: string, baseUrl: string) => Promise<LocalModelInfo>;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
@@ -124,13 +151,20 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
   };
-  const localProbe = options.localProbe ?? probeAndCacheLocalModel;
-  const [init, reachable, slider, localReachable] = await Promise.all([
+  const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
+  const [init, reachable, slider, localInfo, servedModel] = await Promise.all([
     golemInitStatus(projectDir, settings.proxy.port),
     probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
     getSliderInfo(sliderOpts),
-    localProbe(projectDir, settings.inference.ollama_base_url).catch(() => false),
+    localProbe(projectDir, settings.inference.ollama_base_url).catch(
+      (): LocalModelInfo => ({ reachable: false }),
+    ),
+    readServedModel(projectDir).catch(() => null),
   ]);
+
+  // R6.2 display: the ACTIVE account/provider/model the proxy fronts (not just
+  // the top-level base URL). No network, no secret — see resolveUpstreamDisplay.
+  const upstream = resolveUpstreamDisplay(settings.proxy);
 
   // Update status from the cached check only (no network — never hang status).
   // Recompute "available" against the version we're actually running.
@@ -162,9 +196,22 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       url: `http://localhost:${settings.proxy.port}`,
       reachable,
     },
+    upstream: {
+      provider: upstream.provider,
+      account: upstream.accountId,
+      base_url: upstream.baseUrl,
+      default_model: upstream.model ?? null,
+      ...(servedModel !== null
+        ? { last_served_model: servedModel.model, last_served_at: servedModel.servedAtIso }
+        : {}),
+    },
     slider: sliderJson(slider),
     config,
-    local_model: { reachable: localReachable },
+    local_model: {
+      reachable: localInfo.reachable,
+      ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
+      base_url: settings.inference.ollama_base_url,
+    },
     ...(cachedUpdate !== null
       ? {
           update: {
@@ -196,6 +243,40 @@ export const REDACTION_OFF_WARNING =
   "Slider level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII " +
   "reach the upstream unredacted. Use level 1 to keep redaction on.";
 
+/**
+ * Human-readable upstream line, e.g.
+ *   `kimi (openai) · api.moonshot.ai · model kimi-k3`
+ * or, when the proxy has served a model that differs from the configured one:
+ *   `kimi (openai) · api.moonshot.ai · default model kimi-k3 · last served <m>`
+ * When no account is active, the leading `<account> ` is dropped.
+ */
+export function renderUpstream(upstream: StatusReport["upstream"]): string {
+  const host = upstreamLabel(upstream.base_url);
+  const who =
+    upstream.account !== null
+      ? `${upstream.account} (${upstream.provider})`
+      : `${upstream.provider}`;
+  const parts = [who];
+  // Skip the host when it's redundant with what `who` already conveys — e.g. an
+  // `anthropic` provider whose base URL also labels as `anthropic`.
+  if (host !== upstream.provider && host !== upstream.account) parts.push(host);
+  const dflt = upstream.default_model;
+  const served = upstream.last_served_model ?? null;
+  if (dflt !== null && served !== null && friendlyModelLabel(served) !== dflt && served !== dflt) {
+    // A configured default exists AND the proxy served something else — show both
+    // so the divergence is visible (e.g. a translating upstream mid-switch).
+    parts.push(`default model ${dflt}`);
+    parts.push(`last served ${friendlyModelLabel(served)}`);
+  } else if (served !== null) {
+    // No configured default (byte-faithful Anthropic), or it matches: the served
+    // model IS the live model — show it as the current model.
+    parts.push(`model ${friendlyModelLabel(served)}`);
+  } else if (dflt !== null) {
+    parts.push(`model ${dflt}`);
+  }
+  return parts.join(" · ");
+}
+
 function sliderJson(slider: SliderInfo): StatusReport["slider"] {
   return {
     level: slider.level,
@@ -226,14 +307,21 @@ export function renderStatus(report: StatusReport): string {
   lines.push(
     `Proxy: ${report.proxy.url} — ${report.proxy.reachable ? "reachable" : "not running (start with `golem proxy`)"}`,
   );
+  lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
   const slider = report.slider;
   lines.push(
     `Slider: level ${slider.level} (${slider.name}) — set by ${slider.layer}` +
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
   // Inference topology: a reachable local model makes Golem local+upstream —
-  // available via the `coder` MCP tool at any level (Decision 30/31).
-  lines.push(`Inference: ${report.local_model.reachable ? "local + upstream" : "upstream only"}`);
+  // available via the `coder` MCP tool at any level (Decision 30/31). Name the
+  // concrete coder model when known.
+  const coder = report.local_model.coder_model;
+  lines.push(
+    report.local_model.reachable
+      ? `Inference: local + upstream${coder !== undefined ? ` · coder ${coder}` : ""}`
+      : "Inference: upstream only",
+  );
   if (report.update !== undefined) {
     lines.push(
       report.update.available
