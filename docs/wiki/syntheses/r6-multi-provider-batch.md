@@ -24,7 +24,7 @@ and the **Anthropic byte-faithful path untouched** throughout.
 | R6.1(b2) | SSE streaming translation (OpenAI deltas → Anthropic events) | [[R6.1 case (b) b2 — streaming translation (OpenAI SSE → Anthropic events)]] |
 | R6.1(b3) | Tool-use mapping (`tool_use`↔`tool_calls`, streaming `input_json_delta`) | [[R6.1 case (b) b3 — tool-use translation (tool_use ↔ tool_calls)]] |
 | R6.1(b4) | OpenAI provider functional (no new code) + Gemini `generateContent` translator | [[R6.1 case (b) b4-gemini — Google Gemini generateContent translator]] |
-| R6.2 | Account switching: registry + `active_account` + `golem account`, gated by [[ADR-0003 — R6.2 credential storage, account switching & multi-provider routing]] | [[R6.2 v1 — account switching (multi-account/provider selection)]] |
+| R6.2 | Account switching: registry + `active_account` + `golem account`, gated by ADR-0003 (docs/decisions/ADR-0003-credential-storage-and-account-routing.md) | [[R6.2 v1 — account switching (multi-account/provider selection)]] |
 
 ## What R6 delivers
 

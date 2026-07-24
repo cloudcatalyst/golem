@@ -98,7 +98,8 @@ already has.
 5. **Capture what's worth keeping.** A fetched page is searchable but orphaned
    until it's a wiki page. If the finding is durable, propose a wiki
    source-note (run \`/golem/wiki-ingest <url>\`) with real \`[[wikilinks]]\`,
-   citing the source. Wiki writes are plan-gated — propose, get approval, write.
+   citing the source. Author wiki pages freely (spec Decision 44) — no prior
+   approval needed; every write is committed to git and reviewable.
 `;
 
 const wikiIngest = `---
@@ -122,11 +123,11 @@ The user wants to add this URL to the project's wiki: $ARGUMENTS
    wiki stores distilled notes, not raw copies (see \`docs/wiki/WIKI.md\`'s
    write rules). If \`golem wiki distill\` isn't available (no local model
    configured), distill the note yourself instead.
-4. Propose the note to the user (show the title, a slug for
-   \`sources/<slug>.md\`, and the body) and wait for approval — wiki writes
-   are plan-gated (spec Decision 29), never automatic.
-5. Only after approval, call \`wiki_upsert\` with \`rel_path: "sources/<slug>.md"\`,
-   \`type: "source"\`, \`sources: ["$ARGUMENTS"]\`, and the approved body.
+4. Call \`wiki_upsert\` with \`rel_path: "sources/<slug>.md"\`, \`type: "source"\`,
+   \`sources: ["$ARGUMENTS"]\`, and the reviewed body — author it directly (spec
+   Decision 44); no prior approval needed, since the write is committed to git
+   and reviewable. Surface any contradiction with an existing page rather than
+   silently overwriting it.
 `;
 
 const develop = `---

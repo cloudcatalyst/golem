@@ -22,21 +22,22 @@ describe("wiki skills (T2, W2 leftover)", () => {
     expect(skill).toContain("/golem/wiki-ingest");
   });
 
-  it("wiki-ingest requires approval before writing (plan-gated per Decision 29)", () => {
+  it("wiki-ingest authors the note directly, no prior approval (de-gated per Decision 44)", () => {
     const skill = P0_SKILLS["wiki-ingest"];
     if (skill === undefined) throw new Error("expected a wiki-ingest skill");
     expect(skill).toContain("wiki_upsert");
-    expect(skill.toLowerCase()).toContain("approval");
-    // The write must come strictly after the approval instruction, not before it.
-    expect(skill.indexOf("approval")).toBeLessThan(skill.indexOf("wiki_upsert"));
+    expect(skill).toContain("Decision 44");
+    // De-gated: authored directly, no prior approval required.
+    expect(skill.toLowerCase()).toContain("no prior approval");
+    expect(skill.toLowerCase()).not.toContain("wait for approval");
   });
 
   it("wiki-ingest prefers an existing distill draft over re-distilling (T3)", () => {
     const skill = P0_SKILLS["wiki-ingest"];
     if (skill === undefined) throw new Error("expected a wiki-ingest skill");
     expect(skill).toContain("golem wiki distill");
-    // The distill step must come before the approval/write steps.
-    expect(skill.indexOf("golem wiki distill")).toBeLessThan(skill.indexOf("approval"));
+    // The distill step must come before the write step.
+    expect(skill.indexOf("golem wiki distill")).toBeLessThan(skill.indexOf("wiki_upsert"));
   });
 });
 

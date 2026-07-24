@@ -1092,12 +1092,13 @@ function registerWikiTools(server: McpServer, wiki: WikiStore, tel?: ToolTelemet
       title: "Write a Golem wiki page",
       description:
         "Create or refine a page in the project's committed wiki (spec Decisions " +
-        "28/29). Writes are plan-gated: only call this after proposing the page (or " +
-        "the addition) to the user and getting approval — never write unprompted. " +
-        "If a page already exists at rel_path, the new body is appended under a " +
-        "dated separator and tags/sources are merged in; this never replaces " +
-        "existing content wholesale. title/type must match the existing page's " +
-        "when one is already there.",
+        "28/29, de-gated by Decision 44). Author freely — no prior approval needed; " +
+        "every write is committed to git, so it's reviewable and revertible. " +
+        "Redaction-before-storage still applies and contradictions must be surfaced " +
+        "to the human, never auto-resolved. If a page already exists at rel_path, " +
+        "the new body is appended under a dated separator and tags/sources are " +
+        "merged in; this never replaces existing content wholesale. title/type must " +
+        "match the existing page's when one is already there.",
       inputSchema: {
         rel_path: z
           .string()

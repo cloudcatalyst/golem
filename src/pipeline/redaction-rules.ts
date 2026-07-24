@@ -287,7 +287,7 @@ const INTEGRITY_HASH_RE = /^(sha1|sha224|sha256|sha384|sha512|md5)-/i;
 /**
  * Whether a candidate is shaped like a repo path or a versioned/slugged
  * filename rather than random secret material (verification-notes §49): a
- * whole path (`docs/wiki/decisions/ADR-0012-file-watcher`) forms one
+ * whole path (`docs/decisions/ADR-0012-file-watcher`) forms one
  * candidate token because `/` sits in the entropy charset, and a path with
  * mixed case + digits (ADR numbers, dates) can measure above the entropy
  * threshold on its own alphabet.

@@ -9,12 +9,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkWiki, golemWikiInit, resolveWikiDir } from "../../../src/cli/wiki.js";
 
+// ADRs are NOT a wiki zone (spec Decision 44) — decisions live at docs/decisions/.
 const ZONE_DIRS = [
   "concepts",
   "entities",
   "sources",
   "syntheses",
-  "decisions",
   "debriefs",
   "questions",
   "artifacts",

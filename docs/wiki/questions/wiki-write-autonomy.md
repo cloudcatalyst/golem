@@ -4,8 +4,16 @@ type: question
 tags: [knowledge-base, autonomy]
 sources: [docs/plan/proposals/wiki-knowledge-pivot.md, docs/golem-spec.md]
 created: 2026-07-10
-updated: 2026-07-10
+updated: 2026-07-25
 ---
+
+> **Update (2026-07-25, spec Decision 44):** answer #1 below is reversed. The
+> agent may now author or refine wiki pages **freely, without a plan gate** —
+> every write is committed to git, so it's reviewable and revertible in history.
+> The other hard rules still bind (redaction-before-storage; contradictions
+> surfaced to the human, never auto-resolved). Decisions (ADRs) moved out of the
+> wiki to `docs/decisions/` and keep the stricter human-driven rule. The
+> original resolution is preserved unedited below as the point-in-time record.
 
 # Resolved — when may the agent write wiki pages without a plan gate?
 
