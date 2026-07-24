@@ -67,6 +67,7 @@ updated: YYYY-MM-DD
   originating article
 - sources/local-coder-models-2026.md — distilled landscape of small local coder models (Qwen3-Coder vs Qwen2.5-Coder; Ollama tag availability), captured during R4.7
 - sources/kimi-k3.md — Kimi K3 (Moonshot) API: OpenAI-compatible (base `https://api.moonshot.ai/v1`, model `kimi-k3`, bearer); fronted via Golem's `openai` provider + the reasoning/vision translator support (R6.1 b4-kimi)
+- sources/agentic-token-saving-techniques.md — four families of agentic token-saving (caching, lazy tool-def loading, routing/cascading, compaction) mapped to Golem's stance; names the honest gaps (lazy tool-defs, cache-hit observability)
 - `questions/` — open questions carried over from the Decision 28 proposal
 - debriefs/2026-07-10-T7.md — entropy sweep path false-positive fix
 - debriefs/2026-07-10-T1.md — wired durable `ccrRefsRetrieved` telemetry
