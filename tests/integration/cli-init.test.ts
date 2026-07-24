@@ -66,8 +66,13 @@ describe("golem init", () => {
       expect(skill).toBe(P0_SKILLS[name]);
     }
 
+    // Committed settings.json is a content-free "uses Golem" marker; the
+    // machine-local, transient slider level + per-project port live in the
+    // gitignored settings.local.json (spec Decision 43).
     const golemSettings = await readJson(".golem/settings.json");
-    expect(golemSettings).toStrictEqual({ slider: { level: 1 }, proxy: { port } });
+    expect(golemSettings).toStrictEqual({});
+    const golemLocal = await readJson(".golem/settings.local.json");
+    expect(golemLocal).toStrictEqual({ slider: { level: 1 }, proxy: { port } });
 
     // Status line (21c) + blocked-state event hooks (21b) are installed.
     const cs = await readJson(".claude/settings.json");

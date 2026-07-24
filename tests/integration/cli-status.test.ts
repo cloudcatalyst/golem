@@ -65,7 +65,7 @@ describe("collectStatus", () => {
     expect(report.config["proxy.port"]).toEqual({ value: 4653, layer: "default" });
   });
 
-  it("reports an initialized project and project-layer provenance", async () => {
+  it("reports an initialized project and local-layer provenance", async () => {
     await golemInit({ projectDir, probe: passingProbe });
     const report = await collectStatus({
       projectDir,
@@ -79,9 +79,9 @@ describe("collectStatus", () => {
     expect(report.initialized.mcp_registered).toBe(true);
     expect(report.initialized.skills).toBe(true);
     expect(report.initialized.golem_settings).toBe(true);
-    // init writes slider.level=1 at project scope.
-    expect(report.config["slider.level"]?.layer).toBe("project");
-    expect(report.config["slider.level"]?.source).toContain("settings.json");
+    // init writes slider.level=1 to the gitignored local scope (spec Decision 43).
+    expect(report.config["slider.level"]?.layer).toBe("local");
+    expect(report.config["slider.level"]?.source).toContain("settings.local.json");
   });
 
   it("surfaces an env override with env provenance", async () => {

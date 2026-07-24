@@ -2,9 +2,11 @@
  * WS-E E3 — `golem slider` engine: show or set the quality/savings slider.
  *
  * Reads go through the E1 config loader (so provenance says WHICH layer set
- * the effective level); writes go through `writeSetting` on the PROJECT scope
- * (`<project>/.golem/settings.json`, nested `slider.level`) — the same file
- * and key the reconciled MCP JsonFileSliderStore uses, so `/mcp__golem__slider`,
+ * the effective level); writes go through `writeSetting` on the LOCAL scope
+ * (`<project>/.golem/settings.local.json`, nested `slider.level`, gitignored) —
+ * the slider is a personal, frequently-changed dial, so its writes must not
+ * dirty the committed `settings.json` (spec Decision 43). The reconciled MCP
+ * JsonFileSliderStore writes the same local file and key, so `/mcp__golem__level`,
  * `golem slider`, and `loadConfig()` all see one value (verification-notes §20).
  */
 
@@ -65,7 +67,7 @@ export async function getSliderInfo(options: SliderOptions): Promise<SliderInfo>
 }
 
 export interface SetSliderResult {
-  /** Absolute path of the settings file written (project scope). */
+  /** Absolute path of the settings file written (local scope, gitignored). */
   readonly file: string;
   /** Effective level AFTER the write (a higher layer may still override). */
   readonly effective: SliderInfo;
@@ -81,12 +83,14 @@ export interface SetSliderResult {
 }
 
 /**
- * Persist `slider.level` at project scope, then report the effective value.
+ * Persist `slider.level` at LOCAL scope (gitignored settings.local.json), then
+ * report the effective value. The slider is a personal, transient dial — its
+ * writes must not churn the committed `settings.json` (spec Decision 43).
  *
  * Choosing a level is what activates Golem in a project: if it hasn't been
  * initialized yet (no `.golem/settings.json`, no MCP/skills wiring), this runs
  * the full `golemInit` flow at the chosen level first, rather than writing an
- * orphaned `.golem/settings.json` with none of the rest of the wiring.
+ * orphaned settings file with none of the rest of the wiring.
  */
 export async function setSliderLevel(
   level: SliderLevel,
@@ -107,9 +111,9 @@ export async function setSliderLevel(
       ...(options.probe !== undefined && { probe: options.probe }),
     });
   }
-  const file = await writeSetting("project", "slider.level", level, loadOpts(options));
+  const file = await writeSetting("local", "slider.level", level, loadOpts(options));
   const effective = await getSliderInfo(options);
-  const overridden = effective.layer !== "project" || effective.level !== level;
+  const overridden = effective.layer !== "local" || effective.level !== level;
   return {
     file,
     effective,

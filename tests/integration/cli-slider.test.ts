@@ -43,10 +43,11 @@ describe("golem slider", () => {
     expect(info.layer).toBe("default");
   });
 
-  it("round-trips a set through getSliderInfo with project provenance", async () => {
+  it("round-trips a set through getSliderInfo with local provenance", async () => {
     const result = await setSliderLevel(3, { projectDir, userDir, probe: okProbe });
     expect(result.effective.level).toBe(3);
-    expect(result.effective.layer).toBe("project");
+    // The slider writes to the gitignored local scope (spec Decision 43).
+    expect(result.effective.layer).toBe("local");
     expect(result.overriddenBy).toBeUndefined();
 
     const info = await getSliderInfo({ projectDir, userDir });
@@ -61,9 +62,9 @@ describe("golem slider", () => {
     const { settings } = await loadConfig({ projectDir, userDir });
     expect(settings.slider.level).toBe(3);
 
-    // 2. The MCP slider store, pointed at the SAME project settings file, agrees.
-    const projectFile = settingsFilePaths({ projectDir, userDir }).project;
-    const store = new JsonFileSliderStore(projectFile);
+    // 2. The MCP slider store, pointed at the SAME local settings file, agrees.
+    const localFile = settingsFilePaths({ projectDir, userDir }).local;
+    const store = new JsonFileSliderStore(localFile);
     await expect(store.get()).resolves.toBe(3);
 
     // 3. A set via the MCP store is then visible to the config loader too.
@@ -81,7 +82,7 @@ describe("golem slider", () => {
       // Legacy env value 5 is accepted and migrated onto the 0–3 scale (→ 3).
       env: { GOLEM_SLIDER_LEVEL: "5" },
     });
-    // Written at project scope, but env wins for the effective value.
+    // Written at local scope, but env wins for the effective value.
     expect(result.effective.level).toBe(3);
     expect(result.effective.layer).toBe("env");
     expect(result.overriddenBy).toBeDefined();
