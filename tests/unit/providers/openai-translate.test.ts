@@ -63,6 +63,28 @@ describe("anthropicToOpenAIChat", () => {
     ]);
   });
 
+  it("accepts mid-conversation system messages → OpenAI system messages", () => {
+    // Anthropic allows role:"system" inside the messages array (not just the
+    // top-level `system` field); Claude Code sends them. Must not be rejected.
+    const out = anthropicToOpenAIChat(
+      buf({
+        model: "kimi-k3",
+        system: "top-level system",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "system", content: "mid-conversation steer" },
+          { role: "assistant", content: "ok" },
+        ],
+      }),
+    );
+    expect(out.messages).toEqual([
+      { role: "system", content: "top-level system" },
+      { role: "user", content: "hi" },
+      { role: "system", content: "mid-conversation steer" },
+      { role: "assistant", content: "ok" },
+    ]);
+  });
+
   it("uses the request model when no override is given", () => {
     const out = anthropicToOpenAIChat(buf({ model: "gpt-5.2", messages: [] }));
     expect(out.model).toBe("gpt-5.2");
