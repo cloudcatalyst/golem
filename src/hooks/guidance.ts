@@ -172,12 +172,12 @@ const SNOOZE_HOLD = [
   "   your context intact — pick up from the documented task.",
   "",
   "Golem's proxy watches the session-window utilization; as it fills, the PreToolUse",
-  "gate redirects you here. By default that redirect is advisory (a one-shot nudge",
-  "per window); when `snooze.enforce` is on (spec Decision 45) it is enforcing —",
-  "every non-`snooze` tool call is denied until you park. If the rate-limit feed",
-  "goes cold (e.g. an account that doesn't emit the limit headers), Golem warns once",
-  "that the auto-park is blind instead of failing silently. `golem status` shows the",
-  "utilization, freshness, and whether the park is advisory or enforced.",
+  "gate redirects you here. By default this is ENFORCING (spec Decision 45): every",
+  "non-`snooze` tool call is denied until you park, so the only way forward is to",
+  "call the `snooze` tool. Set `snooze.enforce` false for advisory (a one-shot nudge",
+  "per window). If the rate-limit feed goes cold (e.g. an account that doesn't emit",
+  "the limit headers), Golem warns once that the auto-park is blind instead of",
+  "failing silently. `golem status` shows utilization, freshness, and advisory/enforced.",
 ].join("\n");
 
 /**

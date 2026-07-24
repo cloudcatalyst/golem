@@ -43,9 +43,10 @@ import {
 
 /**
  * Whether the snooze document-and-hold park is ENFORCING (persistent deny) vs
- * ADVISORY (one-shot). Reads `snooze.enforce` from the effective config (env
- * `GOLEM_SNOOZE_ENFORCE` overrides). Fail-open to false: a config error must
- * never turn into a hard block on every tool call.
+ * ADVISORY (one-shot). Reads `snooze.enforce` from the effective config (default
+ * true, env `GOLEM_SNOOZE_ENFORCE` overrides). Fail-open to false even though the
+ * default is true: erroring into a session-wide hard block is worse than briefly
+ * degrading to advisory, so a config-read failure never blocks every tool call.
  */
 async function readSnoozeEnforced(projectDir: string): Promise<boolean> {
   try {

@@ -101,9 +101,13 @@ describe("runPreToolUseHook", () => {
     observedAtIso: "2026-07-18T00:00:00.000Z",
     fiveHour: { utilization: 0.95, resetAtIso: "2026-07-18T02:00:00.000Z" },
   };
+  // Advisory by default in these tests (enforce is a separate, explicitly-set
+  // case below). Real default is now enforce=true (Decision 45); the enforce
+  // test overrides isSnoozeEnforced back to true.
   const withPrediction = (p: LimitPrediction | null) => ({
     readPrediction: () => Promise.resolve(p),
     now: () => NOW_MS,
+    isSnoozeEnforced: () => Promise.resolve(false),
   });
 
   it("denies a non-snooze tool near-limit, instructing document-and-hold", async () => {

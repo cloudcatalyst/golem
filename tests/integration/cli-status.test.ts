@@ -374,19 +374,26 @@ describe("status — usage-limit prediction freshness", () => {
     expect(report.limits?.seven_day_utilization).toBe(0.72);
     expect(report.warnings.some((w) => w.includes("STALE"))).toBe(false);
     expect(renderStatus(report)).toContain("Limits: 5h window 17% used");
+    // Enforcement is ON by default (Decision 45).
+    expect(report.limits?.enforced).toBe(true);
+    expect(renderStatus(report)).toContain("park enforced");
   });
 
-  it("reflects snooze.enforce (env override) in the limits view", async () => {
+  it("enforce defaults on; env can override it to advisory", async () => {
     const fresh: LimitPrediction = {
       observedAtIso: new Date(NOW_MS - 60_000).toISOString(),
       fiveHour: { utilization: 0.95, resetAtIso: "2026-07-25T05:00:00.000Z" },
     };
-    const report = await collectStatus({
+    // Default (no env) → enforced.
+    const dflt = await collectStatus(base(projectDir, userDir, () => Promise.resolve(fresh)));
+    expect(dflt.limits?.enforced).toBe(true);
+    // Env override → advisory.
+    const overridden = await collectStatus({
       ...base(projectDir, userDir, () => Promise.resolve(fresh)),
-      env: { GOLEM_SNOOZE_ENFORCE: "true" },
+      env: { GOLEM_SNOOZE_ENFORCE: "false" },
     });
-    expect(report.limits?.enforced).toBe(true);
-    expect(renderStatus(report)).toContain("park enforced");
+    expect(overridden.limits?.enforced).toBe(false);
+    expect(renderStatus(overridden)).toContain("park advisory");
   });
 
   it("flags a stale reading and adds a warning (feed cold — e.g. account switch)", async () => {

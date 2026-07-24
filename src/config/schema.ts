@@ -251,12 +251,12 @@ export const SETTINGS_LEAVES = {
   snooze: {
     /**
      * Enforce the document-and-hold park at the usage limit (spec Decision 45).
-     * When false (default) the PreToolUse trigger is ADVISORY — a single
-     * one-shot redirect to `snooze` per window that the agent can work past.
-     * When true it is ENFORCING — while the session (5h) window is at/above the
-     * threshold on a FRESH reading, every non-`snooze` tool call is denied until
-     * the agent parks (calls `mcp__golem__snooze`) or the window resets. Only
-     * ever fires on a fresh prediction — a stale/cold feed never hard-blocks
+     * **Default true (USER decision).** When true it is ENFORCING — while the
+     * session (5h) window is at/above the threshold on a FRESH reading, every
+     * non-`snooze` tool call is denied until the agent parks (calls
+     * `mcp__golem__snooze`) or the window resets. Set false for ADVISORY — a
+     * single one-shot redirect to `snooze` per window that the agent can work
+     * past. Only ever fires on a fresh prediction — a stale/cold feed never hard-blocks
      * (it still just warns once). NOTE: a PreToolUse deny cannot stop the model
      * from spending tokens reacting to it — enforcement funnels the model to
      * snooze quickly, it is not a hard token freeze.
@@ -398,7 +398,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     dashboard_port: 4654,
   },
   snooze: {
-    enforce: false,
+    enforce: true,
   },
 });
 
