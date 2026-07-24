@@ -13,8 +13,9 @@
 import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
+import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { friendlyModelLabel, resolveUpstreamDisplay } from "../providers/index.js";
-import { readServedModel } from "../proxy/index.js";
+import { type LimitPrediction, readLimitState, readServedModel } from "../proxy/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
@@ -93,6 +94,22 @@ export interface StatusReport {
     readonly current: string;
     readonly latest: string | null;
   };
+  /**
+   * Usage-limit prediction, from the proxy's last observed
+   * `anthropic-ratelimit-unified-*` headers (`.golem/state/limit-state.json`).
+   * Absent until the proxy has seen those headers at least once. `stale` is true
+   * when the reading is too old to trust (the header feed has gone cold — e.g.
+   * the active account doesn't emit them), which is exactly when the snooze
+   * auto-park goes blind, so it's surfaced as a warning too.
+   */
+  readonly limits?: {
+    readonly five_hour_utilization: number;
+    readonly seven_day_utilization?: number;
+    readonly reset_at: string | null;
+    readonly observed_at: string;
+    readonly age_minutes: number;
+    readonly stale: boolean;
+  };
   readonly warnings: readonly string[];
 }
 
@@ -107,6 +124,10 @@ export interface StatusOptions {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Test injection for the local-model probe (avoids real network in tests). */
   readonly localProbe?: (projectDir: string, baseUrl: string) => Promise<LocalModelInfo>;
+  /** Test injection for the limit-prediction read; default reads `limit-state.json`. */
+  readonly readLimit?: (projectDir: string) => Promise<LimitPrediction | null>;
+  /** Injected clock (epoch ms) for the prediction-freshness age; default `Date.now()`. */
+  readonly now?: () => number;
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 1_500;
@@ -170,6 +191,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // Recompute "available" against the version we're actually running.
   const cachedUpdate = await readCachedUpdateCheck(path.join(projectDir, ".golem", "state"));
 
+  // Usage-limit prediction freshness (read-only; snooze P2a). A stale reading
+  // means the proxy has stopped seeing the rate-limit headers (the auto-park is
+  // blind) — surfaced both as a field and, when stale, a warning.
+  const nowMs = options.now?.() ?? Date.now();
+  const limitState = await (options.readLimit ?? readLimitState)(projectDir).catch(() => null);
+  const limits = limitState === null ? undefined : buildLimits(limitState, nowMs);
+
   const config: Record<string, ConfigKeyStatus> = {};
   for (const [dotted, entry] of Object.entries(provenance)) {
     const [section, key] = dotted.split(".", 2) as [string, string];
@@ -222,14 +250,44 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           },
         }
       : {}),
-    warnings:
-      cachedUpdate?.latest != null && semverGt(cachedUpdate.latest, options.version)
+    ...(limits !== undefined ? { limits } : {}),
+    warnings: [
+      ...(cachedUpdate?.latest != null && semverGt(cachedUpdate.latest, options.version)
         ? [...updateWarnings(cachedUpdate.latest, slider.level), ...warnings]
         : slider.level === 0
           ? [...warnings, REDACTION_OFF_WARNING]
-          : warnings,
+          : warnings),
+      ...(limits?.stale ? [LIMIT_STALE_WARNING] : []),
+    ],
   };
 }
+
+/**
+ * Build the {@link StatusReport}["limits"] view from a persisted prediction.
+ * `stale` uses the same {@link STALE_AFTER_MS} threshold the snooze auto-park
+ * trigger uses, so `golem status` and the trigger agree on when the feed is cold.
+ */
+function buildLimits(pred: LimitPrediction, nowMs: number): StatusReport["limits"] {
+  const observedMs = Date.parse(pred.observedAtIso);
+  const ageMs = Number.isFinite(observedMs)
+    ? Math.max(0, nowMs - observedMs)
+    : Number.POSITIVE_INFINITY;
+  return {
+    five_hour_utilization: pred.fiveHour.utilization,
+    ...(pred.sevenDay !== undefined ? { seven_day_utilization: pred.sevenDay.utilization } : {}),
+    reset_at: pred.fiveHour.resetAtIso,
+    observed_at: pred.observedAtIso,
+    age_minutes: Number.isFinite(ageMs) ? Math.round(ageMs / 60_000) : -1,
+    stale: ageMs > STALE_AFTER_MS,
+  };
+}
+
+/** Warning shown when the rate-limit feed has gone cold (auto-park is blind). */
+export const LIMIT_STALE_WARNING =
+  "Usage-limit prediction is STALE — Golem hasn't seen fresh rate-limit headers " +
+  "recently, so the snooze auto-park is BLIND. The active account/upstream may not " +
+  "emit `anthropic-ratelimit-unified-*` headers (common after an account switch). " +
+  "Watch Claude Code's own limit indicator and park manually if needed.";
 
 /** Warning lines when a newer version is known (plus the level-0 redaction one). */
 function updateWarnings(latest: string, sliderLevel: number): string[] {
@@ -275,6 +333,17 @@ export function renderUpstream(upstream: StatusReport["upstream"]): string {
     parts.push(`model ${dflt}`);
   }
   return parts.join(" · ");
+}
+
+/** One-line rendering of the usage-limit prediction + freshness. */
+export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
+  const pct = Math.round(limits.five_hour_utilization * 100);
+  if (limits.stale) {
+    const age = limits.age_minutes < 0 ? "unknown" : `${limits.age_minutes}m ago`;
+    return `Limits: STALE (last reading ${age}, 5h ${pct}%) — auto-park blind; active account may not emit rate-limit headers`;
+  }
+  const reset = limits.reset_at !== null ? ` (resets ${limits.reset_at})` : "";
+  return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago`;
 }
 
 function sliderJson(slider: SliderInfo): StatusReport["slider"] {
@@ -328,6 +397,9 @@ export function renderStatus(report: StatusReport): string {
         ? `Update: ${report.update.current} → ${report.update.latest} available (run \`golem update\`)`
         : `Update: up to date (${report.update.current})`,
     );
+  }
+  if (report.limits !== undefined) {
+    lines.push(renderLimits(report.limits));
   }
   lines.push("");
 
