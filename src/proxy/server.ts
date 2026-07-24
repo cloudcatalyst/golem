@@ -19,6 +19,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { pipeline } from "node:stream/promises";
+import { gunzipSync } from "node:zlib";
 import { type Dispatcher, Pool } from "undici";
 import { mapUpstreamError, PROXY_ERROR_HEADER } from "./errors.js";
 import {
@@ -245,6 +246,13 @@ export class GolemProxy {
       let raw: Buffer;
       try {
         raw = Buffer.from(await upstream.body.arrayBuffer());
+        // The Anthropic passthrough relays bytes verbatim, but the translating
+        // path must PARSE the body — so decode gzip first (undici doesn't
+        // auto-decompress; some OpenAI-schema upstreams, e.g. Moonshot, gzip).
+        const enc = this.header(upstream.headers, "content-encoding");
+        if (enc !== undefined && enc.toLowerCase().includes("gzip")) {
+          raw = gunzipSync(raw);
+        }
       } catch {
         res.destroy();
         return;
