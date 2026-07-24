@@ -25,8 +25,10 @@ import { z } from "zod";
 
 /** Minimal Anthropic Messages request shape we read (tolerant — extra keys ignored). */
 const anthropicContentBlock = z.object({ type: z.string() }).catchall(z.unknown());
+// Anthropic allows mid-conversation `system` messages in the array (not just the
+// top-level `system` field), and Claude Code uses them — so accept all three.
 const anthropicMessage = z.object({
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "system"]),
   content: z.union([z.string(), z.array(anthropicContentBlock)]),
 });
 const anthropicTool = z
@@ -190,6 +192,12 @@ function combineContent(
 function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAIChatMessage[] {
   const out: OpenAIChatMessage[] = [];
   for (const m of messages) {
+    // Mid-conversation system messages → OpenAI system messages (text only).
+    if (m.role === "system") {
+      const text = typeof m.content === "string" ? m.content : textOf(m.content as Block[]);
+      if (text.length > 0) out.push({ role: "system", content: text });
+      continue;
+    }
     if (typeof m.content === "string") {
       out.push({ role: m.role, content: m.content });
       continue;

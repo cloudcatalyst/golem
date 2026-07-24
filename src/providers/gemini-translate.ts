@@ -21,8 +21,10 @@
 import { z } from "zod";
 
 const block = z.object({ type: z.string() }).catchall(z.unknown());
+// Anthropic allows mid-conversation `system` messages; Gemini `contents` has no
+// system role, so they fold into a `user` turn (the role mapping below).
 const message = z.object({
-  role: z.enum(["user", "assistant"]),
+  role: z.enum(["user", "assistant", "system"]),
   content: z.union([z.string(), z.array(block)]),
 });
 const tool = z

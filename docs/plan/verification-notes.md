@@ -2852,3 +2852,29 @@ against https://platform.kimi.ai/docs/guide/kimi-k3-quickstart (fetched
   (incl. reasoning) back each turn; Golem rebuilds each request from Anthropic
   history and drops `thinking` on the way out, so the trace is not preserved
   across turns (K3 recomputes). Acceptable; noted.
+
+## §80 — Translator bug: mid-conversation `system` messages rejected (fixed 2026-07-24)
+
+**Found in the field** (first real Kimi K3 traffic): switching to Kimi failed
+with `Invalid enum value. Expected 'user' | 'assistant', received 'system'` at
+`messages[991].role`, `[1002].role`, … — Golem's OWN request zod (not Kimi's).
+Root cause: `anthropicMessage.role` in `openai-translate.ts` (and
+`gemini-translate.ts`) was `z.enum(["user","assistant"])`, but **Anthropic
+supports mid-conversation `system` messages** (a `role:"system"` entry inside the
+`messages` array, distinct from the top-level `system` field — see the "Context
+management → Mid-conversation system messages" doc) and **Claude Code emits
+them** in long sessions. The byte-faithful Anthropic path never parses messages
+so it was unaffected; only the translating path (openai/ollama/gemini) hit it,
+which is why it only surfaced when a user first switched to a translated
+provider.
+
+**Fix:** accept `role:"system"` in both translators' message schema.
+- OpenAI/Ollama: a `system` message → an OpenAI `{role:"system", content}` (text
+  extracted); OpenAI-schema accepts multiple system messages anywhere.
+- Gemini: `contents` has no system role, so it folds into a `user` turn (the
+  existing non-assistant→`user` mapping), preserving position.
++2 regression tests. **Lesson:** the translating path must accept every role/
+  block Claude Code can emit, even ones the *old* Anthropic API didn't — the
+  passthrough hid this class of gap. Worth an audit of other Anthropic features
+  (e.g. `document`/PDF blocks, `redacted_thinking`) the translator silently
+  drops or would reject.
