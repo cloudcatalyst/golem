@@ -16,7 +16,10 @@
  * (hard rule).
  */
 
+import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { z } from "zod";
+import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import {
   fetchRawPage,
@@ -196,6 +199,34 @@ function metaFrom(res: RevalidateResponse, nowMs: number): WebCacheMeta {
   };
 }
 
+/**
+ * Store an oversized served page in the project CCR store so the full text is
+ * retrievable in one deterministic step via the `expand` MCP tool — the same
+ * content-addressed store and `hash=<sha256>` marker grammar the oversized
+ * tool-output swap uses (post-tool-use.ts), so `expand` resolves it through the
+ * exact same path. Redaction is re-applied at the storage point (hard rule);
+ * both serve paths already hand us redacted content, so `stripKnownSecrets` is
+ * idempotent here and the refId matches what post-tool-use would compute.
+ * Best-effort: returns the refId on success, or null on ANY failure — a CCR
+ * error must never break the hook (the caller falls back to a KB-search hint).
+ */
+async function storeServedPageRef(projectDir: string, content: string): Promise<string | null> {
+  try {
+    const stored = stripKnownSecrets(content);
+    const refId = createHash("sha256").update(stored, "utf8").digest("hex");
+    const ccr = new CcrStore(new LocalDirBlobStore(join(projectDir, ".golem", "ccr")));
+    await ccr.putIfAbsent(refId, {
+      v: 1,
+      contentType: "text/plain",
+      originalTokens: estimateTokens(stored),
+      content: stored,
+    });
+    return refId;
+  } catch {
+    return null; // best-effort: caller falls back to the KB-search hint
+  }
+}
+
 /** Write a `deny` PreToolUse decision that hands Claude `content` as the reason. */
 async function writeServedDeny(
   io: HookIo,
@@ -204,10 +235,23 @@ async function writeServedDeny(
   content: string,
   intro: string,
 ): Promise<void> {
-  const served =
-    content.length > MAX_SERVED_CHARS
-      ? `${content.slice(0, MAX_SERVED_CHARS)}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`
-      : content;
+  let served: string;
+  if (content.length > MAX_SERVED_CHARS) {
+    const head = content.slice(0, MAX_SERVED_CHARS);
+    // Stash the full page as a CCR ref so the whole thing is retrievable in one
+    // `expand` call — not a vague "go search the KB" hint. Falls back to that
+    // hint only when the CCR write fails (the content is still in the web cache
+    // + vector KB regardless).
+    const refId = await storeServedPageRef(projectDir, content);
+    served =
+      refId !== null
+        ? `${head}\n\n[Golem: page truncated for inline display (${content.length} chars total); ` +
+          `the full page is stored losslessly. Retrieve original: hash=${refId} — call the expand ` +
+          `MCP tool with ref_id "${refId}" (or /golem/expand ${refId}).]`
+        : `${head}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`;
+  } else {
+    served = content;
+  }
 
   // Lazy-backfill pointer (T3): note an existing distill draft, if any.
   // Self-contained — a lookup failure here must never regress the serve.
