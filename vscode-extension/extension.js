@@ -125,8 +125,7 @@ class GolemViewProvider {
     view.webview.onDidReceiveMessage(async (msg) => {
       if (!msg) return;
       if (msg.type === "setSlider" && typeof msg.level === "number") {
-        await golemJson(["slider", String(msg.level), "--json"]);
-        refresh();
+        await applySlider(msg.level);
       } else if (msg.type === "proxyStart") {
         await setProxy(true);
       } else if (msg.type === "proxyStop") {
@@ -146,8 +145,40 @@ let statusBar;
 let provider;
 let timer;
 let updateTimer;
+let refreshDebounce;
 /** The most recent model, so the status-bar menu knows whether the proxy is running. */
 let lastModel = null;
+
+/** Coalesce bursts of refresh triggers — a single file write fires several watch events. */
+function scheduleRefresh() {
+  if (refreshDebounce) clearTimeout(refreshDebounce);
+  refreshDebounce = setTimeout(() => {
+    refreshDebounce = undefined;
+    refresh();
+  }, 150);
+}
+
+/** Slider level → its lowercase display name, from the shared SLIDER_LEVELS table. */
+function sliderNameFor(level) {
+  const found = SLIDER_LEVELS.find((l) => l.level === level);
+  return found ? found.name.toLowerCase() : "";
+}
+
+/**
+ * Apply a slider change with instant feedback: repaint the status bar + panel
+ * from the chosen level immediately (no CLI round-trip), then persist via the
+ * CLI and refresh to reconcile — a higher-precedence config layer could still
+ * override the level, and the refresh also updates savings and the tooltip.
+ */
+async function applySlider(level) {
+  if (lastModel) {
+    lastModel = { ...lastModel, slider: level, sliderName: sliderNameFor(level) };
+    if (statusBar) statusBar.text = statusBarText(lastModel);
+    if (provider) provider.render(lastModel);
+  }
+  await golemJson(["slider", String(level), "--json"]);
+  await refresh();
+}
 
 /** Start (detached) or stop the proxy in the workspace, then refresh. */
 async function setProxy(running) {
@@ -264,10 +295,7 @@ function activate(context) {
         })),
         { placeHolder: "Golem savings slider" },
       );
-      if (pick) {
-        await golemJson(["slider", String(pick.level), "--json"]);
-        refresh();
-      }
+      if (pick) await applySlider(pick.level);
     }),
     vscode.commands.registerCommand("golem.menu", async () => {
       const running = lastModel?.proxyReachable ?? false;
@@ -299,8 +327,25 @@ function activate(context) {
     }),
   );
 
-  const pollSeconds = vscode.workspace.getConfiguration("golem").get("pollSeconds", 5);
-  timer = setInterval(refresh, Math.max(2, pollSeconds) * 1000);
+  // Event-driven refresh: watch the on-disk slider/served-model so a change made
+  // OUTSIDE the extension (terminal `golem slider`, the MCP `level` tool, a new
+  // served model) reflects near-instantly rather than waiting for the poll.
+  // Changes made IN the extension already repaint optimistically via applySlider.
+  // The periodic timer below is now just a safety net (proxy up/down, telemetry
+  // savings, update checks), so it can run less often.
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (folder) {
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, ".golem/{settings.json,state/served-model.json}"),
+    );
+    watcher.onDidChange(scheduleRefresh);
+    watcher.onDidCreate(scheduleRefresh);
+    watcher.onDidDelete(scheduleRefresh);
+    context.subscriptions.push(watcher);
+  }
+
+  const pollSeconds = vscode.workspace.getConfiguration("golem").get("pollSeconds", 15);
+  timer = setInterval(refresh, Math.max(5, pollSeconds) * 1000);
   // Update check: once at startup, then every 6h (the CLI caches for 24h anyway).
   updateTimer = setInterval(() => {
     fetchUpdate().then(refresh);
