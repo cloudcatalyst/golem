@@ -31,5 +31,9 @@ follow this ladder before reaching outside the project:
    a page rather than letting the capture evaporate or sit as an orphaned
    chunk; cite the raw source and add real `[[wikilinks]]` to every related
    page it belongs with, so graph traversal (not just similarity search)
-   can find it later. Wiki writes are plan-gated (propose, get approval,
-   then write).
+   can find it later. Author wiki pages freely — no prior approval needed
+   (spec Decision 44); every write is committed to git, so it's reviewable
+   and revertible. Redaction-before-storage still applies, and contradictions
+   with an existing page are surfaced to the human, never auto-resolved.
+   (Decisions — ADRs — live at `docs/decisions/`, outside the wiki, and keep
+   their stricter human-driven rule.)

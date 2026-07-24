@@ -15,13 +15,16 @@ import type { WikiPageType } from "../interfaces/index.js";
 import { extractWikilinks, parseFrontmatter } from "../wiki/index.js";
 import type { InitAction } from "./init.js";
 
-/** Zone-2/3 subdirectories every scaffolded wiki gets, empty but git-tracked. */
+/**
+ * Zone-2 subdirectories every scaffolded wiki gets, empty but git-tracked.
+ * ADRs are deliberately NOT here — decisions live outside the wiki at
+ * `docs/decisions/` under a stricter rule (spec Decision 44).
+ */
 const WIKI_ZONE_DIRS = [
   "concepts",
   "entities",
   "sources",
   "syntheses",
-  "decisions",
   "debriefs",
   "questions",
   "artifacts",
@@ -51,10 +54,14 @@ function wikiSchemaTemplate(date: string): string {
     "| Zone | Where | Who writes | Rule |",
     "|---|---|---|---|",
     "| 1 — raw | local raw-capture stores (gitignored) | tooling/hooks | never committed; never hand-edited |",
-    "| 2 — wiki | `concepts/ entities/ sources/ syntheses/ questions/ artifacts/` | agent, **plan-gated** | propose a plan, get approval, then write; append-and-refine, never wholesale rewrite |",
-    "| 3 — dev | `decisions/ debriefs/` | human drives, agent co-pilots | accepted ADRs immutable except status; superseded, never deleted |",
+    "| 2 — wiki | `concepts/ entities/ sources/ syntheses/ questions/ artifacts/ debriefs/` | agent + human | **author freely** — create or refine pages without prior approval. Every write is committed to git, so it is diffable, reviewable, and revertible in history. Prefer append-and-refine over wholesale rewrites. |",
     "",
-    "Hard rules for every write, agent or human:",
+    "> **Decisions (ADRs) live at `docs/decisions/`, outside this wiki.** They are",
+    "> human-driven dev artifacts with a stricter rule — accepted ADRs immutable",
+    "> except status; superseded, never deleted — so they sit apart from the",
+    "> freely-authored wiki.",
+    "",
+    "Hard rules for every write, agent or human (these still bind):",
     "",
     "1. **Redaction before storage** — no secrets/PII ever land here.",
     "2. **Link, don't restate.** The wiki never duplicates what the code, docs, or git",
@@ -67,7 +74,8 @@ function wikiSchemaTemplate(date: string): string {
     "",
     "- Filenames: Title Case for `concepts/` and `entities/` (`Prompt Caching.md`);",
     "  kebab-case slugs for `sources/`, `syntheses/`, `questions/`, `artifacts/`;",
-    "  `ADR-NNNN-slug.md` for decisions; `YYYY-MM-DD-slug.md` for debriefs.",
+    "  `YYYY-MM-DD-slug.md` for debriefs. (ADRs — `ADR-NNNN-slug.md` — live outside",
+    "  this wiki at `docs/decisions/`.)",
     "- Links: wikilinks (`[[Page Title]]`) between wiki pages; plain repo-relative paths",
     "  for code/docs. Every page carries **at least one wikilink**.",
     "- Required frontmatter on every page:",

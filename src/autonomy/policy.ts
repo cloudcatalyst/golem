@@ -4,7 +4,7 @@
  * The level is project-scoped state (like the slider), stored at
  * `<project>/.golem/state/autonomy.json`, read by the PreToolUse gate hook and
  * surfaced loudly (session-state report, status line, `golem autonomy`). Threat
- * model + full rationale: docs/wiki/decisions/ADR-0002-autonomy-approval-gates.md.
+ * model + full rationale: docs/decisions/ADR-0002-autonomy-approval-gates.md.
  *
  * Safety invariant: an unreadable/invalid file resolves to the MOST restrictive
  * level (`manual`), never the least — default-deny by construction.

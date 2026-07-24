@@ -31,7 +31,7 @@ pipeline, the tasks form one loop:
   title/wikilink graph *ahead* of vector search, so a promoted page ranks above
   any raw chunk.
 - **Stay fresh** — the file watcher (debriefs/2026-07-11-T6.md, implementing
-  [[ADR-0001 File Watcher Backend]]) keeps the derived index current as pages change.
+  ADR-0001 (docs/decisions/ADR-0001-file-watcher.md)) keeps the derived index current as pages change.
 - **Promote (by habit)** — the `golem init` guidance change
   (debriefs/2026-07-11-golem-init-guidance.md) bakes "a capture has no place in
   the graph until it's a wiki page" into every project's `CLAUDE.local.md`, so
@@ -94,4 +94,4 @@ Tracked forward rather than lost:
   insufficient.
 
 See also [[Wiki-First Knowledge]], [[Distillation Pipeline]], [[Redaction Stage]],
-and [[ADR-0001 File Watcher Backend]].
+and ADR-0001 (docs/decisions/ADR-0001-file-watcher.md).

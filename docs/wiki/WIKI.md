@@ -19,10 +19,15 @@ derived, rebuildable cache of these pages — never the truth.
 | Zone | Where | Who writes | Rule |
 |---|---|---|---|
 | 1 — raw | `.golem/webcache`, `.golem/ccr` (local, gitignored) | Golem hooks | never committed; never hand-edited |
-| 2 — wiki | `concepts/ entities/ sources/ syntheses/ questions/ artifacts/` | agent, **plan-gated** | propose a plan, get approval, then write; append-and-refine, never wholesale rewrite |
-| 3 — dev | `decisions/ debriefs/` | human drives, agent co-pilots | accepted ADRs immutable except status; superseded, never deleted |
+| 2 — wiki | `concepts/ entities/ sources/ syntheses/ questions/ artifacts/ debriefs/` | agent + human | **author freely** — create or refine pages without prior approval (spec Decision 44). Every write is committed to git, so it is diffable, reviewable, and revertible in history. Prefer append-and-refine over wholesale rewrites. |
 
-Hard rules for every write, agent or human:
+> **Decisions (ADRs) live at `docs/decisions/`, outside this wiki** (spec Decision 44).
+> They are human-driven dev artifacts with a stricter rule — accepted ADRs are
+> immutable except status; superseded, never deleted — so they sit apart from the
+> freely-authored wiki. `docs/golem-spec.md` remains authoritative for this
+> project's own Decisions Log.
+
+Hard rules for every write, agent or human (these still bind — de-gating is not a licence to skip them):
 
 1. **Redaction before storage** — no secrets/PII ever land here (repo hard rule).
 2. **Link, don't restate.** The wiki never duplicates what the code, `docs/`, or git
@@ -36,7 +41,8 @@ Hard rules for every write, agent or human:
 
 - Filenames: Title Case for `concepts/` and `entities/` (`Prompt Caching.md`);
   kebab-case slugs for `sources/`, `syntheses/`, `questions/`, `artifacts/`;
-  `ADR-NNNN-slug.md` for decisions; `YYYY-MM-DD-slug.md` for debriefs.
+  `YYYY-MM-DD-slug.md` for debriefs. (ADRs — `ADR-NNNN-slug.md` — live outside
+  this wiki at `docs/decisions/`, spec Decision 44.)
 - Links: wikilinks (`[[Page Title]]`) between wiki pages; plain repo-relative paths
   for code/docs. Every page carries **at least one wikilink**.
 - Required frontmatter on every page:
@@ -76,9 +82,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T5.md — graph-first lookup ahead of vector search in `search`
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
-- decisions/ADR-0001-file-watcher.md — accepted: `node:fs.watch` (native recursive on Windows/macOS, manual per-directory on Linux) behind a swappable `FileWatcher` interface, `chokidar` deferred unless proven necessary
-- decisions/ADR-0002-autonomy-approval-gates.md — accepted: R5.4 threat model — autonomy levels (manual/assisted/outcome, no full-auto), PreToolUse gate emitting allow/ask, conservative fail-closed classifier, default-deny proofs; enforcement never auto-allows destructive/outward
-- decisions/ADR-0003-credential-storage-and-account-routing.md — PROPOSED: R6.2 gate — multi-account credential threat model (secrets never a setting; env-var-first, no plaintext-on-disk; fail-closed; audit log; no tool surface) + ToS scope (legitimate account/provider switching IN; automated quota-evasion OUT). Blocks R6.2 code until accepted + the USER ToS decision
+- **ADRs live at `../decisions/`** (outside this wiki, spec Decision 44): `ADR-0001-file-watcher.md` (accepted: `node:fs.watch` behind a swappable `FileWatcher`), `ADR-0002-autonomy-approval-gates.md` (accepted: R5.4 autonomy threat model — PreToolUse allow/ask gate, fail-closed classifier), `ADR-0003-credential-storage-and-account-routing.md` (PROPOSED: R6.2 multi-account credential threat model + ToS scope)
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there
 - debriefs/2026-07-11-R1.1.md — shipped `UsageSniffer`/`aggregateUsageByLevel` usage-telemetry infra + the gzip response-decoding fix it required
