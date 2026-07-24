@@ -68,9 +68,9 @@
       "properties": {
         "golem.pollSeconds": {
           "type": "number",
-          "default": 5,
-          "minimum": 2,
-          "description": "How often (seconds) the panel and status bar refresh from the golem CLI."
+          "default": 15,
+          "minimum": 5,
+          "description": "How often (seconds) the panel and status bar poll the golem CLI as a background safety net. Slider/state changes update immediately (optimistically for in-editor changes, via a file watcher for external ones), so this only needs to catch proxy up/down and savings drift."
         }
       }
     }
