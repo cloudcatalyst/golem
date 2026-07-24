@@ -157,6 +157,40 @@ describe("runPreToolUseHook", () => {
     expect(h.stdout.text).toBe("");
   });
 
+  it("enforce mode: denies EVERY near-limit call (not one-shot) with the enforce reason", async () => {
+    const enforced = { isSnoozeEnforced: () => Promise.resolve(true) };
+    const first = io(payload("Read", {}, dir));
+    await runPreToolUseHook(first, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+      ...enforced,
+    });
+    const out1 = JSON.parse(first.stdout.text);
+    expect(out1.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out1.hookSpecificOutput.permissionDecisionReason).toContain("ENFORCEMENT");
+
+    // Second call in the SAME window is ALSO denied (persistent, unlike advisory).
+    const second = io(payload("Read", {}, dir));
+    await runPreToolUseHook(second, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+      ...enforced,
+    });
+    expect(JSON.parse(second.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+
+    // The snooze tool itself is still exempt even under enforcement.
+    const snooze = io(payload("mcp__golem__snooze", { until: "2026-07-18T02:00:00.000Z" }, dir));
+    await runPreToolUseHook(snooze, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+      ...enforced,
+    });
+    expect(snooze.stdout.text).toBe("");
+  });
+
   it("warns once when the rate-limit feed is stale (auto-park is blind)", async () => {
     // Observed ~24h before NOW → well past the staleness window (the feed went
     // cold, e.g. an account switch), even though the recorded reset is future.

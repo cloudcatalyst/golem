@@ -248,6 +248,21 @@ export const SETTINGS_LEAVES = {
     /** Port for the local savings dashboard. */
     dashboard_port: portSchema,
   },
+  snooze: {
+    /**
+     * Enforce the document-and-hold park at the usage limit (spec Decision 45).
+     * When false (default) the PreToolUse trigger is ADVISORY — a single
+     * one-shot redirect to `snooze` per window that the agent can work past.
+     * When true it is ENFORCING — while the session (5h) window is at/above the
+     * threshold on a FRESH reading, every non-`snooze` tool call is denied until
+     * the agent parks (calls `mcp__golem__snooze`) or the window resets. Only
+     * ever fires on a fresh prediction — a stale/cold feed never hard-blocks
+     * (it still just warns once). NOTE: a PreToolUse deny cannot stop the model
+     * from spending tokens reacting to it — enforcement funnels the model to
+     * snooze quickly, it is not a hard token freeze.
+     */
+    enforce: z.boolean(),
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -323,6 +338,10 @@ export interface TelemetrySettings {
   readonly dashboard_port: number;
 }
 
+export interface SnoozeSettings {
+  readonly enforce: boolean;
+}
+
 export interface GolemSettings {
   readonly slider: SliderSettings;
   readonly proxy: ProxySettings;
@@ -330,6 +349,7 @@ export interface GolemSettings {
   readonly compression: CompressionSettings;
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
+  readonly snooze: SnoozeSettings;
 }
 
 /**
@@ -376,6 +396,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   telemetry: {
     enabled: true,
     dashboard_port: 4654,
+  },
+  snooze: {
+    enforce: false,
   },
 });
 
