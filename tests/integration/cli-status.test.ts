@@ -16,10 +16,12 @@ import { golemInit } from "../../src/cli/init.js";
 import {
   collectStatus,
   probeProxy,
+  renderLimits,
   renderStatus,
   renderUpstream,
   type StatusReport,
 } from "../../src/cli/status.js";
+import type { LimitPrediction } from "../../src/proxy/index.js";
 
 const VERSION = "0.1.0-test";
 
@@ -323,5 +325,94 @@ describe("renderStatus", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("status — usage-limit prediction freshness", () => {
+  const NOW_MS = Date.parse("2026-07-25T00:00:00.000Z");
+  const base = (
+    projectDir: string,
+    userDir: string,
+    readLimit: () => Promise<LimitPrediction | null>,
+  ) => ({
+    projectDir,
+    version: VERSION,
+    userDir,
+    probeTimeoutMs: 200,
+    now: () => NOW_MS,
+    readLimit,
+  });
+
+  let projectDir: string;
+  let userDir: string;
+  beforeEach(async () => {
+    const root = await mkdtemp(join(tmpdir(), "golem-status-lim-"));
+    projectDir = join(root, "project");
+    userDir = join(root, "user");
+    await mkdir(projectDir, { recursive: true });
+    await mkdir(userDir, { recursive: true });
+  });
+  afterEach(async () => {
+    await rm(join(projectDir, ".."), { recursive: true, force: true });
+  });
+
+  it("omits limits entirely when the proxy has never seen the headers", async () => {
+    const report = await collectStatus(base(projectDir, userDir, () => Promise.resolve(null)));
+    expect(report.limits).toBeUndefined();
+    expect(renderStatus(report)).not.toContain("Limits:");
+  });
+
+  it("surfaces a fresh reading (not stale, no warning)", async () => {
+    const fresh: LimitPrediction = {
+      observedAtIso: new Date(NOW_MS - 60_000).toISOString(), // 1 min ago
+      fiveHour: { utilization: 0.17, resetAtIso: "2026-07-25T05:00:00.000Z" },
+      sevenDay: { utilization: 0.72, resetAtIso: "2026-07-29T09:00:00.000Z" },
+    };
+    const report = await collectStatus(base(projectDir, userDir, () => Promise.resolve(fresh)));
+    expect(report.limits?.stale).toBe(false);
+    expect(report.limits?.five_hour_utilization).toBe(0.17);
+    expect(report.limits?.seven_day_utilization).toBe(0.72);
+    expect(report.warnings.some((w) => w.includes("STALE"))).toBe(false);
+    expect(renderStatus(report)).toContain("Limits: 5h window 17% used");
+  });
+
+  it("flags a stale reading and adds a warning (feed cold — e.g. account switch)", async () => {
+    const stale: LimitPrediction = {
+      observedAtIso: new Date(NOW_MS - 9 * 3_600_000).toISOString(), // 9h ago
+      fiveHour: { utilization: 0.17, resetAtIso: "2026-07-24T19:40:00.000Z" },
+    };
+    const report = await collectStatus(base(projectDir, userDir, () => Promise.resolve(stale)));
+    expect(report.limits?.stale).toBe(true);
+    expect(report.warnings.some((w) => w.includes("STALE"))).toBe(true);
+    const out = renderStatus(report);
+    expect(out).toContain("Limits: STALE");
+    expect(out).toContain("Warnings:");
+  });
+});
+
+describe("renderLimits", () => {
+  it("renders a fresh line with utilization, reset, and age", () => {
+    expect(
+      renderLimits({
+        five_hour_utilization: 0.42,
+        reset_at: "2026-07-25T05:00:00.000Z",
+        observed_at: "2026-07-25T00:00:00.000Z",
+        age_minutes: 2,
+        stale: false,
+      }),
+    ).toBe("Limits: 5h window 42% used (resets 2026-07-25T05:00:00.000Z) · observed 2m ago");
+  });
+
+  it("renders a stale line naming the blind auto-park", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.17,
+      reset_at: null,
+      observed_at: "2026-07-24T15:00:00.000Z",
+      age_minutes: 540,
+      stale: true,
+    });
+    expect(line).toContain("STALE");
+    expect(line).toContain("auto-park blind");
+    expect(line).toContain("540m ago");
   });
 });
