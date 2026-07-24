@@ -1,6 +1,6 @@
 /**
  * R5.4 (WS-F4 / spec 20d) — cruise-control autonomy modes & approval gates.
- * Threat model: docs/wiki/decisions/ADR-0002-autonomy-approval-gates.md.
+ * Threat model: docs/decisions/ADR-0002-autonomy-approval-gates.md.
  */
 
 export { type ActionClass, classifyAction, classifyBash } from "./classify.js";

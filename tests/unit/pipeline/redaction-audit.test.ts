@@ -132,7 +132,7 @@ describe("T-C3: entropy backstop for uncontexted secrets", () => {
 
 describe("T-C3: path-like false-positive guard (§49)", () => {
   it("does not redact a multi-segment repo path (mixed case, digits, ADR-style)", () => {
-    const path = "docs/wiki/decisions/ADR-0012-file-watcher";
+    const path = "docs/decisions/ADR-0012-file-watcher";
     const out = redact(`write the memo as ${path} and get it reviewed`);
     expect(out).toContain(path);
     expect(out).not.toContain("[REDACTED:high-entropy");

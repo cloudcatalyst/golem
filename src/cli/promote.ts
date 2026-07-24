@@ -24,7 +24,13 @@ import {
 } from "../knowledge/distill-store.js";
 import { FileWikiStore } from "../wiki/index.js";
 
-/** Zone directory each page type lives under (spec Decision 28 layout). */
+/**
+ * Zone directory each page type lives under (spec Decision 28 layout, amended by
+ * Decision 44). `adr` is kept only so this map stays total over the frozen
+ * `WikiPageType`; ADRs are NOT promoted into the wiki — decisions live at
+ * `docs/decisions/`, and `runPromote` refuses an `adr` draft. The value is the
+ * legacy relative path, never written for `adr`.
+ */
 const ZONE_FOR_TYPE: Readonly<Record<WikiPageType, string>> = {
   schema: "",
   concept: "concepts",
@@ -133,6 +139,14 @@ export async function runPromote(opts: PromoteOptions): Promise<PromoteOutcome> 
   const draft = await readDraftFile(opts.projectDir, opts.slug);
   if (draft === null) {
     throw new Error(`no pending draft "${opts.slug}" (see: golem wiki promote --list)`);
+  }
+  if (draft.frontmatter.type === "adr") {
+    // ADRs are not a wiki zone (spec Decision 44) — decisions live at
+    // docs/decisions/ under a stricter rule. Author them there directly.
+    throw new Error(
+      `"${opts.slug}" is an ADR — decisions live at docs/decisions/, outside the wiki ` +
+        "(spec Decision 44). Author it there directly rather than promoting it into the wiki.",
+    );
   }
 
   if (!opts.yes) {
