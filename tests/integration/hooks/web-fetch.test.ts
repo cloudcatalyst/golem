@@ -8,7 +8,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { CcrStore, LocalDirBlobStore } from "../../../src/compression/index.js";
 import { type HookIo, runWebFetchPost, runWebFetchPre } from "../../../src/hooks/index.js";
+import { MAX_SERVED_CHARS } from "../../../src/hooks/web-fetch.js";
 import {
   openKnowledgeBase,
   WebCache,
@@ -262,6 +264,37 @@ describe("WebFetch gate (PreToolUse)", () => {
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("CACHED BODY TEXT");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("knowledge base");
+  });
+
+  it("stores an oversized served page as a CCR ref and emits an expand handle", async () => {
+    const url = "https://example.com/huge";
+    // A page well over the inline cap: only a head excerpt should be served
+    // inline, with a precise `expand` handle for the full text.
+    const big = "X".repeat(MAX_SERVED_CHARS + 5_000);
+    await new WebCache(webCacheDir(projectDir)).put(url, big, "2026-07-05T00:00:00Z");
+
+    const io = fakeIo(preInput(url));
+    await runWebFetchPre(io, {
+      projectDir,
+      nowMs: Date.parse("2026-07-05T01:00:00Z"),
+      ttlHours: 168,
+    });
+
+    const reason = JSON.parse(io.out[0] ?? "{}").hookSpecificOutput
+      .permissionDecisionReason as string;
+    // A precise `hash=<sha256>` expand handle, not the vague KB-search hint.
+    const match = reason.match(/hash=([0-9a-f]{64})/);
+    expect(match).not.toBeNull();
+    expect(reason).toContain("expand MCP tool");
+    expect(reason).not.toContain("use search / fetch");
+    // Only a head excerpt is served inline (well under the full page).
+    expect(reason.length).toBeLessThan(big.length);
+
+    // ...and the full page round-trips losslessly from the CCR store.
+    const refId = match?.[1] ?? "";
+    const ccr = new CcrStore(new LocalDirBlobStore(path.join(projectDir, ".golem", "ccr")));
+    const envelope = await ccr.getEnvelope(refId);
+    expect(envelope.content).toBe(big);
   });
 
   it("lets an UNCACHED url through (no output = allow)", async () => {
