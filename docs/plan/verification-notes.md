@@ -2878,3 +2878,30 @@ provider.
   passthrough hid this class of gap. Worth an audit of other Anthropic features
   (e.g. `document`/PDF blocks, `redacted_thinking`) the translator silently
   drops or would reject.
+
+## §81 — Kimi K3 LIVE-verified + gzip-decompression fix (2026-07-24)
+
+First real Kimi K3 traffic through the user's account (Moonshot key, topped up;
+`golem account use kimi`). Two field findings:
+
+1. **gzip:** the non-streaming translate path 502'd with "could not translate
+   the upstream response (Unexpected token \x1f…)" — Moonshot gzips responses,
+   and undici does **not** auto-decompress, so `translateResponse` received
+   gzipped bytes instead of JSON. **Fix** (`server.ts`): decompress
+   `content-encoding: gzip` before parsing in the translating branch. The
+   Anthropic passthrough relays bytes verbatim so it was unaffected; the
+   streaming translate path parsed the streamed SSE fine (not gzipped).
+2. **LIVE VERIFIED (closes the §79 live gap):** with the fix, both paths work
+   against real Kimi K3 —
+   - **non-streaming:** HTTP 200, `model:"kimi-k3"`, content `[{type:"thinking",
+     thinking:"…one word as requested."},{type:"text",text:"PONG"}]`,
+     `stop_reason:"end_turn"`, `usage:{input:93,output:57}` — the
+     **`reasoning_content` → Anthropic `thinking` block mapping works against
+     the real model** (the response honestly reports `kimi-k3`, not a Claude
+     name).
+   - **streaming:** HTTP 200 `text/event-stream`, correct Anthropic sequence —
+     `message_start` → thinking block (streaming `thinking_delta` run) → text
+     block (`PONG`) → `content_block_stop` → `message_delta` → `message_stop`.
+   So account resolution → bearer auth → request translation → Moonshot → gzip
+   decode → response translation (thinking + text) all verified end-to-end.
+   Claude Code (which streams) is the working path.
