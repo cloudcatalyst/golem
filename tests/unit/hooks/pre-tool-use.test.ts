@@ -157,6 +157,33 @@ describe("runPreToolUseHook", () => {
     expect(h.stdout.text).toBe("");
   });
 
+  it("warns once when the rate-limit feed is stale (auto-park is blind)", async () => {
+    // Observed ~24h before NOW → well past the staleness window (the feed went
+    // cold, e.g. an account switch), even though the recorded reset is future.
+    const staleP: LimitPrediction = {
+      observedAtIso: "2026-07-17T00:00:00.000Z",
+      fiveHour: { utilization: 0.17, resetAtIso: "2026-07-18T02:00:00.000Z" },
+    };
+    const first = io(payload("Read", {}, dir));
+    await runPreToolUseHook(first, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(staleP),
+    });
+    const out = JSON.parse(first.stdout.text);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("BLIND");
+
+    // One-shot: the second identical call is silent (already warned this reading).
+    const second = io(payload("Read", {}, dir));
+    await runPreToolUseHook(second, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(staleP),
+    });
+    expect(second.stdout.text).toBe("");
+  });
+
   // --- Coder-first enforcement (Decision 39) ---
   const bigCode = { file_path: "src/x.ts", content: "x".repeat(400) };
   const guided = (on: boolean) => ({ isGuidanceEnabled: () => Promise.resolve(on) });

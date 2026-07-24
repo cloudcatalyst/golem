@@ -35,6 +35,7 @@ import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
   snoozeNudgeReason,
+  snoozeStaleReason,
   writeSnoozeNudgeState,
 } from "./snooze-nudge.js";
 
@@ -103,19 +104,32 @@ export async function runPreToolUseHook(
       const readPrediction = options.readPrediction ?? readLimitState;
       const nowMs = options.now?.() ?? Date.now();
       const prediction = await readPrediction(projectDir);
-      const nudged = await readSnoozeNudgeState(projectDir);
-      const nudge = decideSnoozeNudge(prediction, nudged, nowMs);
-      if (nudge.nudge && nudge.resetAtIso !== undefined && nudge.utilization !== undefined) {
-        await writeSnoozeNudgeState(projectDir, nudge.resetAtIso);
+      const state = await readSnoozeNudgeState(projectDir);
+      const nudge = decideSnoozeNudge(prediction, state, nowMs);
+      const emitDeny = (reason: string): void => {
         io.stdout.write(
           `${JSON.stringify({
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: "deny",
-              permissionDecisionReason: snoozeNudgeReason(nudge.resetAtIso, nudge.utilization),
+              permissionDecisionReason: reason,
             },
           })}\n`,
         );
+      };
+      if (nudge.kind === "park") {
+        // Preserve any prior stale one-shot marker while recording this window.
+        await writeSnoozeNudgeState(projectDir, { ...state, nudgedForResetIso: nudge.resetAtIso });
+        emitDeny(snoozeNudgeReason(nudge.resetAtIso, nudge.utilization));
+        return 0;
+      }
+      if (nudge.kind === "stale") {
+        // Warn once that the rate-limit feed has gone cold (auto-park is blind).
+        await writeSnoozeNudgeState(projectDir, {
+          ...state,
+          staleWarnedForObservedIso: nudge.observedAtIso,
+        });
+        emitDeny(snoozeStaleReason(nudge.observedAtIso, nudge.utilization, nudge.ageMinutes));
         return 0;
       }
     }
