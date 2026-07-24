@@ -107,3 +107,62 @@ export function resolveActiveUpstream(
     },
   };
 }
+
+/** The non-secret upstream identity for display surfaces (status/statusline/extension). */
+export interface UpstreamDisplay {
+  /** Active account id, or null when the legacy top-level config is in use. */
+  readonly accountId: string | null;
+  readonly provider: UpstreamProvider;
+  readonly baseUrl: string;
+  /** Configured default model (undefined for a byte-faithful Anthropic upstream). */
+  readonly model: string | undefined;
+  /** A loud misconfiguration note (unknown active account) to surface; else undefined. */
+  readonly warning?: string;
+}
+
+/**
+ * The proxy-settings shape {@link resolveUpstreamDisplay} reads — a structural
+ * subset of `GolemSettings["proxy"]`, kept local so the providers module does
+ * not import the config schema.
+ */
+export interface UpstreamDisplaySettings {
+  readonly upstream_provider: UpstreamProvider;
+  readonly upstream_base_url: string;
+  readonly upstream_model?: string;
+  readonly upstream_auth_scheme: UpstreamAuthScheme;
+  readonly accounts?: readonly UpstreamAccount[];
+  readonly active_account?: string;
+}
+
+/**
+ * Resolve the active upstream's non-secret identity for DISPLAY only — the
+ * account id / provider / base URL / configured model that `golem status`,
+ * `golem statusline`, and the VS Code extension show. Wraps
+ * {@link resolveActiveUpstream} (same fail-closed semantics for an unknown
+ * active account) but drops the credential/auth-scheme, which display surfaces
+ * never need. `resolveActiveUpstream` reads secrets from the environment; here
+ * the env is irrelevant (no key is surfaced), so an empty env is passed.
+ */
+export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): UpstreamDisplay {
+  const { resolved, warning } = resolveActiveUpstream(
+    {
+      legacy: {
+        provider: settings.upstream_provider,
+        base_url: settings.upstream_base_url,
+        ...(settings.upstream_model !== undefined ? { model: settings.upstream_model } : {}),
+        auth_scheme: resolveAuthScheme(settings.upstream_provider, settings.upstream_auth_scheme),
+      },
+      ...(settings.accounts !== undefined ? { accounts: settings.accounts } : {}),
+      ...(settings.active_account !== undefined ? { activeAccount: settings.active_account } : {}),
+      legacyApiKey: undefined,
+    },
+    {},
+  );
+  return {
+    accountId: resolved.accountId,
+    provider: resolved.provider,
+    baseUrl: resolved.baseUrl,
+    model: resolved.model,
+    ...(warning !== undefined ? { warning } : {}),
+  };
+}

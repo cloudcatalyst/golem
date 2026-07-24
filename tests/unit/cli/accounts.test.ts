@@ -7,7 +7,12 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { collectAccounts, renderAccounts, useAccount } from "../../../src/cli/accounts.js";
+import {
+  collectAccounts,
+  defaultAccountId,
+  renderAccounts,
+  useAccount,
+} from "../../../src/cli/accounts.js";
 import { writeSetting } from "../../../src/config/index.js";
 
 let dir: string;
@@ -34,20 +39,37 @@ afterEach(async () => {
 });
 
 describe("collectAccounts", () => {
-  it("lists accounts with key-set flags (never the key) and no active by default", async () => {
+  it("lists accounts with key-set flags (never the key); the default is active by default", async () => {
     const report = await collectAccounts(dir, { GOLEM_UPSTREAM_API_KEY__WORK: "sk-x" });
-    expect(report.active).toBeNull();
-    expect(report.accounts).toHaveLength(2);
+    // No named account selected → the synthetic default (top-level anthropic) is active.
+    expect(report.active).toBe("anthropic");
+    expect(report.active_unknown).toBe(false);
+    // Default row is first, plus the two named accounts.
+    expect(report.accounts).toHaveLength(3);
+    const dflt = report.accounts[0];
+    expect(dflt).toMatchObject({
+      id: "anthropic",
+      provider: "anthropic",
+      is_default: true,
+      active: true,
+      key_env: "GOLEM_UPSTREAM_API_KEY",
+    });
     const work = report.accounts.find((a) => a.id === "work");
     expect(work).toMatchObject({
       provider: "openai",
       key_env: "GOLEM_UPSTREAM_API_KEY__WORK",
       key_set: true,
+      active: false,
     });
     const local = report.accounts.find((a) => a.id === "local");
     expect(local?.key_set).toBe(false);
     // The report carries no secret values anywhere.
     expect(JSON.stringify(report)).not.toContain("sk-x");
+  });
+
+  it("exposes the default id as the top-level provider name", () => {
+    expect(defaultAccountId("anthropic")).toBe("anthropic");
+    expect(defaultAccountId("openrouter")).toBe("openrouter");
   });
 });
 
@@ -70,13 +92,22 @@ describe("useAccount", () => {
     await expect(useAccount(dir, "ghost", "2026-07-23T00:00:00.000Z")).rejects.toThrow(
       /unknown account/,
     );
-    expect((await collectAccounts(dir, {})).active).toBeNull();
+    expect((await collectAccounts(dir, {})).active).toBe("anthropic");
   });
 
-  it("clears the active account with id=null", async () => {
+  it("clears the active account with id=null (reverts to the default)", async () => {
     await useAccount(dir, "work", "2026-07-23T00:00:00.000Z");
     await useAccount(dir, null, "2026-07-23T00:01:00.000Z");
-    expect((await collectAccounts(dir, {})).active).toBeNull();
+    const report = await collectAccounts(dir, {});
+    expect(report.active).toBe("anthropic");
+    expect(report.accounts[0]).toMatchObject({ id: "anthropic", active: true });
+  });
+
+  it("treats selecting the default id as clearing (not an unknown-account error)", async () => {
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z");
+    const { active } = await useAccount(dir, "anthropic", "2026-07-23T00:02:00.000Z");
+    expect(active).toBeNull(); // cleared, reverted to top-level
+    expect((await collectAccounts(dir, {})).active).toBe("anthropic");
   });
 });
 
@@ -87,5 +118,14 @@ describe("renderAccounts", () => {
     expect(out).toContain("* local");
     expect(out).toContain("key MISSING");
     expect(out).toContain("active: local");
+    // The synthetic default is listed and tagged, but not active here.
+    expect(out).toContain("anthropic");
+    expect(out).toContain("(default)");
+  });
+
+  it("marks the default active when no named account is selected", async () => {
+    const out = renderAccounts(await collectAccounts(dir, {}));
+    expect(out).toContain("* anthropic");
+    expect(out).toContain("active: anthropic");
   });
 });

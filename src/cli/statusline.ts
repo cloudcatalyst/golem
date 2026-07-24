@@ -22,13 +22,15 @@ import { readSessionState } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import {
-  resolveActiveUpstream,
-  resolveAuthScheme,
+  friendlyModelVersionLabel,
+  localModelVersionLabel,
+  resolveUpstreamDisplay,
   type UpstreamProvider,
 } from "../providers/index.js";
+import { readServedModel } from "../proxy/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
-import { golemDirExists, localModelReachableCached } from "./local-model.js";
+import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { SLIDER_LEVEL_NAMES } from "./slider.js";
 
@@ -47,6 +49,12 @@ export interface SessionInput {
 export interface GolemState {
   readonly sliderLevel: number;
   readonly upstreamLabel: string;
+  /** Resolved upstream provider (`openai`/`anthropic`/…) — shown when it adds info beyond the label. */
+  readonly upstreamProvider?: string;
+  /** Configured default model (e.g. `kimi-k3`), if any. */
+  readonly upstreamModel?: string;
+  /** Last model the proxy actually served (from served-model.json), if any. */
+  readonly lastServedModel?: string;
   readonly tokensBefore?: number;
   readonly tokensAfter?: number;
   /** Session is waiting on the human (21b blocked-state), if known. */
@@ -55,6 +63,8 @@ export interface GolemState {
   readonly proxyRunning?: boolean;
   /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known. */
   readonly localModelReachable?: boolean;
+  /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
+  readonly localCoderModel?: string;
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
 }
@@ -150,10 +160,34 @@ export function providerUpstreamLabel(
   }
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return String(n);
+/**
+ * The versioned upstream-model label for the one-liner — the live/served model
+ * when known (`claude-opus-4-8[1m]` → `Opus 4.8`), else the configured default
+ * shown verbatim (an explicit id like `kimi-k3`), or `undefined` when neither is
+ * known (a plain Anthropic passthrough that has served nothing yet).
+ */
+function upstreamModelLabel(golem: GolemState): string | undefined {
+  if (golem.lastServedModel !== undefined) return friendlyModelVersionLabel(golem.lastServedModel);
+  return golem.upstreamModel;
+}
+
+/**
+ * The one-liner destination, e.g. `local (Qwen 2.5) + anthropic (Opus 4.8)`.
+ * Each backend carries its own `(model)` parenthetical (versioned label). The
+ * `local (…)` segment is present only when a local model is reachable
+ * (Decision 30 — Golem is then a local+upstream hybrid at any level); when the
+ * local model is up but its id is unknown it degrades to a bare `local`. Model
+ * parentheticals are omitted when the model isn't known.
+ */
+export function destinationLabel(golem: GolemState): string {
+  const upstreamModel = upstreamModelLabel(golem);
+  const upstreamSeg =
+    upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
+  if (golem.localModelReachable !== true) return upstreamSeg;
+  const localVer =
+    golem.localCoderModel !== undefined ? localModelVersionLabel(golem.localCoderModel) : "";
+  const localSeg = localVer !== "" ? `local (${localVer})` : "local";
+  return `${localSeg} + ${upstreamSeg}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -167,9 +201,19 @@ export interface RenderOptions {
   readonly color?: boolean;
 }
 
-/** Pure renderer — the unit-tested core. */
+/**
+ * Pure renderer — the unit-tested core. The line is the compact one-liner:
+ *
+ *   ⬢ Golem · Balanced → local (Qwen 2.5) + anthropic (Opus 4.8)
+ *
+ * `_session` (Claude Code's per-turn context %, 5h quota, cost) is parsed and
+ * captured by {@link parseSessionInput} but deliberately NOT rendered here yet:
+ * those live signals need a legible one-liner treatment before they go back on
+ * the line (deferred, 2026-07-24). Cumulative savings moved to the fuller
+ * summary surfaces (VS Code hover / panel), where the token in→out detail fits.
+ */
 export function renderStatusLine(
-  session: SessionInput,
+  _session: SessionInput,
   golem: GolemState,
   options: RenderOptions = {},
 ): string {
@@ -178,7 +222,6 @@ export function renderStatusLine(
   const green = ansi(32, color);
   const cyan = ansi(36, color);
   const yellow = ansi(33, color);
-  const red = ansi(31, color);
 
   const parts: string[] = [];
   // Lead with the brand + level NAME, and an icon that signals whether Golem is
@@ -192,41 +235,15 @@ export function renderStatusLine(
   // traffic passes straight through to the upstream, untransformed.
   const passthrough = !active || golem.sliderLevel === 0;
   const label = passthrough ? "Passthrough" : levelName(golem.sliderLevel);
-  parts.push(`${brand}: ${cyan(label)}`);
+
+  // Brand · Level → destination. The destination names each backend with its
+  // own versioned model (`local (Qwen 2.5) + anthropic (Opus 4.8)`); `local` is
+  // present only when a local model is reachable (Decision 30).
+  parts.push(brand);
+  parts.push(`${cyan(label)} ${dim("→")} ${cyan(destinationLabel(golem))}`);
+
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
-
-  // Cumulative Golem savings from telemetry.
-  const before = golem.tokensBefore ?? 0;
-  const after = golem.tokensAfter ?? 0;
-  if (before > 0 && after <= before) {
-    const pct = Math.round(((before - after) / before) * 100);
-    parts.push(green(`saved ${pct}% (${fmtTokens(before)}→${fmtTokens(after)})`));
-  }
-
-  // Where traffic is (or, in passthrough/off, would be) fronting — shown in
-  // every state as the configured destination. A reachable local model prefixes
-  // "local+" since Golem is a local+upstream hybrid at any level (Decision 30).
-  const dest = golem.localModelReachable
-    ? `→local+${golem.upstreamLabel}`
-    : `→${golem.upstreamLabel}`;
-  parts.push(cyan(dest));
-
-  // Live session context usage.
-  if (session.contextUsedPct !== undefined) {
-    const c = session.contextUsedPct >= 80 ? red : session.contextUsedPct >= 50 ? yellow : dim;
-    parts.push(c(`ctx ${Math.round(session.contextUsedPct)}%`));
-  }
-
-  // Quota (5h window is the one people hit).
-  if (session.fiveHourPct !== undefined) {
-    const c = session.fiveHourPct >= 80 ? red : session.fiveHourPct >= 50 ? yellow : dim;
-    parts.push(c(`5h ${Math.round(session.fiveHourPct)}%`));
-  }
-
-  if (session.costUsd !== undefined) {
-    parts.push(dim(`$${session.costUsd.toFixed(session.costUsd < 1 ? 3 : 2)}`));
-  }
 
   return parts.join(dim(" · "));
 }
@@ -234,43 +251,32 @@ export function renderStatusLine(
 /** Read Golem-side state (config + telemetry) for `dir`. Never throws. */
 export async function collectGolemState(
   dir: string,
-  opts: { localReachable?: (dir: string, baseUrl: string) => Promise<boolean> } = {},
+  opts: { localReachable?: (dir: string, baseUrl: string) => Promise<LocalModelInfo> } = {},
 ): Promise<GolemState> {
   let sliderLevel = 1;
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
+  let provider: UpstreamProvider | undefined;
+  let model: string | undefined;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
-    const { resolved } = resolveActiveUpstream(
-      {
-        legacy: {
-          provider: settings.proxy.upstream_provider,
-          base_url: settings.proxy.upstream_base_url,
-          ...(settings.proxy.upstream_model !== undefined
-            ? { model: settings.proxy.upstream_model }
-            : {}),
-          auth_scheme: resolveAuthScheme(
-            settings.proxy.upstream_provider,
-            settings.proxy.upstream_auth_scheme,
-          ),
-        },
-        ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
-        ...(settings.proxy.active_account !== undefined
-          ? { activeAccount: settings.proxy.active_account }
-          : {}),
-        legacyApiKey: undefined,
-      },
-      {},
-    );
-    label = providerUpstreamLabel(resolved.provider, resolved.baseUrl, resolved.accountId);
+    const upstream = resolveUpstreamDisplay(settings.proxy);
+    label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
+    provider = upstream.provider;
+    model = upstream.model;
   } catch {
     // defaults
   }
-  let state: GolemState = { sliderLevel, upstreamLabel: label };
+  let state: GolemState = {
+    sliderLevel,
+    upstreamLabel: label,
+    ...(provider !== undefined ? { upstreamProvider: provider } : {}),
+    ...(model !== undefined ? { upstreamModel: model } : {}),
+  };
   // Only probe the local model in a Golem project. The status line may be a
   // global Claude Code `statusLine` that runs in every project; probing (which
   // also caches to `.golem/state/`) unconditionally would both waste a per-turn
@@ -278,8 +284,13 @@ export async function collectGolemState(
   // opted into Golem (reported 2026-07-22).
   if (await golemDirExists(dir)) {
     try {
-      const probe = opts.localReachable ?? localModelReachableCached;
-      state = { ...state, localModelReachable: await probe(dir, ollamaBaseUrl) };
+      const probe = opts.localReachable ?? localModelInfoCached;
+      const info = await probe(dir, ollamaBaseUrl);
+      state = {
+        ...state,
+        localModelReachable: info.reachable,
+        ...(info.coderModel !== undefined ? { localCoderModel: info.coderModel } : {}),
+      };
     } catch {
       // local-model probe is best-effort; leave the field unknown
     }
@@ -292,6 +303,15 @@ export async function collectGolemState(
       }
     } catch {
       // no cached check yet — leave unknown
+    }
+    // R6.2: the model the proxy last served (cheap state-file read, no network) —
+    // lets the line show the live/current model, falling back to the configured
+    // one when nothing has been served yet (handled in renderStatusLine).
+    try {
+      const served = await readServedModel(dir);
+      if (served !== null) state = { ...state, lastServedModel: served.model };
+    } catch {
+      // no served-model state yet — leave unknown
     }
   }
   // Is the proxy actually running? Pid-file + kill(pid,0) only — instant, no

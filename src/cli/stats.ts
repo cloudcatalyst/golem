@@ -15,7 +15,12 @@
 
 import { NativeLosslessCompression } from "../compression/index.js";
 import type { CompressionStats } from "../interfaces/compression.js";
-import type { ToolUsageStats } from "../telemetry/index.js";
+import type { TelemetryEvent } from "../telemetry/index.js";
+import {
+  type BenchWindow,
+  type ToolUsageStats,
+  windowedStatsWithFallback,
+} from "../telemetry/index.js";
 
 /** Pluggable savings-stats provider (A4 telemetry implements this later). */
 export interface StatsSource {
@@ -77,6 +82,10 @@ export interface StatsReport {
   readonly ccr_refs_retrieved: number;
   /** R4.3 — per-tool local-tool usage; absent when nothing was recorded. */
   readonly tool_usage?: Readonly<Record<string, ToolUsageReport>> | undefined;
+  /** The savings window requested (24h/7d/all); absent for the all-time live source. */
+  readonly window?: BenchWindow;
+  /** The window that actually supplied the numbers after fallback (may be wider). */
+  readonly window_applied?: BenchWindow;
   readonly note: string;
 }
 
@@ -111,6 +120,57 @@ export async function collectStats(
   };
 }
 
+export const TELEMETRY_WINDOW_NOTE =
+  "Durable per-project savings over a rolling window (telemetry store); " +
+  "situational per spec Decision 23 — near-0% on cached Anthropic traffic.";
+
+/**
+ * A {@link StatsReport} scoped to a rolling savings window, folded from raw
+ * timestamped telemetry events. Widens the window (24h → 7d → all) when the
+ * requested one recorded nothing, and reports which window the numbers came from
+ * so the surface can label it. `nowMs` is injected (never reads the clock).
+ */
+export function collectWindowedStats(
+  events: readonly TelemetryEvent[],
+  opts: {
+    readonly window: BenchWindow;
+    readonly nowMs: number;
+    readonly projectId?: string;
+    readonly toolUsage?: ToolUsageStats;
+  },
+): StatsReport {
+  const { stats, windowApplied } = windowedStatsWithFallback(events, {
+    preferred: opts.window,
+    nowMs: opts.nowMs,
+    ...(opts.projectId !== undefined ? { projectId: opts.projectId } : {}),
+  });
+  const perStage: Record<string, StageReport> = {};
+  for (const [stage, delta] of Object.entries(stats.perStage)) {
+    perStage[stage] = {
+      tokens_before: delta.tokensBefore,
+      tokens_after: delta.tokensAfter,
+      tokens_saved: delta.tokensBefore - delta.tokensAfter,
+    };
+  }
+  return {
+    source: "telemetry",
+    project_id: stats.projectId,
+    requests: stats.requests,
+    tokens_before: stats.tokensBefore,
+    tokens_after: stats.tokensAfter,
+    tokens_saved: stats.tokensBefore - stats.tokensAfter,
+    per_stage: perStage,
+    ccr_refs_stored: stats.ccrRefsStored,
+    ccr_refs_retrieved: stats.ccrRefsRetrieved,
+    ...(toolUsageToReport(opts.toolUsage) !== undefined
+      ? { tool_usage: toolUsageToReport(opts.toolUsage) }
+      : {}),
+    window: opts.window,
+    window_applied: windowApplied,
+    note: TELEMETRY_WINDOW_NOTE,
+  };
+}
+
 /** Convert telemetry {@link ToolUsageStats} to the snake_case report shape (undefined if empty). */
 function toolUsageToReport(
   usage: ToolUsageStats | undefined,
@@ -135,7 +195,11 @@ function toolUsageToReport(
 export function renderStats(report: StatsReport): string {
   const scope = report.project_id === null ? "all projects" : `project ${report.project_id}`;
   const lines: string[] = [];
-  lines.push(`Golem savings (${scope})`);
+  const windowLabel =
+    report.window !== undefined
+      ? `, ${report.window === report.window_applied ? report.window : `${report.window}→${report.window_applied}`}`
+      : "";
+  lines.push(`Golem savings (${scope}${windowLabel})`);
   lines.push(`  requests:       ${report.requests}`);
   lines.push(`  tokens before:  ${report.tokens_before}`);
   lines.push(`  tokens after:   ${report.tokens_after}`);

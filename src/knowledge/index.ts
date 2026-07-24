@@ -62,7 +62,7 @@ export {
 } from "./driver.js";
 export { inferenceEmbedFn } from "./embedder.js";
 export { extractHtmlText, extractPdfText } from "./extractors.js";
-export { collectionDir, FileVectorDriver } from "./file-driver.js";
+export { canonicalProjectId, collectionDir, FileVectorDriver } from "./file-driver.js";
 export type { FileChangeBatch, FileWatcher, FileWatcherOptions } from "./file-watcher.js";
 export { watchPath } from "./file-watcher.js";
 export { DEFAULT_HASH_DIM, hashEmbed, hashingEmbedFn, tokenize } from "./hashing-embedder.js";

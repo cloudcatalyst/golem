@@ -38,12 +38,32 @@ import {
 } from "./driver.js";
 
 /**
+ * Canonicalize a project id before it is hashed into a collection identity.
+ *
+ * A project id is usually an absolute path, and on Windows the SAME project can
+ * arrive with different drive-letter case — `d:\repo` from one launcher, `D:\repo`
+ * from another (Windows treats drive letters case-insensitively). Those hash
+ * differently, spawning DUPLICATE per-project collections that each re-embed the
+ * tree independently. Uppercasing a leading drive letter (absolute `c:\x` or
+ * drive-relative `c:x`) collapses them to one. No-op for POSIX paths, bare ids,
+ * and the already-uppercase case (so it never rewrites an id needlessly).
+ */
+export function canonicalProjectId(projectId: string): string {
+  return projectId.replace(/^([a-z]):/, (_m, drive: string) => `${drive.toUpperCase()}:`);
+}
+
+/**
  * Filesystem-safe per-project collection directory under `baseDir`. Exported so
  * the auto-index manifest lives alongside a collection's data with ONE hashing
- * impl (projectId is often an absolute path).
+ * impl (projectId is often an absolute path). The id is canonicalized first
+ * ({@link canonicalProjectId}) so drive-letter case can't split one project
+ * across two collections.
  */
 export function collectionDir(baseDir: string, projectId: string): string {
-  const hash = createHash("sha256").update(projectId, "utf8").digest("hex").slice(0, 16);
+  const hash = createHash("sha256")
+    .update(canonicalProjectId(projectId), "utf8")
+    .digest("hex")
+    .slice(0, 16);
   return path.join(baseDir, hash);
 }
 

@@ -12,7 +12,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Chunk } from "../../../src/interfaces/index.js";
 import type { StoredChunk } from "../../../src/knowledge/index.js";
-import { EmbedderMismatchError, FileVectorDriver } from "../../../src/knowledge/index.js";
+import {
+  canonicalProjectId,
+  collectionDir,
+  EmbedderMismatchError,
+  FileVectorDriver,
+} from "../../../src/knowledge/index.js";
 
 let base: string;
 beforeEach(async () => {
@@ -28,6 +33,32 @@ function chunk(id: string, text: string): Chunk {
 function stored(id: string, vector: number[], text = id): StoredChunk {
   return { chunk: chunk(id, text), vector };
 }
+
+describe("canonicalProjectId", () => {
+  it("uppercases a lowercase leading Windows drive letter", () => {
+    expect(canonicalProjectId("d:\\Personar\\repo")).toBe("D:\\Personar\\repo");
+  });
+  it("leaves an already-uppercase drive letter untouched", () => {
+    expect(canonicalProjectId("D:\\Personar\\repo")).toBe("D:\\Personar\\repo");
+  });
+  it("collapses drive-letter case so both cases hash to one collection", () => {
+    expect(canonicalProjectId("d:\\Personar\\repo")).toBe(canonicalProjectId("D:\\Personar\\repo"));
+    expect(collectionDir("/base", "d:\\Personar\\repo")).toBe(
+      collectionDir("/base", "D:\\Personar\\repo"),
+    );
+  });
+  it("canonicalizes a drive-relative path too (c:foo → C:foo)", () => {
+    expect(canonicalProjectId("c:foo")).toBe("C:foo");
+  });
+  it("is a no-op for POSIX paths, bare ids, and the empty string", () => {
+    expect(canonicalProjectId("/home/user/repo")).toBe("/home/user/repo");
+    expect(canonicalProjectId("proj")).toBe("proj");
+    expect(canonicalProjectId("")).toBe("");
+  });
+  it("only rewrites the drive letter, never the rest of the path's case", () => {
+    expect(canonicalProjectId("d:\\Foo\\BarBaz")).toBe("D:\\Foo\\BarBaz");
+  });
+});
 
 describe("FileVectorDriver", () => {
   it("searches by cosine similarity, best first, respecting k", async () => {
