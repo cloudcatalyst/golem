@@ -78,8 +78,12 @@ export type SnoozeNudgeDecision =
  * - `prediction === null` → `none`. We have never seen the headers; staying
  *   silent avoids noise on a fresh setup (there is nothing to be stale about).
  * - reading older than `staleAfterMs` → `stale`, one-shot per `observedAtIso`.
- * - otherwise (fresh): `park` when `utilization ≥ threshold`, the reset is in the
- *   future, and we have not already nudged for that exact reset window.
+ * - otherwise (fresh): `park` when `utilization ≥ threshold` and the reset is in
+ *   the future. In ADVISORY mode (`enforce: false`) the park is one-shot per
+ *   reset window (a single redirect). In ENFORCING mode (`enforce: true`) the
+ *   one-shot is bypassed so park keeps firing every call until the agent parks
+ *   or the window resets — the caller turns that into a persistent deny. Enforce
+ *   never changes the `stale` path: a cold feed still only warns, never blocks.
  */
 export function decideSnoozeNudge(
   prediction: LimitPrediction | null,
@@ -87,12 +91,14 @@ export function decideSnoozeNudge(
   nowMs: number,
   threshold: number = DEFAULT_NUDGE_UTILIZATION,
   staleAfterMs: number = STALE_AFTER_MS,
+  enforce = false,
 ): SnoozeNudgeDecision {
   if (prediction === null) return { kind: "none" };
 
   const observedMs = Date.parse(prediction.observedAtIso);
   if (Number.isFinite(observedMs) && nowMs - observedMs > staleAfterMs) {
-    // Feed has gone cold — warn once for this exact stale reading.
+    // Feed has gone cold — warn once for this exact stale reading (never enforce
+    // on stale data: a hard block on a bad reading is worse than the blindness).
     if (state.staleWarnedForObservedIso === prediction.observedAtIso) return { kind: "none" };
     return {
       kind: "stale",
@@ -107,7 +113,8 @@ export function decideSnoozeNudge(
   if (utilization < threshold || resetAtIso === null) return { kind: "none" };
   const resetMs = Date.parse(resetAtIso);
   if (!Number.isFinite(resetMs) || resetMs <= nowMs) return { kind: "none" };
-  if (resetAtIso === state.nudgedForResetIso) return { kind: "none" }; // one-shot per window
+  // Advisory: one-shot per window. Enforcing: keep parking until the agent snoozes.
+  if (!enforce && resetAtIso === state.nudgedForResetIso) return { kind: "none" };
   return { kind: "park", resetAtIso, utilization };
 }
 
@@ -124,6 +131,28 @@ export function snoozeNudgeReason(resetAtIso: string, utilization: number): stri
     `\`mcp__golem__snooze\` tool with \`until="${resetAtIso}"\` to park until the ` +
     `window resets, then (3) STOP — do not keep working. The session resumes here ` +
     `automatically when snooze completes.`
+  );
+}
+
+/**
+ * The ENFORCING park instruction (`enforce: true`): a hard redirect shown as the
+ * PreToolUse deny reason. Unlike {@link snoozeNudgeReason} this repeats on every
+ * non-snooze tool call until the agent parks, so it states plainly that snooze is
+ * the only permitted action and how the user lifts enforcement. Pure.
+ *
+ * (Honest limit: a deny cannot stop the model spending tokens reacting to it —
+ * this funnels the model to `snooze` fast, it is not a hard token freeze.)
+ */
+export function snoozeEnforceReason(resetAtIso: string, utilization: number): string {
+  const pct = Math.round(utilization * 100);
+  return (
+    `**Golem** Usage-limit ENFORCEMENT is on and the session window is ~${pct}% used. ` +
+    `The ONLY permitted action now is the \`mcp__golem__snooze\` tool ` +
+    `(\`until="${resetAtIso}"\`) — every other tool is denied until you park or the ` +
+    `window resets. Call snooze now: your context is retained in-place and the session ` +
+    `resumes automatically at reset (optionally note next steps in the snooze reason). ` +
+    `To lift enforcement, the user can set \`snooze.enforce\` false (env ` +
+    `\`GOLEM_SNOOZE_ENFORCE=false\`).`
   );
 }
 

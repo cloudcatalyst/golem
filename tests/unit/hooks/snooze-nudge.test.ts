@@ -11,6 +11,7 @@ import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
   STALE_AFTER_MS,
+  snoozeEnforceReason,
   snoozeNudgeReason,
   snoozeNudgeStatePath,
   snoozeStaleReason,
@@ -102,6 +103,37 @@ describe("decideSnoozeNudge", () => {
     it("a fresh reading (within the window) is not stale", () => {
       expect(decideSnoozeNudge(prediction(0.17, FUTURE), {}, NOW_MS).kind).toBe("none");
     });
+
+    it("enforce never overrides staleness — a cold feed still only warns", () => {
+      const d = decideSnoozeNudge(stale(), {}, NOW_MS, undefined, undefined, true);
+      expect(d.kind).toBe("stale");
+    });
+  });
+
+  describe("enforce mode (persistent deny)", () => {
+    it("bypasses the one-shot: parks even when already nudged for this window", () => {
+      // Advisory returns none (one-shot consumed for this reset)...
+      expect(
+        decideSnoozeNudge(prediction(0.95, FUTURE), { nudgedForResetIso: FUTURE }, NOW_MS).kind,
+      ).toBe("none");
+      // ...but enforce keeps parking so the caller can deny persistently.
+      expect(
+        decideSnoozeNudge(
+          prediction(0.95, FUTURE),
+          { nudgedForResetIso: FUTURE },
+          NOW_MS,
+          undefined,
+          undefined,
+          true,
+        ).kind,
+      ).toBe("park");
+    });
+
+    it("still respects the threshold and future-reset guards", () => {
+      const opts = [undefined, undefined, true] as const;
+      expect(decideSnoozeNudge(prediction(0.5, FUTURE), {}, NOW_MS, ...opts).kind).toBe("none");
+      expect(decideSnoozeNudge(prediction(0.99, PAST), {}, NOW_MS, ...opts).kind).toBe("none");
+    });
   });
 });
 
@@ -124,6 +156,17 @@ describe("snoozeStaleReason", () => {
     expect(r).toContain("17%");
     expect(r).toContain("account switch");
     expect(r).toContain("golem status");
+  });
+});
+
+describe("snoozeEnforceReason", () => {
+  it("states snooze is the only permitted action and how to lift enforcement", () => {
+    const r = snoozeEnforceReason(FUTURE, 0.95);
+    expect(r).toContain("ENFORCEMENT");
+    expect(r).toContain("ONLY permitted action");
+    expect(r).toContain("mcp__golem__snooze");
+    expect(r).toContain(`until="${FUTURE}"`);
+    expect(r).toContain("GOLEM_SNOOZE_ENFORCE=false");
   });
 });
 
