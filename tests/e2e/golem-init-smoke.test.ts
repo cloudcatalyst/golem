@@ -77,10 +77,12 @@ describe("golem init -> Claude Code smoke (T-C2)", () => {
     const first = await golemInit({ projectDir, probe: fakeProbe });
     expect(first.dryRun).toBe(false);
 
-    const golemSettings = JSON.parse(
-      await readFile(path.join(projectDir, ".golem", "settings.json"), "utf8"),
+    // Slider level is machine-local/transient → gitignored settings.local.json;
+    // committed settings.json is a content-free marker (spec Decision 43).
+    const golemLocal = JSON.parse(
+      await readFile(path.join(projectDir, ".golem", "settings.local.json"), "utf8"),
     ) as { slider: { level: number } };
-    expect(golemSettings.slider.level).toBe(1);
+    expect(golemLocal.slider.level).toBe(1);
 
     // Second run against the same project: no writes, every action a skip.
     const before = await snapshot(projectDir);
