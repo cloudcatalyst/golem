@@ -25,7 +25,10 @@ export {
   type ResolvedUpstream,
   type ResolveResult,
   resolveActiveUpstream,
+  resolveUpstreamDisplay,
   type UpstreamAccount,
+  type UpstreamDisplay,
+  type UpstreamDisplaySettings,
 } from "./accounts.js";
 export { createGeminiToAnthropicSSE, GeminiSSETranslator } from "./gemini-stream.js";
 export {
@@ -35,6 +38,12 @@ export {
   geminiToAnthropic,
   mapGeminiFinish,
 } from "./gemini-translate.js";
+export {
+  friendlyModelLabel,
+  friendlyModelVersionLabel,
+  localModelVersionLabel,
+  sniffRequestModel,
+} from "./model-display.js";
 export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
 export {
   type AnthropicMessageResponse,

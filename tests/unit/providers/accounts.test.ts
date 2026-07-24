@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 import {
   perAccountEnvVar,
   resolveActiveUpstream,
+  resolveUpstreamDisplay,
   type UpstreamAccount,
+  type UpstreamDisplaySettings,
 } from "../../../src/providers/index.js";
 
 const legacy = {
@@ -85,5 +87,56 @@ describe("resolveActiveUpstream", () => {
     expect(resolved.accountId).toBeNull();
     expect(resolved.provider).toBe("anthropic");
     expect(warning).toMatch(/not in proxy.accounts/);
+  });
+});
+
+describe("resolveUpstreamDisplay", () => {
+  const base: UpstreamDisplaySettings = {
+    upstream_provider: "anthropic",
+    upstream_base_url: "https://api.anthropic.com",
+    upstream_auth_scheme: "inherit",
+    accounts,
+  };
+
+  it("returns the legacy provider/URL and no model when no account is active", () => {
+    const d = resolveUpstreamDisplay(base);
+    expect(d).toEqual({
+      accountId: null,
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      model: undefined,
+    });
+  });
+
+  it("reflects the ACTIVE account's provider/base/model (never a secret)", () => {
+    const d = resolveUpstreamDisplay({ ...base, active_account: "work" });
+    expect(d).toEqual({
+      accountId: "work",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-5.2",
+    });
+    // No credential/auth surfaced on a display object.
+    expect(Object.keys(d)).not.toContain("apiKey");
+    expect(Object.keys(d)).not.toContain("authScheme");
+  });
+
+  it("surfaces the configured legacy model when set (translating provider, no account)", () => {
+    const d = resolveUpstreamDisplay({
+      upstream_provider: "openai",
+      upstream_base_url: "https://api.moonshot.ai/v1",
+      upstream_model: "kimi-k3",
+      upstream_auth_scheme: "inherit",
+    });
+    expect(d.provider).toBe("openai");
+    expect(d.model).toBe("kimi-k3");
+    expect(d.accountId).toBeNull();
+  });
+
+  it("falls back to legacy + a warning for an unknown active account (fail-closed)", () => {
+    const d = resolveUpstreamDisplay({ ...base, active_account: "ghost" });
+    expect(d.accountId).toBeNull();
+    expect(d.provider).toBe("anthropic");
+    expect(d.warning).toMatch(/not in proxy.accounts/);
   });
 });

@@ -211,6 +211,17 @@ export class GolemProxy {
     // Anthropic passthrough below stays a raw byte pipe. An upstream error is
     // surfaced unchanged in either mode.
     if (translate !== undefined) {
+      // Observe-only header hook (served-model + limit prediction) — the
+      // translating branch returns before the byte-faithful hook below, so fire
+      // it here too. Header-only; never touches the body pipe (fidelity preserved).
+      const onResponseHeaders = this.config.onResponseHeaders;
+      if (onResponseHeaders !== undefined) {
+        try {
+          onResponseHeaders(upstream.headers, forward);
+        } catch {
+          // observe-only — a hook error can never affect the forwarded response
+        }
+      }
       if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
         let raw: Buffer;
         try {

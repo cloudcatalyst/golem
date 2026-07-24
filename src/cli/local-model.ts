@@ -12,10 +12,23 @@
 
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { chatModelFor, createProbeRunner, detectCapability } from "../inference/index.js";
 
 export interface LocalModelState {
   readonly reachable: boolean;
+  /**
+   * The concrete local model the `coder`/`drafter` role runs at this machine's
+   * hardware tier (e.g. `qwen2.5-coder:7b`), when the local model is reachable.
+   * Absent when unreachable or not yet resolved.
+   */
+  readonly coderModel?: string;
   readonly ts: string;
+}
+
+/** Reachability plus the resolved coder model — the info the status surfaces show. */
+export interface LocalModelInfo {
+  readonly reachable: boolean;
+  readonly coderModel?: string;
 }
 
 /** Statusline treats a cache entry older than this as stale and re-probes. */
@@ -68,7 +81,26 @@ export async function readLocalModelCache(projectDir: string): Promise<LocalMode
   return null;
 }
 
-export async function writeLocalModelCache(projectDir: string, reachable: boolean): Promise<void> {
+/**
+ * The concrete model the `coder`/`drafter` role runs at this machine's hardware
+ * tier (e.g. `qwen2.5-coder:7b`). `detectCapability` never throws and degrades
+ * to the CPU tier, so this always resolves; `""` only if the probe path itself
+ * fails unexpectedly (guarded so callers never see a throw).
+ */
+export async function resolveCoderModel(): Promise<string> {
+  try {
+    const facts = await detectCapability(createProbeRunner());
+    return chatModelFor(facts.tier, "drafter");
+  } catch {
+    return "";
+  }
+}
+
+export async function writeLocalModelCache(
+  projectDir: string,
+  reachable: boolean,
+  coderModel?: string,
+): Promise<void> {
   // Never create `.golem/` from a best-effort cache write. Only write when the
   // project already opted into Golem (has `.golem/`); otherwise the status line —
   // which runs in every project — would litter non-Golem repos with a `.golem/`.
@@ -77,7 +109,11 @@ export async function writeLocalModelCache(projectDir: string, reachable: boolea
   try {
     await mkdir(dirname(path), { recursive: true });
     const tmp = `${path}.${process.pid}.tmp`;
-    const payload = { reachable, ts: new Date().toISOString() };
+    const payload = {
+      reachable,
+      ...(coderModel !== undefined && coderModel !== "" ? { coderModel } : {}),
+      ts: new Date().toISOString(),
+    };
     await writeFile(tmp, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     await rename(tmp, path);
   } catch {
@@ -98,13 +134,44 @@ export function localCacheFresh(
  * Live probe that also refreshes the cache — for surfaces that can afford a
  * network call (`golem status`, the dashboard). Never throws.
  */
+/**
+ * Live probe (reachability + coder model) that also refreshes the cache — for
+ * surfaces that can afford a network call (`golem status`, the dashboard). The
+ * coder model is resolved only when the local model is reachable. Never throws.
+ */
+export async function probeAndCacheLocalModelInfo(
+  projectDir: string,
+  baseUrl: string,
+): Promise<LocalModelInfo> {
+  const reachable = await probeLocalModel(baseUrl);
+  const coderModel = reachable ? await resolveCoderModel() : "";
+  await writeLocalModelCache(projectDir, reachable, coderModel);
+  return { reachable, ...(coderModel !== "" ? { coderModel } : {}) };
+}
+
 export async function probeAndCacheLocalModel(
   projectDir: string,
   baseUrl: string,
 ): Promise<boolean> {
-  const reachable = await probeLocalModel(baseUrl);
-  await writeLocalModelCache(projectDir, reachable);
-  return reachable;
+  return (await probeAndCacheLocalModelInfo(projectDir, baseUrl)).reachable;
+}
+
+/**
+ * Reachability + coder model for the per-turn status line: use a fresh cache if
+ * present, else probe once (bounded) and refresh the cache. Never throws.
+ */
+export async function localModelInfoCached(
+  projectDir: string,
+  baseUrl: string,
+): Promise<LocalModelInfo> {
+  const cached = await readLocalModelCache(projectDir);
+  if (cached && localCacheFresh(cached)) {
+    return {
+      reachable: cached.reachable,
+      ...(cached.coderModel !== undefined ? { coderModel: cached.coderModel } : {}),
+    };
+  }
+  return probeAndCacheLocalModelInfo(projectDir, baseUrl);
 }
 
 /**
@@ -115,7 +182,5 @@ export async function localModelReachableCached(
   projectDir: string,
   baseUrl: string,
 ): Promise<boolean> {
-  const cached = await readLocalModelCache(projectDir);
-  if (cached && localCacheFresh(cached)) return cached.reachable;
-  return probeAndCacheLocalModel(projectDir, baseUrl);
+  return (await localModelInfoCached(projectDir, baseUrl)).reachable;
 }

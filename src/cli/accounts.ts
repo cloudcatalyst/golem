@@ -27,15 +27,38 @@ export interface AccountRow {
   /** Whether that env var is currently set (never the value). */
   readonly key_set: boolean;
   readonly active: boolean;
+  /**
+   * True for the synthetic DEFAULT account — the top-level upstream config the
+   * proxy falls back to when no named account is active. It is not a
+   * `proxy.accounts` entry; selecting it just clears `active_account`.
+   */
+  readonly is_default?: boolean;
 }
 
 export interface AccountsReport {
-  /** The active account id, null if none, or a `{unknown}` marker string if it names a missing id. */
-  readonly active: string | null;
+  /**
+   * The active account id: a named account, or the synthetic default id (the
+   * top-level provider, e.g. `anthropic`) when no named account is active.
+   * Never null — the default is always a real, selectable identity.
+   */
+  readonly active: string;
   /** True when `active_account` is set but not present in the registry (misconfig). */
   readonly active_unknown: boolean;
   readonly accounts: readonly AccountRow[];
 }
+
+/**
+ * The id of the synthetic DEFAULT account — the top-level upstream config used
+ * when no named account is active. It is simply the top-level provider name
+ * (e.g. `anthropic`), so the cleared state reads as a real destination rather
+ * than "(none)". Selecting it clears `active_account`.
+ */
+export function defaultAccountId(provider: string): string {
+  return provider;
+}
+
+/** The env var carrying the legacy/default single-account credential. */
+const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
 
 /** Read the account registry + which is active (best-effort; never reads secrets' values). */
 export async function collectAccounts(
@@ -43,9 +66,26 @@ export async function collectAccounts(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<AccountsReport> {
   const { settings } = await loadConfig({ projectDir });
-  const active = settings.proxy.active_account ?? null;
+  const selected = settings.proxy.active_account ?? null;
   const accounts = settings.proxy.accounts ?? [];
-  const rows: AccountRow[] = accounts.map((a) => {
+  const defaultId = defaultAccountId(settings.proxy.upstream_provider);
+
+  // The default is active whenever no named account is selected, or the
+  // selection names the default id itself.
+  const defaultActive = selected === null || selected === defaultId;
+  const defaultKey = env[DEFAULT_KEY_ENV];
+  const defaultRow: AccountRow = {
+    id: defaultId,
+    provider: settings.proxy.upstream_provider,
+    base_url: settings.proxy.upstream_base_url,
+    model: settings.proxy.upstream_model ?? null,
+    key_env: DEFAULT_KEY_ENV,
+    key_set: defaultKey !== undefined && defaultKey !== "",
+    active: defaultActive,
+    is_default: true,
+  };
+
+  const namedRows: AccountRow[] = accounts.map((a) => {
     const keyEnv = perAccountEnvVar(a.id);
     const v = env[keyEnv];
     return {
@@ -55,11 +95,17 @@ export async function collectAccounts(
       model: a.model ?? null,
       key_env: keyEnv,
       key_set: v !== undefined && v !== "",
-      active: a.id === active,
+      active: a.id === selected,
     };
   });
-  const activeUnknown = active !== null && !accounts.some((a) => a.id === active);
-  return { active, active_unknown: activeUnknown, accounts: rows };
+
+  // Unknown = a selection that is neither the default id nor a known named
+  // account (a genuine misconfig — the proxy falls back to the top-level config).
+  const activeUnknown =
+    selected !== null && selected !== defaultId && !accounts.some((a) => a.id === selected);
+  const active = defaultActive || activeUnknown ? defaultId : selected;
+
+  return { active, active_unknown: activeUnknown, accounts: [defaultRow, ...namedRows] };
 }
 
 /** Append a switch event to the audit log (ADR-0003). Fire-and-forget safe. */
@@ -74,50 +120,57 @@ async function appendAudit(
 }
 
 /**
- * Switch the active account (or clear it with `id: null`). Fail-closed: a
- * non-null id that is not in `proxy.accounts` is rejected. Records an audit line.
+ * Switch the active account. `id: null`, `"none"` (handled by the caller), or
+ * the synthetic default id (the top-level provider) all clear `active_account`
+ * and revert to the top-level config. Any other id must be in `proxy.accounts`
+ * (fail-closed — an unknown id is rejected). Records an audit line.
  */
 export async function useAccount(
   projectDir: string,
   id: string | null,
   nowIso: string,
 ): Promise<{ readonly active: string | null }> {
+  // Resolve the target: null / the default id both mean "clear active_account
+  // and revert to the top-level config". Any other id must be a known account.
+  let target = id;
   if (id !== null) {
     const { settings } = await loadConfig({ projectDir });
-    const known = (settings.proxy.accounts ?? []).some((a) => a.id === id);
-    if (!known) {
-      const ids =
-        (settings.proxy.accounts ?? []).map((a) => a.id).join(", ") || "(none configured)";
-      throw new InitError(`unknown account "${id}"; configured accounts: ${ids}`);
+    if (id === defaultAccountId(settings.proxy.upstream_provider)) {
+      target = null; // selecting the synthetic default = clear
+    } else {
+      const known = (settings.proxy.accounts ?? []).some((a) => a.id === id);
+      if (!known) {
+        const ids =
+          (settings.proxy.accounts ?? []).map((a) => a.id).join(", ") || "(none configured)";
+        throw new InitError(`unknown account "${id}"; configured accounts: ${ids}`);
+      }
     }
   }
-  await writeSetting("project", "proxy.active_account", id ?? undefined, { projectDir });
-  await appendAudit(projectDir, { action: id === null ? "clear" : "use", account: id }, nowIso);
-  return { active: id };
+  await writeSetting("project", "proxy.active_account", target ?? undefined, { projectDir });
+  await appendAudit(
+    projectDir,
+    { action: target === null ? "clear" : "use", account: target },
+    nowIso,
+  );
+  return { active: target };
 }
 
 /** Human-readable rendering of {@link AccountsReport}. */
 export function renderAccounts(report: AccountsReport): string {
   const lines: string[] = [];
-  if (report.accounts.length === 0) {
-    lines.push("No accounts configured (proxy.accounts). Using the top-level upstream config.");
-    lines.push("Add accounts in .golem/settings.json, then: golem account use <id>");
-    return `${lines.join("\n")}\n`;
-  }
   lines.push("Golem upstream accounts (secrets live in env, never shown):");
   for (const a of report.accounts) {
     const mark = a.active ? "*" : " ";
     const key = a.key_set ? "key set" : `key MISSING (${a.key_env})`;
     const model = a.model !== null ? ` model=${a.model}` : "";
-    lines.push(`  ${mark} ${a.id.padEnd(12)} ${a.provider} ${a.base_url}${model} [${key}]`);
+    const tag = a.is_default === true ? " (default)" : "";
+    lines.push(`  ${mark} ${a.id.padEnd(12)} ${a.provider} ${a.base_url}${model} [${key}]${tag}`);
   }
   lines.push("");
-  if (report.active === null) {
-    lines.push("active: (none) — using the top-level upstream config.");
-  } else if (report.active_unknown) {
+  if (report.active_unknown) {
     lines.push(
-      `active: "${report.active}" — WARNING: not in proxy.accounts; the proxy falls back to the ` +
-        "top-level config (no silent switch to another account).",
+      "active: (default) — WARNING: proxy.active_account names an id not in proxy.accounts; " +
+        "the proxy falls back to the top-level config (no silent switch to another account).",
     );
   } else {
     lines.push(`active: ${report.active}`);

@@ -32,11 +32,17 @@ import {
   openAIChatToAnthropic,
   resolveActiveUpstream,
   resolveAuthScheme,
+  sniffRequestModel,
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
 import type { UpstreamTranslator } from "../proxy/index.js";
-import { GolemProxy, parseLimitPrediction, writeLimitState } from "../proxy/index.js";
+import {
+  GolemProxy,
+  parseLimitPrediction,
+  writeLimitState,
+  writeServedModel,
+} from "../proxy/index.js";
 import {
   recordAvoidedUpstream,
   recordPipelineEvent,
@@ -317,22 +323,40 @@ export function buildProxyFromSettings(
     },
     onResponseUsage: (usage) => {
       if (usage === null) return;
+      const nowIso = new Date().toISOString();
       void (async () => {
         const level = (await resolvePolicy()).level;
         await recordUsageEvent(
           telemetry,
           { projectId: dir, level, usage, semanticForced: forceSemanticOnCaching },
-          new Date().toISOString(),
+          nowIso,
         );
       })().catch(() => {});
     },
-    // Limit prediction (snooze P2a): persist the observed session/weekly window
-    // utilization + reset to `.golem/state/limit-state.json`, throttled so a busy
-    // stream doesn't rewrite the file per response. Observe-only, fail-open.
-    onResponseHeaders: (headers) => {
+    // Fires on EVERY response (both the byte-faithful pipe and the translating
+    // path) once upstream response headers arrive — unlike onResponseUsage,
+    // which on the translating path can get `null` (the UsageSniffer never sees
+    // a usage block past the SSE translator). Two observe-only writes hang here.
+    onResponseHeaders: (headers, request) => {
       const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      // R6.2 display: record the model that actually fronted this request, so
+      // `golem status`/`statusline` + the VS Code extension can show the current
+      // model. For a translating upstream that is the configured `upstream.model`
+      // (it won over the client's `claude-*`). For a byte-faithful Anthropic
+      // upstream `upstreamModel` is undefined — the client's own per-request
+      // model flows through — so we read it back out of the request body
+      // (observe-only, never mutating the forwarded bytes) rather than showing
+      // nothing. Fail-open (never affects the forwarded response).
+      const servedModel = upstreamModel ?? sniffRequestModel(request.body);
+      if (servedModel !== undefined) {
+        void writeServedModel(dir, { model: servedModel, servedAtIso: nowIso }).catch(() => {});
+      }
+      // Limit prediction (snooze P2a): persist the observed session/weekly window
+      // utilization + reset to `.golem/state/limit-state.json`, throttled so a busy
+      // stream doesn't rewrite the file per response. Observe-only, fail-open.
       if (nowMs - lastLimitPersistMs < LIMIT_PERSIST_THROTTLE_MS) return;
-      const prediction = parseLimitPrediction(headers, new Date(nowMs).toISOString());
+      const prediction = parseLimitPrediction(headers, nowIso);
       if (prediction === null) return;
       lastLimitPersistMs = nowMs;
       void writeLimitState(dir, prediction).catch(() => {});

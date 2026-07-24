@@ -3,7 +3,17 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { fmtTokens, upstreamLabel, buildModel, statusBarText, renderHtml } = require("./render.js");
+const {
+  fmtTokens,
+  upstreamLabel,
+  friendlyLocalModelLabel,
+  friendlyModelVersionLabel,
+  localModelVersionLabel,
+  levelLabel,
+  buildModel,
+  statusBarText,
+  renderHtml,
+} = require("./render.js");
 
 test("fmtTokens", () => {
   assert.equal(fmtTokens(1_520_615), "1.5M");
@@ -48,14 +58,76 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.localModelReachable, false);
 });
 
-test("buildModel surfaces local_model reachability from status --json", () => {
+test("buildModel surfaces local_model reachability + coder model from status --json", () => {
   const status = {
     slider: { level: 3, name: "aggressive" },
     proxy: { reachable: true },
-    local_model: { reachable: true },
+    local_model: { reachable: true, coder_model: "qwen2.5-coder:7b" },
   };
   const m = buildModel({}, status);
   assert.equal(m.localModelReachable, true);
+  assert.equal(m.localCoderModel, "qwen2.5-coder:7b");
+});
+
+test("buildModel shortens a Claude last_served_model to a family label", () => {
+  const status = {
+    upstream: {
+      provider: "anthropic",
+      account: null,
+      base_url: "https://api.anthropic.com",
+      last_served_model: "claude-opus-4-8[1m]",
+    },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.model, "opus");
+  assert.equal(m.lastServedModel, "claude-opus-4-8[1m]"); // raw id preserved on the model
+});
+
+test("buildModel prefers the account-aware status.upstream block (R6.2)", () => {
+  // Regression: with an account active, the legacy config.upstream_base_url is
+  // the WRONG (top-level) URL. The `upstream` block must win, so the label reads
+  // the account id and the model is surfaced.
+  const status = {
+    slider: { level: 1, name: "lossless" },
+    proxy: { reachable: true },
+    config: { "proxy.upstream_base_url": { value: "https://api.anthropic.com" } },
+    upstream: {
+      provider: "openai",
+      account: "kimi",
+      base_url: "https://api.moonshot.ai/v1",
+      default_model: "kimi-k3",
+    },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.upstream, "https://api.moonshot.ai/v1");
+  assert.equal(m.upstreamLabel, "kimi"); // account id, NOT "anthropic"
+  assert.equal(m.provider, "openai");
+  assert.equal(m.model, "kimi-k3");
+  assert.equal(m.defaultModel, "kimi-k3");
+});
+
+test("buildModel prefers last_served_model over default_model for the current model", () => {
+  const status = {
+    upstream: {
+      provider: "openai",
+      account: "kimi",
+      base_url: "https://api.moonshot.ai/v1",
+      default_model: "kimi-k3",
+      last_served_model: "kimi-k3-0724",
+    },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.model, "kimi-k3-0724");
+  assert.equal(m.lastServedModel, "kimi-k3-0724");
+});
+
+test("buildModel falls back to legacy config path when no upstream block (older CLI)", () => {
+  const status = {
+    config: { "proxy.upstream_base_url": { value: "https://x.services.ai.azure.com" } },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.upstreamLabel, "foundry");
+  assert.equal(m.model, null);
 });
 
 test("statusBarText — compact, provider-focused, no savings", () => {
@@ -92,6 +164,37 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   );
 });
 
+test("statusBarText — shows the current model in parentheses when known (R6.2)", () => {
+  // The configured default is shown verbatim (an explicit id like kimi-k3).
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 1,
+      upstreamLabel: "kimi",
+      defaultModel: "kimi-k3",
+    }),
+    "⬢ Golem · L1 → kimi (kimi-k3)",
+  );
+  // Last-served wins over the configured default, and a Claude id is versioned.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 3,
+      sliderName: "aggressive",
+      upstreamLabel: "anthropic",
+      defaultModel: null,
+      lastServedModel: "claude-opus-4-8[1m]",
+      localModelReachable: true,
+    }),
+    "⬢ Golem · Aggressive → local + anthropic (Opus 4.8)",
+  );
+  // No model known → no parenthetical (plain Anthropic passthrough).
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic" }),
+    "⬢ Golem · L1 → anthropic",
+  );
+});
+
 test("statusBarText — local segment appears whenever a local model is reachable, at any level", () => {
   // No local model reachable: no local segment.
   assert.equal(
@@ -119,6 +222,63 @@ test("statusBarText — local segment appears whenever a local model is reachabl
     }),
     "⬡ Golem · Passthrough → local + anthropic",
   );
+});
+
+test("friendlyLocalModelLabel shortens an Ollama model id to its family", () => {
+  assert.equal(friendlyLocalModelLabel("qwen2.5-coder:7b"), "qwen");
+  assert.equal(friendlyLocalModelLabel("llama3.1:8b"), "llama");
+  assert.equal(friendlyLocalModelLabel("deepseek-coder-v2:16b"), "deepseek");
+  assert.equal(friendlyLocalModelLabel("bge-m3"), "bge");
+  assert.equal(friendlyLocalModelLabel(""), "");
+});
+
+test("statusBarText names each backend with its own versioned model", () => {
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 1,
+      upstreamLabel: "anthropic",
+      lastServedModel: "claude-opus-4-8[1m]",
+      localModelReachable: true,
+      localCoderModel: "qwen2.5-coder:7b",
+    }),
+    "⬢ Golem · L1 → local (Qwen 2.5) + anthropic (Opus 4.8)",
+  );
+});
+
+test("friendlyModelVersionLabel / localModelVersionLabel (mirror the CLI helpers)", () => {
+  assert.equal(friendlyModelVersionLabel("claude-opus-4-8[1m]"), "Opus 4.8");
+  assert.equal(friendlyModelVersionLabel("claude-haiku-4-5-20251001"), "Haiku 4.5");
+  assert.equal(friendlyModelVersionLabel("claude-sonnet-5"), "Sonnet 5");
+  assert.equal(friendlyModelVersionLabel("kimi-k3"), "kimi-k3");
+  assert.equal(localModelVersionLabel("qwen2.5-coder:7b"), "Qwen 2.5");
+  assert.equal(localModelVersionLabel("llama3.1:8b"), "Llama 3.1");
+  assert.equal(localModelVersionLabel("deepseek-coder-v2:16b"), "Deepseek");
+  assert.equal(localModelVersionLabel(""), "");
+});
+
+test("levelLabel is Passthrough when proxy is off or at level 0, else the title-cased name", () => {
+  assert.equal(levelLabel({ proxyReachable: true, slider: 2, sliderName: "balanced" }), "Balanced");
+  assert.equal(levelLabel({ proxyReachable: true, slider: 3 }), "L3");
+  assert.equal(levelLabel({ proxyReachable: false, slider: 2 }), "Passthrough");
+  assert.equal(levelLabel({ proxyReachable: true, slider: 0 }), "Passthrough");
+});
+
+test("buildModel surfaces the savings window and local base URL for the hover summary", () => {
+  const stats = {
+    tokens_before: 128_000,
+    tokens_after: 84_000,
+    requests: 4,
+    window: "24h",
+    window_applied: "7d",
+  };
+  const status = {
+    proxy: { reachable: true },
+    local_model: { reachable: true, coder_model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
+  };
+  const m = buildModel(stats, status);
+  assert.equal(m.savingsWindow, "7d"); // window_applied wins over requested window
+  assert.equal(m.localBaseUrl, "http://localhost:11434");
 });
 
 test("buildModel reads update state from the explicit update arg", () => {

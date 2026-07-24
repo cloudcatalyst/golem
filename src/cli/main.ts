@@ -72,6 +72,7 @@ import {
   openTelemetryStore,
   readTelemetryEvents,
   renderCostBenchmark,
+  type TelemetryEvent,
   type ToolUsageStats,
 } from "../telemetry/index.js";
 import { checkForUpdate, detectInstallMethod } from "../update/index.js";
@@ -116,7 +117,7 @@ import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
 import { collectSessionStateReport } from "./session-report.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
-import { collectStats, renderStats } from "./stats.js";
+import { collectStats, collectWindowedStats, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
@@ -481,6 +482,25 @@ async function resolvePort(
   return { port, upstream: settings.proxy.upstream_base_url, sliderLevel: settings.slider.level };
 }
 
+/**
+ * Stop then start the proxy as a background daemon (the `proxy restart` core,
+ * reused by `account use` so a config switch takes effect without a manual
+ * restart). Returns the new pid + resolved port/upstream, or throws if it does
+ * not come back up. Does NOT print — the caller phrases the message.
+ */
+async function restartProxyDetached(
+  dir: string,
+  portOpt?: string,
+): Promise<{ pid: number; port: number; upstream: string }> {
+  await writeProxyDesired(dir, "running", new Date().toISOString());
+  const { port, upstream } = await resolvePort(dir, portOpt);
+  await stopProxy(dir);
+  await waitForPortFree(port);
+  const pid = await startDetached(dir, port, process.argv[1] ?? "");
+  if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
+  return { pid, port, upstream };
+}
+
 /** Run the proxy in the foreground: bind, write a pid file, serve until stopped. */
 async function runProxyForeground(dir: string, portOpt?: string): Promise<void> {
   const { settings } = await loadConfig({ projectDir: dir });
@@ -619,18 +639,17 @@ proxyCmd
   .option("--foreground", "restart in the foreground instead of detached", false)
   .action(async (opts: { dir: string; port?: string; foreground: boolean }) => {
     try {
-      await writeProxyDesired(opts.dir, "running", new Date().toISOString());
-      const { port, upstream } = await resolvePort(opts.dir, opts.port);
-      await stopProxy(opts.dir);
-      // Also clear anything still holding the port (a proxy started without a
-      // pid file), then wait for release.
-      await waitForPortFree(port);
+      // Foreground keeps its bespoke path (it blocks). The --port override only
+      // applies here; the detached helper reads the configured port.
       if (opts.foreground) {
+        await writeProxyDesired(opts.dir, "running", new Date().toISOString());
+        const { port } = await resolvePort(opts.dir, opts.port);
+        await stopProxy(opts.dir);
+        await waitForPortFree(port);
         await runProxyForeground(opts.dir, opts.port);
         return;
       }
-      const pid = await startDetached(opts.dir, port, process.argv[1] ?? "");
-      if (pid === null) fail(new InitError(`proxy did not come up on port ${port}`));
+      const { pid, port, upstream } = await restartProxyDetached(opts.dir, opts.port);
       process.stdout.write(
         `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
       );
@@ -951,9 +970,14 @@ program
   .description("Show Golem token-savings statistics (per-stage breakdown, CCR activity)")
   .option("--dir <path>", "project directory", process.cwd())
   .option("--project <id>", "limit stats to this project id")
+  .option("--window <window>", "savings window: 24h | 7d | all", "24h")
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { dir: string; project?: string; json: boolean }) => {
+  .action(async (opts: { dir: string; project?: string; window: string; json: boolean }) => {
     try {
+      if (opts.window !== "24h" && opts.window !== "7d" && opts.window !== "all") {
+        throw new InitError(`invalid --window "${opts.window}" (expected 24h | 7d | all)`);
+      }
+      const window: BenchWindow = opts.window;
       // R4.3 — fold durable per-tool usage into the report (best-effort: a
       // telemetry read failure just omits the section, never fails `stats`).
       let toolUsage: ToolUsageStats | undefined;
@@ -962,7 +986,25 @@ program
       } catch {
         toolUsage = undefined;
       }
-      const report = await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
+      // Prefer durable telemetry, windowed to the rolling savings window
+      // (Decision 23). Fall back to the live in-process counters only when the
+      // store holds no pipeline runs at all (a fresh project) — those counters
+      // have no timestamps to window, so they report all-time for this process.
+      let events: readonly TelemetryEvent[] = [];
+      try {
+        events = await readTelemetryEvents(opts.dir);
+      } catch {
+        events = [];
+      }
+      const hasRequests = events.some((e) => (e.kind ?? "request") === "request");
+      const report = hasRequests
+        ? collectWindowedStats(events, {
+            window,
+            nowMs: Date.now(),
+            ...(opts.project !== undefined ? { projectId: opts.project } : {}),
+            ...(toolUsage !== undefined ? { toolUsage } : {}),
+          })
+        : await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
       );
@@ -1045,15 +1087,36 @@ accountCmd
   .description("Switch the active account (use 'none' to clear and revert to the top-level config)")
   .argument("<id>", "an account id from proxy.accounts, or 'none' to clear")
   .option("--dir <path>", "project directory", process.cwd())
-  .action(async (id: string, opts: { dir: string }) => {
+  .option("--no-restart", "do not auto-restart a running proxy to apply the switch")
+  .action(async (id: string, opts: { dir: string; restart: boolean }) => {
     try {
       const target = id === "none" ? null : id;
       const { active } = await useAccount(opts.dir, target, new Date().toISOString());
-      process.stdout.write(
+      const label =
         active === null
-          ? "active account cleared — using the top-level upstream config.\n"
-          : `active account: ${active} (restart the proxy to apply: golem proxy restart)\n`,
-      );
+          ? "active account cleared — using the top-level (default) upstream config"
+          : `active account: ${active}`;
+
+      // Report the ACTIVE account's real upstream URL (not the top-level base
+      // URL that restartProxyDetached returns) so the message matches where
+      // traffic will actually go.
+      const report = await collectAccounts(opts.dir);
+      const activeUrl = report.accounts.find((a) => a.active)?.base_url;
+      const dest = activeUrl !== undefined ? ` -> ${activeUrl}` : "";
+
+      // Apply the switch to the live daemon. Only restart when the proxy is
+      // actually running (a switch while stopped just persists), and honour
+      // --no-restart for scripted use.
+      const { port } = await resolvePort(opts.dir);
+      const running = await portInUse(port);
+      if (opts.restart && running) {
+        const { pid } = await restartProxyDetached(opts.dir);
+        process.stdout.write(`${label} — proxy restarted (pid ${pid})${dest}\n`);
+      } else if (running) {
+        process.stdout.write(`${label} (restart the proxy to apply: golem proxy restart)\n`);
+      } else {
+        process.stdout.write(`${label}.\n`);
+      }
     } catch (err) {
       fail(err);
     }

@@ -17,6 +17,7 @@ import {
   collectStatus,
   probeProxy,
   renderStatus,
+  renderUpstream,
   type StatusReport,
 } from "../../src/cli/status.js";
 
@@ -107,9 +108,10 @@ describe("collectStatus", () => {
       version: VERSION,
       userDir,
       probeTimeoutMs: 200,
-      localProbe: async () => true,
+      localProbe: async () => ({ reachable: true, coderModel: "qwen2.5-coder:7b" }),
     });
     expect(report.local_model.reachable).toBe(true);
+    expect(report.local_model.coder_model).toBe("qwen2.5-coder:7b");
   });
 });
 
@@ -152,12 +154,18 @@ describe("renderStatus", () => {
       golem_settings: true,
     },
     proxy: { port: 4653, url: "http://localhost:4653", reachable: true },
+    upstream: {
+      provider: "openai",
+      account: "kimi",
+      base_url: "https://api.moonshot.ai/v1",
+      default_model: "kimi-k3",
+    },
     slider: { level: 1, name: "lossless", layer: "project", source: ".golem/settings.json" },
     config: {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: true },
+    local_model: { reachable: true, base_url: "http://localhost:11434" },
     warnings: [],
   };
 
@@ -172,12 +180,18 @@ describe("renderStatus", () => {
       golem_settings: false,
     },
     proxy: { port: 4653, url: "http://localhost:4653", reachable: false },
+    upstream: {
+      provider: "anthropic",
+      account: null,
+      base_url: "https://api.anthropic.com",
+      default_model: null,
+    },
     slider: { level: 3, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
     config: {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: false },
+    local_model: { reachable: false, base_url: "http://localhost:11434" },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
   };
 
@@ -191,6 +205,7 @@ describe("renderStatus", () => {
     expect(output).toContain("[ok] /golem/* skills installed");
     expect(output).toContain("[ok] .golem/settings.json present");
     expect(output).toContain("Proxy: http://localhost:4653 — reachable");
+    expect(output).toContain("Upstream: kimi (openai) · api.moonshot.ai · model kimi-k3");
     expect(output).toContain("Slider: level 1 (lossless) — set by project (.golem/settings.json)");
     expect(output).toContain("Config (value — layer):");
     expect(output).toContain("slider.level = 1 — project (.golem/settings.json)");
@@ -215,6 +230,8 @@ describe("renderStatus", () => {
     expect(output).toContain(
       "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
     );
+    // No active account, no configured model, host label == provider → just the provider.
+    expect(output).toMatch(/Upstream: anthropic(\n| —|$)/m);
     expect(output).toContain("Slider: level 3 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("slider.level = 3 — env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("Warnings:");
@@ -222,6 +239,60 @@ describe("renderStatus", () => {
       "  - config file .golem/settings.json is malformed JSON; using defaults",
     );
     expect(output).toContain("Inference: upstream only");
+  });
+
+  it("shows the coder model on the Inference line when a local model is reachable", () => {
+    const output = renderStatus({
+      ...healthyReport,
+      local_model: {
+        reachable: true,
+        coder_model: "qwen2.5-coder:7b",
+        base_url: "http://localhost:11434",
+      },
+    });
+    expect(output).toContain("Inference: local + upstream · coder qwen2.5-coder:7b");
+  });
+
+  describe("renderUpstream", () => {
+    const base = {
+      provider: "anthropic",
+      account: null,
+      base_url: "https://api.anthropic.com",
+      default_model: null,
+    } as const;
+
+    it("shows the sniffed Claude model as a friendly family label (no configured default)", () => {
+      expect(renderUpstream({ ...base, last_served_model: "claude-opus-4-8[1m]" })).toBe(
+        "anthropic · model opus",
+      );
+    });
+
+    it("shows just the provider when nothing has been served yet", () => {
+      expect(renderUpstream(base)).toBe("anthropic");
+    });
+
+    it("shows a configured default model verbatim (translating upstream)", () => {
+      expect(
+        renderUpstream({
+          provider: "openai",
+          account: "kimi",
+          base_url: "https://api.moonshot.ai/v1",
+          default_model: "kimi-k3",
+        }),
+      ).toBe("kimi (openai) · api.moonshot.ai · model kimi-k3");
+    });
+
+    it("shows both when the served model diverges from a configured default", () => {
+      expect(
+        renderUpstream({
+          provider: "openai",
+          account: "kimi",
+          base_url: "https://api.moonshot.ai/v1",
+          default_model: "kimi-k3",
+          last_served_model: "kimi-k3-turbo",
+        }),
+      ).toBe("kimi (openai) · api.moonshot.ai · default model kimi-k3 · last served kimi-k3-turbo");
+    });
   });
 
   it("renders collectStatus's real output for an uninitialized project (no source suffixes, no warnings)", async () => {

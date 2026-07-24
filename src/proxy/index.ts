@@ -17,6 +17,12 @@ export {
   readLimitState,
   writeLimitState,
 } from "./limit-prediction.js";
+export {
+  readServedModel,
+  type ServedModel,
+  servedModelPath,
+  writeServedModel,
+} from "./served-model.js";
 export { GolemProxy } from "./server.js";
 export {
   BYPASS_HEADER,

@@ -52,5 +52,22 @@ describe("local-model cache", () => {
       const raw = await readFile(localModelCachePath(dir), "utf8");
       expect(JSON.parse(raw).reachable).toBe(true);
     });
+
+    it("persists the coder model when given, and round-trips it", async () => {
+      await mkdir(path.join(dir, ".golem"), { recursive: true });
+      await writeLocalModelCache(dir, true, "qwen2.5-coder:7b");
+
+      const cached = await readLocalModelCache(dir);
+      expect(cached?.reachable).toBe(true);
+      expect(cached?.coderModel).toBe("qwen2.5-coder:7b");
+    });
+
+    it("omits the coder model key when empty/absent (exactOptionalPropertyTypes)", async () => {
+      await mkdir(path.join(dir, ".golem"), { recursive: true });
+      await writeLocalModelCache(dir, false, "");
+
+      const raw = JSON.parse(await readFile(localModelCachePath(dir), "utf8"));
+      expect("coderModel" in raw).toBe(false);
+    });
   });
 });
