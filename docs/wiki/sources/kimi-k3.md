@@ -71,7 +71,11 @@ shipped alongside this note: `reasoning_content` → Anthropic `thinking` blocks
 - `reasoning_effort` defaults to `max` (priciest); set the config to trim cost.
 - Golem's OpenAI translator does not map Moonshot `ms://` file references or the
   Files API; images pass through as base64/URL only.
-- **Not live-verified in-repo** — no Moonshot key in-session (see the debrief).
+- **LIVE-verified 2026-07-24** (verification-notes §81): non-streaming and
+  streaming both work against real Kimi K3 — the reasoning trace maps to an
+  Anthropic `thinking` block and the response honestly reports `kimi-k3`. One
+  fix needed: the proxy now decompresses gzip before translating a non-streaming
+  response (Moonshot gzips; undici doesn't auto-decompress).
 
 Related: [[R6.1 b4-kimi — Kimi K3 upstream + reasoning/vision translator enhancements]]
 (the implementation + verification), [[R6 — Multi-provider & remote batch retrospective]]
