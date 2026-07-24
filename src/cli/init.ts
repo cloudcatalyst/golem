@@ -446,8 +446,14 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // projects each get their own proxy without colliding on one port. A newly
   // assigned port is persisted below (step 4) so every surface reads the same one.
   const golemSettingsPath = path.join(projectDir, ".golem", "settings.json");
+  const golemLocalPath = path.join(projectDir, ".golem", "settings.local.json");
   const existingGolem = await readJsonObject(golemSettingsPath).catch(() => null);
-  const explicitPort = (existingGolem?.proxy as JsonObject | undefined)?.port;
+  const existingLocal = await readJsonObject(golemLocalPath).catch(() => null);
+  // The per-project port lives in the gitignored local file (Decision 43); still
+  // honor a legacy project-scoped `proxy.port` from an older init for back-compat.
+  const explicitPort =
+    (existingLocal?.proxy as JsonObject | undefined)?.port ??
+    (existingGolem?.proxy as JsonObject | undefined)?.port;
   const portAssigned = typeof explicitPort !== "number";
   const port =
     typeof explicitPort === "number"
@@ -624,30 +630,53 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     }
   }
 
-  // 4. .golem/settings.json — defaults when absent, plus the assigned proxy port.
+  // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
+  // (gitignored). The slider level and per-project proxy port are personal /
+  // machine-local and transient, so they live in the local file; settings.json
+  // stays a stable, content-free "this project uses Golem" marker so the file's
+  // presence still signals init without churning on every slider/port change
+  // (spec Decision 43).
   if (existingGolem === null) {
-    const initialLevel = options.initialLevel ?? 1;
+    if (!dryRun) await writeJsonObject(golemSettingsPath, {});
     actions.push({
       kind: "create",
       path: rel(projectDir, golemSettingsPath),
+      detail: "Golem project marker",
+    });
+  }
+  // Re-read: step 1b (--foundry/--gateway) may have created the local file above.
+  const localBeforeStep4 = dryRun
+    ? existingLocal
+    : await readJsonObject(golemLocalPath).catch(() => null);
+  if (localBeforeStep4 === null) {
+    const initialLevel = options.initialLevel ?? 1;
+    actions.push({
+      kind: "create",
+      path: rel(projectDir, golemLocalPath),
       detail: `slider.level=${initialLevel}, proxy.port=${port}`,
     });
     if (!dryRun) {
-      await writeSetting("project", "slider.level", initialLevel, { projectDir });
-      await writeSetting("project", "proxy.port", port, { projectDir });
+      await writeSetting("local", "slider.level", initialLevel, { projectDir });
+      await writeSetting("local", "proxy.port", port, { projectDir });
     }
   } else if (portAssigned) {
-    // Existing config but no explicit port yet — pin the per-project one.
+    // Local file exists (e.g. --foundry just created it) but no explicit port yet
+    // — pin the per-project one, and the slider baseline if it's missing too.
     actions.push({
       kind: "modify",
-      path: rel(projectDir, golemSettingsPath),
+      path: rel(projectDir, golemLocalPath),
       detail: `proxy.port=${port}`,
     });
-    if (!dryRun) await writeSetting("project", "proxy.port", port, { projectDir });
+    if (!dryRun) {
+      await writeSetting("local", "proxy.port", port, { projectDir });
+      if ((localBeforeStep4.slider as JsonObject | undefined)?.level === undefined) {
+        await writeSetting("local", "slider.level", options.initialLevel ?? 1, { projectDir });
+      }
+    }
   } else {
     actions.push({
       kind: "skip",
-      path: rel(projectDir, golemSettingsPath),
+      path: rel(projectDir, golemLocalPath),
       detail: "already exists",
     });
   }

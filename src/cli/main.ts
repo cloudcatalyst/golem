@@ -513,7 +513,10 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
 
   const telemetry = openTelemetryStore(dir);
-  const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).project);
+  // Local-scope (gitignored) settings file — the slider is a personal, transient
+  // dial that must not churn the committed settings.json (spec Decision 43); the
+  // same file + nested slider.level key `golem slider` and the E1 loader use.
+  const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).local);
   let inference: InferenceService | undefined;
   let facts: Awaited<ReturnType<typeof detectCapability>> | undefined;
   try {
@@ -760,9 +763,10 @@ mcp
       await serveStdio({
         compression: mcpCompressionService(opts.dir, telemetry),
         telemetry,
-        // Project-scope settings file — the same file (and nested slider.level
-        // key) the E1 loader and `golem slider` use (verification-notes §20).
-        sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).project),
+        // Local-scope (gitignored) settings file — the same file (and nested
+        // slider.level key) the E1 loader and `golem slider` use; the slider is a
+        // personal, transient dial kept out of committed settings (Decision 43).
+        sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).local),
         ...(knowledge !== undefined
           ? {
               knowledge,
