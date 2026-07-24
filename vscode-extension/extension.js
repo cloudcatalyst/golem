@@ -8,7 +8,14 @@ const vscode = require("vscode");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs");
 const nodePath = require("node:path");
-const { buildModel, statusBarText, renderHtml, levelLabel, fmtTokens } = require("./render.js");
+const {
+  buildModel,
+  statusBarText,
+  renderHtml,
+  levelLabel,
+  fmtTokens,
+  SLIDER_LEVELS,
+} = require("./render.js");
 
 const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
@@ -249,7 +256,12 @@ function activate(context) {
     vscode.commands.registerCommand("golem.setAccount", pickAccount),
     vscode.commands.registerCommand("golem.setSlider", async () => {
       const pick = await vscode.window.showQuickPick(
-        ["0", "1", "2", "3", "4", "5"].map((l) => ({ label: `Level ${l}`, level: Number(l) })),
+        SLIDER_LEVELS.map((l) => ({
+          label: `${l.level === lastModel?.slider ? "$(check) " : ""}Level ${l.level} · ${l.name}`,
+          // Level 0 is a full bypass with redaction OFF (Decision 30) — flag it.
+          description: l.level === 0 ? "full bypass — redaction OFF" : "",
+          level: l.level,
+        })),
         { placeHolder: "Golem savings slider" },
       );
       if (pick) {
@@ -260,14 +272,13 @@ function activate(context) {
     vscode.commands.registerCommand("golem.menu", async () => {
       const running = lastModel?.proxyReachable ?? false;
       const items = [
+        { label: "$(arrow-both) Set slider level…", action: "slider" },
+        { label: "$(account) Switch upstream…", action: "account" },
         {
-          label: running ? "$(primitive-square) Stop Golem proxy" : "$(play) Start Golem proxy",
+          label: running ? "$(primitive-square) Stop proxy" : "$(play) Start proxy",
           action: "proxy",
         },
-        { label: "$(arrow-both) Set slider level…", action: "slider" },
-        { label: "$(account) Switch upstream account…", action: "account" },
-        { label: "$(window) Open Golem panel", action: "panel" },
-        { label: "$(refresh) Refresh", action: "refresh" },
+        { label: "$(window) Open panel", action: "panel" },
       ];
       if (lastModel?.updateAvailable) {
         items.unshift({

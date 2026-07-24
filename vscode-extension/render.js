@@ -2,6 +2,18 @@
 // No `vscode` imports here so this is unit-testable with `node --test`.
 "use strict";
 
+/**
+ * The current slider scale (spec Decision 30 — levels 0–3, mirrors the CLI's
+ * SLIDER_LEVEL_NAMES in src/cli/slider.ts). Single source of truth for the
+ * panel buttons and the status-bar quick-pick so neither drifts to a stale range.
+ */
+const SLIDER_LEVELS = [
+  { level: 0, name: "Passthrough" },
+  { level: 1, name: "Lossless" },
+  { level: 2, name: "Balanced" },
+  { level: 3, name: "Aggressive" },
+];
+
 /** Compact token formatting: 1_520_615 -> "1.5M", 139_560 -> "139.6k". */
 function fmtTokens(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "0";
@@ -267,12 +279,12 @@ function esc(s) {
 
 /** Full webview HTML. `nonce` gates inline script under the CSP. */
 function renderHtml(model, nonce) {
-  const sliderButtons = [0, 1, 2, 3]
-    .map(
-      (n) =>
-        `<button class="lvl ${n === model.slider ? "on" : ""}" data-level="${n}">${n}</button>`,
-    )
-    .join("");
+  const sliderButtons = SLIDER_LEVELS.map(
+    (l) =>
+      `<button class="lvl ${l.level === model.slider ? "on" : ""}" data-level="${l.level}" title="${esc(
+        l.name,
+      )}">${l.level}</button>`,
+  ).join("");
   const stageRows = model.perStage
     .map(
       (p) =>
@@ -361,6 +373,7 @@ function renderHtml(model, nonce) {
 }
 
 module.exports = {
+  SLIDER_LEVELS,
   fmtTokens,
   upstreamLabel,
   friendlyModelLabel,

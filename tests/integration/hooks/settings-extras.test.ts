@@ -19,6 +19,7 @@ import {
   removeEventHook,
   removeStatusLine,
   STATUS_LINE_COMMAND,
+  STATUS_LINE_REFRESH_INTERVAL_SEC,
   writeDefaultMode,
   writeStatusLine,
 } from "../../../src/hooks/index.js";
@@ -211,12 +212,16 @@ describe("removeEventHook", () => {
 });
 
 describe("writeStatusLine", () => {
-  it("creates settings.json with the Golem status line in a fresh project", async () => {
+  it("creates settings.json with the Golem status line + refresh interval in a fresh project", async () => {
     const action = await writeStatusLine({ projectDir });
     expect(action.kind).toBe("create");
 
     const settings = (await readSettings()) as Any;
-    expect(settings.statusLine).toStrictEqual({ type: "command", command: STATUS_LINE_COMMAND });
+    expect(settings.statusLine).toStrictEqual({
+      type: "command",
+      command: STATUS_LINE_COMMAND,
+      refreshInterval: STATUS_LINE_REFRESH_INTERVAL_SEC,
+    });
   });
 
   it("is idempotent: second write is a skip", async () => {
@@ -224,7 +229,27 @@ describe("writeStatusLine", () => {
     const action = await writeStatusLine({ projectDir });
     expect(action.kind).toBe("skip");
     const settings = (await readSettings()) as Any;
-    expect(settings.statusLine).toStrictEqual({ type: "command", command: STATUS_LINE_COMMAND });
+    expect(settings.statusLine).toStrictEqual({
+      type: "command",
+      command: STATUS_LINE_COMMAND,
+      refreshInterval: STATUS_LINE_REFRESH_INTERVAL_SEC,
+    });
+  });
+
+  it("upgrades an older Golem status line that lacks a refresh interval, preserving extra keys", async () => {
+    // Pre-refreshInterval install: our command, no interval, plus a user padding.
+    await writeSettings({
+      statusLine: { type: "command", command: STATUS_LINE_COMMAND, padding: 2 },
+    });
+    const action = await writeStatusLine({ projectDir });
+    expect(action.kind).toBe("modify");
+    const settings = (await readSettings()) as Any;
+    expect(settings.statusLine).toStrictEqual({
+      type: "command",
+      command: STATUS_LINE_COMMAND,
+      refreshInterval: STATUS_LINE_REFRESH_INTERVAL_SEC,
+      padding: 2,
+    });
   });
 
   it("refuses to clobber a foreign non-Golem status line", async () => {
