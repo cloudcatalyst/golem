@@ -80,6 +80,7 @@ export {
   removeEventHook,
   removeStatusLine,
   STATUS_LINE_COMMAND,
+  STATUS_LINE_REFRESH_INTERVAL_SEC,
   writeDefaultMode,
   writeStatusLine,
 } from "./settings-extras.js";
