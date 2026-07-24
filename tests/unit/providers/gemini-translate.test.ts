@@ -92,6 +92,22 @@ describe("anthropicToGemini", () => {
     });
   });
 
+  it("folds a mid-conversation system message into a user turn (Gemini has no system role)", () => {
+    const { body } = anthropicToGemini(
+      buf({
+        model: "gemini-2.0-flash",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "system", content: "steer" },
+        ],
+      }),
+    );
+    expect(body.contents).toEqual([
+      { role: "user", parts: [{ text: "hi" }] },
+      { role: "user", parts: [{ text: "steer" }] },
+    ]);
+  });
+
   it("throws without a model, and on an empty body", () => {
     expect(() => anthropicToGemini(buf({ messages: [] }))).toThrow(/upstream model/);
     expect(() => anthropicToGemini(null)).toThrow();
