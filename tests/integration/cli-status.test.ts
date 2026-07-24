@@ -374,6 +374,26 @@ describe("status — usage-limit prediction freshness", () => {
     expect(report.limits?.seven_day_utilization).toBe(0.72);
     expect(report.warnings.some((w) => w.includes("STALE"))).toBe(false);
     expect(renderStatus(report)).toContain("Limits: 5h window 17% used");
+    // Enforcement is ON by default (Decision 45).
+    expect(report.limits?.enforced).toBe(true);
+    expect(renderStatus(report)).toContain("park enforced");
+  });
+
+  it("enforce defaults on; env can override it to advisory", async () => {
+    const fresh: LimitPrediction = {
+      observedAtIso: new Date(NOW_MS - 60_000).toISOString(),
+      fiveHour: { utilization: 0.95, resetAtIso: "2026-07-25T05:00:00.000Z" },
+    };
+    // Default (no env) → enforced.
+    const dflt = await collectStatus(base(projectDir, userDir, () => Promise.resolve(fresh)));
+    expect(dflt.limits?.enforced).toBe(true);
+    // Env override → advisory.
+    const overridden = await collectStatus({
+      ...base(projectDir, userDir, () => Promise.resolve(fresh)),
+      env: { GOLEM_SNOOZE_ENFORCE: "false" },
+    });
+    expect(overridden.limits?.enforced).toBe(false);
+    expect(renderStatus(overridden)).toContain("park advisory");
   });
 
   it("flags a stale reading and adds a warning (feed cold — e.g. account switch)", async () => {
@@ -391,7 +411,7 @@ describe("status — usage-limit prediction freshness", () => {
 });
 
 describe("renderLimits", () => {
-  it("renders a fresh line with utilization, reset, and age", () => {
+  it("renders a fresh line with utilization, reset, age, and advisory park mode", () => {
     expect(
       renderLimits({
         five_hour_utilization: 0.42,
@@ -399,8 +419,23 @@ describe("renderLimits", () => {
         observed_at: "2026-07-25T00:00:00.000Z",
         age_minutes: 2,
         stale: false,
+        enforced: false,
       }),
-    ).toBe("Limits: 5h window 42% used (resets 2026-07-25T05:00:00.000Z) · observed 2m ago");
+    ).toBe(
+      "Limits: 5h window 42% used (resets 2026-07-25T05:00:00.000Z) · observed 2m ago · park advisory",
+    );
+  });
+
+  it("shows enforced park mode when enforcement is on", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.95,
+      reset_at: "2026-07-25T05:00:00.000Z",
+      observed_at: "2026-07-25T00:00:00.000Z",
+      age_minutes: 1,
+      stale: false,
+      enforced: true,
+    });
+    expect(line).toContain("park enforced");
   });
 
   it("renders a stale line naming the blind auto-park", () => {
@@ -410,6 +445,7 @@ describe("renderLimits", () => {
       observed_at: "2026-07-24T15:00:00.000Z",
       age_minutes: 540,
       stale: true,
+      enforced: false,
     });
     expect(line).toContain("STALE");
     expect(line).toContain("auto-park blind");

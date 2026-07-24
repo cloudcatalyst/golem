@@ -20,6 +20,7 @@ import {
   readAutonomyGateEnabled,
   readAutonomyLevel,
 } from "../autonomy/index.js";
+import { loadConfig } from "../config/index.js";
 import { readLimitState } from "../proxy/index.js";
 import type { LimitPrediction } from "../proxy/limit-prediction.js";
 import {
@@ -34,10 +35,27 @@ import type { HookIo } from "./post-tool-use.js";
 import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
+  snoozeEnforceReason,
   snoozeNudgeReason,
   snoozeStaleReason,
   writeSnoozeNudgeState,
 } from "./snooze-nudge.js";
+
+/**
+ * Whether the snooze document-and-hold park is ENFORCING (persistent deny) vs
+ * ADVISORY (one-shot). Reads `snooze.enforce` from the effective config (default
+ * true, env `GOLEM_SNOOZE_ENFORCE` overrides). Fail-open to false even though the
+ * default is true: erroring into a session-wide hard block is worse than briefly
+ * degrading to advisory, so a config-read failure never blocks every tool call.
+ */
+async function readSnoozeEnforced(projectDir: string): Promise<boolean> {
+  try {
+    const { settings } = await loadConfig({ projectDir });
+    return settings.snooze.enforce;
+  } catch {
+    return false;
+  }
+}
 
 interface PreToolUsePayload {
   readonly cwd?: string;
@@ -59,6 +77,8 @@ export interface PreToolUseGateOptions {
   readonly isGuidanceEnabled?: (projectDir: string, name: string) => Promise<boolean>;
   /** Inject the gate-enabled check (tests); default reads `.golem/state/autonomy.json`. */
   readonly readGateEnabled?: (projectDir: string) => Promise<boolean>;
+  /** Inject the snooze-enforce check (tests); default reads `snooze.enforce` config. */
+  readonly isSnoozeEnforced?: (projectDir: string) => Promise<boolean>;
 }
 
 async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
@@ -105,7 +125,8 @@ export async function runPreToolUseHook(
       const nowMs = options.now?.() ?? Date.now();
       const prediction = await readPrediction(projectDir);
       const state = await readSnoozeNudgeState(projectDir);
-      const nudge = decideSnoozeNudge(prediction, state, nowMs);
+      const enforce = await (options.isSnoozeEnforced ?? readSnoozeEnforced)(projectDir);
+      const nudge = decideSnoozeNudge(prediction, state, nowMs, undefined, undefined, enforce);
       const emitDeny = (reason: string): void => {
         io.stdout.write(
           `${JSON.stringify({
@@ -118,9 +139,18 @@ export async function runPreToolUseHook(
         );
       };
       if (nudge.kind === "park") {
-        // Preserve any prior stale one-shot marker while recording this window.
-        await writeSnoozeNudgeState(projectDir, { ...state, nudgedForResetIso: nudge.resetAtIso });
-        emitDeny(snoozeNudgeReason(nudge.resetAtIso, nudge.utilization));
+        if (enforce) {
+          // Enforcing: deny every non-snooze call until the agent parks. Do NOT
+          // write the one-shot marker — the block must persist, not consume itself.
+          emitDeny(snoozeEnforceReason(nudge.resetAtIso, nudge.utilization));
+        } else {
+          // Advisory: a single redirect per window. Preserve any stale marker.
+          await writeSnoozeNudgeState(projectDir, {
+            ...state,
+            nudgedForResetIso: nudge.resetAtIso,
+          });
+          emitDeny(snoozeNudgeReason(nudge.resetAtIso, nudge.utilization));
+        }
         return 0;
       }
       if (nudge.kind === "stale") {

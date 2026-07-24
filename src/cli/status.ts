@@ -109,6 +109,8 @@ export interface StatusReport {
     readonly observed_at: string;
     readonly age_minutes: number;
     readonly stale: boolean;
+    /** Whether the snooze auto-park is ENFORCING (persistent deny) vs advisory. */
+    readonly enforced: boolean;
   };
   readonly warnings: readonly string[];
 }
@@ -196,7 +198,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // blind) — surfaced both as a field and, when stale, a warning.
   const nowMs = options.now?.() ?? Date.now();
   const limitState = await (options.readLimit ?? readLimitState)(projectDir).catch(() => null);
-  const limits = limitState === null ? undefined : buildLimits(limitState, nowMs);
+  const limits =
+    limitState === null ? undefined : buildLimits(limitState, nowMs, settings.snooze.enforce);
 
   const config: Record<string, ConfigKeyStatus> = {};
   for (const [dotted, entry] of Object.entries(provenance)) {
@@ -267,7 +270,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
  * `stale` uses the same {@link STALE_AFTER_MS} threshold the snooze auto-park
  * trigger uses, so `golem status` and the trigger agree on when the feed is cold.
  */
-function buildLimits(pred: LimitPrediction, nowMs: number): StatusReport["limits"] {
+function buildLimits(
+  pred: LimitPrediction,
+  nowMs: number,
+  enforced: boolean,
+): StatusReport["limits"] {
   const observedMs = Date.parse(pred.observedAtIso);
   const ageMs = Number.isFinite(observedMs)
     ? Math.max(0, nowMs - observedMs)
@@ -279,6 +286,7 @@ function buildLimits(pred: LimitPrediction, nowMs: number): StatusReport["limits
     observed_at: pred.observedAtIso,
     age_minutes: Number.isFinite(ageMs) ? Math.round(ageMs / 60_000) : -1,
     stale: ageMs > STALE_AFTER_MS,
+    enforced,
   };
 }
 
@@ -338,12 +346,13 @@ export function renderUpstream(upstream: StatusReport["upstream"]): string {
 /** One-line rendering of the usage-limit prediction + freshness. */
 export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
   const pct = Math.round(limits.five_hour_utilization * 100);
+  const park = limits.enforced ? "enforced" : "advisory";
   if (limits.stale) {
     const age = limits.age_minutes < 0 ? "unknown" : `${limits.age_minutes}m ago`;
-    return `Limits: STALE (last reading ${age}, 5h ${pct}%) — auto-park blind; active account may not emit rate-limit headers`;
+    return `Limits: STALE (last reading ${age}, 5h ${pct}%) — auto-park blind; active account may not emit rate-limit headers · park ${park}`;
   }
   const reset = limits.reset_at !== null ? ` (resets ${limits.reset_at})` : "";
-  return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago`;
+  return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago · park ${park}`;
 }
 
 function sliderJson(slider: SliderInfo): StatusReport["slider"] {
