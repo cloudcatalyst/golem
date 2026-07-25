@@ -23,6 +23,20 @@ Decision 30) map to per-stage switches in the frozen `SliderPolicy` contract
 | **2** | `balanced` | + lossy semantic compression (stale-turn drop) + strict semantic cache. |
 | **3** | `aggressive` | + max semantic compression + loose semantic cache. |
 
+Each level is additive — a higher level runs everything the lower one does, plus more.
+The `*` stages are lossy and engage **only on non-caching upstreams** (see
+[[Compression]]); on Anthropic's cached traffic they are gated off, so levels 2–3
+behave like level 1. For how these stages sit in the full request path, see
+[[Architecture]].
+
+```mermaid
+flowchart TB
+  L0["Level 0 · passthrough"] --> N["Nothing runs — redaction OFF (warned loudly)"]
+  L1["Level 1 · lossless (default)"] --> S1["Redaction + lossless<br/>dedup · compaction · cache-align"]
+  L2["Level 2 · balanced"] --> S2["L1 + lossy semantic* + strict semantic cache*"]
+  L3["Level 3 · aggressive"] --> S3["L2 + max semantic* + loose semantic cache*"]
+```
+
 ## Level 0 is the one place redaction is off
 
 Redaction is mandatory and un-weakenable at **every level ≥ 1** — it always runs

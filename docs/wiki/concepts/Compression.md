@@ -37,4 +37,30 @@ half is the situational part. Implementation lives in `src/compression/`
 (`native-lossless.ts` for the always-on lossless path, `headroom-adapter.ts` for
 the pinned Headroom semantic stage).
 
-See also [[Slider Levels]], [[Redaction Stage]], and [[Wiki-First Knowledge]].
+## CCR reference lifecycle
+
+**CCR** (content-reference) is the reversible half: an oversized tool output (or web
+page, see [[Web Cache]]) is stored losslessly under `.golem/ccr` and replaced with a
+compact digest carrying a `hash=<id>` marker. Nothing is lost — Claude re-hydrates
+the original in one step with the `expand` MCP tool only when the excerpt isn't
+enough.
+
+```mermaid
+sequenceDiagram
+  participant Tool as Tool output
+  participant Hook as PostToolUse hook
+  participant CCR as CCR store
+  participant CC as Claude
+
+  Tool->>Hook: oversized output
+  Hook->>CCR: store original (sha256 id)
+  Hook-->>CC: compact digest + hash marker (Retrieve original)
+  Note over CC: use the excerpt if it's enough
+  opt need the full original
+    CC->>CCR: expand(ref_id)
+    CCR-->>CC: full original re-enters context
+  end
+```
+
+See also [[Slider Levels]], [[Redaction Stage]], [[Architecture]], and
+[[Wiki-First Knowledge]].
