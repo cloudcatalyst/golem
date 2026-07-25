@@ -74,3 +74,92 @@ describe("plan skill (R4.1 — planning-collaboration surface)", () => {
     expect(skill.toLowerCase()).toContain("admit gaps");
   });
 });
+
+describe("close-out skills (verify + ship)", () => {
+  it("verify judges by exit code and runs the full check gate", () => {
+    const skill = P0_SKILLS.verify;
+    if (skill === undefined) throw new Error("expected a verify skill");
+    expect(skill).toContain("invocationMode: user");
+    expect(skill.toLowerCase()).toContain("exit code");
+    expect(skill).toContain("npm run check");
+    expect(skill).toContain("golem wiki check");
+  });
+
+  it("ship runs the checklist in order: verify green before commit/PR", () => {
+    const skill = P0_SKILLS.ship;
+    if (skill === undefined) throw new Error("expected a ship skill");
+    // The verify step must precede the commit/PR step.
+    expect(skill.indexOf("Verify green")).toBeGreaterThanOrEqual(0);
+    expect(skill.indexOf("Verify green")).toBeLessThan(skill.indexOf("Commit + PR"));
+    // Uses the gh CLI and never commits straight to main.
+    expect(skill).toContain("gh pr create");
+    expect(skill).toContain("never commit to");
+  });
+});
+
+describe("footgun-guard skills (upstream + park)", () => {
+  it("upstream switches via golem account, not the model picker", () => {
+    const skill = P0_SKILLS.upstream;
+    if (skill === undefined) throw new Error("expected an upstream skill");
+    expect(skill).toContain("golem account use");
+    expect(skill.toLowerCase()).toContain("not the claude code model picker");
+  });
+
+  it("park documents a durable task before snoozing", () => {
+    const skill = P0_SKILLS.park;
+    if (skill === undefined) throw new Error("expected a park skill");
+    expect(skill).toContain("golem task add");
+    expect(skill).toContain("snooze");
+    // Document-then-park: the task add must come before the snooze step.
+    expect(skill.indexOf("golem task add")).toBeLessThan(skill.indexOf("Park until reset"));
+  });
+});
+
+describe("P0 skill registry", () => {
+  it("registers every expected skill under a stable name", () => {
+    for (const name of [
+      "slider",
+      "stats",
+      "expand",
+      "bypass",
+      "research",
+      "wiki-ingest",
+      "develop",
+      "plan",
+      "verify",
+      "ship",
+      "promote",
+      "upstream",
+      "debrief",
+      "park",
+      "triage",
+      "cache-health",
+      "context-hygiene",
+      "fresh-eyes",
+    ]) {
+      expect(P0_SKILLS[name], `missing skill: ${name}`).toBeDefined();
+    }
+  });
+
+  it("fresh-eyes reads code before docs and sorts findings into three buckets", () => {
+    const skill = P0_SKILLS["fresh-eyes"];
+    if (skill === undefined) throw new Error("expected a fresh-eyes skill");
+    // Code-only pass must come strictly before the comments/docs pass.
+    expect(skill.indexOf("Pass 1 — code only")).toBeLessThan(
+      skill.indexOf("Pass 2 — reveal comments"),
+    );
+    // The three actionable buckets.
+    expect(skill).toContain("Code should change");
+    expect(skill).toContain("Comment/doc should change");
+    expect(skill).toContain("Agree / confirmed");
+    // Read-only: it proposes, never writes.
+    expect(skill.toLowerCase()).toContain("writes nothing");
+  });
+
+  it("every skill has a description and an invocationMode", () => {
+    for (const [name, body] of Object.entries(P0_SKILLS)) {
+      expect(body, `${name} description`).toContain("description:");
+      expect(body, `${name} invocationMode`).toMatch(/invocationMode: (user|auto)/);
+    }
+  });
+});
