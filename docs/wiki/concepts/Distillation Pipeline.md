@@ -14,6 +14,29 @@ wiki knowledge (spec Decision 20f, foundation for P2). Capture (T4) and
 distill (T3, extended by R3.5 to cover notes as well as fetched URLs) are both
 built; promote stays a human-in-the-loop step.
 
+## The loop, and the zones it crosses
+
+Capture lands in **zone 1** (local, gitignored, never committed); distillation
+shapes a draft; promote is the one human-gated step that writes a **zone 2** wiki
+page committed to git. The zones are defined in the wiki schema (`WIKI.md`); see also
+[[Wiki-First Knowledge]], [[Knowledge Base]], and [[Architecture]].
+
+```mermaid
+flowchart LR
+  subgraph Z1["Zone 1 — raw (gitignored)"]
+    NOTE["golem note"]
+    WEB["fetched page (webcache)"]
+    DRAFT[".golem/distill/*.md draft"]
+  end
+  subgraph Z2["Zone 2 — wiki (committed to git)"]
+    PAGE["concepts/ · sources/ · syntheses/ …"]
+  end
+  NOTE -->|"capture (redact first)"| DRAFT
+  WEB -->|"distill (local summarizer, strict JSON)"| DRAFT
+  DRAFT -->|"promote (human-gated · append-and-refine)"| PAGE
+  PAGE -.->|"indexed as a derived cache"| KB["Vector KB"]
+```
+
 ## Stage 1 — capture (built, T4)
 
 `golem note "text"` is the fastest path into the pipeline: redact (reusing
