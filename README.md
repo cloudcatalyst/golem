@@ -18,6 +18,34 @@ Claude Code is Golem's flagship, most-verified integration — byte-faithful
 proxying, native MCP tools, `/golem/*` skills — with the same pipeline
 designed to extend to other gateways. Native Windows, macOS, and Linux.
 
+## How it works
+
+One local process exposes two doors — a **transparent proxy** (every request) and an
+**MCP server** (explicit tools) — over one shared engine, and talks to local models
+(Ollama, on this box or a LAN GPU box), a vector knowledge base, and the upstream
+LLM:
+
+```mermaid
+flowchart LR
+  CC["Claude Code / SDK"] -->|"proxy (ANTHROPIC_BASE_URL)"| G["Golem hub<br/>redaction · compression · cache · routing · telemetry"]
+  CC -->|"MCP tools"| G
+  G -->|"local tools"| L["Ollama (local / LAN) · vector KB · CCR store"]
+  G -->|"forward"| UP["Anthropic (default) · Foundry · OpenRouter · OpenAI · Gemini"]
+```
+
+Every `POST /v1/messages` runs a fixed pipeline — **redaction always first** (never
+reordered), then situational compression, then a byte-faithful forward at slider
+level ≤ 1:
+
+```mermaid
+flowchart LR
+  R["Request"] --> RD["Redact"] --> LA["Local-answer?<br/>(opt-in short-circuit)"] --> CO["Compress<br/>(situational)"] --> FW["Forward<br/>byte-faithful at level <= 1"] --> UP["Upstream"]
+```
+
+Full component diagrams — request lifecycle by slider level, web-fetch caching,
+search/RAG/vector DB, local/LAN/upstream routing, observability, and the guardrail
+stack — are in the wiki: **[docs/wiki/concepts/Architecture.md](docs/wiki/concepts/Architecture.md)**.
+
 ## Install
 
 ```sh

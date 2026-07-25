@@ -4,7 +4,7 @@ type: schema
 tags: [meta]
 sources: []
 created: 2026-07-10
-updated: 2026-07-16
+updated: 2026-07-25
 ---
 
 # Golem project wiki — schema (Zone 0)
@@ -62,11 +62,14 @@ updated: YYYY-MM-DD
 
 ## Index
 
+- [[Architecture]] — **visual map**: component topology, proxy request lifecycle, local/LAN/upstream routing, observability, and the PreToolUse guardrail stack (Mermaid diagrams, the deep-dive entry point)
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
 - [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
+- [[Web Cache]] — WebFetch fetch-cache-serve flow (Decision 42 raw mode), freshness/revalidation, oversized → CCR ref
+- [[Knowledge Base]] — RAG ingest + graph-first-then-vector search, scopes/federation, FileVectorDriver (vs spec's Qdrant)
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)
 - syntheses/wiki-knowledge-loop-batch.md — retrospective tying the T1–T7 batch + init-guidance work into one knowledge loop; records patterns + open follow-ups
 - sources/llm-wiki-second-brain-obsidian.md — distilled source note for the

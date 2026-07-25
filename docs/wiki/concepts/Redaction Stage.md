@@ -31,6 +31,21 @@ config) — required for prompt-cache prefix stability — and idempotent:
 placeholders (`[REDACTED:<kind>:<n>]`) use a charset no rule's pattern matches,
 so re-redacting redacted text is a no-op.
 
+## Where it runs
+
+Redaction is **stage 1 of the pipeline and is never reordered after compression**.
+The single exception is slider level 0 (`passthrough`), a deliberate full bypass
+where nothing runs — see [[Slider Levels]] and [[Architecture]].
+
+```mermaid
+flowchart LR
+  IN["Request body / content to store"] --> L0{"slider level"}
+  L0 -->|"0 — passthrough"| RAW["Forward RAW · redaction OFF (warned loudly)"]
+  L0 -->|"level >= 1"| P1["Pass 1 — rule table (table order)"]
+  P1 --> P2["Pass 2 — high-entropy backstop"]
+  P2 --> NEXT["then compression / storage / forward"]
+```
+
 ## Known false-positive classes (entropy backstop)
 
 The backstop is heuristic and has needed successive narrowing, each logged in
