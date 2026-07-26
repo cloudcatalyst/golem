@@ -58,6 +58,7 @@ import {
   translatePrompt,
   writeLastSuggestion,
 } from "../prompt/index.js";
+import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
 import {
   buildResumeArgv,
   createTask,
@@ -78,10 +79,13 @@ import {
 import { checkForUpdate, detectInstallMethod } from "../update/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
 import {
+  addAccount,
   collectAccounts,
   credentialEnvForProxy,
   loginAccount,
   logoutAccount,
+  type NewAccount,
+  removeAccount,
   renderAccounts,
   useAccount,
 } from "./accounts.js";
@@ -1203,6 +1207,97 @@ accountCmd
         );
       }
       if (result.env_note !== null) process.stdout.write(`${result.env_note}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+accountCmd
+  .command("add")
+  .description(
+    "Register a new account in proxy.accounts (non-secret config only — set the key with 'account login')",
+  )
+  .argument("<id>", "new account id (e.g. kimi, work)")
+  .requiredOption("--provider <name>", `provider (${UPSTREAM_PROVIDERS.join(" | ")})`)
+  .requiredOption("--base-url <url>", "upstream base URL (e.g. https://api.moonshot.ai/v1)")
+  .option("--model <id>", "model id the upstream expects (translating providers)")
+  .option(
+    "--auth-scheme <scheme>",
+    `credential header scheme (${UPSTREAM_AUTH_SCHEMES.join(" | ")}); default: provider default`,
+  )
+  .option("--dir <path>", "project directory", process.cwd())
+  .option(
+    "--login",
+    "prompt for the credential and store it in the OS credential store right after registering",
+    false,
+  )
+  .action(
+    async (
+      id: string,
+      opts: {
+        provider: string;
+        baseUrl: string;
+        model?: string;
+        authScheme?: string;
+        dir: string;
+        login: boolean;
+      },
+    ) => {
+      try {
+        const provider = opts.provider as NewAccount["provider"];
+        if (!UPSTREAM_PROVIDERS.includes(provider)) {
+          throw new InitError(
+            `unknown provider "${opts.provider}"; valid: ${UPSTREAM_PROVIDERS.join(", ")}`,
+          );
+        }
+        const authScheme = opts.authScheme as NewAccount["auth_scheme"];
+        if (authScheme !== undefined && !UPSTREAM_AUTH_SCHEMES.includes(authScheme)) {
+          throw new InitError(
+            `unknown auth scheme "${opts.authScheme}"; valid: ${UPSTREAM_AUTH_SCHEMES.join(", ")}`,
+          );
+        }
+        await addAccount(
+          opts.dir,
+          {
+            id,
+            provider,
+            base_url: opts.baseUrl,
+            ...(opts.model !== undefined ? { model: opts.model } : {}),
+            ...(authScheme !== undefined ? { auth_scheme: authScheme } : {}),
+          },
+          new Date().toISOString(),
+        );
+        process.stdout.write(
+          `registered account "${id}" (${provider} ${opts.baseUrl}). ` +
+            `Next: golem account login ${id}  (set its key), then  golem account use ${id}.\n`,
+        );
+        if (opts.login) {
+          const result = await loginAccount(opts.dir, id, new Date().toISOString(), {});
+          process.stdout.write(
+            `stored credential for "${result.account}" — ${result.stored_in} (probe: ${result.probe}).\n`,
+          );
+        }
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+accountCmd
+  .command("remove")
+  .description(
+    "Remove an account from proxy.accounts (does NOT delete its stored credential — use 'account logout' for that)",
+  )
+  .argument("<id>", "an account id from proxy.accounts")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (id: string, opts: { dir: string }) => {
+    try {
+      const result = await removeAccount(opts.dir, id, new Date().toISOString());
+      process.stdout.write(
+        `removed account "${result.account}" from proxy.accounts` +
+          `${result.was_active ? " (was active — reverted to the default upstream)" : ""}. ` +
+          `Its stored credential, if any, is untouched — remove it with: golem account logout ${id}.\n`,
+      );
     } catch (err) {
       fail(err);
     }

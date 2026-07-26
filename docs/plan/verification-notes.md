@@ -2972,3 +2972,20 @@ pwsh 7.6.3, Node 24) unless noted.
   reaches the proxy deterministically.
 
 Decision 46 (CLI-managed credential chain) is built on exactly these findings.
+
+## §83 — Settings layers REPLACE arrays; account state must write to the local scope (2026-07-26)
+
+Found while adding `golem account add`. The config loader
+(`applyObjectLayer` in src/config/loader.ts) merges layers per leaf with
+`section[key] = parsed.data` — so a `proxy.accounts` **array** in any
+higher-precedence layer **wholesale-replaces** (does not merge with) the array
+from a lower layer. Consequence: this repo carries `proxy.accounts` in
+`.golem/settings.local.json` (top file layer), so an `account add` / `account
+use` that wrote to the committable `.golem/settings.json` was **silently
+invisible** to the merged config the proxy actually reads (the new account
+appeared in the file but not in `account list` / `account use`). **Rule:**
+account state (`proxy.accounts`, `proxy.active_account`) is machine-specific and
+must be written to the **local** scope — both so it wins the merge and so it
+stays out of the committable project settings file. Verified: `account add` →
+`list` shows it immediately, `use` then fails closed on the missing credential,
+`remove` deletes it; a unit test asserts the local-scope write.

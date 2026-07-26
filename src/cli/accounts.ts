@@ -288,7 +288,7 @@ export async function useAccount(
 
   // A single-leaf write: `undefined` deletes the key (revert to the default),
   // a string sets it. writeSetting validates against the schema.
-  await writeSetting("project", "proxy.active_account", target ?? undefined, { projectDir });
+  await writeSetting("local", "proxy.active_account", target ?? undefined, { projectDir });
   await appendAudit(
     projectDir,
     { action: target === null ? "clear" : "use", account: target },
@@ -403,6 +403,107 @@ export async function logoutAccount(
       ? `note: ${envVar} is still set in this shell's environment — Golem cannot unset it; remove it from your profile if you want it gone.`
       : null;
   return { account: id, removed: removed.map((l) => l.label), env_note: envNote };
+}
+
+/** Input for {@link addAccount}. All fields are NON-SECRET (ADR-0003 invariant 1). */
+export interface NewAccount {
+  readonly id: string;
+  readonly provider: RegistryAccount["provider"];
+  readonly base_url: string;
+  readonly model?: string;
+  readonly auth_scheme?: RegistryAccount["auth_scheme"];
+}
+
+/**
+ * Register a new account in `proxy.accounts`. This is the registration leg the
+ * credential commands depend on: until an id exists here, `account login <id>`
+ * and `account use <id>` both reject it as unknown.
+ *
+ * Written to the **local** scope (`settings.local.json`) — the top file layer —
+ * because the proxy reads the MERGED config and a `proxy.accounts` array in any
+ * higher-precedence layer wholesale-replaces lower ones. Writing anywhere lower
+ * would let a pre-existing local-layer `accounts` mask the change. Local scope
+ * also keeps machine-specific account registrations out of the committable
+ * project settings file.
+ *
+ * Fail-closed and non-destructive: refuses a duplicate id, refuses to shadow
+ * the synthetic default's id, preserves every existing entry and its key order
+ * (read-modify-write of the whole array through the schema-validated
+ * `proxy.accounts` leaf). Never touches a credential — that is `account login`'s
+ * job. Audit-logged.
+ */
+export async function addAccount(
+  projectDir: string,
+  input: NewAccount,
+  nowIso: string,
+): Promise<{ readonly account: string }> {
+  const { settings } = await loadConfig({ projectDir });
+  const p = settings.proxy;
+  const accounts = [...(p.accounts ?? [])];
+
+  if (input.id === defaultAccountId(p.upstream_provider) || input.id === DEFAULT_STORE_ID) {
+    throw new InitError(
+      `"${input.id}" is the default account (the top-level upstream config) — it is not a ` +
+        `registered account and needs no \`account add\`. Set its credential with ` +
+        `\`golem account login ${input.id}\` or edit proxy.upstream_* directly.`,
+    );
+  }
+  if (accounts.some((a) => a.id === input.id)) {
+    throw new InitError(
+      `account "${input.id}" already exists. To change it, \`golem account remove ${input.id}\` ` +
+        `and re-add, or edit proxy.accounts directly.`,
+    );
+  }
+
+  const entry: RegistryAccount = {
+    id: input.id,
+    provider: input.provider,
+    base_url: input.base_url,
+    ...(input.model !== undefined ? { model: input.model } : {}),
+    ...(input.auth_scheme !== undefined ? { auth_scheme: input.auth_scheme } : {}),
+  };
+  // writeSetting validates the WHOLE array against the accounts leaf schema
+  // (id/provider/base_url required, model/auth_scheme optional) before writing.
+  await writeSetting("local", "proxy.accounts", [...accounts, entry], { projectDir });
+  await appendAudit(projectDir, { action: "add", account: input.id }, nowIso);
+  return { account: input.id };
+}
+
+/**
+ * Remove an account from `proxy.accounts` (local scope — see {@link addAccount}
+ * for why local, not project). Does NOT delete the stored credential — say so
+ * and point at `account logout`, which does. Fail-closed on an unknown id; if
+ * the removed account was active, clears `active_account` back to the default
+ * rather than leaving a dangling reference. Audit-logged.
+ */
+export async function removeAccount(
+  projectDir: string,
+  id: string,
+  nowIso: string,
+): Promise<{ readonly account: string; readonly was_active: boolean }> {
+  const { settings } = await loadConfig({ projectDir });
+  const p = settings.proxy;
+  const accounts = p.accounts ?? [];
+  if (id === defaultAccountId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
+    throw new InitError(
+      `"${id}" is the default account (the top-level upstream config) — remove it by editing ` +
+        `proxy.upstream_* directly, not via \`account remove\`.`,
+    );
+  }
+  if (!accounts.some((a) => a.id === id)) {
+    const ids = accounts.map((a) => a.id).join(", ") || "(none configured)";
+    throw new InitError(`unknown account "${id}"; configured accounts: ${ids}`);
+  }
+
+  const remaining = accounts.filter((a) => a.id !== id);
+  await writeSetting("local", "proxy.accounts", remaining, { projectDir });
+
+  const wasActive = p.active_account === id;
+  if (wasActive) {
+    await writeSetting("local", "proxy.active_account", undefined, { projectDir });
+  }
+  await appendAudit(projectDir, { action: "remove", account: id }, nowIso);
+  return { account: id, was_active: wasActive };
 }
 
 /**
