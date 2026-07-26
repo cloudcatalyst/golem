@@ -36,6 +36,11 @@ in one shell.
   accepted), `golem account logout <id>`, a **fail-closed credential preflight**
   in `golem account use <id>` (`--yes` overrides), and key location/strength in
   `golem account list` (never the value).
+- **Account registration:** `golem account add <id> --provider <p> --base-url
+  <url> [--model] [--auth-scheme] [--login]` registers the non-secret config and
+  `golem account remove <id>` unregisters it — closing the loop so
+  add → login → use works entirely from the CLI (previously you hand-edited
+  `proxy.accounts`).
 - **Honesty rules:** surfaces name the backend and its real strength (a DPAPI
   blob is never called "Credential Manager"; a 0600 file is never called
   "encrypted"); secrets never appear in argv (writes use stdin), logs, or errors.
@@ -73,6 +78,13 @@ check. What it found:
   **resource contention** (my DPAPI self-test spawns PowerShell), not
   regressions: those suites pass in isolation in my tree and on a clean `HEAD`
   worktree, and the full suite is green at `--maxWorkers=4`.
+- **`account add` exposed a real scope bug (§83):** the config loader REPLACES
+  array leaves across layers, so a `proxy.accounts` in `settings.local.json`
+  silently masked any account written to `settings.json`. Account state
+  (`proxy.accounts` + `active_account`) now writes to the **local** scope — the
+  layer the proxy's merged config actually reads, and the right home for
+  machine-specific state. This also corrects the pre-existing `account use`,
+  which had the same masking exposure.
 
 ## Verified
 `tsc --noEmit`, `biome check`, `biome format` clean; `vitest run` **1361
