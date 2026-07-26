@@ -77,7 +77,14 @@ import {
 } from "../telemetry/index.js";
 import { checkForUpdate, detectInstallMethod } from "../update/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../wiki/index.js";
-import { collectAccounts, renderAccounts, useAccount } from "./accounts.js";
+import {
+  collectAccounts,
+  credentialEnvForProxy,
+  loginAccount,
+  logoutAccount,
+  renderAccounts,
+  useAccount,
+} from "./accounts.js";
 import {
   embedderSignature,
   ensureProjectIndexed,
@@ -200,7 +207,12 @@ program
         if (opts.startProxy) {
           const { settings } = await loadConfig({ projectDir: opts.dir });
           await writeProxyDesired(opts.dir, "running", new Date().toISOString());
-          const pid = await startDetached(opts.dir, settings.proxy.port, process.argv[1] ?? "");
+          const pid = await startDetached(
+            opts.dir,
+            settings.proxy.port,
+            process.argv[1] ?? "",
+            await credentialEnvForProxy(opts.dir),
+          );
           process.stdout.write(
             pid === null
               ? "golem proxy: failed to start — run `golem proxy start --detach` manually\n"
@@ -496,7 +508,10 @@ async function restartProxyDetached(
   const { port, upstream } = await resolvePort(dir, portOpt);
   await stopProxy(dir);
   await waitForPortFree(port);
-  const pid = await startDetached(dir, port, process.argv[1] ?? "");
+  // Inject the active account's resolved credential so the daemon — which does
+  // NOT inherit this shell's env — starts with it (Decision 46).
+  const credEnv = await credentialEnvForProxy(dir);
+  const pid = await startDetached(dir, port, process.argv[1] ?? "", credEnv);
   if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
   return { pid, port, upstream };
 }
@@ -605,7 +620,12 @@ proxyCmd
           process.stdout.write(`golem proxy: already running on port ${port}\n`);
           return;
         }
-        const pid = await startDetached(opts.dir, port, process.argv[1] ?? "");
+        const pid = await startDetached(
+          opts.dir,
+          port,
+          process.argv[1] ?? "",
+          await credentialEnvForProxy(opts.dir),
+        );
         if (pid === null) fail(new InitError(`proxy did not come up on port ${port}`));
         process.stdout.write(
           `golem proxy started (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
@@ -1092,10 +1112,17 @@ accountCmd
   .argument("<id>", "an account id from proxy.accounts, or 'none' to clear")
   .option("--dir <path>", "project directory", process.cwd())
   .option("--no-restart", "do not auto-restart a running proxy to apply the switch")
-  .action(async (id: string, opts: { dir: string; restart: boolean }) => {
+  .option(
+    "--yes",
+    "switch even if the account's credential does not resolve (fail-closed override)",
+    false,
+  )
+  .action(async (id: string, opts: { dir: string; restart: boolean; yes: boolean }) => {
     try {
       const target = id === "none" ? null : id;
-      const { active } = await useAccount(opts.dir, target, new Date().toISOString());
+      const { active } = await useAccount(opts.dir, target, new Date().toISOString(), {
+        assumeYes: opts.yes,
+      });
       const label =
         active === null
           ? "active account cleared — using the top-level (default) upstream config"
@@ -1121,6 +1148,61 @@ accountCmd
       } else {
         process.stdout.write(`${label}.\n`);
       }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+accountCmd
+  .command("login")
+  .description(
+    "Store an account's credential in the OS credential store — prompt, verify against the upstream, then save (Decision 46)",
+  )
+  .argument("<id>", "an account id from proxy.accounts, or the default provider id")
+  .option("--dir <path>", "project directory", process.cwd())
+  .option("--no-probe", "store without verifying the key against the upstream first")
+  .option(
+    "--store <backend>",
+    "where to store: 'keychain' (default, the OS store) or 'file' (UNENCRYPTED plaintext, explicit opt-in)",
+    "keychain",
+  )
+  .action(async (id: string, opts: { dir: string; probe: boolean; store: string }) => {
+    try {
+      const storeTarget = opts.store === "file" ? ("file" as const) : ("keychain" as const);
+      if (storeTarget === "file") {
+        process.stdout.write(
+          "warning: storing UNENCRYPTED plaintext on disk (protected only by file permissions).\n",
+        );
+      }
+      const result = await loginAccount(opts.dir, id, new Date().toISOString(), {
+        probe: opts.probe,
+        store: storeTarget,
+      });
+      process.stdout.write(
+        `stored credential for "${result.account}" — ${result.stored_in} (probe: ${result.probe}).\n` +
+          "It resolves automatically on every proxy start; no env var to re-export.\n",
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+accountCmd
+  .command("logout")
+  .description("Remove an account's stored credential from the OS credential store")
+  .argument("<id>", "an account id from proxy.accounts, or the default provider id")
+  .option("--dir <path>", "project directory", process.cwd())
+  .action(async (id: string, opts: { dir: string }) => {
+    try {
+      const result = await logoutAccount(opts.dir, id, new Date().toISOString());
+      if (result.removed.length === 0) {
+        process.stdout.write(`no stored credential found for "${result.account}".\n`);
+      } else {
+        process.stdout.write(
+          `removed credential for "${result.account}" from: ${result.removed.join(", ")}.\n`,
+        );
+      }
+      if (result.env_note !== null) process.stdout.write(`${result.env_note}\n`);
     } catch (err) {
       fail(err);
     }

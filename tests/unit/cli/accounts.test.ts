@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   collectAccounts,
+  credentialEnvForProxy,
   defaultAccountId,
   renderAccounts,
   useAccount,
@@ -75,7 +76,7 @@ describe("collectAccounts", () => {
 
 describe("useAccount", () => {
   it("switches the active account, marks it, and appends an audit line", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z");
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
     const report = await collectAccounts(dir, {});
     expect(report.active).toBe("work");
     expect(report.accounts.find((a) => a.id === "work")?.active).toBe(true);
@@ -95,8 +96,44 @@ describe("useAccount", () => {
     expect((await collectAccounts(dir, {})).active).toBe("anthropic");
   });
 
+  it("refuses to switch onto an account whose credential does not resolve (fail-closed preflight)", async () => {
+    await expect(useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { env: {} })).rejects.toThrow(
+      /no credential resolves for "local"/,
+    );
+    // No switch happened.
+    expect((await collectAccounts(dir, {})).active).toBe("anthropic");
+  });
+
+  it("switches when the credential resolves from the env var", async () => {
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", {
+      env: { GOLEM_UPSTREAM_API_KEY__WORK: "sk-live" },
+    });
+    expect((await collectAccounts(dir, {})).active).toBe("work");
+  });
+});
+
+describe("credentialEnvForProxy (Decision 46 — the daemon injection)", () => {
+  it("maps the active named account's env credential to its per-account var", async () => {
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", {
+      env: { GOLEM_UPSTREAM_API_KEY__WORK: "sk-live-work" },
+    });
+    const env = await credentialEnvForProxy(dir, { GOLEM_UPSTREAM_API_KEY__WORK: "sk-live-work" });
+    expect(env).toEqual({ GOLEM_UPSTREAM_API_KEY__WORK: "sk-live-work" });
+  });
+
+  it("maps the default account's credential to the plain GOLEM_UPSTREAM_API_KEY", async () => {
+    // No active account → the top-level config → the legacy var.
+    const env = await credentialEnvForProxy(dir, { GOLEM_UPSTREAM_API_KEY: "sk-default" });
+    expect(env).toEqual({ GOLEM_UPSTREAM_API_KEY: "sk-default" });
+  });
+
+  it("returns {} when no credential resolves, so the proxy forwards client auth", async () => {
+    const env = await credentialEnvForProxy(dir, {});
+    expect(env).toEqual({});
+  });
+
   it("clears the active account with id=null (reverts to the default)", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z");
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
     await useAccount(dir, null, "2026-07-23T00:01:00.000Z");
     const report = await collectAccounts(dir, {});
     expect(report.active).toBe("anthropic");
@@ -104,8 +141,10 @@ describe("useAccount", () => {
   });
 
   it("treats selecting the default id as clearing (not an unknown-account error)", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z");
-    const { active } = await useAccount(dir, "anthropic", "2026-07-23T00:02:00.000Z");
+    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    const { active } = await useAccount(dir, "anthropic", "2026-07-23T00:02:00.000Z", {
+      assumeYes: true,
+    });
     expect(active).toBeNull(); // cleared, reverted to top-level
     expect((await collectAccounts(dir, {})).active).toBe("anthropic");
   });
@@ -113,7 +152,7 @@ describe("useAccount", () => {
 
 describe("renderAccounts", () => {
   it("marks the active account and flags a missing credential", async () => {
-    await useAccount(dir, "local", "2026-07-23T00:00:00.000Z");
+    await useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { assumeYes: true });
     const out = renderAccounts(await collectAccounts(dir, {}));
     expect(out).toContain("* local");
     expect(out).toContain("key MISSING");

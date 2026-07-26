@@ -1,0 +1,506 @@
+/**
+ * Credential backends (ADR-0003 amendment; spec Decision 46).
+ *
+ * One API key per account id, stored in the best mechanism the platform
+ * actually offers. Three backends, in resolution order:
+ *
+ * - `env`    — `GOLEM_UPSTREAM_API_KEY__<ID>` (the R6.2 v1 mechanism; still
+ *              wins, so CI/scripted setups keep working unchanged). Read-only.
+ * - `keychain` — the OS-backed store, shelling out to a tool that ships with
+ *              the platform (no native dependency, per CLAUDE.md):
+ *              macOS `security`, Linux `secret-tool`, Windows DPAPI via
+ *              `powershell.exe`.
+ * - `file`   — plaintext, mode 0600. **Never selected automatically** (see
+ *              store.ts); an explicit opt-out for headless boxes with no
+ *              secret service, and labelled honestly as unencrypted.
+ *
+ * Two invariants hold throughout:
+ *
+ * 1. **A secret never appears in argv.** Process arguments are readable by
+ *    other processes; every write pipes the secret through **stdin** instead.
+ * 2. **A secret is never logged or thrown.** Error messages carry the backend
+ *    and the tool's own stderr, never the value or the caller's stdin.
+ *
+ * Windows note: there is no *readable* Windows Credential Manager without a
+ * native module (`cmdkey /list` returns target + user, never the password;
+ * WinRT `PasswordVault` will not load in PowerShell 7). So Windows uses DPAPI,
+ * which is an encrypted *file* bound to the current user + machine — and
+ * {@link CredentialLocation.label} says exactly that rather than claiming
+ * "Credential Manager". Even DPAPI is only reachable by shelling out to a
+ * PowerShell host, and **which host works is machine-dependent**: on some
+ * machines the inbox `powershell.exe` (5.1) cannot autoload its Security module
+ * when spawned from Node, while `pwsh` (PS7, an optional install) can
+ * (verification-notes §82). The backend therefore DETECTS a working host rather
+ * than assuming `powershell.exe` is safe, and degrades honestly when none is.
+ */
+
+import { spawn } from "node:child_process";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { perAccountEnvVar } from "../providers/index.js";
+
+/** Which mechanism a credential lives in. */
+export type CredentialBackendId = "env" | "keychain" | "file";
+
+/**
+ * How well a stored credential is actually protected. Deliberately granular so
+ * display surfaces can be honest: `os-keychain` (a real secret service) is not
+ * the same claim as `dpapi-user` (user+machine-bound encrypted file), which is
+ * not the same claim as `file-permissions` (plaintext, perms only).
+ */
+export type CredentialProtection =
+  | "process-env"
+  | "os-keychain"
+  | "dpapi-user"
+  | "file-permissions";
+
+/** Where a credential lives, and an honest description of its protection. */
+export interface CredentialLocation {
+  readonly backend: CredentialBackendId;
+  /** Human-readable, never overstated — shown by `golem account list`. */
+  readonly label: string;
+  readonly protection: CredentialProtection;
+}
+
+/**
+ * A credential store. `get` resolves `null` for "simply absent" and throws only
+ * on a genuine backend failure (tool broken, keychain access denied), so a
+ * missing key and a broken store are never confused.
+ */
+export interface CredentialBackend {
+  readonly id: CredentialBackendId;
+  /** Can this backend be used on this machine at all? Never throws. */
+  available(): Promise<boolean>;
+  get(account: string): Promise<string | null>;
+  set(account: string, secret: string): Promise<void>;
+  remove(account: string): Promise<void>;
+  describe(): CredentialLocation;
+}
+
+/**
+ * The reserved account id for the top-level (legacy) upstream config — the one
+ * `proxy.upstream_*` describes when no named account is active. It keeps the
+ * original `GOLEM_UPSTREAM_API_KEY` env var, so existing setups are unaffected.
+ */
+export const DEFAULT_ACCOUNT_ID = "default";
+
+/** The env var carrying the top-level/legacy credential. */
+export const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
+
+/**
+ * The env var holding account `id`'s secret. {@link DEFAULT_ACCOUNT_ID} maps to
+ * plain `GOLEM_UPSTREAM_API_KEY`; every other id delegates to
+ * {@link perAccountEnvVar} so there is exactly ONE definition of the
+ * `GOLEM_UPSTREAM_API_KEY__<ID>` spelling in the codebase (a divergence here
+ * would silently break every existing per-account key).
+ */
+export function envVarForAccount(id: string): string {
+  return id === DEFAULT_ACCOUNT_ID ? DEFAULT_KEY_ENV : perAccountEnvVar(id);
+}
+
+/** Filesystem-safe form of an account id, for the on-disk backends. */
+function safeFileName(id: string): string {
+  return id.toLowerCase().replace(/[^a-z0-9._-]/g, "_");
+}
+
+/** `<userDir>/credentials` — the directory the on-disk backends write into. */
+export function credentialsDir(userDir: string): string {
+  return path.join(userDir, "credentials");
+}
+
+interface RunResult {
+  /** Exit code, or null when the process could not be spawned at all. */
+  readonly code: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  /** True when the binary is missing / could not be executed (ENOENT etc.). */
+  readonly spawnFailed: boolean;
+}
+
+/**
+ * Spawn `cmd` with an ARGUMENT ARRAY (never a shell string — CLAUDE.md
+ * cross-platform rule) and optionally feed `stdin`. Resolves for every outcome
+ * including a nonzero exit and a failed spawn, so callers branch on data rather
+ * than exceptions. `stdin` is never echoed into the result.
+ */
+async function run(cmd: string, args: readonly string[], stdin?: string): Promise<RunResult> {
+  return new Promise<RunResult>((resolve) => {
+    const child = spawn(cmd, [...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", (err: Error) => {
+      resolve({ code: null, stdout: "", stderr: err.message, spawnFailed: true });
+    });
+    child.once("close", (code) => {
+      resolve({ code, stdout, stderr, spawnFailed: false });
+    });
+    // Always close stdin: a helper that reads to EOF would otherwise hang.
+    child.stdin?.end(stdin ?? "", "utf8");
+  });
+}
+
+/** Trim the one trailing newline a CLI helper adds, without touching the secret. */
+function trimOutput(s: string): string {
+  return s.replace(/\r?\n$/, "").trim();
+}
+
+// ---------------------------------------------------------------------------
+// env — the R6.2 v1 mechanism, read-only
+// ---------------------------------------------------------------------------
+
+/**
+ * Read a credential from the process environment. Read-only by nature: a child
+ * process cannot durably set its parent's (or a future shell's) environment, so
+ * `set`/`remove` throw with that explanation rather than pretending to work —
+ * which is precisely the failure mode that motivated Decision 46.
+ */
+export function envBackend(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): CredentialBackend {
+  return {
+    id: "env",
+    available: async () => true,
+    get: async (account) => {
+      const v = env[envVarForAccount(account)];
+      return v === undefined || v === "" ? null : v;
+    },
+    set: async (account) => {
+      throw new Error(
+        `Golem cannot set environment variables for you — ${envVarForAccount(account)} must be ` +
+          "exported by your shell or profile. Use a stored backend instead: golem account login " +
+          `${account}`,
+      );
+    },
+    remove: async (account) => {
+      throw new Error(
+        `Golem cannot unset environment variables — remove ${envVarForAccount(account)} from the ` +
+          "shell or profile that exports it.",
+      );
+    },
+    describe: () => ({
+      backend: "env",
+      label: "environment variable (visible to this process only)",
+      protection: "process-env",
+    }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// keychain — OS-backed, one implementation per platform, no native deps
+// ---------------------------------------------------------------------------
+
+/** macOS keychain service name for account `id`. */
+function macService(id: string): string {
+  return `golem:${id}`;
+}
+
+function macKeychain(): CredentialBackend {
+  const ACCOUNT = "golem";
+  return {
+    id: "keychain",
+    available: async () => {
+      // A harmless read: succeeds on any Mac with a keychain configured.
+      const r = await run("security", ["list-keychains"]);
+      return !r.spawnFailed && r.code === 0;
+    },
+    get: async (account) => {
+      const r = await run("security", [
+        "find-generic-password",
+        "-s",
+        macService(account),
+        "-a",
+        ACCOUNT,
+        "-w",
+      ]);
+      if (r.spawnFailed) throw new Error(`macOS keychain unavailable: ${r.stderr}`);
+      if (r.code === 0) {
+        const v = trimOutput(r.stdout);
+        return v === "" ? null : v;
+      }
+      // 44 = "The specified item could not be found in the keychain."
+      if (r.code === 44 || /could not be found/i.test(r.stderr)) return null;
+      // Anything else is a real failure (e.g. the user denied the ACL prompt).
+      throw new Error(`macOS keychain read failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+    },
+    set: async (account, secret) => {
+      // `-w` with no value reads the password from stdin, so it stays out of argv.
+      // `-U` updates an existing item instead of erroring.
+      const r = await run(
+        "security",
+        ["add-generic-password", "-s", macService(account), "-a", ACCOUNT, "-U", "-w"],
+        secret,
+      );
+      if (r.spawnFailed || r.code !== 0) {
+        throw new Error(`macOS keychain write failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+      }
+    },
+    remove: async (account) => {
+      const r = await run("security", [
+        "delete-generic-password",
+        "-s",
+        macService(account),
+        "-a",
+        ACCOUNT,
+      ]);
+      // Absent is success for a delete.
+      if (r.spawnFailed) throw new Error(`macOS keychain unavailable: ${r.stderr}`);
+      if (r.code !== 0 && r.code !== 44 && !/could not be found/i.test(r.stderr)) {
+        throw new Error(`macOS keychain delete failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+      }
+    },
+    describe: () => ({
+      backend: "keychain",
+      label: "macOS Keychain (login keychain, via security(1))",
+      protection: "os-keychain",
+    }),
+  };
+}
+
+function linuxKeychain(): CredentialBackend {
+  const attrs = (account: string): readonly string[] => ["service", "golem", "account", account];
+  return {
+    id: "keychain",
+    available: async () => {
+      const r = await run("secret-tool", ["--help"]);
+      return !r.spawnFailed && r.code === 0;
+    },
+    get: async (account) => {
+      const r = await run("secret-tool", ["lookup", ...attrs(account)]);
+      if (r.spawnFailed) {
+        throw new Error("secret-tool not available (install libsecret-tools)");
+      }
+      if (r.code === 0) {
+        // secret-tool prints the secret with NO trailing newline.
+        const v = r.stdout.trim();
+        return v === "" ? null : v;
+      }
+      // Not found: exit 1 with nothing on stderr. A real failure (no D-Bus
+      // session, locked keyring) prints a diagnostic.
+      if (trimOutput(r.stderr) === "") return null;
+      throw new Error(`libsecret read failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+    },
+    set: async (account, secret) => {
+      const r = await run(
+        "secret-tool",
+        ["store", "--label=Golem upstream credential", ...attrs(account)],
+        secret,
+      );
+      if (r.spawnFailed || r.code !== 0) {
+        throw new Error(`libsecret write failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+      }
+    },
+    remove: async (account) => {
+      const r = await run("secret-tool", ["clear", ...attrs(account)]);
+      if (r.spawnFailed) throw new Error("secret-tool not available");
+      if (r.code !== 0 && trimOutput(r.stderr) !== "") {
+        throw new Error(`libsecret delete failed (exit ${r.code}): ${trimOutput(r.stderr)}`);
+      }
+    },
+    describe: () => ({
+      backend: "keychain",
+      label: "Linux keyring (libsecret / Secret Service, via secret-tool)",
+      protection: "os-keychain",
+    }),
+  };
+}
+
+/**
+ * DPAPI encrypt/decrypt one-liners. `$ErrorActionPreference='Stop'` plus an
+ * explicit try/catch is required: PowerShell's non-terminating errors leave the
+ * exit code at 0, so without this a failed decrypt would look like success with
+ * empty output. Exit 2 distinguishes "nothing on stdin" from a real error.
+ */
+const DPAPI_ENCRYPT =
+  "$ErrorActionPreference='Stop'; try { " +
+  "$s=[Console]::In.ReadToEnd().Trim(); if ($s.Length -eq 0) { exit 2 }; " +
+  "ConvertTo-SecureString $s -AsPlainText -Force | ConvertFrom-SecureString; exit 0 " +
+  "} catch { exit 1 }";
+
+const DPAPI_DECRYPT =
+  "$ErrorActionPreference='Stop'; try { " +
+  "$b=[Console]::In.ReadToEnd().Trim(); if ($b.Length -eq 0) { exit 2 }; " +
+  "$p=[Runtime.InteropServices.Marshal]::SecureStringToBSTR((ConvertTo-SecureString $b)); " +
+  "[Runtime.InteropServices.Marshal]::PtrToStringAuto($p); exit 0 " +
+  "} catch { exit 1 }";
+
+function powershellArgs(command: string): readonly string[] {
+  return ["-NoProfile", "-NonInteractive", "-Command", command];
+}
+
+/**
+ * PowerShell hosts that can run DPAPI, in preference order. `pwsh` (PS7) is
+ * first because it is the one verified to load `ConvertTo-SecureString` reliably
+ * under a Node spawn; the inbox Windows PowerShell 5.1 is kept as a fallback
+ * because on some machines it works and on others its Security module fails to
+ * autoload (§82).
+ */
+const DPAPI_HOSTS = ["pwsh.exe", "powershell.exe"] as const;
+
+/**
+ * Windows DPAPI backend: an encrypted *file* per account under
+ * `<userDir>/credentials/`, bound to the current user + machine. The mechanism
+ * is only as available as a working PowerShell host, so {@link CredentialBackend.available}
+ * performs a real encrypt→decrypt self-test rather than assuming `powershell.exe`
+ * is safe to call — and `set`/`get` throw a *remediable* error (pointing at the
+ * fix) when no host works, instead of silently storing nothing or failing with a
+ * raw PowerShell diagnostic.
+ */
+function windowsDpapi(userDir: string): CredentialBackend {
+  const blobPath = (account: string): string =>
+    path.join(credentialsDir(userDir), `${safeFileName(account)}.dpapi`);
+
+  /** Cached resolution of the first host that round-trips DPAPI. */
+  let hostPromise: Promise<string | null> | null = null;
+  const findHost = (): Promise<string | null> => {
+    hostPromise ??= (async () => {
+      for (const bin of DPAPI_HOSTS) {
+        const enc = await run(bin, powershellArgs(DPAPI_ENCRYPT), "golem-dpapi-selftest");
+        if (enc.spawnFailed || enc.code !== 0 || trimOutput(enc.stdout) === "") continue;
+        const dec = await run(bin, powershellArgs(DPAPI_DECRYPT), trimOutput(enc.stdout));
+        if (dec.code === 0 && trimOutput(dec.stdout) === "golem-dpapi-selftest") return bin;
+      }
+      return null;
+    })();
+    return hostPromise;
+  };
+
+  const NO_HOST =
+    "DPAPI needs a working PowerShell host, and none was found: the inbox " +
+    "`powershell.exe` could not load its security module here and `pwsh` (PowerShell 7) " +
+    "is not installed. Fixes, best first: (1) install PowerShell 7 " +
+    "(`winget install Microsoft.PowerShell`); (2) export the key as " +
+    "GOLEM_UPSTREAM_API_KEY__<ID> instead; (3) opt into UNENCRYPTED file storage with " +
+    "`golem account login <id> --store file`.";
+
+  return {
+    id: "keychain",
+    available: async () => (await findHost()) !== null,
+    get: async (account) => {
+      let blob: string;
+      try {
+        blob = await readFile(blobPath(account), "utf8");
+      } catch {
+        return null; // no stored credential
+      }
+      if (blob.trim() === "") return null;
+      const host = await findHost();
+      if (host === null) throw new Error(NO_HOST);
+      const r = await run(host, powershellArgs(DPAPI_DECRYPT), blob.trim());
+      if (r.spawnFailed) throw new Error(`could not run ${host}: ${r.stderr}`);
+      if (r.code === 0) {
+        const v = trimOutput(r.stdout);
+        return v === "" ? null : v;
+      }
+      throw new Error(
+        `DPAPI decrypt failed (exit ${r.code}) — the stored blob is bound to the user and machine ` +
+          `that created it, so a copied or roamed ${path.basename(blobPath(account))} cannot be ` +
+          `read here. Re-run: golem account login ${account}`,
+      );
+    },
+    set: async (account, secret) => {
+      const host = await findHost();
+      if (host === null) throw new Error(NO_HOST);
+      const r = await run(host, powershellArgs(DPAPI_ENCRYPT), secret);
+      if (r.spawnFailed) throw new Error(`could not run ${host}: ${r.stderr}`);
+      if (r.code !== 0) throw new Error(`DPAPI encrypt failed (exit ${r.code})`);
+      const blob = trimOutput(r.stdout);
+      if (blob === "") throw new Error("DPAPI encrypt produced no output");
+      const file = blobPath(account);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `${blob}\n`, { encoding: "utf8", mode: 0o600 });
+    },
+    remove: async (account) => {
+      await rm(blobPath(account), { force: true });
+    },
+    describe: () => ({
+      backend: "keychain",
+      // Deliberately NOT called "Windows Credential Manager": it is not that.
+      label: "DPAPI-encrypted file (decryptable only by this user on this machine)",
+      protection: "dpapi-user",
+    }),
+  };
+}
+
+/**
+ * The OS-backed backend for `platform`, or `null` on a platform with no
+ * supported mechanism (callers then fall back to env, or ask the user to opt
+ * into {@link fileBackend} explicitly).
+ */
+export function keychainBackend(
+  platform: NodeJS.Platform,
+  userDir: string,
+): CredentialBackend | null {
+  switch (platform) {
+    case "darwin":
+      return macKeychain();
+    case "linux":
+      return linuxKeychain();
+    case "win32":
+      return windowsDpapi(userDir);
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// file — plaintext, explicit opt-in only
+// ---------------------------------------------------------------------------
+
+/**
+ * Plaintext credential file, mode 0600. ADR-0003 rejected plaintext-on-disk as
+ * a *default* ("a worse posture than env") and that still holds — the store
+ * never selects this automatically. It exists so a headless Linux box with no
+ * Secret Service has a documented, honestly-labelled option instead of a dead
+ * end.
+ */
+export function fileBackend(
+  userDir: string,
+  platform: NodeJS.Platform = process.platform,
+): CredentialBackend {
+  const keyPath = (account: string): string =>
+    path.join(credentialsDir(userDir), `${safeFileName(account)}.key`);
+
+  return {
+    id: "file",
+    available: async () => true,
+    get: async (account) => {
+      try {
+        const v = (await readFile(keyPath(account), "utf8")).trim();
+        return v === "" ? null : v;
+      } catch {
+        return null;
+      }
+    },
+    set: async (account, secret) => {
+      const file = keyPath(account);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, `${secret}\n`, { encoding: "utf8", mode: 0o600 });
+      // `mode` on writeFile only applies when the file is CREATED, so re-assert
+      // it for an overwrite. A no-op on Windows (POSIX bits are not enforced) —
+      // which is why describe() calls the guarantee best-effort there.
+      await chmod(file, 0o600).catch(() => {});
+    },
+    remove: async (account) => {
+      await rm(keyPath(account), { force: true });
+    },
+    describe: () => ({
+      backend: "file",
+      label:
+        platform === "win32"
+          ? "UNENCRYPTED file, permissions best-effort on Windows (NTFS ACLs are not set)"
+          : "UNENCRYPTED file, protected only by 0600 permissions",
+      protection: "file-permissions",
+    }),
+  };
+}

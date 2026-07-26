@@ -121,6 +121,35 @@ export interface ProxyStatus {
 }
 
 /**
+ * The subset of the spawning process's environment that is always forwarded to
+ * the daemon. Golem's settings resolution is env-driven (`GOLEM_<SECTION>_<KEY>`
+ * beats the config file), so a daemon that inherits the *whole* shell env can
+ * silently pick up a stray `GOLEM_*` var the user exported once in one terminal
+ * and forgot — precisely the "works in one terminal, not another" trap. The
+ * daemon instead starts from a minimal, predictable base (PATH + a home dir) and
+ * receives everything else explicitly.
+ */
+const ENV_ALLOWLIST = ["PATH", "Path", "HOME", "USERPROFILE", "SYSTEMROOT", "SystemRoot"];
+
+/**
+ * Build the daemon's environment: the minimal allowlist above plus any
+ * explicitly-injected `extra` vars (the resolved upstream credential chief among
+ * them, by {@link startDetached}). Nothing else from the spawning shell leaks
+ * through.
+ */
+export function buildSpawnEnv(
+  base: Readonly<Record<string, string | undefined>> = process.env,
+  extra: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const key of ENV_ALLOWLIST) {
+    const value = base[key];
+    if (value !== undefined && out[key] === undefined) out[key] = value;
+  }
+  return { ...out, ...extra };
+}
+
+/**
  * Is a Golem proxy running for this project? Prefers the PID file (exact),
  * falls back to a port probe (catches a proxy started without a pid file).
  */
@@ -156,17 +185,26 @@ export async function stopProxy(projectDir: string): Promise<number | null> {
  * Spawn a DETACHED `golem proxy start` (foreground in the child) that outlives
  * this process, then wait until it is listening. Returns the child pid, or null
  * if it never came up.
+ *
+ * `env` is explicit extra environment for the daemon — the resolved upstream
+ * credential, injected by the caller under its `GOLEM_UPSTREAM_API_KEY[_…]` var.
+ * The daemon does NOT inherit the whole spawning shell's env (see
+ * {@link buildSpawnEnv}), so a credential stored via `golem account login`
+ * reaches the daemon deterministically and a stray `GOLEM_*` var in one
+ * terminal can no longer silently un-configure a working daemon.
  */
 export async function startDetached(
   projectDir: string,
   port: number,
   scriptPath: string,
+  env: Readonly<Record<string, string>> = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
   const child = spawn(process.execPath, [scriptPath, ...args], {
     detached: true,
     stdio: "ignore",
     windowsHide: true,
+    env: buildSpawnEnv(process.env, env),
   });
   child.unref();
   const up = await waitForPort(port);
