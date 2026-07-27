@@ -87,14 +87,17 @@ async function fetchUpdate() {
 }
 
 async function fetchModel() {
-  const [stats, status] = await Promise.all([
+  const [stats, status, accounts] = await Promise.all([
     // Rolling 24h savings window (Decision 23 — savings is situational); the CLI
     // widens to 7d/all when the last day recorded nothing, and reports which
     // window it used via `window_applied`.
     golemJson(["stats", "--json", "--window", "24h"]),
     golemJson(["status", "--json"]),
+    // Cache the account list so the "Switch upstream" quick-pick can render
+    // instantly instead of waiting for a CLI round-trip each time it opens.
+    golemJson(["account", "list", "--json", "--dir", cwd()]),
   ]);
-  return buildModel(stats, status, lastUpdate);
+  return buildModel(stats, status, lastUpdate, accounts);
 }
 
 /** Run `golem update` in an integrated terminal so the user sees the upgrade. */
@@ -195,8 +198,13 @@ async function setProxy(running) {
  * config.
  */
 async function pickAccount() {
-  const report = await golemJson(["account", "list", "--json", "--dir", cwd()]);
-  const accounts = report && Array.isArray(report.accounts) ? report.accounts : [];
+  // Use the cached account list from the last refresh so the quick-pick appears
+  // instantly; only block on a CLI round-trip the first time it is opened.
+  let accounts = lastModel && Array.isArray(lastModel.accounts) ? lastModel.accounts : [];
+  if (accounts.length === 0) {
+    const report = await golemJson(["account", "list", "--json", "--dir", cwd()]);
+    accounts = report && Array.isArray(report.accounts) ? report.accounts : [];
+  }
   if (accounts.length === 0) {
     vscode.window.showInformationMessage("Golem: no upstream accounts configured.");
     return;

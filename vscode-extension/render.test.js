@@ -58,6 +58,21 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.upstreamDisplay, "anthropic");
   assert.equal(m.proxyReachable, false);
   assert.equal(m.localModelReachable, false);
+  assert.deepStrictEqual(m.accounts, []);
+});
+
+test("buildModel exposes the cached account list for the quick-pick", () => {
+  const accounts = [
+    { id: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", active: true, is_default: true, key_set: true },
+    { id: "kimi", provider: "openai", base_url: "https://api.moonshot.ai/v1", model: "moonshotai/kimi-k3", active: false, key_set: true },
+  ];
+  const m = buildModel({}, {}, null, accounts);
+  assert.deepStrictEqual(m.accounts, accounts);
+});
+
+test("buildModel normalizes non-array accounts to an empty list", () => {
+  assert.deepStrictEqual(buildModel({}, {}, null, null).accounts, []);
+  assert.deepStrictEqual(buildModel({}, {}, null, { accounts: [] }).accounts, []);
 });
 
 test("buildModel surfaces local_model reachability + coder model from status --json", () => {
