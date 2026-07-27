@@ -2905,3 +2905,87 @@ First real Kimi K3 traffic through the user's account (Moonshot key, topped up;
    So account resolution → bearer auth → request translation → Moonshot → gzip
    decode → response translation (thinking + text) all verified end-to-end.
    Claude Code (which streams) is the working path.
+
+## §82 — OS credential store per platform: what is actually readable (2026-07-26)
+
+The verification ADR-0003 invariant 2 required before any OS-keychain backend
+("a light, cross-platform mechanism … confirmed"). Prompted by a real failure:
+switching to a Kimi account left the proxy reporting "key missing" in every new
+terminal, because the per-account env var only ever lived in one shell. Findings
+are **per-platform**; all commands tested live on this machine (Windows 11,
+pwsh 7.6.3, Node 24) unless noted.
+
+- **Windows Credential Manager (`cmdkey`) is WRITE-ONLY from a CLI.**
+  `cmdkey /generic:T /user:U /pass:P` stores, but `cmdkey /list:T` returns only
+  Target + User — **never the password**. Verified. So Credential Manager cannot
+  be used as a read-back store without the WinRT/COM API.
+- **WinRT `PasswordVault` does not load in PowerShell 7.**
+  `[Windows.Security.Credentials.PasswordVault,…]` → "Unable to find type".
+  Verified. So that API route is also out for a script-only mechanism.
+- **DPAPI *does* round-trip** via `ConvertTo-SecureString … | ConvertFrom-SecureString`
+  (encrypt) and `ConvertTo-SecureString $blob` → `SecureStringToBSTR` →
+  `PtrToStringAuto` (decrypt), with the secret passed on **stdin** (never argv).
+  The blob is CurrentUser-scoped (bound to the user + machine), hex, ~524 chars
+  for a 24-char secret. **But the PowerShell host matters and is
+  machine-dependent:**
+  - Spawned from **Node** (`child_process.spawn`), the inbox
+    **`powershell.exe` (Windows PowerShell 5.1, both 64- and 32-bit) could NOT
+    load `ConvertTo-SecureString`** on this machine: `CommandNotFoundException …
+    the module could not be loaded`; an explicit
+    `Import-Module Microsoft.PowerShell.Security` then failed on TypeData
+    duplication (`The member AuditToString is already present`). This is a local
+    module-autoload breakage, not a DPAPI limitation.
+  - **`pwsh.exe` (PowerShell 7) round-trips correctly from the same Node spawn**
+    (blob_len=524). It is an optional install, not inbox.
+  - **Consequence:** DPAPI is reachable from Node **only through a PowerShell
+    host, and which host works varies by machine.** The backend therefore
+    DETECTS a working host at runtime (a real encrypt→decrypt self-test,
+    preferring `pwsh` then `powershell.exe`) instead of assuming
+    `powershell.exe` is safe, and throws a *remediable* error (install PS7 /
+    export the env var / opt into `--store file`) when none works — never a raw
+    PowerShell diagnostic, never silent plaintext.
+  - **No direct-API route without a native dep:** Node Krypton
+    (`process.binding('crypto')`) is blocked ("No such module"); `keytar@7.9.0`
+    is a native module, barred from the default install by CLAUDE.md. A
+    keytar-style opt-in **extra** remains a possible later enhancement for users
+    who want the real Credential Manager.
+- **macOS:** `security find-generic-password -s <svc> -a <acct> -w` prints the
+  secret to stdout (exit 44 = not found); `add-generic-password -U -w` reads the
+  password from stdin when `-w` has no value. ACL prompts are possible for a
+  process that is not the item's creator — fine for the interactive CLI, a
+  liability for a detached daemon (see below). (Command shapes from the
+  `security(1)` man page; not executed here — no macOS device.)
+- **Linux:** `secret-tool lookup service golem account <id>` (prints the secret,
+  no trailing newline; not-found = exit 1 with empty stderr);
+  `secret-tool store --label=… service golem account <id>` reads the secret from
+  stdin. Requires libsecret-tools **and** a live Secret Service on D-Bus — both
+  commonly absent in headless/SSH/WSL. (From `secret-tool(1)`; not executed here.)
+- **The daemon must not touch the store.** Every OS mechanism above is weakest
+  for exactly the process that needs the key: a detached, session-less daemon
+  (macOS ACL prompts, Linux D-Bus absence, Windows host flakiness). So the
+  **interactive CLI owns the credential**: it resolves (env → OS store) and
+  injects the secret into the daemon's environment at spawn. The daemon keeps
+  reading `process.env` and never touches a keychain. This also removes the
+  original bug class: the daemon is spawned from a minimal allowlist env
+  (`buildSpawnEnv`) rather than inheriting whichever shell happened to launch
+  it, so a key set in one terminal — or stored via `golem account login` —
+  reaches the proxy deterministically.
+
+Decision 46 (CLI-managed credential chain) is built on exactly these findings.
+
+## §83 — Settings layers REPLACE arrays; account state must write to the local scope (2026-07-26)
+
+Found while adding `golem account add`. The config loader
+(`applyObjectLayer` in src/config/loader.ts) merges layers per leaf with
+`section[key] = parsed.data` — so a `proxy.accounts` **array** in any
+higher-precedence layer **wholesale-replaces** (does not merge with) the array
+from a lower layer. Consequence: this repo carries `proxy.accounts` in
+`.golem/settings.local.json` (top file layer), so an `account add` / `account
+use` that wrote to the committable `.golem/settings.json` was **silently
+invisible** to the merged config the proxy actually reads (the new account
+appeared in the file but not in `account list` / `account use`). **Rule:**
+account state (`proxy.accounts`, `proxy.active_account`) is machine-specific and
+must be written to the **local** scope — both so it wins the merge and so it
+stays out of the committable project settings file. Verified: `account add` →
+`list` shows it immediately, `use` then fails closed on the missing credential,
+`remove` deletes it; a unit test asserts the local-scope write.
