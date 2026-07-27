@@ -4,7 +4,12 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, loadConfig, policyFromSettings } from "../../src/config/index.js";
+import {
+  DEFAULT_SETTINGS,
+  findProjectDir,
+  loadConfig,
+  policyFromSettings,
+} from "../../src/config/index.js";
 
 let base: string;
 let userDir: string;
@@ -151,5 +156,33 @@ describe("loadConfig precedence", () => {
     const policy = policyFromSettings(config.settings);
     expect(policy.level).toBe(3);
     expect(policy.stages.semanticCompression).toBe("aggressive");
+  });
+
+  describe("findProjectDir", () => {
+    it("returns the directory containing .golem/settings.json", async () => {
+      await writeJson(projectFile(), {});
+      expect(findProjectDir(projectDir)).toBe(projectDir);
+    });
+
+    it("walks up from a subdirectory to the project root", async () => {
+      await writeJson(projectFile(), {});
+      const sub = path.join(projectDir, "src", "cli");
+      expect(findProjectDir(sub)).toBe(projectDir);
+    });
+
+    it("returns null when no ancestor has .golem/settings.json", async () => {
+      const orphan = path.join(base, "no-golem-here");
+      await mkdir(orphan, { recursive: true });
+      expect(findProjectDir(orphan)).toBeNull();
+    });
+
+    it("returns the deepest matching project (closest ancestor)", async () => {
+      const nested = path.join(projectDir, "packages", "api");
+      await writeJson(projectFile(), {});
+      const nestedProjectFile = path.join(nested, ".golem", "settings.json");
+      await writeJson(nestedProjectFile, {});
+      const deepSub = path.join(nested, "src");
+      expect(findProjectDir(deepSub)).toBe(nested);
+    });
   });
 });

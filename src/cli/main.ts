@@ -23,7 +23,7 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
-import { loadConfig, settingsFilePaths } from "../config/index.js";
+import { findProjectDir, loadConfig, settingsFilePaths } from "../config/index.js";
 import { startDashboard } from "../dashboard/index.js";
 import {
   addEventHook,
@@ -132,6 +132,9 @@ import {
   type WikiCheckReport,
   wikiSourcePrefix,
 } from "./wiki.js";
+
+/** Default `--dir`: the enclosing Golem project root, or the cwd if none. */
+const DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
 const program = new Command();
 
@@ -289,7 +292,7 @@ const wiki = program.command("wiki").description("Golem project wiki (spec Decis
 wiki
   .command("init")
   .description("Scaffold the project wiki (WIKI.md schema + zone directories)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--dry-run", "show what would change without writing", false)
   .option(
     "--user",
@@ -321,7 +324,7 @@ wiki
 wiki
   .command("check")
   .description("Lint wiki pages: frontmatter, dates, wikilinks, duplicate titles")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       const { settings } = await loadConfig({ projectDir: opts.dir });
@@ -338,7 +341,7 @@ wiki
   .command("distill")
   .description("Distill a cached page into a zone-1 source-note draft (local model, T3)")
   .argument("[url]", "URL to distill (must already be cached by a prior WebFetch)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--pending", "list drafts awaiting review instead of distilling one", false)
   .option("--force", "re-distill even if a draft already exists for this URL", false)
   .option("--json", "machine-readable output", false)
@@ -390,7 +393,7 @@ wiki
   .description(
     "Draft a weekly synthesis of recent debriefs + notes into a zone-1 draft (local model, R3.4)",
   )
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--days <n>", "how many days back to gather from", "7")
   .action(async (opts: { dir: string; days: string }) => {
     try {
@@ -413,7 +416,7 @@ wiki
     "Review and apply a pending distill draft as a wiki page (Decision 29 append-and-refine)",
   )
   .argument("[id]", "draft id (slug) to promote; omit (or use --list) to list pending drafts")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--list", "list pending drafts instead of promoting", false)
   .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
   .option("--json", "machine-readable output (with --list)", false)
@@ -592,7 +595,7 @@ const proxyCmd = program
 proxyCmd
   .command("start", { isDefault: true })
   .description("Start the proxy (foreground; --detach runs it as a background daemon)")
-  .option("--dir <path>", "project directory (for .golem/ config)", process.cwd())
+  .option("--dir <path>", "project directory (for .golem/ config)", DEFAULT_DIR)
   .option("--port <port>", "listen port (overrides config)")
   .option("--detach", "run in the background, surviving this shell", false)
   .action(async (opts: { dir: string; port?: string; detach: boolean }) => {
@@ -621,7 +624,7 @@ proxyCmd
 proxyCmd
   .command("stop")
   .description("Stop the running proxy")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       await writeProxyDesired(opts.dir, "stopped", new Date().toISOString());
@@ -637,7 +640,7 @@ proxyCmd
 proxyCmd
   .command("restart")
   .description("Reliably stop then start the proxy as a background daemon")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--port <port>", "listen port (overrides config)")
   .option("--foreground", "restart in the foreground instead of detached", false)
   .action(async (opts: { dir: string; port?: string; foreground: boolean }) => {
@@ -664,7 +667,7 @@ proxyCmd
 proxyCmd
   .command("status")
   .description("Show whether the proxy is running")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -688,7 +691,7 @@ const mcp = program.command("mcp").description("Golem MCP server");
 mcp
   .command("serve")
   .description("Serve the unified Golem MCP server on stdio (used by .mcp.json)")
-  .option("--dir <path>", "project directory (for the CCR store)", process.cwd())
+  .option("--dir <path>", "project directory (for the CCR store)", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       // stdio owns stdout (MCP JSON-RPC) — NEVER write there here; warnings go to
@@ -807,7 +810,7 @@ mcp
 program
   .command("status")
   .description("Show Golem status: config + provenance, proxy reachability, project wiring, slider")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -824,7 +827,7 @@ program
   .command("update")
   .alias("upgrade")
   .description("Check for a newer Golem and upgrade (npm) or print the command (standalone)")
-  .option("--dir <path>", "project directory (for the cached check)", process.cwd())
+  .option("--dir <path>", "project directory (for the cached check)", DEFAULT_DIR)
   .option("--check", "only check for an update; don't install", false)
   .option("--force", "ignore the cached check and re-query the npm registry", false)
   .option("--json", "machine-readable output", false)
@@ -923,7 +926,7 @@ program
   .command("slider")
   .description("Show the Golem savings slider, or set it (0 passthrough … 3 aggressive)")
   .argument("[level]", "new slider level 0–3; omit to show the current level", parseSliderLevel)
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (level: SliderLevel | undefined, opts: { dir: string; json: boolean }) => {
     try {
@@ -972,7 +975,7 @@ program
 program
   .command("stats")
   .description("Show Golem token-savings statistics (per-stage breakdown, CCR activity)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--project <id>", "limit stats to this project id")
   .option("--window <window>", "savings window: 24h | 7d | all", "24h")
   .option("--json", "machine-readable output", false)
@@ -1024,7 +1027,7 @@ benchCmd
   .description(
     "Cost-governance benchmark: Golem's measured savings vs Claude Code's cost-doc baselines",
   )
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--project <id>", "limit the benchmark to this project id")
   .option("--window <window>", "time window: 24h | 7d | all", "7d")
   .option("--json", "machine-readable output", false)
@@ -1073,7 +1076,7 @@ accountCmd
   .description(
     "List configured accounts, which is active, and whether each credential env var is set",
   )
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -1090,7 +1093,7 @@ accountCmd
   .command("use")
   .description("Switch the active account (use 'none' to clear and revert to the top-level config)")
   .argument("<id>", "an account id from proxy.accounts, or 'none' to clear")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--no-restart", "do not auto-restart a running proxy to apply the switch")
   .action(async (id: string, opts: { dir: string; restart: boolean }) => {
     try {
@@ -1130,7 +1133,7 @@ const noteCmd = program
   .command("note")
   .description("Capture a quick idea/note into the local capture log (spec Decision 20f)")
   .argument("[text...]", "note text to capture (quote it, or pass several words)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (text: string[], opts: { dir: string }) => {
     if (text.length === 0) {
       noteCmd.help();
@@ -1147,7 +1150,7 @@ const noteCmd = program
 noteCmd
   .command("list")
   .description("Show recently captured notes, newest first")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("-n, --limit <count>", "how many notes to show", "20")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; limit: string; json: boolean }) => {
@@ -1172,7 +1175,7 @@ noteCmd
     "[ts]",
     "timestamp of the note to distill (defaults to the most recently captured note)",
   )
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--force", "re-distill even if a draft already exists for this note", false)
   .action(async (ts: string | undefined, opts: { dir: string; force: boolean }) => {
     try {
@@ -1194,7 +1197,7 @@ noteCmd
 program
   .command("dashboard")
   .description("Serve the local savings dashboard (loopback only)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--port <port>", "listen port (overrides config telemetry.dashboard_port)")
   .action(async (opts: { dir: string; port?: string }) => {
     try {
@@ -1237,7 +1240,7 @@ program
 program
   .command("watch")
   .description("Full-screen sidecar TUI of Golem's live session state (run in a second pane)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--interval <ms>", "refresh interval in milliseconds")
   .option("--no-color", "disable ANSI colors")
   .action(async (opts: { dir: string; interval?: string; color?: boolean }) => {
@@ -1267,7 +1270,7 @@ taskCmd
   .command("add")
   .description("Queue a durable task (a prompt to run/resume later)")
   .argument("<prompt...>", "the prompt/instructions to persist")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--title <text>", "short label for `task list`")
   .option("--session-id <uuid>", "Claude Code session id to resume deterministically")
   .option("--continue", "resume the most-recent conversation instead of a session id", false)
@@ -1312,7 +1315,7 @@ taskCmd
 taskCmd
   .command("list")
   .description("List durable tasks (newest-updated first)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -1329,7 +1332,7 @@ taskCmd
   .command("show")
   .description("Show one task in detail (by id or unique id prefix)")
   .argument("<id>", "task id or unique prefix")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (id: string, opts: { dir: string; json: boolean }) => {
     try {
@@ -1346,7 +1349,7 @@ taskCmd
   .command("resume")
   .description("Build (and optionally spawn) the headless resume command for a task")
   .argument("<id>", "task id or unique prefix")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--spawn", "actually launch it (detached); default just prints the command", false)
   .option("--output-json", "resume with --output-format json", false)
   .option("--permission-mode <mode>", "begin the resumed session in this permission mode")
@@ -1395,7 +1398,7 @@ taskCmd
   .command("cancel")
   .description("Mark a task cancelled (keeps the record; use it to stop auto-resume)")
   .argument("<id>", "task id or unique prefix")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--delete", "remove the task record entirely instead of marking it cancelled", false)
   .action(async (id: string, opts: { dir: string; delete: boolean }) => {
     try {
@@ -1418,7 +1421,7 @@ taskCmd
 taskCmd
   .command("run")
   .description("Service queued tasks LOCALLY (Ollama tier) — non-blocking multiplexing (R5.3)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--concurrency <n>", "max tasks serviced at once (default 2)", "2")
   .option("--limit <n>", "cap how many queued tasks to service this run")
   .action(async (opts: { dir: string; concurrency: string; limit?: string }) => {
@@ -1472,7 +1475,7 @@ taskCmd
   .command("escalate")
   .description("Hand a task to the Claude tier: fold its local result into the prompt (R5.3 / 21a)")
   .argument("<id>", "task id or unique prefix")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (id: string, opts: { dir: string }) => {
     try {
       const store = new FileTaskStore(opts.dir);
@@ -1516,7 +1519,7 @@ const autonomyCmd = program
 autonomyCmd
   .command("show", { isDefault: true })
   .description("Show the current autonomy level")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -1556,7 +1559,7 @@ autonomyCmd
 autonomyCmd
   .command("enable")
   .description("Turn the autonomy approval gate ON (the default)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       await setAutonomyGateEnabled(opts.dir, true);
@@ -1572,7 +1575,7 @@ autonomyCmd
 autonomyCmd
   .command("disable")
   .description("Turn the autonomy approval gate OFF (keeps snooze/coder-first nudges)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       await setAutonomyGateEnabled(opts.dir, false);
@@ -1590,7 +1593,7 @@ autonomyCmd
   .command("set")
   .description(`Set the autonomy level (${AUTONOMY_LEVELS.join(" | ")})`)
   .argument("<level>", "autonomy level", parseAutonomyLevel)
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (level: ReturnType<typeof parseAutonomyLevel>, opts: { dir: string }) => {
     try {
       await writeAutonomyLevel(opts.dir, level);
@@ -1609,7 +1612,7 @@ autonomyCmd
 autonomyCmd
   .command("wire")
   .description("Install the PreToolUse gate hook in .claude/settings.json (activates autonomy)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       const action = await addEventHook(
@@ -1627,7 +1630,7 @@ autonomyCmd
 autonomyCmd
   .command("unwire")
   .description("Remove the PreToolUse gate hook (deactivates autonomy)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       const action = await removeEventHook(
@@ -1644,7 +1647,7 @@ autonomyCmd
 autonomyCmd
   .command("log")
   .description("Show the autonomy action log (auditable allow/ask/defer decisions)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("-n, --limit <count>", "how many entries to show", "50")
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; limit: string; json: boolean }) => {
@@ -1685,7 +1688,7 @@ promptCmd
     "Suggest a clearer prompt for a raw note (local model; you decide whether to use it)",
   )
   .argument("<note...>", "the raw note to translate")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (note: string[], opts: { dir: string }) => {
     try {
       const inference = await buildInferenceForDir(opts.dir);
@@ -1714,7 +1717,7 @@ promptCmd
 promptCmd
   .command("accept")
   .description("Record the last suggested translation as an accepted style example")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     try {
       const last = await readLastSuggestion(opts.dir);
@@ -1759,7 +1762,7 @@ const ruleFileExists = async (
 guidanceCmd
   .command("list", { isDefault: true })
   .description("List guidance features and whether each is enabled for this project")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .action(async (opts: { dir: string }) => {
     process.stdout.write("Golem guidance features (.claude/rules/golem-<name>.md):\n\n");
     for (const g of GUIDANCE_FEATURES) {
@@ -1790,7 +1793,7 @@ guidanceCmd
   .command("enable")
   .description("Write a guidance rule file so Claude uses this feature (auto-loaded)")
   .argument("<name>", "feature name")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option(
     "--user",
     "personal scope (gitignored .local.md) instead of committed project scope",
@@ -1813,7 +1816,7 @@ guidanceCmd
   .command("disable")
   .description("Remove a guidance rule file so Claude no longer uses this feature")
   .argument("<name>", "feature name")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--user", "only remove the personal (.local.md) rule; default removes both scopes", false)
   .action(async (name: string, opts: { dir: string; user: boolean }) => {
     try {
@@ -1840,7 +1843,7 @@ program
   .command("index")
   .description("Index a file or directory into the Golem knowledge base (local embeddings)")
   .argument("[path]", "file or directory to ingest (default: project root)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--watch", "keep watching the path for changes (stays running)", false)
   .option("--json", "machine-readable output", false)
   .action(
@@ -1954,7 +1957,7 @@ const ollamaCmd = program
 ollamaCmd
   .command("status")
   .description("Show whether Ollama is installed, reachable, and has this tier's drafter model")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {
     try {
@@ -1968,7 +1971,7 @@ ollamaCmd
 ollamaCmd
   .command("setup")
   .description("Install Ollama and pull this tier's drafter model (asks for confirmation)")
-  .option("--dir <path>", "project directory", process.cwd())
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--yes", "skip the confirmation prompt", false)
   .action(async (opts: { dir: string; yes: boolean }) => {
     try {
