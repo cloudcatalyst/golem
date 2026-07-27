@@ -92,6 +92,19 @@ function friendlyModelVersionLabel(modelId) {
   return version.length > 0 ? `${cap(family)} ${version.join(".")}` : cap(family);
 }
 
+/** Split a `vendor/model-name` id into its parts; `defaultVendor` is used when there is no `/`. */
+function parseVendorModel(modelId, defaultVendor = "anthropic") {
+  const slash = modelId.indexOf("/");
+  if (slash === -1) return { vendor: defaultVendor, modelName: modelId };
+  return { vendor: modelId.slice(0, slash), modelName: modelId.slice(slash + 1) };
+}
+
+/** Render a vendor/model-name id as the human-facing upstream label, e.g. `moonshotai/kimi-k3` → `moonshotai (kimi-k3)`. */
+function formatVendorModelStatus(modelId, defaultVendor = "anthropic") {
+  const { vendor, modelName } = parseVendorModel(modelId, defaultVendor);
+  return `${vendor} (${modelName})`;
+}
+
 /**
  * Versioned local (Ollama) model label — `qwen2.5-coder:7b` → `Qwen 2.5`,
  * `llama3.1:8b` → `Llama 3.1`, `deepseek-coder-v2:16b` → `Deepseek`. Mirrors the
@@ -122,9 +135,10 @@ function levelLabel(model) {
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
  */
-function buildModel(stats, status, update) {
+function buildModel(stats, status, update, accounts) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
+  const accountList = Array.isArray(accounts) ? accounts : [];
   // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
   // `golem status --json`.update → {available,latest,current}.
   const up =
@@ -172,7 +186,15 @@ function buildModel(stats, status, update) {
   const model = lastServedModel ? friendlyModelLabel(lastServedModel) : defaultModel;
   // Label prefers the account id (that's what the user switched to), matching
   // the CLI's providerUpstreamLabel; else the URL-derived host/provider name.
+  // The panel pill uses this; the status-bar destination uses upstreamDisplay.
   const label = account || upstreamLabel(upstream);
+  // R6.2: mirror the CLI's vendor/model-name formatting in the status bar,
+  // e.g. `moonshotai/kimi-k3` with provider `openai` → `moonshotai (kimi-k3)`.
+  // When no model is known, fall back to the URL-derived/provider label.
+  const primaryModel = defaultModel || lastServedModel;
+  const upstreamDisplay = primaryModel
+    ? formatVendorModelStatus(primaryModel, provider || "anthropic")
+    : label;
 
   return {
     requests: Number(s.requests) || 0,
@@ -185,6 +207,7 @@ function buildModel(stats, status, update) {
     sliderName: (st.slider && st.slider.name) || "",
     upstream,
     upstreamLabel: label,
+    upstreamDisplay,
     account,
     provider,
     model,
@@ -213,6 +236,7 @@ function buildModel(stats, status, update) {
           ? s.window
           : null,
     source: typeof s.source === "string" ? s.source : "live",
+    accounts: accountList,
     updateAvailable,
     latestVersion,
     currentVersion,
@@ -257,13 +281,10 @@ function statusBarText(model) {
  * passthrough/off): it's the configured destination traffic goes to.
  */
 function destinationLabel(model) {
-  const upstream = model.upstreamLabel || "upstream";
-  // Versioned upstream model: last-served when known (`Opus 4.8`), else the
-  // configured default shown verbatim (an explicit id like `kimi-k3`).
-  const upVer = model.lastServedModel
-    ? friendlyModelVersionLabel(model.lastServedModel)
-    : model.defaultModel;
-  const upstreamSeg = upVer ? `${upstream} (${upVer})` : upstream;
+  // R6.2: use the vendor/model-name display label (e.g. `moonshotai (kimi-k3)`)
+  // built in buildModel; it already incorporates the last-served or configured
+  // model and matches the CLI's `golem status` output.
+  const upstreamSeg = model.upstreamDisplay || model.upstreamLabel || "upstream";
   if (!model.localModelReachable) return upstreamSeg;
   const localVer = model.localCoderModel ? localModelVersionLabel(model.localCoderModel) : "";
   const localSeg = localVer ? `local (${localVer})` : "local";
