@@ -6,9 +6,11 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  formatVendorModelStatus,
   friendlyModelLabel,
   friendlyModelVersionLabel,
   localModelVersionLabel,
+  parseVendorModel,
   sniffRequestModel,
 } from "../../../src/providers/model-display.js";
 
@@ -76,6 +78,40 @@ describe("localModelVersionLabel", () => {
   it("returns empty for empty, and an id with no alphabetic family unchanged", () => {
     expect(localModelVersionLabel("")).toBe("");
     expect(localModelVersionLabel("7b")).toBe("7b");
+  });
+});
+
+describe("parseVendorModel", () => {
+  it("splits vendor and model-name on the first slash", () => {
+    expect(parseVendorModel("moonshotai/kimi-k3")).toEqual({
+      vendor: "moonshotai",
+      modelName: "kimi-k3",
+    });
+    expect(parseVendorModel("anthropic/claude-sonnet-4-5-20250929")).toEqual({
+      vendor: "anthropic",
+      modelName: "claude-sonnet-4-5-20250929",
+    });
+  });
+
+  it("defaults to anthropic as vendor when there is no slash", () => {
+    expect(parseVendorModel("kimi-k3")).toEqual({ vendor: "anthropic", modelName: "kimi-k3" });
+  });
+
+  it("accepts a custom default vendor", () => {
+    expect(parseVendorModel("kimi-k3", "openai")).toEqual({
+      vendor: "openai",
+      modelName: "kimi-k3",
+    });
+  });
+});
+
+describe("formatVendorModelStatus", () => {
+  it("renders vendor/model-name as 'vendor (model-name)'", () => {
+    expect(formatVendorModelStatus("moonshotai/kimi-k3")).toBe("moonshotai (kimi-k3)");
+  });
+
+  it("uses the default vendor for bare model ids", () => {
+    expect(formatVendorModelStatus("kimi-k3", "openai")).toBe("openai (kimi-k3)");
   });
 });
 

@@ -20,9 +20,38 @@ const MODEL_FAMILIES = ["opus", "sonnet", "haiku", "fable"] as const;
 /** A numeric id segment that is really a date/build stamp (8+ digits) — dropped. */
 const DATE_SEGMENT_MIN_DIGITS = 8;
 
+/**
+ * Default Anthropic vendor/model id surfaced when no upstream model is
+ * configured for display. Kept in sync with the Headroom worker default.
+ */
+export const DEFAULT_ANTHROPIC_VENDOR_MODEL = "anthropic/claude-sonnet-4-5-20250929";
+
 /** First upper, rest lower — `opus` → `Opus`, `qwen` → `Qwen`. */
 function capitalize(s: string): string {
   return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+}
+
+/**
+ * Split an OpenRouter-style `vendor/model-name` id into its parts. When the id
+ * carries no `/`, `defaultVendor` is used (defaults to `anthropic` for the
+ * top-level Anthropic passthrough case).
+ */
+export function parseVendorModel(
+  modelId: string,
+  defaultVendor = "anthropic",
+): { readonly vendor: string; readonly modelName: string } {
+  const slash = modelId.indexOf("/");
+  if (slash === -1) return { vendor: defaultVendor, modelName: modelId };
+  return { vendor: modelId.slice(0, slash), modelName: modelId.slice(slash + 1) };
+}
+
+/**
+ * Render a vendor/model-name id as the human-facing upstream label,
+ * e.g. `moonshotai/kimi-k3` → `moonshotai (kimi-k3)`.
+ */
+export function formatVendorModelStatus(modelId: string, defaultVendor = "anthropic"): string {
+  const { vendor, modelName } = parseVendorModel(modelId, defaultVendor);
+  return `${vendor} (${modelName})`;
 }
 
 /**

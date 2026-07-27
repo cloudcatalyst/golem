@@ -1220,7 +1220,10 @@ accountCmd
   .argument("<id>", "new account id (e.g. kimi, work)")
   .requiredOption("--provider <name>", `provider (${UPSTREAM_PROVIDERS.join(" | ")})`)
   .requiredOption("--base-url <url>", "upstream base URL (e.g. https://api.moonshot.ai/v1)")
-  .option("--model <id>", "model id the upstream expects (translating providers)")
+  .option(
+    "--model <id>",
+    "model id in vendor/model-name form, e.g. moonshotai/kimi-k3 (OpenRouter-style)",
+  )
   .option(
     "--auth-scheme <scheme>",
     `credential header scheme (${UPSTREAM_AUTH_SCHEMES.join(" | ")}); default: provider default`,

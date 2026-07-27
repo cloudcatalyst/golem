@@ -99,6 +99,11 @@ export function readEnvLayer(env: Readonly<Record<string, string | undefined>>):
       continue; // rule 3: empty string means unset
     }
     const rest = normalized.slice(ENV_PREFIX.length);
+    // Credential env vars are not settings (secrets never are). The credential
+    // store reads GOLEM_UPSTREAM_API_KEY and GOLEM_UPSTREAM_API_KEY__<ID> directly.
+    if (rest === "UPSTREAM_API_KEY" || rest.startsWith("UPSTREAM_API_KEY__")) {
+      continue;
+    }
     const splitAt = rest.indexOf("_");
     const section = splitAt === -1 ? rest.toLowerCase() : rest.slice(0, splitAt).toLowerCase();
     const key = splitAt === -1 ? "" : rest.slice(splitAt + 1).toLowerCase();

@@ -35,6 +35,7 @@ import {
   sniffRequestModel,
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
+  upstreamModelName,
 } from "../providers/index.js";
 import type { UpstreamTranslator } from "../proxy/index.js";
 import {
@@ -239,12 +240,14 @@ export function buildProxyFromSettings(
   // Non-streaming uses translateResponse; streaming uses createStreamTranslator.
   // The pipeline still runs in Anthropic terms before this; translation is last.
   const upstreamModel = upstream.model;
+  const requestModel =
+    upstreamModel !== undefined ? upstreamModelName(upstreamModel, upstreamProvider) : undefined;
   const upstreamBase = upstream.baseUrl;
   const translateFallback = {
     id: "msg_golem_translated",
-    model: upstreamModel ?? upstreamProvider,
+    model: requestModel ?? upstreamProvider,
   };
-  const modelOpt = upstreamModel !== undefined ? { model: upstreamModel } : {};
+  const modelOpt = requestModel !== undefined ? { model: requestModel } : {};
 
   let translateUpstream: UpstreamTranslator | undefined;
   if (isGeminiProvider(upstreamProvider)) {
@@ -252,7 +255,7 @@ export function buildProxyFromSettings(
     // per-request path, so the base `path` is a placeholder that translateRequest
     // always overrides.
     translateUpstream = {
-      path: geminiPath(upstreamBase, upstreamModel ?? "", false, upstreamApiKey),
+      path: geminiPath(upstreamBase, requestModel ?? "", false, upstreamApiKey),
       translateRequest: (body: Buffer | null) => {
         const { body: g, stream, model } = anthropicToGemini(body, modelOpt);
         return {
@@ -290,7 +293,7 @@ export function buildProxyFromSettings(
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {
     process.stderr.write(
       `golem proxy: upstream_provider "${upstreamProvider}" needs proxy.upstream_model ` +
-        "(the backend model id, e.g. qwen2.5-coder:7b); requests will fail until it is set.\n",
+        "(the backend model id, e.g. qwen/qwen2.5-coder:7b); requests will fail until it is set.\n",
     );
   }
   if (

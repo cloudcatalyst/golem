@@ -22,7 +22,8 @@ import { readSessionState } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import {
-  friendlyModelVersionLabel,
+  DEFAULT_ANTHROPIC_VENDOR_MODEL,
+  formatVendorModelStatus,
   localModelVersionLabel,
   resolveUpstreamDisplay,
   type UpstreamProvider,
@@ -161,28 +162,15 @@ export function providerUpstreamLabel(
 }
 
 /**
- * The versioned upstream-model label for the one-liner — the live/served model
- * when known (`claude-opus-4-8[1m]` → `Opus 4.8`), else the configured default
- * shown verbatim (an explicit id like `kimi-k3`), or `undefined` when neither is
- * known (a plain Anthropic passthrough that has served nothing yet).
- */
-function upstreamModelLabel(golem: GolemState): string | undefined {
-  if (golem.lastServedModel !== undefined) return friendlyModelVersionLabel(golem.lastServedModel);
-  return golem.upstreamModel;
-}
-
-/**
- * The one-liner destination, e.g. `local (Qwen 2.5) + anthropic (Opus 4.8)`.
- * Each backend carries its own `(model)` parenthetical (versioned label). The
- * `local (…)` segment is present only when a local model is reachable
- * (Decision 30 — Golem is then a local+upstream hybrid at any level); when the
- * local model is up but its id is unknown it degrades to a bare `local`. Model
- * parentheticals are omitted when the model isn't known.
+ * The one-liner destination, e.g. `local (Qwen 2.5) + moonshotai (kimi-k3)`.
+ * The upstream segment is already the vendor/model-name label built in
+ * {@link collectGolemState}; the `local (…)` segment is present only when a
+ * local model is reachable (Decision 30 — Golem is then a local+upstream hybrid
+ * at any level); when the local model is up but its id is unknown it degrades
+ * to a bare `local`.
  */
 export function destinationLabel(golem: GolemState): string {
-  const upstreamModel = upstreamModelLabel(golem);
-  const upstreamSeg =
-    upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
+  const upstreamSeg = golem.upstreamLabel;
   if (golem.localModelReachable !== true) return upstreamSeg;
   const localVer =
     golem.localCoderModel !== undefined ? localModelVersionLabel(golem.localCoderModel) : "";
@@ -265,9 +253,12 @@ export async function collectGolemState(
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
-    label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
     provider = upstream.provider;
     model = upstream.model;
+    // The one-liner destination is always vendor/model-name style. The
+    // configured default is used here; the last-served model is applied below
+    // once we know the project has a .golem dir.
+    label = formatVendorModelStatus(model ?? DEFAULT_ANTHROPIC_VENDOR_MODEL, provider);
   } catch {
     // defaults
   }
@@ -306,10 +297,16 @@ export async function collectGolemState(
     }
     // R6.2: the model the proxy last served (cheap state-file read, no network) —
     // lets the line show the live/current model, falling back to the configured
-    // one when nothing has been served yet (handled in renderStatusLine).
+    // one when nothing has been served yet.
     try {
       const served = await readServedModel(dir);
-      if (served !== null) state = { ...state, lastServedModel: served.model };
+      if (served !== null) {
+        state = {
+          ...state,
+          lastServedModel: served.model,
+          upstreamLabel: formatVendorModelStatus(served.model, provider ?? "anthropic"),
+        };
+      }
     } catch {
       // no served-model state yet — leave unknown
     }

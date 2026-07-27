@@ -39,9 +39,12 @@ export {
   mapGeminiFinish,
 } from "./gemini-translate.js";
 export {
+  DEFAULT_ANTHROPIC_VENDOR_MODEL,
+  formatVendorModelStatus,
   friendlyModelLabel,
   friendlyModelVersionLabel,
   localModelVersionLabel,
+  parseVendorModel,
   sniffRequestModel,
 } from "./model-display.js";
 export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
@@ -134,6 +137,17 @@ export function resolveAuthScheme(
   configured: UpstreamAuthScheme,
 ): UpstreamAuthScheme {
   return configured === "inherit" ? defaultAuthScheme(provider) : configured;
+}
+
+/**
+ * The actual model id to send upstream. OpenRouter uses the full
+ * `vendor/model-name` string natively; other providers expect only the
+ * model-name portion after the vendor prefix.
+ */
+export function upstreamModelName(modelId: string, provider: UpstreamProvider): string {
+  if (provider === "openrouter") return modelId;
+  const slash = modelId.indexOf("/");
+  return slash === -1 ? modelId : modelId.slice(slash + 1);
 }
 
 /** Header map the proxy forwards upstream (lowercased names, Node semantics). */

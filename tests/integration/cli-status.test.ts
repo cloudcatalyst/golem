@@ -160,7 +160,7 @@ describe("renderStatus", () => {
       provider: "openai",
       account: "kimi",
       base_url: "https://api.moonshot.ai/v1",
-      default_model: "kimi-k3",
+      default_model: "moonshotai/kimi-k3",
     },
     slider: { level: 1, name: "lossless", layer: "project", source: ".golem/settings.json" },
     config: {
@@ -207,7 +207,7 @@ describe("renderStatus", () => {
     expect(output).toContain("[ok] /golem/* skills installed");
     expect(output).toContain("[ok] .golem/settings.json present");
     expect(output).toContain("Proxy: http://localhost:4653 — reachable");
-    expect(output).toContain("Upstream: kimi (openai) · api.moonshot.ai · model kimi-k3");
+    expect(output).toContain("Upstream: moonshotai (kimi-k3) · api.moonshot.ai");
     expect(output).toContain("Slider: level 1 (lossless) — set by project (.golem/settings.json)");
     expect(output).toContain("Config (value — layer):");
     expect(output).toContain("slider.level = 1 — project (.golem/settings.json)");
@@ -232,8 +232,8 @@ describe("renderStatus", () => {
     expect(output).toContain(
       "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
     );
-    // No active account, no configured model, host label == provider → just the provider.
-    expect(output).toMatch(/Upstream: anthropic(\n| —|$)/m);
+    // No active account, no configured model → falls back to the Anthropic default.
+    expect(output).toContain("Upstream: anthropic (claude-sonnet-4-5-20250929)");
     expect(output).toContain("Slider: level 3 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("slider.level = 3 — env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("Warnings:");
@@ -263,37 +263,37 @@ describe("renderStatus", () => {
       default_model: null,
     } as const;
 
-    it("shows the sniffed Claude model as a friendly family label (no configured default)", () => {
+    it("shows the sniffed Claude model in vendor/model-name form (no configured default)", () => {
       expect(renderUpstream({ ...base, last_served_model: "claude-opus-4-8[1m]" })).toBe(
-        "anthropic · model opus",
+        "anthropic (claude-opus-4-8[1m])",
       );
     });
 
-    it("shows just the provider when nothing has been served yet", () => {
-      expect(renderUpstream(base)).toBe("anthropic");
+    it("shows the default Anthropic vendor/model when nothing has been served yet", () => {
+      expect(renderUpstream(base)).toBe("anthropic (claude-sonnet-4-5-20250929)");
     });
 
-    it("shows a configured default model verbatim (translating upstream)", () => {
+    it("shows a configured default model in vendor/model-name form", () => {
       expect(
         renderUpstream({
           provider: "openai",
           account: "kimi",
           base_url: "https://api.moonshot.ai/v1",
-          default_model: "kimi-k3",
+          default_model: "moonshotai/kimi-k3",
         }),
-      ).toBe("kimi (openai) · api.moonshot.ai · model kimi-k3");
+      ).toBe("moonshotai (kimi-k3) · api.moonshot.ai");
     });
 
-    it("shows both when the served model diverges from a configured default", () => {
+    it("shows the last-served model when it diverges from the configured default", () => {
       expect(
         renderUpstream({
           provider: "openai",
           account: "kimi",
           base_url: "https://api.moonshot.ai/v1",
-          default_model: "kimi-k3",
+          default_model: "moonshotai/kimi-k3",
           last_served_model: "kimi-k3-turbo",
         }),
-      ).toBe("kimi (openai) · api.moonshot.ai · default model kimi-k3 · last served kimi-k3-turbo");
+      ).toBe("moonshotai (kimi-k3) · api.moonshot.ai · last served kimi-k3-turbo");
     });
   });
 

@@ -122,33 +122,35 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain(String.fromCharCode(27));
   });
 
-  it("names each backend with its own versioned model (Decision 23 format)", () => {
+  it("names each backend with its own model (vendor/model-name for upstream)", () => {
     const line = renderStatusLine(
       {},
       {
         sliderLevel: 1,
-        upstreamLabel: "anthropic",
+        upstreamLabel: "anthropic (claude-opus-4-8[1m])",
         lastServedModel: "claude-opus-4-8[1m]",
         localModelReachable: true,
         localCoderModel: "qwen2.5-coder:7b",
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Lossless → local (Qwen 2.5) + anthropic (Opus 4.8)");
+    expect(line).toContain(
+      "⬢ Golem · Lossless → local (Qwen 2.5) + anthropic (claude-opus-4-8[1m])",
+    );
   });
 
-  it("shows the configured model in the destination when nothing served yet", () => {
+  it("shows the configured model in vendor/model-name form when nothing served yet", () => {
     const line = renderStatusLine(
       {},
       {
         sliderLevel: 1,
-        upstreamLabel: "kimi",
+        upstreamLabel: "moonshotai (kimi-k3)",
         upstreamProvider: "openai",
-        upstreamModel: "kimi-k3",
+        upstreamModel: "moonshotai/kimi-k3",
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ kimi (kimi-k3)");
+    expect(line).toContain("→ moonshotai (kimi-k3)");
   });
 
   it("prefers the last-served model over the configured default", () => {
@@ -156,13 +158,13 @@ describe("renderStatusLine", () => {
       {},
       {
         sliderLevel: 1,
-        upstreamLabel: "kimi",
+        upstreamLabel: "moonshotai (kimi-k3-turbo)",
         upstreamProvider: "openai",
-        upstreamModel: "kimi-k3",
-        lastServedModel: "kimi-k3-turbo",
+        upstreamModel: "moonshotai/kimi-k3",
+        lastServedModel: "moonshotai/kimi-k3-turbo",
       },
     );
-    expect(line).toContain("→ kimi (kimi-k3-turbo)");
+    expect(line).toContain("→ moonshotai (kimi-k3-turbo)");
   });
 
   it("prefixes a bare 'local' when the local model is up but its id is unknown", () => {
@@ -170,22 +172,25 @@ describe("renderStatusLine", () => {
       {},
       {
         sliderLevel: 1,
-        upstreamLabel: "kimi",
-        upstreamModel: "kimi-k3",
+        upstreamLabel: "moonshotai (kimi-k3)",
+        upstreamModel: "moonshotai/kimi-k3",
         localModelReachable: true,
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ local + kimi (kimi-k3)");
+    expect(line).toContain("→ local + moonshotai (kimi-k3)");
   });
 
-  it("omits the parenthetical for a plain Anthropic passthrough (no model known)", () => {
+  it("shows the default Anthropic vendor/model when no model is known", () => {
     const line = renderStatusLine(
       {},
-      { sliderLevel: 1, upstreamLabel: "anthropic", upstreamProvider: "anthropic" },
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic (claude-sonnet-4-5-20250929)",
+        upstreamProvider: "anthropic",
+      },
     );
-    expect(line).toContain("→ anthropic");
-    expect(line).not.toContain("(");
+    expect(line).toContain("→ anthropic (claude-sonnet-4-5-20250929)");
   });
 
   it("renders a stopped proxy as hollow 'Passthrough' and still shows the destination", () => {
@@ -254,7 +259,7 @@ describe("collectGolemState", () => {
   it("returns sane defaults for a bare project dir with no Golem state", async () => {
     const state = await collectGolemState(dir);
     expect(state.sliderLevel).toBe(1);
-    expect(state.upstreamLabel).toBe("anthropic");
+    expect(state.upstreamLabel).toBe("anthropic (claude-sonnet-4-5-20250929)");
     expect(state.tokensBefore).toBeUndefined();
     expect(state.tokensAfter).toBeUndefined();
     expect(state.blocked).toBeUndefined();
@@ -283,7 +288,7 @@ describe("collectGolemState", () => {
     expect(state.localModelReachable).toBe(true);
   });
 
-  it("reflects the ACTIVE account in the upstream label + provider/model (R6.2)", async () => {
+  it("reflects the ACTIVE account's vendor/model-name in the upstream label (R6.2)", async () => {
     await writeSetting(
       "project",
       "proxy.accounts",
@@ -292,7 +297,7 @@ describe("collectGolemState", () => {
           id: "kimi",
           provider: "openai",
           base_url: "https://api.moonshot.ai/v1",
-          model: "kimi-k3",
+          model: "moonshotai/kimi-k3",
         },
       ],
       { projectDir: dir },
@@ -301,9 +306,9 @@ describe("collectGolemState", () => {
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
-    expect(state.upstreamLabel).toBe("kimi"); // the account id, not the top-level base URL
+    expect(state.upstreamLabel).toBe("moonshotai (kimi-k3)");
     expect(state.upstreamProvider).toBe("openai");
-    expect(state.upstreamModel).toBe("kimi-k3");
+    expect(state.upstreamModel).toBe("moonshotai/kimi-k3");
   });
 
   it("reads the last-served model from served-model.json (R6.2)", async () => {
@@ -315,28 +320,35 @@ describe("collectGolemState", () => {
           id: "kimi",
           provider: "openai",
           base_url: "https://api.moonshot.ai/v1",
-          model: "kimi-k3",
+          model: "moonshotai/kimi-k3",
         },
       ],
       { projectDir: dir },
     );
     await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
-    await writeServedModel(dir, { model: "kimi-k3-0724", servedAtIso: "2026-07-24T00:00:00.000Z" });
+    await writeServedModel(dir, {
+      model: "moonshotai/kimi-k3-0724",
+      servedAtIso: "2026-07-24T00:00:00.000Z",
+    });
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
-    expect(state.lastServedModel).toBe("kimi-k3-0724");
+    expect(state.lastServedModel).toBe("moonshotai/kimi-k3-0724");
+    expect(state.upstreamLabel).toBe("moonshotai (kimi-k3-0724)");
   });
 
-  it("labels a translating provider set at the top level (no account)", async () => {
+  it("labels a translating provider set at the top level with a configured model", async () => {
     await writeSetting("project", "proxy.upstream_provider", "ollama", { projectDir: dir });
     await writeSetting("project", "proxy.upstream_base_url", "http://localhost:11434/v1", {
+      projectDir: dir,
+    });
+    await writeSetting("project", "proxy.upstream_model", "qwen/qwen2.5-coder:7b", {
       projectDir: dir,
     });
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
-    expect(state.upstreamLabel).toBe("ollama");
+    expect(state.upstreamLabel).toBe("qwen (qwen2.5-coder:7b)");
   });
 
   describe("proxy running", () => {
@@ -422,7 +434,7 @@ describe("collectGolemState", () => {
       collectGolemState(dir, { localReachable: async () => ({ reachable: false }) }),
     ).resolves.toStrictEqual({
       sliderLevel: 1,
-      upstreamLabel: "anthropic",
+      upstreamLabel: "anthropic (claude-sonnet-4-5-20250929)",
       upstreamProvider: "anthropic",
       proxyRunning: false,
       localModelReachable: false,

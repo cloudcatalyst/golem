@@ -14,7 +14,12 @@ import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
-import { friendlyModelLabel, resolveUpstreamDisplay } from "../providers/index.js";
+import {
+  DEFAULT_ANTHROPIC_VENDOR_MODEL,
+  formatVendorModelStatus,
+  friendlyModelLabel,
+  resolveUpstreamDisplay,
+} from "../providers/index.js";
 import { type LimitPrediction, readLimitState, readServedModel } from "../proxy/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
@@ -318,27 +323,20 @@ export const REDACTION_OFF_WARNING =
  */
 export function renderUpstream(upstream: StatusReport["upstream"]): string {
   const host = upstreamLabel(upstream.base_url);
-  const who =
-    upstream.account !== null
-      ? `${upstream.account} (${upstream.provider})`
-      : `${upstream.provider}`;
-  const parts = [who];
-  // Skip the host when it's redundant with what `who` already conveys — e.g. an
-  // `anthropic` provider whose base URL also labels as `anthropic`.
-  if (host !== upstream.provider && host !== upstream.account) parts.push(host);
   const dflt = upstream.default_model;
   const served = upstream.last_served_model ?? null;
-  if (dflt !== null && served !== null && friendlyModelLabel(served) !== dflt && served !== dflt) {
-    // A configured default exists AND the proxy served something else — show both
-    // so the divergence is visible (e.g. a translating upstream mid-switch).
-    parts.push(`default model ${dflt}`);
+
+  // Always render the upstream as vendor (model-name). The configured default
+  // wins over the last-served sniff, with a built-in Anthropic fallback so the
+  // line never reads empty.
+  const primaryModel = dflt ?? served ?? DEFAULT_ANTHROPIC_VENDOR_MODEL;
+
+  const parts = [formatVendorModelStatus(primaryModel, upstream.provider)];
+  // Skip the host when it's redundant with what the label already conveys.
+  if (host !== upstream.provider) parts.push(host);
+
+  if (dflt !== null && served !== null && served !== dflt) {
     parts.push(`last served ${friendlyModelLabel(served)}`);
-  } else if (served !== null) {
-    // No configured default (byte-faithful Anthropic), or it matches: the served
-    // model IS the live model — show it as the current model.
-    parts.push(`model ${friendlyModelLabel(served)}`);
-  } else if (dflt !== null) {
-    parts.push(`model ${dflt}`);
   }
   return parts.join(" · ");
 }

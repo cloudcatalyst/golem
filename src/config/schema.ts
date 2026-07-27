@@ -71,10 +71,12 @@ export const SETTINGS_LEAVES = {
     upstream_auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES),
     /**
      * R6.1 case (b): the model id to send to a translating (OpenAI-schema)
-     * upstream. Claude Code sends a `claude-*` model an OpenAI/Ollama backend
-     * does not have, so it is overridden here (e.g. `qwen2.5-coder:7b` for
-     * Ollama, `gpt-5.2` for OpenAI). Required in practice for `openai`/`ollama`;
-     * ignored by Anthropic-protocol providers (they receive the model as-is).
+     * upstream, in OpenRouter-style `vendor/model-name` form (e.g.
+     * `moonshotai/kimi-k3`, `qwen/qwen2.5-coder:7b`,
+     * `anthropic/claude-sonnet-...`). Golem strips the vendor prefix for
+     * non-OpenRouter providers when sending the actual request. Required in
+     * practice for `openai`/`ollama`/`gemini`; ignored by Anthropic-protocol
+     * providers (they receive the client's model as-is).
      */
     upstream_model: z.string().min(1).optional(),
     /**
@@ -96,8 +98,10 @@ export const SETTINGS_LEAVES = {
      * between the user's own accounts/providers. Each entry is NON-SECRET
      * identity only (id, provider, base_url, optional model/auth_scheme); the
      * credential for account `<id>` is read from the env var
-     * `GOLEM_UPSTREAM_API_KEY__<ID>` — secrets are never a setting. Legitimate
-     * switching only; there is no automated quota-evasion (ADR-0003 ToS scope).
+     * `GOLEM_UPSTREAM_API_KEY__<ID>` — secrets are never a setting. The optional
+     * `model` is in OpenRouter-style `vendor/model-name` form
+     * (e.g. `moonshotai/kimi-k3`). Legitimate switching only; there is no
+     * automated quota-evasion (ADR-0003 ToS scope).
      */
     accounts: z
       .array(
