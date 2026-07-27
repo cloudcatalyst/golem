@@ -115,6 +115,7 @@ import {
   renderPendingPromotions,
   runPromote,
 } from "./promote.js";
+import { clearClaudeProxyUrl, restoreClaudeProxyUrl } from "./proxy-claude-settings.js";
 import {
   portInUse,
   proxyStatus,
@@ -631,6 +632,7 @@ proxyCmd
           await credentialEnvForProxy(opts.dir),
         );
         if (pid === null) fail(new InitError(`proxy did not come up on port ${port}`));
+        await restoreClaudeProxyUrl(opts.dir);
         process.stdout.write(
           `golem proxy started (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
         );
@@ -650,9 +652,12 @@ proxyCmd
     try {
       await writeProxyDesired(opts.dir, "stopped", new Date().toISOString());
       const pid = await stopProxy(opts.dir);
+      const cleared = await clearClaudeProxyUrl(opts.dir);
       process.stdout.write(
         pid === null ? "golem proxy: not running\n" : `golem proxy stopped (pid ${pid})\n`,
       );
+      if (cleared)
+        process.stdout.write("golem: cleared Claude Code proxy URL from .claude/settings.json\n");
     } catch (err) {
       fail(err);
     }
@@ -677,6 +682,7 @@ proxyCmd
         return;
       }
       const { pid, port, upstream } = await restartProxyDetached(opts.dir, opts.port);
+      await restoreClaudeProxyUrl(opts.dir);
       process.stdout.write(
         `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
       );
