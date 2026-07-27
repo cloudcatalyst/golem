@@ -45,6 +45,7 @@ test("buildModel from real CLI json shapes", () => {
   assert.equal(m.savedPct, 91);
   assert.equal(m.slider, 2);
   assert.equal(m.upstreamLabel, "foundry");
+  assert.equal(m.upstreamDisplay, "foundry");
   assert.equal(m.proxyReachable, true);
   assert.equal(m.perStage.length, 1);
 });
@@ -54,6 +55,7 @@ test("buildModel is defensive against null/missing input", () => {
   assert.equal(m.savedPct, 0);
   assert.equal(m.slider, 1);
   assert.equal(m.upstreamLabel, "anthropic");
+  assert.equal(m.upstreamDisplay, "anthropic");
   assert.equal(m.proxyReachable, false);
   assert.equal(m.localModelReachable, false);
 });
@@ -95,15 +97,16 @@ test("buildModel prefers the account-aware status.upstream block (R6.2)", () => 
       provider: "openai",
       account: "kimi",
       base_url: "https://api.moonshot.ai/v1",
-      default_model: "kimi-k3",
+      default_model: "moonshotai/kimi-k3",
     },
   };
   const m = buildModel({}, status);
   assert.equal(m.upstream, "https://api.moonshot.ai/v1");
   assert.equal(m.upstreamLabel, "kimi"); // account id, NOT "anthropic"
+  assert.equal(m.upstreamDisplay, "moonshotai (kimi-k3)");
   assert.equal(m.provider, "openai");
-  assert.equal(m.model, "kimi-k3");
-  assert.equal(m.defaultModel, "kimi-k3");
+  assert.equal(m.model, "moonshotai/kimi-k3");
+  assert.equal(m.defaultModel, "moonshotai/kimi-k3");
 });
 
 test("buildModel prefers last_served_model over default_model for the current model", () => {
@@ -127,13 +130,14 @@ test("buildModel falls back to legacy config path when no upstream block (older 
   };
   const m = buildModel({}, status);
   assert.equal(m.upstreamLabel, "foundry");
+  assert.equal(m.upstreamDisplay, "foundry");
   assert.equal(m.model, null);
 });
 
 test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry", savedPct: 34 }),
+    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry", savedPct: 34 }),
     "⬢ Golem · L1 → foundry",
   );
   // Slider name, title-cased, is preferred over the bare "L<n>" form.
@@ -142,38 +146,37 @@ test("statusBarText — compact, provider-focused, no savings", () => {
       proxyReachable: true,
       slider: 3,
       sliderName: "aggressive",
-      upstreamLabel: "anthropic",
+      upstreamDisplay: "anthropic",
     }),
     "⬢ Golem · Aggressive → anthropic",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
-    statusBarText({ proxyReachable: true, slider: 2, upstreamLabel: "anthropic", savedPct: 91 }),
+    statusBarText({ proxyReachable: true, slider: 2, upstreamDisplay: "anthropic", savedPct: 91 }),
     /saved|%|91/,
   );
   // Proxy off = not transforming traffic → "Passthrough" (hollow glyph); the
   // configured destination is still shown.
   assert.equal(
-    statusBarText({ proxyReachable: false, slider: 1, upstreamLabel: "foundry" }),
+    statusBarText({ proxyReachable: false, slider: 1, upstreamDisplay: "foundry" }),
     "⬡ Golem · Passthrough → foundry",
   );
   // Running at slider level 0 (full bypass) also reads "Passthrough" (filled glyph).
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 0, upstreamLabel: "anthropic" }),
+    statusBarText({ proxyReachable: true, slider: 0, upstreamDisplay: "anthropic" }),
     "⬢ Golem · Passthrough → anthropic",
   );
 });
 
-test("statusBarText — shows the current model in parentheses when known (R6.2)", () => {
+test("statusBarText — shows the vendor/model destination built by buildModel (R6.2)", () => {
   // The configured default is shown verbatim (an explicit id like kimi-k3).
   assert.equal(
     statusBarText({
       proxyReachable: true,
       slider: 1,
-      upstreamLabel: "kimi",
-      defaultModel: "kimi-k3",
+      upstreamDisplay: "moonshotai (kimi-k3)",
     }),
-    "⬢ Golem · L1 → kimi (kimi-k3)",
+    "⬢ Golem · L1 → moonshotai (kimi-k3)",
   );
   // Last-served wins over the configured default, and a Claude id is versioned.
   assert.equal(
@@ -181,16 +184,14 @@ test("statusBarText — shows the current model in parentheses when known (R6.2)
       proxyReachable: true,
       slider: 3,
       sliderName: "aggressive",
-      upstreamLabel: "anthropic",
-      defaultModel: null,
-      lastServedModel: "claude-opus-4-8[1m]",
+      upstreamDisplay: "anthropic (Opus 4.8)",
       localModelReachable: true,
     }),
     "⬢ Golem · Aggressive → local + anthropic (Opus 4.8)",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic" }),
+    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "anthropic" }),
     "⬢ Golem · L1 → anthropic",
   );
 });
@@ -198,7 +199,7 @@ test("statusBarText — shows the current model in parentheses when known (R6.2)
 test("statusBarText — local segment appears whenever a local model is reachable, at any level", () => {
   // No local model reachable: no local segment.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "foundry" }),
+    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry" }),
     "⬢ Golem · L1 → foundry",
   );
   // Local model reachable at ANY level (Decision 30): "local" is folded into the
@@ -207,7 +208,7 @@ test("statusBarText — local segment appears whenever a local model is reachabl
     statusBarText({
       proxyReachable: true,
       slider: 1,
-      upstreamLabel: "anthropic",
+      upstreamDisplay: "anthropic",
       localModelReachable: true,
     }),
     "⬢ Golem · L1 → local + anthropic",
@@ -217,7 +218,7 @@ test("statusBarText — local segment appears whenever a local model is reachabl
     statusBarText({
       proxyReachable: false,
       slider: 3,
-      upstreamLabel: "anthropic",
+      upstreamDisplay: "anthropic",
       localModelReachable: true,
     }),
     "⬡ Golem · Passthrough → local + anthropic",
@@ -237,8 +238,7 @@ test("statusBarText names each backend with its own versioned model", () => {
     statusBarText({
       proxyReachable: true,
       slider: 1,
-      upstreamLabel: "anthropic",
-      lastServedModel: "claude-opus-4-8[1m]",
+      upstreamDisplay: "anthropic (Opus 4.8)",
       localModelReachable: true,
       localCoderModel: "qwen2.5-coder:7b",
     }),
