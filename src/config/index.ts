@@ -33,6 +33,7 @@ export { loadConfig } from "./loader.js";
 export type { SettingsFilePaths } from "./paths.js";
 export {
   defaultUserDir,
+  findProjectDir,
   LOCAL_SETTINGS_FILE,
   PROJECT_DIR_NAME,
   SETTINGS_FILE,
