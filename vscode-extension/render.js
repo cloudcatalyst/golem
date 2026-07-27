@@ -135,9 +135,10 @@ function levelLabel(model) {
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
  */
-function buildModel(stats, status, update) {
+function buildModel(stats, status, update, accounts) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
+  const accountList = Array.isArray(accounts) ? accounts : [];
   // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
   // `golem status --json`.update → {available,latest,current}.
   const up =
@@ -235,6 +236,7 @@ function buildModel(stats, status, update) {
           ? s.window
           : null,
     source: typeof s.source === "string" ? s.source : "live",
+    accounts: accountList,
     updateAvailable,
     latestVersion,
     currentVersion,
