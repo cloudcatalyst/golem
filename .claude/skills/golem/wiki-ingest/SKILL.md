@@ -1,5 +1,5 @@
 ---
-description: Distill a URL into a new wiki source note
+description: Distill a URL into a new wiki source note (proposed, not auto-written)
 invocationMode: user
 ---
 
