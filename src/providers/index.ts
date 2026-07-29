@@ -43,6 +43,7 @@ export {
   friendlyModelVersionLabel,
   localModelVersionLabel,
   sniffRequestModel,
+  stripVendorPrefix,
 } from "./model-display.js";
 export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
 export {
