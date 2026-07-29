@@ -20,13 +20,27 @@
  *
  * The probe is a GET against the provider's model-list endpoint: no tokens are
  * spent and nothing is mutated.
+ *
+ * **The probe checks the key, NOT the route.** A model-list GET necessarily uses
+ * a different URL from the `/v1/messages` or `/chat/completions` the proxy POSTs,
+ * so an `accepted` verdict says nothing about whether the configured base URL
+ * composes into a route that exists. That gap was a real trap: `--provider
+ * openrouter --base-url https://openrouter.ai/api/v1` probed `…/api/v1/models`
+ * (200, "key accepted") while every actual request went to
+ * `…/api/v1/v1/messages` and 404'd. So the probe now ALSO reports
+ * {@link ProbeResult.requestUrl} — the URL the proxy will really POST to,
+ * composed by `upstreamRequestUrl` so it cannot drift from the request path — and
+ * raises {@link ProbeResult.configWarning} when that composition is malformed.
  */
 
 import { request } from "undici";
 import {
   defaultAuthScheme,
+  doubledVersionSegment,
   type UpstreamAuthScheme,
   type UpstreamProvider,
+  upstreamBasePath,
+  upstreamRequestUrl,
 } from "../providers/index.js";
 
 export type ProbeVerdict = "accepted" | "rejected" | "inconclusive";
@@ -37,6 +51,17 @@ export interface ProbeResult {
   readonly status?: number;
   /** Human-readable explanation, safe to print (never contains the secret). */
   readonly detail: string;
+  /**
+   * The absolute URL the proxy will POST real traffic to, so the caller can show
+   * the user what this configuration actually targets. Independent of the verdict
+   * (which is only ever about the credential).
+   */
+  readonly requestUrl: string;
+  /**
+   * Set when the base URL composes into a malformed request route — the key may
+   * be perfectly good and every request will still fail. Safe to print.
+   */
+  readonly configWarning?: string;
 }
 
 export interface ProbeInput {
@@ -50,11 +75,14 @@ export interface ProbeInput {
 /**
  * The model-list URL for a base URL, tolerating both spellings users configure:
  * an OpenAI-style base that already ends in `/v1` (→ `/v1/models`) and an
- * Anthropic-style base that does not (→ `/v1/models` appended).
+ * Anthropic-style base that does not (→ `/v1/models` appended). Derives its path
+ * prefix via `upstreamBasePath` — the same normalization the proxy applies — so
+ * the two cannot disagree about what the base URL means.
  */
 export function modelsUrl(baseUrl: string): string {
-  const base = baseUrl.replace(/\/+$/, "");
-  return /\/v\d+$/.test(base) ? `${base}/models` : `${base}/v1/models`;
+  const { origin } = new URL(baseUrl);
+  const prefix = upstreamBasePath(baseUrl);
+  return /\/v\d+$/.test(prefix) ? `${origin}${prefix}/models` : `${origin}${prefix}/v1/models`;
 }
 
 /**
@@ -102,6 +130,23 @@ export async function probeCredential(input: ProbeInput): Promise<ProbeResult> {
   // NEVER interpolate `url` into a message: the Gemini form carries the key in
   // its query string. Only this stripped form is safe to print.
   const shownUrl = modelsUrl(input.baseUrl);
+  // Route facts, independent of the credential verdict (see the module comment).
+  const doubled = doubledVersionSegment(input.provider, input.baseUrl);
+  const route = {
+    requestUrl: upstreamRequestUrl(input.provider, input.baseUrl),
+    ...(doubled !== undefined
+      ? {
+          configWarning:
+            `base URL "${input.baseUrl}" composes into ${doubled} — the API version ` +
+            "segment is repeated, so requests will 404 however good the key is. Drop the " +
+            "trailing version segment from the base URL (the proxy appends the client's own).",
+        }
+      : {}),
+  };
+  const verdict = (r: Omit<ProbeResult, "requestUrl" | "configWarning">): ProbeResult => ({
+    ...r,
+    ...route,
+  });
 
   try {
     const res = await request(url, {
@@ -115,43 +160,43 @@ export async function probeCredential(input: ProbeInput): Promise<ProbeResult> {
     const status = res.statusCode;
 
     if (status >= 200 && status < 300) {
-      return {
+      return verdict({
         verdict: "accepted",
         status,
         detail: `upstream accepted the credential (${status})`,
-      };
+      });
     }
     if (status === 401 || status === 403) {
-      return {
+      return verdict({
         verdict: "rejected",
         status,
         detail: `upstream rejected the credential (HTTP ${status}) — the key is wrong, revoked, or lacks access`,
-      };
+      });
     }
     if (status === 404) {
-      return {
+      return verdict({
         verdict: "inconclusive",
         status,
         detail: `no model-list endpoint at ${shownUrl} (HTTP 404) — cannot verify the key this way`,
-      };
+      });
     }
     if (status === 429) {
-      return {
+      return verdict({
         verdict: "inconclusive",
         status,
         detail: "upstream rate-limited the probe (HTTP 429) — the key may still be valid",
-      };
+      });
     }
-    return {
+    return verdict({
       verdict: "inconclusive",
       status,
       detail: `unexpected probe response (HTTP ${status}) — cannot confirm or deny the key`,
-    };
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
+    return verdict({
       verdict: "inconclusive",
       detail: `could not reach ${new URL(shownUrl).host}: ${message}`,
-    };
+    });
   }
 }

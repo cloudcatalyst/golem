@@ -30,9 +30,11 @@ import {
   isTranslatingProvider,
   makeAuthMapper,
   openAIChatToAnthropic,
+  preservesVendorPrefix,
   resolveActiveUpstream,
   resolveAuthScheme,
   sniffRequestModel,
+  type UpstreamProvider,
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
@@ -54,6 +56,20 @@ export interface ProxyBuild {
   readonly proxy: GolemProxy;
   /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, slider ≥2). */
   readonly semantic?: HeadroomSidecar;
+  /**
+   * The upstream this proxy actually forwards to — the resolved ACTIVE account,
+   * not the top-level `proxy.upstream_*` config. Returned so the caller's startup
+   * banner reports the truth: it used to print `settings.proxy.upstream_base_url`,
+   * which meant a proxy serving an active account still announced
+   * `-> https://api.anthropic.com` and made a working `golem account use` look
+   * like it had not taken effect.
+   */
+  readonly upstream: {
+    readonly provider: UpstreamProvider;
+    readonly baseUrl: string;
+    readonly accountId: string | null;
+    readonly model?: string;
+  };
 }
 
 export interface BuildProxyOptions {
@@ -272,7 +288,14 @@ export function buildProxyFromSettings(
     // reasoning_effort and map the reasoning trace ↔ Anthropic thinking blocks.
     const reasoningEffort = settings.proxy.upstream_reasoning_effort;
     const mapReasoning = settings.proxy.map_reasoning_to_thinking;
-    const reqOpts = reasoningEffort !== undefined ? { ...modelOpt, reasoningEffort } : modelOpt;
+    // A multi-vendor gateway's ids keep their `vendor/` segment (Decision 48) —
+    // stripping it on OpenRouter resolves to a different vendor's model or 400s.
+    const keepVendorPrefix = preservesVendorPrefix(upstreamProvider);
+    const reqOpts = {
+      ...modelOpt,
+      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+      ...(keepVendorPrefix ? { keepVendorPrefix } : {}),
+    };
     const respOpts = { mapReasoning };
     translateUpstream = {
       path: upstreamChatCompletionsPath(upstreamBase),
@@ -373,5 +396,13 @@ export function buildProxyFromSettings(
       void writeLimitState(dir, prediction).catch(() => {});
     },
   });
-  return semantic !== undefined ? { proxy, semantic } : { proxy };
+  const upstreamInfo = {
+    provider: upstreamProvider,
+    baseUrl: upstream.baseUrl,
+    accountId: upstream.accountId,
+    ...(upstreamModel !== undefined ? { model: upstreamModel } : {}),
+  };
+  return semantic !== undefined
+    ? { proxy, semantic, upstream: upstreamInfo }
+    : { proxy, upstream: upstreamInfo };
 }

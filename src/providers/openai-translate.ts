@@ -277,11 +277,18 @@ function translateToolChoice(tc: { type: string } | undefined): OpenAIToolChoice
  * Translate an Anthropic Messages request body (raw bytes) to an OpenAI Chat
  * Completions request object. `opts.model` overrides the request's model (Ollama
  * has no `claude-*` model, so the upstream model is configured, not inherited).
- * Throws on an unparseable body so the caller can fail open.
+ * `opts.keepVendorPrefix` forwards a `vendor/model` id whole instead of stripping
+ * the vendor segment — required for a multi-vendor gateway whose canonical ids
+ * carry it (see `preservesVendorPrefix`). Throws on an unparseable body so the
+ * caller can fail open.
  */
 export function anthropicToOpenAIChat(
   body: Buffer | null,
-  opts: { readonly model?: string; readonly reasoningEffort?: OpenAIReasoningEffort } = {},
+  opts: {
+    readonly model?: string;
+    readonly reasoningEffort?: OpenAIReasoningEffort;
+    readonly keepVendorPrefix?: boolean;
+  } = {},
 ): OpenAIChatRequest {
   if (body === null) throw new Error("empty request body");
   const parsed = anthropicRequest.parse(JSON.parse(body.toString("utf8")));
@@ -293,7 +300,8 @@ export function anthropicToOpenAIChat(
   }
   messages.push(...translateMessages(parsed.messages));
 
-  const model = stripVendorPrefix(opts.model ?? parsed.model ?? "");
+  const requestedModel = opts.model ?? parsed.model ?? "";
+  const model = opts.keepVendorPrefix === true ? requestedModel : stripVendorPrefix(requestedModel);
   if (model === "") {
     throw new Error("no upstream model: set proxy.upstream_model for this provider");
   }

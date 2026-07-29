@@ -1,88 +1,22 @@
 /**
  * Upstream model DISPLAY helpers (R6.2 status/statusline/extension).
  *
- * Two small pure helpers used to surface *which model* the proxy is fronting:
+ * Model ids are shown VERBATIM on every surface — the id as configured
+ * (`inference` catalog / account `model`) or as served (`claude-opus-5[1m]`,
+ * `qwen2.5-coder:7b`). There is deliberately no prettifier here: only Claude ids
+ * have a marketing family/version to fold into (`Opus 5`), so pretty-printing
+ * them alongside raw ids for every other model (`kimi-k3`, `qwen2.5-coder:7b`)
+ * made the same line mix two naming schemes. The raw id is also what the user
+ * types into config, so it is the label they can act on.
  *
- * - {@link friendlyModelLabel} turns a raw Claude model id
- *   (`claude-opus-4-8[1m]`) into a short family label (`opus`) for the human
- *   surfaces. Stored data stays the raw id (honest observability); the friendly
- *   form is applied only at render time.
  * - {@link sniffRequestModel} reads the top-level `model` field out of a proxy
  *   request body. On a byte-faithful Anthropic upstream the proxy never parses
  *   the body, so this is the ONLY way it learns the per-request model
  *   (`claude-*`) that Claude Code sent — read-only, never mutating the bytes it
  *   forwards. Bounded and non-throwing so it is safe on the hot response path.
+ * - {@link stripVendorPrefix} drops a `vendor/` slug at the translating-provider
+ *   boundary (wire-level, not display).
  */
-
-/** Short family labels we recognise in a Claude model id, in match order. */
-const MODEL_FAMILIES = ["opus", "sonnet", "haiku", "fable"] as const;
-
-/** A numeric id segment that is really a date/build stamp (8+ digits) — dropped. */
-const DATE_SEGMENT_MIN_DIGITS = 8;
-
-/** First upper, rest lower — `opus` → `Opus`, `qwen` → `Qwen`. */
-function capitalize(s: string): string {
-  return s.length === 0 ? s : s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
-}
-
-/**
- * A Claude model id as a capitalized family + version for the compact one-liner
- * surfaces, e.g. `claude-opus-4-8[1m]` → `Opus 4.8`,
- * `claude-haiku-4-5-20251001` → `Haiku 4.5` (the trailing date stamp is dropped),
- * `claude-sonnet-5` → `Sonnet 5`. An id with no recognised family (a non-Claude
- * or future name) is returned unchanged. Pure — the richer sibling of
- * {@link friendlyModelLabel}, which collapses to the bare family (`opus`).
- */
-export function friendlyModelVersionLabel(modelId: string): string {
-  const lower = modelId.toLowerCase();
-  const family = MODEL_FAMILIES.find((f) => lower.includes(f));
-  if (family === undefined) return modelId;
-  // Everything after the family name: strip any `[…]` build suffix and the
-  // leading `-`, then keep the run of short numeric segments (`4`, `8`) up to
-  // the first non-numeric or date-length (`20251001`) segment.
-  const rest = lower
-    .slice(lower.indexOf(family) + family.length)
-    .replace(/\[[^\]]*\]/g, "")
-    .replace(/^-/, "");
-  const version: string[] = [];
-  for (const seg of rest.split("-")) {
-    if (/^\d+$/.test(seg) && seg.length < DATE_SEGMENT_MIN_DIGITS) version.push(seg);
-    else break;
-  }
-  return version.length > 0 ? `${capitalize(family)} ${version.join(".")}` : capitalize(family);
-}
-
-/**
- * A local (Ollama) model id as a capitalized family + version, e.g.
- * `qwen2.5-coder:7b` → `Qwen 2.5`, `llama3.1:8b` → `Llama 3.1`,
- * `deepseek-coder-v2:16b` → `Deepseek` (no numeric version immediately follows
- * the family). Empty in → empty out; an id with no leading alphabetic family is
- * returned unchanged. Pure — the versioned sibling of the extension's
- * `friendlyLocalModelLabel` (bare family `qwen`).
- */
-export function localModelVersionLabel(modelId: string): string {
-  if (modelId === "") return "";
-  const beforeTag = modelId.split(":")[0] ?? modelId; // drop `:7b`
-  const familyMatch = /^[a-zA-Z]+/.exec(beforeTag);
-  if (familyMatch === null) return modelId;
-  const family = capitalize(familyMatch[0]);
-  const versionMatch = /^[0-9]+(?:\.[0-9]+)*/.exec(beforeTag.slice(familyMatch[0].length));
-  return versionMatch !== null ? `${family} ${versionMatch[0]}` : family;
-}
-
-/**
- * Map a raw Claude model id to a short human family label for display, e.g.
- * `claude-opus-4-8[1m]` → `opus`, `claude-haiku-4-5-20251001` → `haiku`. An id
- * with no recognised family (a non-Claude model, or a future name) is returned
- * unchanged so the surface still shows *something* truthful. Pure.
- */
-export function friendlyModelLabel(modelId: string): string {
-  const lower = modelId.toLowerCase();
-  for (const family of MODEL_FAMILIES) {
-    if (lower.includes(family)) return family;
-  }
-  return modelId;
-}
 
 /**
  * Only scan the head of a request body — the `model` field sits near the top of

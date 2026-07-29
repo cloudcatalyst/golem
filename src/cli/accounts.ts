@@ -33,6 +33,7 @@ import {
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import { PromptCancelled, promptSecret } from "../credentials/prompt.js";
+import { doubledVersionSegment, isTranslatingProvider } from "../providers/index.js";
 import { clearServedModel } from "../proxy/index.js";
 import { InitError } from "./init.js";
 
@@ -331,7 +332,13 @@ export async function loginAccount(
   id: string,
   nowIso: string,
   opts: LoginOptions = {},
-): Promise<{ readonly account: string; readonly stored_in: string; readonly probe: string }> {
+): Promise<{
+  readonly account: string;
+  readonly stored_in: string;
+  readonly probe: string;
+  /** The URL real traffic will go to — printed so the route is verifiable, not assumed. */
+  readonly request_url?: string;
+}> {
   const { account, storeId } = await resolveAccountTarget(projectDir, id);
   const store = opts.store_backend ?? createCredentialStore({});
 
@@ -355,6 +362,7 @@ export async function loginAccount(
 
   // 2. Probe it against the upstream before storing (unless disabled).
   let probeVerdict = "skipped";
+  let requestUrl: string | undefined;
   if (opts.probe !== false) {
     const result = await probeCredential({
       provider: account.provider,
@@ -363,6 +371,12 @@ export async function loginAccount(
       secret,
     });
     probeVerdict = result.verdict;
+    requestUrl = result.requestUrl;
+    // A route problem is independent of the key: say so even on `accepted`, or
+    // the user stores a working key against a base URL that 404s every request.
+    if (result.configWarning !== undefined) {
+      process.stderr.write(`warning: ${result.configWarning}\n`);
+    }
     if (result.verdict === "rejected") {
       // Fail-closed: do NOT store a key the upstream actively rejects.
       throw new InitError(
@@ -381,7 +395,12 @@ export async function loginAccount(
   // 3. Store it in the OS credential store (or explicit plaintext file).
   const where = await store.store(storeId, secret, opts.store ?? "auto");
   await appendAudit(projectDir, { action: "login", account: storeId }, nowIso);
-  return { account: id, stored_in: where.label, probe: probeVerdict };
+  return {
+    account: id,
+    stored_in: where.label,
+    probe: probeVerdict,
+    ...(requestUrl !== undefined ? { request_url: requestUrl } : {}),
+  };
 }
 
 /**
@@ -455,6 +474,29 @@ export async function addAccount(
     );
   }
 
+  // `--model` only reaches the wire on a TRANSLATING provider: a byte-faithful
+  // case-(a) upstream never parses the body, so the client's own `claude-*` id is
+  // forwarded and the configured model is silently inert. Accepting it without a
+  // word is how an account gets registered that cannot possibly serve the model
+  // its own config names (Decision 48).
+  if (input.model !== undefined && !isTranslatingProvider(input.provider)) {
+    process.stderr.write(
+      `warning: provider "${input.provider}" is byte-faithful (it forwards the client's own ` +
+        `model id unchanged), so model "${input.model}" will be IGNORED on the wire — it is ` +
+        "recorded for display only. To pin a model, use a translating provider " +
+        "(openai, openrouter, ollama, gemini).\n",
+    );
+  }
+  // Catch the base-URL/route mismatch at registration, not on the first request
+  // (where a byte-faithful double-version path 404s with an HTML page).
+  const doubled = doubledVersionSegment(input.provider, input.base_url);
+  if (doubled !== undefined) {
+    process.stderr.write(
+      `warning: base URL "${input.base_url}" composes into ${doubled} — the API version ` +
+        "segment is repeated, so requests will 404. Drop the trailing version segment " +
+        "(the proxy appends the client's own).\n",
+    );
+  }
   const entry: RegistryAccount = {
     id: input.id,
     provider: input.provider,
