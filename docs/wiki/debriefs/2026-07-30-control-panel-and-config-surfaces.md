@@ -205,19 +205,55 @@ tree (`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws`
 means replacing ink — which is the trade Decision 50 recorded, now with a number
 attached.
 
+## The hot paths turned out to matter more than the panel
+
+Fixed in a follow-up pass at the user's request (verification-notes §86b). The
+panel was the visible complaint; these run constantly:
+
+| Command | Before | After |
+|---|---|---|
+| `golem hook post-tool-use` (every tool call) | ~765ms | **129ms** |
+| `golem hook pre-tool-use` (every tool call) | ~765ms | **137ms** |
+| `golem statusline` (every prompt) | ~985ms | **301ms** |
+
+Two things did it. The obvious one: `src/cli/fast-path.ts` handles those commands
+without commander at all, which the `main.ts` shim made easy.
+
+The non-obvious one, and the more generally useful finding: **`undici` is the
+heaviest leaf in the CLI (~270ms)**, and it was reaching hot paths through *barrel*
+imports for functions that only read a JSON file. `hooks/pre-tool-use.ts` imported
+`../proxy/index.js` for `readLimitState`; `cli/statusline.ts` imported it for
+`servedModelFor`; `cli/local-model.ts` imported `../inference/index.js` statically
+when only `resolveCoderModel` needs it. Narrowing those imports alone took
+pre-tool-use 352ms → 127ms and statusline 473ms → 142ms, before any routing change.
+
+Generalise it: **a barrel import is a hot-path liability.** Prefer the narrowest
+module, and look at what its transitive graph drags in before putting it anywhere
+that runs per-tool-call or per-prompt.
+
+**Equivalence was verified, not assumed.** Nine payloads — including an empty one
+and `--max-inline-chars 4` forcing a real CCR-ref swap, whose output embeds a
+content hash — went through both the fast path and `runCli`, diffing stdout and exit
+code. All identical. The one assumption that makes `post-tool-use` safe to
+fast-path (that `program.ts` injects no `PostToolUseOptions` field) is asserted by a
+test, so it can't rot silently.
+
 ## Left open
 
 - **`bun build --compile` + yoga-layout's WASM is UNVERIFIED** (no Bun on this
   box). The panel may not work inside the standalone binaries (Decision 41d) —
   the npm path is verified. Test in the release workflow before advertising
   `golem ui` for the no-Node tier. Folds into the existing 🔬 R7.3 smoke-test.
+- **ink is the remaining floor for the panel** at ~890ms (~75% of the ~1.15s to
+  interactive), spread across its dependency tree rather than concentrated anywhere
+  patchable. Going materially below ~1s means replacing it with a hand-rolled
+  renderer; the user chose to keep ink for now with the number on record. The pure
+  reducer in `state.ts` means such a swap would touch only the four view files.
 - **U+25A0 in the pet is Ambiguous-width**, so it may draw double-wide in a
   CJK-configured terminal. Mitigated (fixed-width box) rather than solved;
   `ui.pet false` / `--no-pet` is the out, and also covers legacy Windows consoles.
 - The panel edits values as text; there's no picker for `knowledge.watch_paths`
   beyond comma-separated entry.
-- **`golem hook pre-tool-use` (~765ms, every tool call) and `golem statusline`
-  (~835ms, every prompt) still route through commander** and pay its ~725ms. In
-  aggregate that costs far more than the panel ever did. The `main.ts` shim makes
-  the fix straightforward — give those two their own lightweight entries — but it
-  was out of scope here and is measured in verification-notes §86.
+- `golem --version` and other user-typed commands still pay commander's ~810ms.
+  Left alone deliberately: ~800ms isn't the bottleneck for something a human typed,
+  and keeping one parsing path keeps `--help` and error messages authoritative.

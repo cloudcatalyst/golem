@@ -16,18 +16,28 @@
  * "cache slow ops" guidance) so the line can show local+upstream.
  */
 
+// Claude Code renders this line on EVERY prompt, so each import here is on a hot
+// path: prefer the narrowest module over a barrel, and the read-only half of
+// anything that also has a write path (verification-notes §86).
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
-import { readSessionState } from "../hooks/index.js";
-import { VERSION } from "../index.js";
+// `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
+// pulls every hook handler) for one function.
+import { readSessionState } from "../hooks/session-state.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { resolveUpstreamDisplay, type UpstreamProvider } from "../providers/index.js";
-import { servedModelFor } from "../proxy/index.js";
+// `../proxy/served-model.js`, not the `../proxy/index.js` barrel: the barrel reaches
+// server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
+import { servedModelFor } from "../proxy/served-model.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
+// `../version.js`, not `../index.js` (which also re-exports every interface).
+import { VERSION } from "../version.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
-import { SLIDER_LEVEL_NAMES } from "./slider.js";
+// `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
+// write path (~426ms) and all that's wanted here is a lookup table.
+import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
 export interface SessionInput {

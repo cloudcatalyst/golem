@@ -15,7 +15,10 @@ import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { resolveUpstreamDisplay } from "../providers/index.js";
-import { type LimitPrediction, readLimitState, servedModelFor } from "../proxy/index.js";
+// Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
+// which imports `undici` (~270ms), and both of these only read a JSON file.
+import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
+import { servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";

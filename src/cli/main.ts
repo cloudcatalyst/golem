@@ -15,7 +15,10 @@
  * shim: it looks at argv, then dynamically imports exactly ONE of
  *
  *   - `../tui/index.js`  — bare, interactive `golem`: the control panel, which
- *                          never needs commander or any other command's deps; or
+ *                          never needs commander or any other command's deps;
+ *   - `./fast-path.js`   — the two commands Claude Code invokes constantly
+ *                          (`hook <event>` on every tool call, `statusline` on
+ *                          every prompt), handled without commander at all; or
  *   - `./program.js`     — everything else, unchanged.
  *
  * Keep this file dependency-free. Anything imported here is imported by every
@@ -62,6 +65,16 @@ async function main(): Promise<void> {
       process.stderr.write(`golem: ${result.reason ?? "could not start the panel"}\n`);
       process.exitCode = 1;
     }
+    return;
+  }
+
+  // The commands Claude Code invokes constantly (hook events on every tool call,
+  // statusline on every prompt) skip commander entirely. `fastPathFor` returns null
+  // for anything it doesn't handle exactly, so the CLI stays authoritative.
+  const { fastPathFor, runFastPath } = await import("./fast-path.js");
+  const fast = fastPathFor(process.argv);
+  if (fast !== null) {
+    await runFastPath(fast, process.argv);
     return;
   }
 

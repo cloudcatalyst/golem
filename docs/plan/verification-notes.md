@@ -3240,3 +3240,56 @@ mostly shared deps) moved statusline 985ms → 835ms and `--version` 787ms → 7
 The rest is the same "thousand cuts" spread. The shim in `main.ts` makes the real
 fix straightforward whenever it is worth doing: route `hook` and `statusline` to
 their own lightweight entries instead of through commander.
+
+### §86b — the hot paths, fixed (2026-07-30, USER-requested follow-up)
+
+The two paths §86 measured and deferred were fixed after all, plus a leaf
+dependency finding that turned out to matter more than the routing.
+
+**`undici` is the heaviest leaf in the CLI: ~270ms** (~215ms over baseline). It
+arrives through `src/proxy/index.js` (server.ts) and `src/inference/index.js`
+(ollama-client.ts). Several hot-path callers were importing those **barrels** for
+functions that only read a JSON file, and paying for an HTTP stack they never used:
+
+| Module | Before | After | Change |
+|---|---|---|---|
+| `hooks/pre-tool-use.js` | 352ms | **127ms** | `readLimitState` from `proxy/limit-prediction.js`, not the barrel |
+| `cli/statusline.js` | 473ms | **142ms** | `servedModelFor` from `proxy/served-model.js`; `readSessionState` from `hooks/session-state.js`; `SLIDER_LEVEL_NAMES` from `cli/slider-read.js`; `VERSION` from `version.js` |
+| `cli/local-model.js` | 388ms | **68ms** | `../inference/index.js` made lazy — only `resolveCoderModel` needs it, while the cache *readers* sit on the statusline path |
+| `config/control-surface.js` | 431ms | **140ms** | (from §86: lazy status, slider-read, direct guidance) |
+
+Lesson worth generalising: **a barrel import is a hot-path liability.** Prefer the
+narrowest module, and check what its transitive graph drags in before putting it on
+a path that runs per-tool-call or per-prompt.
+
+**New `src/cli/fast-path.ts`** handles the four hook events whose handlers take no
+CLI-injected dependencies (`pre-tool-use`, `post-tool-use`, `prompt-submit`,
+`notification`) plus `statusline`, without loading commander at all. `main.ts`
+routes to it; `fastPathFor` returns null for `--help`, unknown events, and any
+unexpected flag, so commander stays authoritative for output and errors.
+`web-fetch-pre`/`web-fetch-post` (which need `buildKnowledge`/`fetchRaw`/
+`revalidate`) and `session-start` (which drives the proxy daemon) deliberately stay
+on the commander path.
+
+**Equivalence was verified, not assumed.** Nine payloads — including an empty one,
+and `post-tool-use --max-inline-chars 4` forcing a real CCR-ref swap (whose output
+embeds a content hash) — were run through both the fast path and `runCli` directly,
+diffing stdout and exit code. All nine byte-identical. `tests/unit/cli-fast-path.test.ts`
+guards the routing and asserts `program.ts` never starts injecting a
+`PostToolUseOptions` field (`redact` / `maxInlineChars` / `projectDir`), which is the
+one assumption that makes `post-tool-use` safe to fast-path.
+
+### Final numbers (best of 5, this box)
+
+| Command | Before | After |
+|---|---|---|
+| `golem hook post-tool-use` (every tool call) | ~765ms | **129ms** — 5.9× |
+| `golem hook pre-tool-use` (every tool call) | ~765ms | **137ms** — 5.6× |
+| `golem statusline` (every prompt) | ~985ms | **301ms** — 3.3× |
+| `golem` panel — pet on screen | (nothing) | **~85ms** |
+| `golem` panel — interactive | ~2.5–3s | **~1.15s** |
+| `golem --version` (commander path, unchanged by design) | ~810ms | ~811ms |
+
+The commander path is untouched on purpose: it serves user-typed commands where
+~800ms is not the bottleneck, and leaving it alone keeps `--help`, error messages,
+and flag parsing in exactly one place.

@@ -12,7 +12,11 @@
 
 import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { chatModelFor, createProbeRunner, detectCapability } from "../inference/index.js";
+// `../inference/index.js` is NOT imported statically: it reaches ollama-client.ts,
+// which imports `undici` (~270ms — the heaviest leaf in the CLI). Only
+// `resolveCoderModel` needs it, while the cache READERS in this file
+// (`localModelInfoCached`, `golemDirExists`) sit on the `golem statusline` path,
+// which Claude Code runs on every prompt. See verification-notes §86.
 
 export interface LocalModelState {
   readonly reachable: boolean;
@@ -89,6 +93,9 @@ export async function readLocalModelCache(projectDir: string): Promise<LocalMode
  */
 export async function resolveCoderModel(): Promise<string> {
   try {
+    const { chatModelFor, createProbeRunner, detectCapability } = await import(
+      "../inference/index.js"
+    );
     const facts = await detectCapability(createProbeRunner());
     return chatModelFor(facts.tier, "drafter");
   } catch {

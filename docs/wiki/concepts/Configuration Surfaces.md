@@ -130,6 +130,15 @@ verification-notes §86). Three rules keep it honest:
 barrel never re-exports the control surface — doing so once added ~400ms to
 `golem hook pre-tool-use`, which runs on every Claude Code tool call.
 
+The same investigation produced a rule worth applying beyond this feature: **a
+barrel import is a hot-path liability.** `undici` is the heaviest leaf in the CLI
+(~270ms) and was reaching per-tool-call code through `../proxy/index.js` for
+functions that only read a JSON file. Narrowing those imports took
+`hooks/pre-tool-use.js` from 352ms to 127ms and `cli/statusline.js` from 473ms to
+142ms. `src/cli/fast-path.ts` then takes the hook events and the status line off
+commander entirely — `golem hook post-tool-use` went ~765ms → ~129ms, `statusline`
+~985ms → ~301ms (verification-notes §86b).
+
 The remaining floor is ink itself (~890ms, spread across its dependency tree rather
 than concentrated in one import), so going materially below ~1s would mean
 replacing it.
