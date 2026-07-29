@@ -16,6 +16,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
+import { loadConfig } from "../config/index.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
 export type GuidanceScope = "project" | "user";
@@ -126,10 +127,12 @@ const LOCAL_CODER = [
   "the slider is a compression dial only and never auto-engages the model",
   "(Decision 31). Use `coder` at every level.",
   "",
-  "This project ENFORCES the practice while this rule is active: the PreToolUse",
-  "gate denies the first non-trivial hand-written code Write/Edit of a session and",
+  "This project ENFORCES the practice while this rule is active AND",
+  "`inference.local_coder_enabled` is true (the default): the PreToolUse gate",
+  "denies the first non-trivial hand-written code Write/Edit of a session and",
   "redirects you here (a one-shot reminder — if you already drafted with `coder`,",
-  "say so and proceed). Disable with `golem guidance disable local-coder`.",
+  "say so and proceed). Disable the guidance with `golem guidance disable local-coder`;",
+  "disable the local coder globally with `golem config set inference.local_coder_enabled false`.",
 ].join("\n");
 
 const PROMPT_TRANSLATION = [
@@ -261,17 +264,36 @@ export function guidanceRuleBody(feature: GuidanceFeature): string {
  * Whether a guidance feature is active for a project — i.e. its rule file is
  * present in either scope (presence *is* the toggle; `golem guidance
  * enable/disable` add/remove it). Used to gate enforcement on "if guided".
+ *
+ * For the `local-coder` feature, the rule file is necessary but not sufficient:
+ * the `inference.local_coder_enabled` setting must also be true. When the local
+ * coder is disabled via `golem config set inference.local_coder_enabled false`,
+ * the guidance text is still present but enforcement is bypassed (the agent is
+ * not told to draft with a tool that is not enabled).
  */
 export async function guidanceEnabled(projectDir: string, name: string): Promise<boolean> {
   for (const scope of ["project", "user"] as const) {
     try {
       await readFile(guidanceRulePath(projectDir, name, scope), "utf8");
+      if (name === "local-coder" && !(await localCoderEnabled(projectDir))) {
+        return false;
+      }
       return true;
     } catch {
       // not present in this scope
     }
   }
   return false;
+}
+
+/** Read the effective `inference.local_coder_enabled` setting; fail-open true. */
+async function localCoderEnabled(projectDir: string): Promise<boolean> {
+  try {
+    const { settings } = await loadConfig({ projectDir });
+    return settings.inference.local_coder_enabled;
+  } catch {
+    return true;
+  }
 }
 
 const rel = (projectDir: string, abs: string): string =>
