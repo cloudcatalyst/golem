@@ -22,6 +22,7 @@
  */
 
 import { z } from "zod";
+import { stripVendorPrefix } from "./model-display.js";
 
 /** Minimal Anthropic Messages request shape we read (tolerant — extra keys ignored). */
 const anthropicContentBlock = z.object({ type: z.string() }).catchall(z.unknown());
@@ -292,8 +293,8 @@ export function anthropicToOpenAIChat(
   }
   messages.push(...translateMessages(parsed.messages));
 
-  const model = opts.model ?? parsed.model;
-  if (model === undefined || model === "") {
+  const model = stripVendorPrefix(opts.model ?? parsed.model ?? "");
+  if (model === "") {
     throw new Error("no upstream model: set proxy.upstream_model for this provider");
   }
 

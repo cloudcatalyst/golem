@@ -24,6 +24,7 @@ import {
   writeAutonomyLevel,
 } from "../autonomy/index.js";
 import { findProjectDir, loadConfig, settingsFilePaths } from "../config/index.js";
+import type { SettingsScope } from "../config/write-setting.js";
 import { startDashboard } from "../dashboard/index.js";
 import {
   addEventHook,
@@ -96,6 +97,16 @@ import {
   writeManifest,
 } from "./auto-index.js";
 import { buildKnowledgeStack, ollamaHasModel } from "./build-knowledge.js";
+import {
+  getConfig,
+  listConfig,
+  renderConfigGet,
+  renderConfigList,
+  renderConfigSet,
+  renderConfigUnset,
+  setConfig,
+  unsetConfig,
+} from "./config.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
@@ -787,6 +798,13 @@ mcp
       // R4.3 — one telemetry store shared by the compression wrapper (retrieval
       // events) and deps.telemetry (per-call tool events + the stats summary).
       const telemetry = openTelemetryStore(opts.dir);
+      const coderInference =
+        settings.inference.local_coder_enabled && inference !== undefined ? inference : undefined;
+      if (settings.inference.local_coder_enabled === false) {
+        process.stderr.write(
+          "golem mcp serve: local coder disabled by inference.local_coder_enabled\n",
+        );
+      }
       await serveStdio({
         compression: mcpCompressionService(opts.dir, telemetry),
         telemetry,
@@ -806,6 +824,7 @@ mcp
             }
           : {}),
         ...(inference !== undefined ? { inference } : {}),
+        ...(coderInference !== undefined ? { coder: coderInference } : {}),
         // R3.1 (spec Decision 34): opt-in chat-judge rerank, decoupled from the
         // slider (Decision 31) via its own settings leaf.
         ...(inference !== undefined && settings.knowledge.rerank_enabled
@@ -2008,6 +2027,150 @@ guidanceCmd
       fail(err);
     }
   });
+
+// E1b — validated read/write of Golem settings (`golem config` + `golem coder`).
+const configCmd = program
+  .command("config")
+  .description("Read and write Golem settings with schema validation");
+
+configCmd
+  .command("list", { isDefault: true })
+  .description("List all effective settings and the layers that supplied them")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await listConfig({ projectDir: opts.dir });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderConfigList(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+configCmd
+  .command("get")
+  .description("Show the effective value of one setting (e.g. slider.level)")
+  .argument("<key>", "dotted section.key")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (key: string, opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await getConfig(key, { projectDir: opts.dir });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderConfigGet(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+configCmd
+  .command("set")
+  .description("Write a setting to a scope (project, local, or user)")
+  .argument("<key>", "dotted section.key")
+  .argument(
+    "<value>",
+    "new value (booleans: true/false/1/0/yes/no/on/off; arrays: JSON or comma-separated)",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option(
+    "--scope <scope>",
+    "settings scope: project (default, committed), local (gitignored), user (~/.golem)",
+    "project",
+  )
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (key: string, value: string, opts: { dir: string; scope: string; json: boolean }) => {
+      try {
+        const scope = parseConfigScope(opts.scope);
+        const result = await setConfig(scope, key, value, { projectDir: opts.dir });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigSet(result),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+configCmd
+  .command("unset")
+  .description("Remove a setting from a scope so lower layers take effect again")
+  .argument("<key>", "dotted section.key")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--scope <scope>", "settings scope: project (default), local, or user", "project")
+  .option("--json", "machine-readable output", false)
+  .action(async (key: string, opts: { dir: string; scope: string; json: boolean }) => {
+    try {
+      const scope = parseConfigScope(opts.scope);
+      const result = await unsetConfig(scope, key, { projectDir: opts.dir });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigUnset(result),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+function parseConfigScope(raw: string): SettingsScope {
+  if (raw === "user" || raw === "project" || raw === "local") return raw;
+  throw new InvalidArgumentError(`invalid scope "${raw}" (expected user, project, or local)`);
+}
+
+// Convenience shortcut for the most common toggle: the local coder.
+program
+  .command("coder")
+  .description("Enable, disable, or show the local coder tool status")
+  .argument("[state]", "enable | disable | status")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--scope <scope>", "settings scope for enable/disable", "project")
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (state: string | undefined, opts: { dir: string; scope: string; json: boolean }) => {
+      try {
+        const scope = parseConfigScope(opts.scope);
+        const key = "inference.local_coder_enabled";
+
+        if (state === undefined || state === "status") {
+          const report = await getConfig(key, { projectDir: opts.dir });
+          const enabled = report.value === true;
+          if (opts.json) {
+            process.stdout.write(`${JSON.stringify({ enabled, source: report }, null, 2)}\n`);
+            return;
+          }
+          process.stdout.write(enabled ? "local coder is enabled\n" : "local coder is disabled\n");
+          return;
+        }
+
+        if (state !== "enable" && state !== "disable") {
+          throw new InvalidArgumentError(`expected enable, disable, or status; got "${state}"`);
+        }
+        const value = state === "enable" ? "true" : "false";
+        const result = await setConfig(scope, key, value, { projectDir: opts.dir });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+          return;
+        }
+        process.stdout.write(
+          `local coder ${state}d${scope !== "project" ? ` (${scope} scope)` : ""}\n`,
+        );
+        if (result.overriddenBy !== undefined) {
+          const o = result.overriddenBy;
+          const oSource = o.source !== undefined ? ` (${o.source})` : "";
+          process.stdout.write(
+            `note: a higher-precedence layer overrides it — effective value is from ${o.layer}${oSource}\n`,
+          );
+        }
+        process.stdout.write(
+          "restart Claude Code (or reload) so the MCP server picks up the change.\n",
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
   0: "P_CPU",

@@ -134,6 +134,13 @@ export const SETTINGS_LEAVES = {
      * slow boxes; env override `GOLEM_INFERENCE_REQUEST_TIMEOUT_MS`.
      */
     request_timeout_ms: timeoutMsSchema,
+    /**
+     * Whether the `coder` MCP tool (local model drafting) is enabled. Default
+     * true. Set false to hide the tool from Claude Code and keep the status line
+     * from showing a local backend. Independent of rerank/local-answer; Ollama
+     * must still be reachable for coder to actually work.
+     */
+    local_coder_enabled: z.boolean(),
   },
   compression: {
     /**
@@ -311,6 +318,7 @@ export interface ProxySettings {
 export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
+  readonly local_coder_enabled: boolean;
 }
 
 export interface CompressionSettings {
@@ -375,6 +383,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   inference: {
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
+    local_coder_enabled: true,
   },
   compression: {
     headroom_sidecar: false,

@@ -19,6 +19,7 @@
  */
 
 import { z } from "zod";
+import { stripVendorPrefix } from "./model-display.js";
 
 const block = z.object({ type: z.string() }).catchall(z.unknown());
 // Anthropic allows mid-conversation `system` messages; Gemini `contents` has no
@@ -206,8 +207,8 @@ export function anthropicToGemini(
   if (body === null) throw new Error("empty request body");
   const parsed = anthropicRequest.parse(JSON.parse(body.toString("utf8")));
 
-  const model = opts.model ?? parsed.model;
-  if (model === undefined || model === "") {
+  const model = stripVendorPrefix(opts.model ?? parsed.model ?? "");
+  if (model === "") {
     throw new Error("no upstream model: set proxy.upstream_model for this provider");
   }
 

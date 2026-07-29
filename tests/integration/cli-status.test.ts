@@ -21,6 +21,7 @@ import {
   renderUpstream,
   type StatusReport,
 } from "../../src/cli/status.js";
+import { writeSetting } from "../../src/config/index.js";
 import type { LimitPrediction } from "../../src/proxy/index.js";
 
 const VERSION = "0.1.0-test";
@@ -114,6 +115,20 @@ describe("collectStatus", () => {
     });
     expect(report.local_model.reachable).toBe(true);
     expect(report.local_model.coder_model).toBe("qwen2.5-coder:7b");
+    expect(report.local_model.coder_enabled).toBe(true);
+  });
+
+  it("reports coder_enabled false when inference.local_coder_enabled is false", async () => {
+    await writeSetting("local", "inference.local_coder_enabled", false, { projectDir });
+    const report = await collectStatus({
+      projectDir,
+      version: VERSION,
+      userDir,
+      probeTimeoutMs: 200,
+      localProbe: async () => ({ reachable: true, coderModel: "qwen2.5-coder:7b" }),
+    });
+    expect(report.local_model.reachable).toBe(true);
+    expect(report.local_model.coder_enabled).toBe(false);
   });
 });
 
@@ -167,7 +182,7 @@ describe("renderStatus", () => {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: true, base_url: "http://localhost:11434" },
+    local_model: { reachable: true, coder_enabled: true, base_url: "http://localhost:11434" },
     warnings: [],
   };
 
@@ -193,7 +208,7 @@ describe("renderStatus", () => {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: false, base_url: "http://localhost:11434" },
+    local_model: { reachable: false, coder_enabled: true, base_url: "http://localhost:11434" },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
   };
 
@@ -248,11 +263,26 @@ describe("renderStatus", () => {
       ...healthyReport,
       local_model: {
         reachable: true,
+        coder_enabled: true,
         coder_model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
     });
     expect(output).toContain("Inference: local + upstream · coder qwen2.5-coder:7b");
+  });
+
+  it("shows upstream only when local coder is disabled", () => {
+    const output = renderStatus({
+      ...healthyReport,
+      local_model: {
+        reachable: true,
+        coder_enabled: false,
+        coder_model: "qwen2.5-coder:7b",
+        base_url: "http://localhost:11434",
+      },
+    });
+    expect(output).toContain("Inference: upstream only (local coder disabled)");
+    expect(output).not.toContain("coder qwen");
   });
 
   describe("renderUpstream", () => {
@@ -310,6 +340,10 @@ describe("renderStatus", () => {
         version: VERSION,
         userDir,
         probeTimeoutMs: 200,
+        // Explicitly empty env: inheriting process.env lets an unrelated
+        // GOLEM_* var (e.g. a credential for an account) raise an
+        // unknown-setting warning and break the no-warnings assertion.
+        env: {},
       });
       const output = renderStatus(report);
 

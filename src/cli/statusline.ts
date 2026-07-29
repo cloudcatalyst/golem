@@ -61,10 +61,12 @@ export interface GolemState {
   readonly blocked?: boolean;
   /** Whether the Golem proxy is actually running (pid-file check), if known. */
   readonly proxyRunning?: boolean;
-  /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known. */
+  /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known and enabled. */
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
   readonly localCoderModel?: string;
+  /** Whether the `coder` MCP tool is enabled (`inference.local_coder_enabled`). */
+  readonly localCoderEnabled?: boolean;
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
 }
@@ -183,7 +185,7 @@ export function destinationLabel(golem: GolemState): string {
   const upstreamModel = upstreamModelLabel(golem);
   const upstreamSeg =
     upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
-  if (golem.localModelReachable !== true) return upstreamSeg;
+  if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return upstreamSeg;
   const localVer =
     golem.localCoderModel !== undefined ? localModelVersionLabel(golem.localCoderModel) : "";
   const localSeg = localVer !== "" ? `local (${localVer})` : "local";
@@ -256,12 +258,14 @@ export async function collectGolemState(
   let sliderLevel = 1;
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
+  let coderEnabled = true;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
+    coderEnabled = settings.inference.local_coder_enabled;
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
@@ -274,6 +278,7 @@ export async function collectGolemState(
   let state: GolemState = {
     sliderLevel,
     upstreamLabel: label,
+    localCoderEnabled: coderEnabled,
     ...(provider !== undefined ? { upstreamProvider: provider } : {}),
     ...(model !== undefined ? { upstreamModel: model } : {}),
   };
