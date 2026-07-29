@@ -27,7 +27,7 @@ import {
   resolveUpstreamDisplay,
   type UpstreamProvider,
 } from "../providers/index.js";
-import { readServedModel } from "../proxy/index.js";
+import { servedModelFor } from "../proxy/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
@@ -261,6 +261,7 @@ export async function collectGolemState(
   let coderEnabled = true;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
+  let activeAccount: string | null = null;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
@@ -272,6 +273,7 @@ export async function collectGolemState(
     label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
     provider = upstream.provider;
     model = upstream.model;
+    activeAccount = upstream.accountId;
   } catch {
     // defaults
   }
@@ -311,9 +313,11 @@ export async function collectGolemState(
     }
     // R6.2: the model the proxy last served (cheap state-file read, no network) —
     // lets the line show the live/current model, falling back to the configured
-    // one when nothing has been served yet (handled in renderStatusLine).
+    // one when nothing has been served yet (handled in renderStatusLine). Scoped
+    // to the active account: a snapshot from the upstream we just switched AWAY
+    // from would otherwise keep the previous model name on the line.
     try {
-      const served = await readServedModel(dir);
+      const served = await servedModelFor(dir, activeAccount);
       if (served !== null) state = { ...state, lastServedModel: served.model };
     } catch {
       // no served-model state yet — leave unknown

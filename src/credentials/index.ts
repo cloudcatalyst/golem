@@ -1,7 +1,9 @@
 /**
- * Golem credential management (ADR-0003 amendment; spec Decision 46).
+ * Golem credential management (ADR-0003 amendment; spec Decisions 46, 47).
  *
- * `backends.ts` — one storage mechanism each (env / OS keychain / plaintext file).
+ * `backends.ts` — one storage mechanism each (OS keychain / plaintext file).
+ *                 There is deliberately no environment-variable backend
+ *                 (Decision 47) — a key is set with `golem account login`.
  * `store.ts`    — the resolution chain over those backends, and the only entry
  *                 point the CLI should use.
  * `prompt.ts`   — masked TTY entry, for when no credential is found.
@@ -19,7 +21,6 @@ export {
   credentialsDir,
   DEFAULT_ACCOUNT_ID,
   DEFAULT_KEY_ENV,
-  envBackend,
   envVarForAccount,
   fileBackend,
   keychainBackend,

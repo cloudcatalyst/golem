@@ -1,9 +1,9 @@
 /**
- * Decision 46 — credential resolution chain.
+ * Decisions 46/47 — credential resolution chain.
  *
- * The behaviours that matter are the ones that were broken before: resolution
- * ORDER (env must keep winning so no existing setup regresses), and the refusal
- * to let one broken backend hide a working one.
+ * The behaviours that matter: an environment variable is NOT a credential source
+ * any more (Decision 47 — a stale export must never shadow a stored key), the
+ * chain falls through cleanly, and one broken backend never hides a working one.
  */
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -13,7 +13,6 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type CredentialBackend,
   DEFAULT_KEY_ENV,
-  envBackend,
   envVarForAccount,
   fileBackend,
 } from "../../../src/credentials/backends.js";
@@ -29,31 +28,22 @@ afterAll(async () => {
   await rm(userDir, { recursive: true, force: true });
 });
 
-describe("envVarForAccount", () => {
-  it("maps the reserved default id to the original single-account var", () => {
+/**
+ * `envVarForAccount` still exists, but only to name the internal CLI→daemon
+ * handoff channel (Decision 47) — the spelling is pinned because the two sides
+ * of that handoff must agree.
+ */
+describe("envVarForAccount (internal daemon handoff only)", () => {
+  it("maps the reserved default id to the plain var", () => {
     expect(envVarForAccount("default")).toBe(DEFAULT_KEY_ENV);
   });
 
-  it("keeps the R6.2 per-account spelling so existing keys keep working", () => {
+  it("keeps the per-account spelling both sides of the handoff agree on", () => {
     expect(envVarForAccount("kimi")).toBe("GOLEM_UPSTREAM_API_KEY__KIMI");
   });
 
   it("sanitizes non-alphanumerics to underscores", () => {
     expect(envVarForAccount("work-acct.2")).toBe("GOLEM_UPSTREAM_API_KEY__WORK_ACCT_2");
-  });
-});
-
-describe("envBackend", () => {
-  it("reads a set var and treats empty string as absent", async () => {
-    const b = envBackend({ GOLEM_UPSTREAM_API_KEY__KIMI: "sk-live", GOLEM_UPSTREAM_API_KEY: "" });
-    expect(await b.get("kimi")).toBe("sk-live");
-    expect(await b.get("default")).toBeNull();
-  });
-
-  it("refuses to pretend it can write an env var", async () => {
-    const b = envBackend({});
-    await expect(b.set("kimi", "sk-x")).rejects.toThrow(/cannot set environment variables/i);
-    await expect(b.remove("kimi")).rejects.toThrow(/cannot unset environment variables/i);
   });
 });
 
@@ -95,21 +85,27 @@ function stubKeychain(value: string | null, failWith?: string): CredentialBacken
 }
 
 describe("resolution chain", () => {
-  it("prefers env over the keychain, so CI and one-off overrides still win", async () => {
-    const store = createCredentialStore({
-      userDir,
-      platform: "linux",
-      env: { GOLEM_UPSTREAM_API_KEY__KIMI: "sk-from-env" },
-    });
-    const hit = await store.resolve("kimi");
-    expect(hit?.secret).toBe("sk-from-env");
-    expect(hit?.location.backend).toBe("env");
+  /**
+   * The Decision 47 regression guard: a set `GOLEM_UPSTREAM_API_KEY__<ID>` must
+   * resolve to NOTHING. `platform: "sunos"` gives a store with no keychain, so
+   * the only possible hits are the env var (now gone) and a file (not written) —
+   * which makes an accidental re-introduction of the env backend a failure here.
+   */
+  it("does not read a credential from the environment", async () => {
+    process.env.GOLEM_UPSTREAM_API_KEY__ENVONLY = "sk-must-be-ignored";
+    try {
+      const store = createCredentialStore({ userDir, platform: "sunos" });
+      expect(await store.resolve("envonly")).toBeNull();
+      expect((await store.status("envonly")).present).toBe(false);
+    } finally {
+      delete process.env.GOLEM_UPSTREAM_API_KEY__ENVONLY;
+    }
   });
 
-  it("falls through to a lower backend when a higher one is absent", async () => {
+  it("resolves from a stored file when the keychain has nothing", async () => {
     const b = fileBackend(userDir, "linux");
     await b.set("fallthrough", "sk-from-file");
-    const store = createCredentialStore({ userDir, platform: "linux", env: {} });
+    const store = createCredentialStore({ userDir, platform: "linux" });
     const hit = await store.resolve("fallthrough");
     expect(hit?.secret).toBe("sk-from-file");
     expect(hit?.location.backend).toBe("file");
@@ -117,48 +113,53 @@ describe("resolution chain", () => {
   });
 
   it("returns null, not a throw, when nothing has the credential", async () => {
-    const store = createCredentialStore({ userDir, platform: "linux", env: {} });
+    const store = createCredentialStore({ userDir, platform: "linux" });
     expect(await store.resolve("nobody")).toBeNull();
   });
 
-  it("does not let a broken keychain hide a working env var, and surfaces the fault", async () => {
+  it("does not let a broken keychain hide a stored file, and surfaces the fault", async () => {
     // Exercised through status(), which reports both the hit and the faults.
-    const store = createCredentialStore({
-      userDir,
-      platform: "linux",
-      env: { GOLEM_UPSTREAM_API_KEY__KIMI: "sk-env-wins" },
-    });
-    const st = await store.status("kimi");
+    const b = fileBackend(userDir, "linux");
+    await b.set("resilient", "sk-from-file");
+    const store = createCredentialStore({ userDir, platform: "linux" });
+    const st = await store.status("resilient");
     expect(st.present).toBe(true);
-    expect(st.location?.backend).toBe("env");
+    expect(st.location?.backend).toBe("file");
+    await b.remove("resilient");
   });
 
   it("status never carries the secret value", async () => {
-    const store = createCredentialStore({
-      userDir,
-      platform: "linux",
-      env: { GOLEM_UPSTREAM_API_KEY__KIMI: "sk-secret-must-not-appear" },
-    });
-    const st = await store.status("kimi");
+    const b = fileBackend(userDir, "linux");
+    await b.set("quiet", "sk-secret-must-not-appear");
+    const store = createCredentialStore({ userDir, platform: "linux" });
+    const st = await store.status("quiet");
+    expect(st.present).toBe(true);
     expect(JSON.stringify(st)).not.toContain("sk-secret-must-not-appear");
+    await b.remove("quiet");
   });
 });
 
 describe("storing", () => {
   it("refuses an empty credential", async () => {
-    const store = createCredentialStore({ userDir, platform: "linux", env: {} });
+    const store = createCredentialStore({ userDir, platform: "linux" });
     await expect(store.store("acct", "")).rejects.toThrow(/empty credential/i);
   });
 
   it("explains itself on a platform with no OS store instead of silently using a file", async () => {
-    const store = createCredentialStore({ userDir, platform: "sunos", env: {} });
+    const store = createCredentialStore({ userDir, platform: "sunos" });
     await expect(store.store("acct", "sk-x")).rejects.toThrow(
       /no OS credential store is available/i,
     );
   });
 
+  /** Decision 47: the remediation can no longer suggest exporting a var. */
+  it("does not offer an env var as the remedy when no store is available", async () => {
+    const store = createCredentialStore({ userDir, platform: "sunos" });
+    await expect(store.store("acct", "sk-x")).rejects.not.toThrow(/GOLEM_UPSTREAM_API_KEY/);
+  });
+
   it("writes plaintext only when the caller explicitly opts in", async () => {
-    const store = createCredentialStore({ userDir, platform: "sunos", env: {} });
+    const store = createCredentialStore({ userDir, platform: "sunos" });
     const where = await store.store("optin", "sk-plain", "file");
     expect(where.backend).toBe("file");
     expect(await store.resolve("optin")).toMatchObject({ secret: "sk-plain" });
@@ -169,8 +170,8 @@ describe("storing", () => {
 
 describe("chain()", () => {
   it("reports the backends consulted, in order, for help text", async () => {
-    const store = createCredentialStore({ userDir, platform: "darwin", env: {} });
-    expect(store.chain().map((c) => c.backend)).toEqual(["env", "keychain", "file"]);
+    const store = createCredentialStore({ userDir, platform: "darwin" });
+    expect(store.chain().map((c) => c.backend)).toEqual(["keychain", "file"]);
   });
 });
 

@@ -110,6 +110,14 @@ import {
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
+import {
+  collectLocalModel,
+  renderLocalCoderWrite,
+  renderLocalModel,
+  renderLocalUrlWrite,
+  setLocalBaseUrl,
+  setLocalCoderEnabled,
+} from "./local-config.js";
 import { golemDirExists } from "./local-model.js";
 import { mcpCompressionService, statsSourceForCli } from "./mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "./notes.js";
@@ -538,6 +546,17 @@ async function restartProxyDetached(
 async function runProxyForeground(dir: string, portOpt?: string): Promise<void> {
   const { settings } = await loadConfig({ projectDir: dir });
   const { port } = await resolvePort(dir, portOpt);
+
+  // Resolve the active account's credential from the OS store into this process's
+  // env, which is where createProxyRuntime reads it (Decision 47: the env var is
+  // an internal handoff, not a setting — so a foreground `golem proxy start` has
+  // to do the resolve the detached path does at spawn, or it would run keyless).
+  // `??=` so an already-injected value wins: in the detached case the parent CLI
+  // already put it there, and the daemon must not depend on reaching a keychain
+  // from a session that may have none (ADR-0003).
+  for (const [name, secret] of Object.entries(await credentialEnvForProxy(dir))) {
+    process.env[name] ??= secret;
+  }
 
   // Idempotent: refuse (cleanly) if a proxy is already up on this port.
   if (await portInUse(port)) {
@@ -1117,7 +1136,7 @@ accountCmd
   .command("list")
   .alias("show")
   .description(
-    "List configured accounts, which is active, and whether each credential env var is set",
+    "List configured accounts, which is active, and whether each has a stored credential",
   )
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
@@ -1200,13 +1219,19 @@ accountCmd
           "warning: storing UNENCRYPTED plaintext on disk (protected only by file permissions).\n",
         );
       }
+      // Non-TTY stdin: take the key from the pipe (`echo <key> | golem account
+      // login <id>`) rather than failing. Since Decision 47 removed the env-var
+      // backend this is the only non-interactive way to set a credential, and it
+      // keeps the secret out of argv. A TTY still prompts, masked.
+      const piped = process.stdin.isTTY ? "" : (await readStdin()).trim();
       const result = await loginAccount(opts.dir, id, new Date().toISOString(), {
         probe: opts.probe,
         store: storeTarget,
+        ...(piped !== "" ? { secret: piped } : {}),
       });
       process.stdout.write(
         `stored credential for "${result.account}" — ${result.stored_in} (probe: ${result.probe}).\n` +
-          "It resolves automatically on every proxy start; no env var to re-export.\n",
+          "It resolves automatically on every proxy start; nothing to export.\n",
       );
     } catch (err) {
       fail(err);
@@ -1228,7 +1253,6 @@ accountCmd
           `removed credential for "${result.account}" from: ${result.removed.join(", ")}.\n`,
         );
       }
-      if (result.env_note !== null) process.stdout.write(`${result.env_note}\n`);
     } catch (err) {
       fail(err);
     }
@@ -1308,17 +1332,29 @@ accountCmd
 accountCmd
   .command("remove")
   .description(
-    "Remove an account from proxy.accounts (does NOT delete its stored credential — use 'account logout' for that)",
+    "Remove an account from proxy.accounts, deleting its stored credential first (logout + de-register)",
   )
   .argument("<id>", "an account id from proxy.accounts")
   .option("--dir <path>", "project directory", process.cwd())
-  .action(async (id: string, opts: { dir: string }) => {
+  .option(
+    "--keep-credential",
+    "de-register the account but LEAVE its stored credential in the OS store",
+    false,
+  )
+  .action(async (id: string, opts: { dir: string; keepCredential: boolean }) => {
     try {
-      const result = await removeAccount(opts.dir, id, new Date().toISOString());
+      const result = await removeAccount(opts.dir, id, new Date().toISOString(), {
+        keepCredential: opts.keepCredential,
+      });
+      const credential = opts.keepCredential
+        ? `Its stored credential was KEPT — remove it with: golem account logout ${id}.`
+        : result.credential_removed.length > 0
+          ? `Logged out first — credential removed from: ${result.credential_removed.join(", ")}.`
+          : "No stored credential to remove.";
       process.stdout.write(
         `removed account "${result.account}" from proxy.accounts` +
           `${result.was_active ? " (was active — reverted to the default upstream)" : ""}. ` +
-          `Its stored credential, if any, is untouched — remove it with: golem account logout ${id}.\n`,
+          `${credential}\n`,
       );
     } catch (err) {
       fail(err);
@@ -2119,10 +2155,92 @@ function parseConfigScope(raw: string): SettingsScope {
   throw new InvalidArgumentError(`invalid scope "${raw}" (expected user, project, or local)`);
 }
 
-// Convenience shortcut for the most common toggle: the local coder.
+/**
+ * `golem local` — the local/LAN model: is it on, where does it live, is it up.
+ * A thin front end over `inference.local_coder_enabled` +
+ * `inference.ollama_base_url` (see src/cli/local-config.ts); `golem coder` is
+ * kept below as an alias for the enable/disable half.
+ */
+const localCmd = program
+  .command("local")
+  .description("Enable, disable, and configure the local (or LAN) model");
+
+localCmd
+  .command("status", { isDefault: true })
+  .description("Show whether the local model is enabled, where it lives, and if it answers")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await collectLocalModel({ projectDir: opts.dir });
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderLocalModel(report),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+for (const state of ["enable", "disable"] as const) {
+  localCmd
+    .command(state)
+    .description(
+      state === "enable"
+        ? "Enable the local model's coder tool"
+        : "Disable the local model's coder tool (hides it from Claude Code and the status surfaces)",
+    )
+    .option("--dir <path>", "project directory", DEFAULT_DIR)
+    .option("--scope <scope>", "settings scope: project (default), local, or user", "project")
+    .option("--json", "machine-readable output", false)
+    .action(async (opts: { dir: string; scope: string; json: boolean }) => {
+      try {
+        const enabled = state === "enable";
+        const result = await setLocalCoderEnabled(enabled, parseConfigScope(opts.scope), {
+          projectDir: opts.dir,
+        });
+        process.stdout.write(
+          opts.json
+            ? `${JSON.stringify(result, null, 2)}\n`
+            : renderLocalCoderWrite(result, enabled),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    });
+}
+
+localCmd
+  .command("url")
+  .description(
+    "Point the local roles at an Ollama endpoint — localhost or another machine on the LAN",
+  )
+  .argument("<url>", "base URL, e.g. http://localhost:11434 or http://gpubox.lan:11434")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--scope <scope>", "settings scope: project (default), local, or user", "project")
+  .option("--no-probe", "skip the reachability check before saving")
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (url: string, opts: { dir: string; scope: string; probe: boolean; json: boolean }) => {
+      try {
+        const result = await setLocalBaseUrl(url, parseConfigScope(opts.scope), {
+          projectDir: opts.dir,
+          probe: opts.probe,
+        });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderLocalUrlWrite(result),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+// Kept as a shortcut/alias for the toggle half of `golem local` — `golem coder
+// enable|disable|status` predates the group and is in muscle memory (and in the
+// guidance rule's text).
 program
   .command("coder")
-  .description("Enable, disable, or show the local coder tool status")
+  .description("Enable, disable, or show the local coder tool status (alias of `golem local`)")
   .argument("[state]", "enable | disable | status")
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--scope <scope>", "settings scope for enable/disable", "project")
@@ -2130,41 +2248,24 @@ program
   .action(
     async (state: string | undefined, opts: { dir: string; scope: string; json: boolean }) => {
       try {
-        const scope = parseConfigScope(opts.scope);
-        const key = "inference.local_coder_enabled";
-
         if (state === undefined || state === "status") {
-          const report = await getConfig(key, { projectDir: opts.dir });
-          const enabled = report.value === true;
-          if (opts.json) {
-            process.stdout.write(`${JSON.stringify({ enabled, source: report }, null, 2)}\n`);
-            return;
-          }
-          process.stdout.write(enabled ? "local coder is enabled\n" : "local coder is disabled\n");
+          const report = await collectLocalModel({ projectDir: opts.dir });
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderLocalModel(report),
+          );
           return;
         }
-
         if (state !== "enable" && state !== "disable") {
           throw new InvalidArgumentError(`expected enable, disable, or status; got "${state}"`);
         }
-        const value = state === "enable" ? "true" : "false";
-        const result = await setConfig(scope, key, value, { projectDir: opts.dir });
-        if (opts.json) {
-          process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-          return;
-        }
+        const enabled = state === "enable";
+        const result = await setLocalCoderEnabled(enabled, parseConfigScope(opts.scope), {
+          projectDir: opts.dir,
+        });
         process.stdout.write(
-          `local coder ${state}d${scope !== "project" ? ` (${scope} scope)` : ""}\n`,
-        );
-        if (result.overriddenBy !== undefined) {
-          const o = result.overriddenBy;
-          const oSource = o.source !== undefined ? ` (${o.source})` : "";
-          process.stdout.write(
-            `note: a higher-precedence layer overrides it — effective value is from ${o.layer}${oSource}\n`,
-          );
-        }
-        process.stdout.write(
-          "restart Claude Code (or reload) so the MCP server picks up the change.\n",
+          opts.json
+            ? `${JSON.stringify(result, null, 2)}\n`
+            : renderLocalCoderWrite(result, enabled),
         );
       } catch (err) {
         fail(err);

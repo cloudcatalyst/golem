@@ -15,7 +15,7 @@ import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { friendlyModelLabel, resolveUpstreamDisplay } from "../providers/index.js";
-import { type LimitPrediction, readLimitState, readServedModel } from "../proxy/index.js";
+import { type LimitPrediction, readLimitState, servedModelFor } from "../proxy/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
@@ -59,7 +59,12 @@ export interface StatusReport {
     readonly base_url: string;
     /** Configured default model, or null for a byte-faithful Anthropic upstream. */
     readonly default_model: string | null;
-    /** Last model the proxy actually served (from served-model.json), if any. */
+    /**
+     * Last model the proxy actually served **on this account** (from
+     * served-model.json), if any. Absent right after an account switch, until the
+     * new upstream serves something — a snapshot from the previous upstream is
+     * dropped rather than reported as the current model.
+     */
     readonly last_served_model?: string | null;
     /** When that model was served (ISO), if known. */
     readonly last_served_at?: string | null;
@@ -177,6 +182,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
   };
+  // R6.2 display: the ACTIVE account/provider/model the proxy fronts (not just
+  // the top-level base URL). No network, no secret — see resolveUpstreamDisplay.
+  // Resolved before the reads below because the last-served-model lookup is
+  // scoped to this account (a snapshot from the previous upstream must not be
+  // reported as the current model).
+  const upstream = resolveUpstreamDisplay(settings.proxy);
+
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
   const [init, reachable, slider, localInfo, servedModel] = await Promise.all([
     golemInitStatus(projectDir, settings.proxy.port),
@@ -185,12 +197,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     localProbe(projectDir, settings.inference.ollama_base_url).catch(
       (): LocalModelInfo => ({ reachable: false }),
     ),
-    readServedModel(projectDir).catch(() => null),
+    servedModelFor(projectDir, upstream.accountId).catch(() => null),
   ]);
-
-  // R6.2 display: the ACTIVE account/provider/model the proxy fronts (not just
-  // the top-level base URL). No network, no secret — see resolveUpstreamDisplay.
-  const upstream = resolveUpstreamDisplay(settings.proxy);
 
   // Update status from the cached check only (no network — never hang status).
   // Recompute "available" against the version we're actually running.

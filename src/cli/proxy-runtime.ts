@@ -216,10 +216,11 @@ export function buildProxyFromSettings(
     ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
   // R6.1 case (a): auth-header mapping for a non-Anthropic Anthropic-protocol
-  // upstream. The credential is a secret read from the environment (the active
-  // account's per-account var, or GOLEM_UPSTREAM_API_KEY), never from
-  // settings.json. `inherit` (the Anthropic default) yields no mapper, so the
-  // passthrough forwards the client's own auth verbatim.
+  // upstream. The credential is a secret the CLI resolved from the OS credential
+  // store and handed to this process at spawn (Decision 47 — an environment
+  // variable is the internal transport, never a user-facing setting), and never
+  // comes from settings.json. `inherit` (the Anthropic default) yields no mapper,
+  // so the passthrough forwards the client's own auth verbatim.
   const upstreamProvider = upstream.provider;
   const authScheme = upstream.authScheme;
   const upstreamApiKey = upstream.apiKey;
@@ -232,7 +233,8 @@ export function buildProxyFromSettings(
   ) {
     process.stderr.write(
       `golem proxy: upstream_provider "${upstreamProvider}"${accountLabel} needs a credential — ` +
-        "set the account's GOLEM_UPSTREAM_API_KEY[__<ID>]; forwarding the client's own auth for now.\n",
+        `set it with \`golem account login ${upstream.accountId ?? upstreamProvider}\`; ` +
+        "forwarding the client's own auth for now.\n",
     );
   }
   // R6.1 case (b): translate request+response bodies for a non-Anthropic schema.
@@ -298,8 +300,9 @@ export function buildProxyFromSettings(
     (upstreamApiKey === undefined || upstreamApiKey === "")
   ) {
     process.stderr.write(
-      'golem proxy: upstream_provider "gemini" needs a credential — set ' +
-        "GOLEM_UPSTREAM_API_KEY (sent as the ?key= query param); requests will 401 until it is set.\n",
+      'golem proxy: upstream_provider "gemini" needs a credential (sent as the ?key= query ' +
+        `param) — set it with \`golem account login ${upstream.accountId ?? "gemini"}\`; ` +
+        "requests will 401 until it is set.\n",
     );
   }
   // Throttle limit-state persistence (P2a) so a busy SSE stream doesn't rewrite
@@ -348,9 +351,17 @@ export function buildProxyFromSettings(
       // model flows through — so we read it back out of the request body
       // (observe-only, never mutating the forwarded bytes) rather than showing
       // nothing. Fail-open (never affects the forwarded response).
+      //
+      // The active account id is stamped alongside it so a snapshot can be told
+      // apart from one written by a different upstream — otherwise a switch left
+      // every display surface reporting the previous account's model.
       const servedModel = upstreamModel ?? sniffRequestModel(request.body);
       if (servedModel !== undefined) {
-        void writeServedModel(dir, { model: servedModel, servedAtIso: nowIso }).catch(() => {});
+        void writeServedModel(dir, {
+          model: servedModel,
+          servedAtIso: nowIso,
+          accountId: upstream.accountId,
+        }).catch(() => {});
       }
       // Limit prediction (snooze P2a): persist the observed session/weekly window
       // utilization + reset to `.golem/state/limit-state.json`, throttled so a busy

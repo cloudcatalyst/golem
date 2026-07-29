@@ -310,15 +310,16 @@ current account; Golem routes the whole request to a configured upstream. Do it
 through Golem:
 
 1. **List accounts.** Run \`golem account list\` via Bash — shows configured
-   accounts, which is active, and whether each credential env var is set.
+   accounts, which is active, and whether each has a stored credential.
 2. **Switch.** Run \`golem account use <id>\` (or \`golem account use none\` to
    revert to the top-level default). This **restarts the proxy automatically**
    so the switch takes effect — no separate \`golem proxy restart\` needed.
 3. **Reconnect MCP.** Tell the user any live \`golem mcp serve\` connection must
    be reconnected by Claude Code for the change to reflect in the MCP tools.
 4. **Confirm.** Report the now-active account and its upstream URL. If a provider
-   needs a credential env var that is not set, name it (\`GOLEM_UPSTREAM_API_KEY\`
-   or the per-account var) rather than leaving auth silently broken.
+   has no stored credential, say so and give the fix
+   (\`golem account login <id>\`) rather than leaving auth silently broken —
+   there is no environment variable to export (spec Decision 47).
 `;
 
 const debrief = `---

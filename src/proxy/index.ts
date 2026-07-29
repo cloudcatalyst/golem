@@ -18,8 +18,10 @@ export {
   writeLimitState,
 } from "./limit-prediction.js";
 export {
+  clearServedModel,
   readServedModel,
   type ServedModel,
+  servedModelFor,
   servedModelPath,
   writeServedModel,
 } from "./served-model.js";
