@@ -11,6 +11,16 @@ import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
 
+/**
+ * Every test here runs a REAL `golemInit` / `golemUninit`: ~20 file writes each
+ * (settings, .mcp.json, the skills, the guidance rules) against a temp dir. On
+ * Windows, with the rest of the suite running in parallel and a virus scanner in
+ * the path, that regularly exceeds vitest's 5s default and flaked intermittently
+ * on whichever test happened to be unlucky. The work is real, so the budget was
+ * what was wrong — not the tests.
+ */
+const SLOW_IO = { timeout: 30_000 };
+
 const okProbe: InitProbe = {
   claudeCodeInstalled: () => Promise.resolve(true),
   headroomWrapActive: () => Promise.resolve(false),
@@ -41,7 +51,7 @@ async function snapshot(dir: string): Promise<Map<string, string>> {
   return out;
 }
 
-describe("golem init", () => {
+describe("golem init", SLOW_IO, () => {
   it("creates all wiring files in a fresh project", async () => {
     const report = await golemInit({ projectDir, probe: okProbe });
     expect(report.dryRun).toBe(false);
@@ -361,7 +371,7 @@ describe("golem init", () => {
   });
 });
 
-describe("golem init — VS Code extension install", () => {
+describe("golem init — VS Code extension install", SLOW_IO, () => {
   let extDir: string;
   let sourceDir: string;
   let vscodeProbe: InitProbe;
@@ -406,7 +416,7 @@ describe("golem init — VS Code extension install", () => {
   });
 });
 
-describe("golem uninit", () => {
+describe("golem uninit", SLOW_IO, () => {
   it("removes exactly what init added, keeping foreign entries and .golem/", async () => {
     await mkdir(path.join(projectDir, ".claude"), { recursive: true });
     await writeFile(

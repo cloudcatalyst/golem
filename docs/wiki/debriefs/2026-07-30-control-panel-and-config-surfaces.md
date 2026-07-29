@@ -1,8 +1,8 @@
 ---
 title: golem ui — one control surface behind three UIs
 type: debrief
-tags: [config, tui, ink, vscode, control-surface, ui, settings]
-sources: [src/config/ui-model.ts, src/config/control-surface.ts, src/tui/, src/cli/main.ts, vscode-extension/render.js, docs/golem-spec.md]
+tags: [config, tui, vscode, control-surface, ui, settings, performance, startup-latency]
+sources: [src/config/ui-model.ts, src/config/control-surface.ts, src/tui/, src/cli/main.ts, src/cli/fast-path.ts, vscode-extension/render.js, docs/golem-spec.md]
 created: 2026-07-30
 updated: 2026-07-30
 ---
@@ -15,9 +15,12 @@ CLI, and VS Code ways to manage preferences at user and project level. The ask
 came with an expectation that "this will likely cause the config to need to be
 refactored".
 
-Shipped under [spec Decision 50] (USER decision on the ink question). The concept
-page is [[Configuration Surfaces]]; related: [[Guidance Rules]],
-[[Slider Levels]], [[Architecture]].
+Shipped under [spec Decision 50], then reworked the same day under
+[spec Decision 51] — ink and React were measured out again once the panel proved
+slow. **The sections below are in the order they happened**, so the early ones
+describe the ink-era code; "And then ink came out again" is where it lands. The
+concept page [[Configuration Surfaces]] describes the *current* state; related:
+[[Guidance Rules]], [[Slider Levels]], [[Architecture]].
 
 ## The config did NOT need refactoring
 
@@ -89,7 +92,7 @@ found there rather than by squinting at a frame.
 The one real ink render (`tests/integration/tui-render.test.tsx`) exists only to
 prove the components mount and the pet, header, and rows appear.
 
-## ink was the user's call; two guards make it safe
+## ink was the user's call; two guards make it safe *(superseded — see below)*
 
 Offered a hand-rolled dependency-free TUI (the repo already has a raw-mode TTY
 prompt in `src/credentials/prompt.ts`) versus ink + React. The user chose ink.
@@ -122,7 +125,7 @@ The panel is now chosen **before** `program.parseAsync`, gated on
 `argv.length <= 2 && stdin.isTTY && stdout.isTTY`. Verified unchanged afterwards:
 `golem --help`, `golem --version`, `golem bogus`, and `golem | cat`.
 
-## Toolchain friction worth remembering
+## Toolchain friction worth remembering *(ink-era; mostly moot now)*
 
 Recorded in full in verification-notes §85; the parts that cost time:
 
@@ -238,17 +241,73 @@ code. All identical. The one assumption that makes `post-tool-use` safe to
 fast-path (that `program.ts` injects no `PostToolUseOptions` field) is asserted by a
 test, so it can't rot silently.
 
+## And then ink came out again
+
+The user asked the obvious follow-up: what is ink actually giving us, would removing
+it keep the functionality, and would it be faster? Answering it properly meant
+inventorying real usage rather than ink's feature list — **8 layout props, 3 text
+props, 3 hooks**, and three layouts (a vertical stack, one two-column row, one
+space-between row). That is not much framework for 892ms.
+
+The numbers decided it: everything the panel needs *except* ink cost **150ms**; with
+ink, **1091ms**. ink was ~85% of the load, spread thinly across its dependency tree
+(`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws` ~72ms, …),
+so there was nothing to defer.
+
+Replaced by ~765 lines across five focused modules: `render.ts` (layout),
+`screen.ts` (diffed repaint, cursor, resize), `keys.ts` (raw-mode key decoding),
+`ansi.ts` (hex → 24-bit/256/16/none, replacing chalk), `width.ts` (ANSI- and
+wide-char-aware measurement, replacing `string-width`/`cli-truncate`). Same layout,
+same keys, same colours, same pet. **~170ms to a fully-populated first frame**, and
+`golem-run` back to **6 runtime dependencies**.
+
+**The reducer split was the whole reason this was cheap.** `tests/unit/tui-state.test.ts`
+— 32 tests over every interaction rule — passed **unchanged**, because `KeyPress` was
+always an ink-agnostic shape and `state.ts` never imported ink. Only the view was
+rewritten, and the new view is *easier* to test: `renderPanel` is `state → string[]`,
+so the string-based tests need no mount and no `ink-testing-library`. Designing for
+testability turned out to be designing for replaceability.
+
+Two things that were a dependency's problem are now ours, so both are tested head-on:
+colour capability detection across the `NO_COLOR`/`FORCE_COLOR`/`COLORTERM`/`TERM`/
+`WT_SESSION` matrix, and display width for CJK/emoji/Ambiguous code points (including
+an assertion that the pet's U+25A0 measures 1, which the fixed-width column assumes).
+
+The `~80ms` ANSI splash from the previous round was **deleted**. It existed to cover a
+1.15s wait; at 170ms there is nothing to cover, and a placeholder that flashes is
+worse than none. Nice reminder that a mitigation can outlive its problem.
+
+One more find: `tui/header.ts` imported `renderUpstream` from `cli/status.js` — a
+string formatter sitting behind a ~430ms module graph, right on the render path. Both
+display helpers moved to a dependency-free `cli/upstream-display.ts`, taking
+`tui/header.js` from 260ms → 83ms.
+
+## The proxy was never the problem
+
+Also asked, so also measured rather than assumed. Against a canned local
+Anthropic-shaped upstream (so the number is Golem, not the network), 40 requests with
+a 9.7 KiB body: **+4.4ms p50** at the default slider level, +3.9ms at level 0 (full
+bypass). Against upstream calls that take 1000s of ms that is well under 1% — and the
+fact that level 0 is barely cheaper says the pipeline isn't where time goes. No proxy
+work was warranted, so none was done.
+
+## A flake, diagnosed instead of re-run
+
+`cli-init.test.ts` failed in 3 of ~6 full-suite runs, on a *different* test each time
+— the classic shape of something being waved through. It was `Error: Test timed out in
+5000ms`: every test in that file performs a real `golemInit` (~20 file writes to a
+temp dir), which on Windows under parallel load plus a virus scanner regularly beats
+vitest's 5s default. (Not the VS Code extension copy — the fake probe doesn't supply
+`vscodeExtensionsDir`, so that path never runs.) The work is real, so the budget was
+wrong: `{ timeout: 30_000 }` on the file's three `describe`s. Three consecutive green
+full runs after.
+
 ## Left open
 
-- **`bun build --compile` + yoga-layout's WASM is UNVERIFIED** (no Bun on this
-  box). The panel may not work inside the standalone binaries (Decision 41d) —
-  the npm path is verified. Test in the release workflow before advertising
-  `golem ui` for the no-Node tier. Folds into the existing 🔬 R7.3 smoke-test.
-- **ink is the remaining floor for the panel** at ~890ms (~75% of the ~1.15s to
-  interactive), spread across its dependency tree rather than concentrated anywhere
-  patchable. Going materially below ~1s means replacing it with a hand-rolled
-  renderer; the user chose to keep ink for now with the number on record. The pure
-  reducer in `state.ts` means such a swap would touch only the four view files.
+- **The `bun build --compile` risk is GONE.** It was ink's `yoga-layout` WASM that
+  might not survive Bun's bundler; with ink removed, `src/tui/` is plain TypeScript
+  with no assets, so the panel should work in the standalone binaries. Still worth
+  including in R7.3's per-OS smoke-test, but it is no longer a known hazard.
 - **U+25A0 in the pet is Ambiguous-width**, so it may draw double-wide in a
   CJK-configured terminal. Mitigated (fixed-width box) rather than solved;
   `ui.pet false` / `--no-pet` is the out, and also covers legacy Windows consoles.

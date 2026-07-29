@@ -3293,3 +3293,94 @@ one assumption that makes `post-tool-use` safe to fast-path.
 The commander path is untouched on purpose: it serves user-typed commands where
 ~800ms is not the bottleneck, and leaving it alone keeps `--help`, error messages,
 and flag parsing in exactly one place.
+
+### §86c — ink removed; the panel now paints in ~170ms (2026-07-30)
+
+§86 concluded that ink was the floor and that going below ~1s meant replacing it.
+Measured, decided, done.
+
+**The case, in one line:** everything the panel needs *except* ink cost **150ms**
+(including node boot); with ink it was **1091ms**. ink alone was **892ms** — ~85% of
+the panel's load — and it was spread across its dependency tree
+(`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws` ~72ms,
+`wrap-ansi` ~65ms, `string-width` ~64ms, `yoga-layout` ~57ms, and a dozen at 5–20ms),
+so there was nothing to defer or patch around.
+
+### What ink was actually providing, and what replaced it
+
+Inventoried from real usage, not from ink's feature list: **8 layout props**
+(`flexDirection`, `marginTop`, `marginRight`, `paddingX`, `width`, `flexGrow`,
+`flexShrink`, `justifyContent`), **3 text props** (`color`, `wrap`, `bold`), and
+**3 hooks** (`useInput`, `useStdout`, `useApp`). The layouts were a vertical stack,
+one two-column row, and one space-between row.
+
+| ink provided | replaced by | lines |
+|---|---|---|
+| flexbox layout (yoga) | `src/tui/render.ts` — computes the 3 layouts directly | ~230 |
+| diffed repaint, cursor, resize | `src/tui/screen.ts` — rewrites only changed lines | ~100 |
+| `useInput` key decoding | `src/tui/keys.ts` — raw-mode decoder → the same `KeyPress` | ~175 |
+| chalk colour degradation | `src/tui/ansi.ts` — hex → 24-bit/256/16/none | ~150 |
+| `string-width` / `cli-truncate` | `src/tui/width.ts` — ANSI- and wide-char-aware | ~110 |
+| React state→view | the reducer in `state.ts`, which already existed | 0 |
+
+**Functionality is unchanged.** Same layout, same keys, same colours, same pet. The
+frame was diffed against the ink version's output and matches. Two things are now
+*ours* to get right rather than a dependency's — colour capability detection and
+display-width arithmetic — so both are directly tested (17 assertions in
+`tests/unit/tui-render.test.ts`), including the terminal matrix
+(`NO_COLOR`/`FORCE_COLOR`/`COLORTERM`/`TERM`/`WT_SESSION`) and CJK/emoji widths.
+
+**The reducer split paid for itself exactly as intended:** `tests/unit/tui-state.test.ts`
+(32 tests covering every interaction rule) passed **unchanged** through the whole
+rewrite, because `KeyPress` was always an ink-agnostic shape. Only the view files
+changed. The new view is *easier* to test than before — `renderPanel` is
+`state → string[]`, so no mount and no `ink-testing-library`.
+
+**One more find along the way:** `src/tui/header.ts` imported `renderUpstream` from
+`cli/status.js` — a string formatter behind a ~430ms module graph, sitting on the
+render path. Both display helpers moved to the dependency-free
+`src/cli/upstream-display.ts` (status.ts and statusline.ts re-export them), taking
+`tui/header.js` from 260ms → **83ms**.
+
+### Final numbers (best of 5–6, this box)
+
+| | before this whole effort | now |
+|---|---|---|
+| `golem` panel — first frame, real data | ~2.5–3s (blank until then) | **~170ms** |
+| `golem hook post-tool-use` (every tool call) | ~765ms | **126ms** |
+| `golem hook pre-tool-use` (every tool call) | ~765ms | **135ms** |
+| `golem statusline` (every prompt) | ~985ms | **275ms** |
+| runtime dependencies | 6 → 34 (with ink) | **back to 6** |
+
+The ANSI pre-paint splash from §86 was **removed**: at ~170ms to a fully-populated
+frame there is nothing to cover, and a placeholder that flashes is worse than none.
+
+**node boot (~52ms) is the remaining floor** for the hooks — Claude Code spawns a
+process per call, so that cannot be avoided from inside Golem.
+
+### The proxy was never the problem — measured
+
+Worth stating plainly, because it was a stated worry. Against a canned local
+Anthropic-shaped upstream (so the number is Golem, not the network), 40 requests with
+a 9.7 KiB body, p50:
+
+| | p50 | added |
+|---|---|---|
+| direct to upstream | 1.0ms | — |
+| via Golem, slider 1 (default) | 5.4ms | **+4.4ms** |
+| via Golem, slider 0 (full bypass) | 4.9ms | +3.9ms |
+
+**+4.4ms per request** on the default level, against upstream LLM calls that take
+1000s of ms — i.e. well under 1% overhead, and level 0 is barely cheaper, so the
+pipeline itself is not where time goes. No proxy work was warranted and none was done.
+
+### Also fixed: a pre-existing test flake this surfaced
+
+`tests/integration/cli-init.test.ts` failed intermittently (3 of ~6 full-suite runs),
+on a *different* test each time. Diagnosed rather than retried: `Error: Test timed out
+in 5000ms` — every test in that file runs a real `golemInit`/`golemUninit` (~20 file
+writes to a temp dir), which on Windows under parallel suite load plus a virus scanner
+regularly exceeds vitest's 5s default. (Not the VS Code extension copy — the fake
+probe doesn't supply `vscodeExtensionsDir`, so that path is skipped.) The work is real,
+so the budget was wrong: the three `describe`s now carry `{ timeout: 30_000 }`. Three
+consecutive full-suite runs green afterwards.

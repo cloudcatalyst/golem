@@ -38,6 +38,9 @@ import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 // `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
 // write path (~426ms) and all that's wanted here is a lookup table.
 import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
+// Shared with status.ts and the `golem ui` header; lives in its own module so
+// rendering a label costs nothing to import (see upstream-display.ts).
+import { upstreamLabel } from "./upstream-display.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
 export interface SessionInput {
@@ -131,18 +134,6 @@ export function parseSessionInput(raw: string): SessionInput {
 }
 
 /** Short label for the configured upstream (foundry / anthropic / host). */
-export function upstreamLabel(url: string): string {
-  try {
-    const host = new URL(url).host.toLowerCase();
-    if (host.includes("azure")) return "foundry";
-    if (host === "api.anthropic.com") return "anthropic";
-    if (host.includes("openrouter")) return "openrouter";
-    return host;
-  } catch {
-    return "upstream";
-  }
-}
-
 /**
  * R6.2: the honest upstream label given the resolved provider + active account.
  * An active account shows its id (that's what the user switched to); otherwise a
@@ -361,3 +352,6 @@ export async function collectGolemState(
   }
   return state;
 }
+
+// Re-exported: callers have always imported `upstreamLabel` from here.
+export { upstreamLabel } from "./upstream-display.js";

@@ -92,15 +92,25 @@ describe("the CLI keeps the panel off the hot path", () => {
     expect(specifiers).not.toContain("./control-surface.js");
   });
 
-  it("does not statically import ink or react anywhere outside src/tui", async () => {
-    // Anything that imports ink transitively drags it onto whatever path loads it,
-    // so the dependency stays confined to the panel's own directory.
+  it("has no ink or react dependency at all, anywhere", async () => {
+    // The panel was ink+React; ink alone cost ~890ms to import, which was ~75% of the
+    // panel's startup, so it was replaced by src/tui/{ansi,width,keys,screen,render}.
+    // Nothing may quietly reintroduce it.
+    const pkg = JSON.parse(await source("package.json")) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const declared = { ...pkg.dependencies, ...pkg.devDependencies };
+    for (const banned of ["ink", "react", "@types/react", "ink-testing-library"]) {
+      expect(Object.keys(declared), `${banned} is back in package.json`).not.toContain(banned);
+    }
+
     const { globSync } = await import("node:fs");
-    const files = globSync("src/**/*.{ts,tsx}", { cwd: repoRoot })
-      .map((file) => file.split(path.sep).join("/"))
-      .filter((file) => !file.startsWith("src/tui/"));
-    // Read in parallel: ~150 files read one-at-a-time overran vitest's 5s default
-    // when the whole suite was running.
+    const files = globSync("src/**/*.ts", { cwd: repoRoot }).map((file) =>
+      file.split(path.sep).join("/"),
+    );
+    // Read in parallel: ~150 files one-at-a-time overran vitest's 5s default when the
+    // whole suite was running.
     const sources = await Promise.all(
       files.map(async (file) => [file, await source(file)] as const),
     );
@@ -113,11 +123,25 @@ describe("the CLI keeps the panel off the hot path", () => {
   });
 
   it("keeps the panel's own entry point free of static imports too", async () => {
-    // src/tui/index.tsx is what main.ts dynamically imports. It must defer ink AND
-    // the control surface, so the instant pre-paint can happen before either loads.
-    const code = await source("src/tui/index.tsx");
+    // src/tui/index.ts is what main.ts dynamically imports in order to decide whether
+    // to open the panel at all, so even the control surface (~140ms) is deferred.
+    const code = await source("src/tui/index.ts");
     expect(staticSpecifiers(code)).toEqual([]);
-    expect(code).toContain('import("ink")');
     expect(code).toMatch(/import\(\s*"\.\.\/config\/control-surface\.js"\s*\)/);
+  });
+
+  it("keeps the ESC byte in exactly one module, and out of the source as a literal", async () => {
+    // A raw control character in source is invisible in diffs and gets mangled by
+    // ordinary tooling; ansi.ts builds it with String.fromCharCode instead.
+    const { globSync } = await import("node:fs");
+    const files = globSync("src/tui/*.ts", { cwd: repoRoot }).map((f) =>
+      f.split(path.sep).join("/"),
+    );
+    const withRawEsc: string[] = [];
+    for (const file of files) {
+      if ((await source(file)).includes(String.fromCharCode(27))) withRawEsc.push(file);
+    }
+    expect(withRawEsc).toEqual([]);
+    expect(await source("src/tui/ansi.ts")).toContain("String.fromCharCode(27)");
   });
 });

@@ -4,10 +4,6 @@
     "lib": ["ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    // The `golem ui` panel (src/tui/) is ink + React; everything else is plain
-    // .ts. `react-jsx` needs no `React` import in scope.
-    "jsx": "react-jsx",
-    "jsxImportSource": "react",
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -23,5 +19,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "tests/**/*.ts", "tests/**/*.tsx", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts"]
 }

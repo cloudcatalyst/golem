@@ -87,7 +87,8 @@ releases.
                               │
         ┌─────────────────────┼──────────────────────────┐
    golem ui (src/tui/)   golem config          VS Code webview
-   ink + React           schema/get/set/unset  (via `config schema --json`)
+   self-rendered, no     schema/get/set/unset  (via `config schema --json`)
+   framework
 ```
 
 `golem config schema --json` emits the whole surface, which is what makes the VS
@@ -115,16 +116,15 @@ verification-notes §86). Three rules keep it honest:
   imports, so the routing decision cannot live in a module that statically imports
   either branch. A bare `golem` therefore never loads commander or any other
   command's dependencies (~790ms saved).
-- **The panel pre-paints before ink exists.** `splashLines` writes the pet, the
-  version, and the cwd with raw SGR — all free data — within ~80ms of process
-  start, then erases those lines before ink renders. First *visible* feedback is
-  ~15× faster than first *interactive* frame, and that is the number a user feels.
+- **The view is a pure function.** `renderPanel(state) → string[]`, so layout is
+  computed directly rather than by a flexbox engine, and the whole UI is assertable
+  as strings. `screen.ts` then rewrites only the lines that changed.
 - **Nothing needed only for display is on the first-paint path.**
   `ControlSurface.header` is nullable and `collectHeader` imports `cli/status.js`
   lazily; the slider's read half lives in `cli/slider-read.ts` so displaying a level
   doesn't load the write path's `cli/init.js`; guidance is imported from
-  `hooks/guidance.js` rather than the hooks barrel. Panel interactive went ~2.5–3s
-  → ~1.15s, with the header filling in a moment later.
+  `hooks/guidance.js` rather than the hooks barrel. The header still arrives a beat
+  after the first frame, into a same-height placeholder.
 
 `tests/unit/tui-lazy-import.test.ts` enforces all of it, including that the config
 barrel never re-exports the control surface — doing so once added ~400ms to
@@ -139,25 +139,28 @@ functions that only read a JSON file. Narrowing those imports took
 commander entirely — `golem hook post-tool-use` went ~765ms → ~129ms, `statusline`
 ~985ms → ~301ms (verification-notes §86b).
 
-The remaining floor is ink itself (~890ms, spread across its dependency tree rather
-than concentrated in one import), so going materially below ~1s would mean
-replacing it.
+ink and React were subsequently **removed** (spec Decision 51): they were ~85% of the
+panel's load and nothing in them could be deferred. `src/tui/` now renders itself —
+`render.ts` (layout), `screen.ts` (diffed repaint), `keys.ts` (key decoding),
+`ansi.ts` (colour degradation), `width.ts` (ANSI/wide-char measurement) — with the
+same layout, keys, and colours, and `golem-run` back to 6 runtime dependencies.
+**The panel now paints a fully-populated first frame in ~170ms**, so the pre-paint
+splash was deleted too: there is nothing left to cover.
 
-Two further structural choices worth knowing:
+One further structural choice, and the one that made the ink removal cheap:
 
-- **`src/tui/state.ts` is a pure reducer.** `(state, event) → {state, effects}`.
-  Every interaction rule lives there and is unit-tested with no ink, no terminal,
-  and no filesystem; `app.tsx` only performs the effects it is handed. This is why
-  `tests/unit/tui-state.test.ts` can cover the whole feel of the panel.
-- **ink is loaded only through a dynamic import.** `golem hook pre-tool-use` runs
-  on every Claude Code tool call, and the proxy/MCP daemons share the entry point,
-  so a static import of ink + React + yoga-layout would tax all of them.
-  `tests/unit/tui-lazy-import.test.ts` fails the build if that regresses.
+- **`src/tui/state.ts` is a pure reducer.** `(state, event) → {state, effects}`,
+  where `KeyPress` was always an ink-agnostic shape. Every interaction rule lives
+  there and is tested with no terminal and no filesystem — so
+  `tests/unit/tui-state.test.ts` (32 tests) passed **unchanged** through the whole
+  rewrite. Only the view changed. `index.ts` is a ~40-line dispatch loop that
+  performs the effects the reducer hands it.
 
-`ui.color` is applied by setting `FORCE_COLOR` **before** ink is imported (chalk
-decides its level at import time), which keeps every `Theme` field a real colour
-string — ink's `<Text color>` rejects an explicit `undefined` under
-`exactOptionalPropertyTypes`.
+Colour is resolved by `ansi.ts` rather than by an environment variable: `ui.color`
+maps to a `Theme.level` (0 = plain text, 1/2/3 = 16/256/24-bit), and every theme
+colour is a hex triplet degraded to that level. That is simpler than the ink version,
+which had to poke `FORCE_COLOR` before importing chalk because chalk fixes its level
+at import time.
 
 ### The pet
 

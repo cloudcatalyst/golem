@@ -40,6 +40,10 @@ export type PanelMode =
 
 export interface PanelState {
   readonly surface: ControlSurface;
+  /** CLI version, for the header placeholder shown before the report arrives. */
+  readonly version: string;
+  /** Project directory, same purpose. */
+  readonly projectDir: string;
   readonly tab: ControlTab;
   /** Index into {@link visibleRows}; always points at a `control` row when one exists. */
   readonly cursor: number;
@@ -101,10 +105,16 @@ export interface PanelStep {
 
 export function initialState(
   surface: ControlSurface,
-  options: { readonly showAdvanced?: boolean } = {},
+  options: {
+    readonly showAdvanced?: boolean;
+    readonly version?: string;
+    readonly projectDir?: string;
+  } = {},
 ): PanelState {
   const state: PanelState = {
     surface,
+    version: options.version ?? surface.header?.version ?? "",
+    projectDir: options.projectDir ?? surface.header?.project_dir ?? "",
     tab: "settings",
     cursor: 0,
     scope: "project",

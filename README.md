@@ -88,10 +88,14 @@ as a toggle or picker — each showing which layer supplied its value, writable 
 scope, `tab` switches group, `a` reveals advanced settings. Rows set by a
 `GOLEM_*` environment variable are locked, since env beats every file layer.
 
+It opens in about **170ms** — the panel renders itself with no UI framework, and the
+CLI's hot paths are kept deliberately thin (`golem hook post-tool-use`, which Claude
+Code runs on every tool call, is ~126ms). See
+[Configuration Surfaces](docs/wiki/concepts/Configuration%20Surfaces.md).
+
 The same controls are available non-interactively (`golem config list|get|set|unset`,
 `golem guidance`, `golem slider`) and in the VS Code panel's Settings section —
-all three render from one surface, `golem config schema --json`. See
-[Configuration Surfaces](docs/wiki/concepts/Configuration%20Surfaces.md).
+all three render from one surface, `golem config schema --json`.
 
 - **Spec:** [docs/golem-spec.md](docs/golem-spec.md) (source of truth)
 - **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md) · [docs/plan/ROADMAP.md](docs/plan/ROADMAP.md)
