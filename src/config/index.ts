@@ -18,6 +18,14 @@
 import { type SliderPolicy, sliderPolicyForLevel } from "../interfaces/policy.js";
 import type { GolemSettings } from "./schema.js";
 
+// `./control-surface.js` is deliberately NOT re-exported from this barrel.
+//
+// It reaches into src/cli (status, init, proxy-daemon, slider, accounts) and
+// src/hooks, so re-exporting it dragged that entire graph into every consumer of
+// `loadConfig` — including src/hooks/pre-tool-use.ts, which runs on EVERY Claude
+// Code tool call. Measured: this barrel went from ~130ms to ~530ms to import.
+// Consumers import it directly from "../config/control-surface.js" instead.
+
 export type { EnvLayer, EnvOverride } from "./env.js";
 export { coerceEnvValue, ENV_PREFIX, readEnvLayer } from "./env.js";
 export { ConfigError } from "./errors.js";
@@ -41,15 +49,31 @@ export {
   USER_DIR_NAME,
 } from "./paths.js";
 export type {
+  CompressionSettings,
   GolemSettings,
   InferenceSettings,
   KnowledgeSettings,
   ProxySettings,
   SectionName,
   SliderSettings,
+  SnoozeSettings,
   TelemetrySettings,
+  UiSettings,
 } from "./schema.js";
 export { allLeafPaths, DEFAULT_SETTINGS, leafSchema, SECTION_NAMES } from "./schema.js";
+export type { LeafPath, SectionMeta, SettingKind, SettingMeta } from "./ui-model.js";
+export {
+  deriveKind,
+  enumOptionsFor,
+  numericRangeFor,
+  SECTION_META,
+  SETTING_META,
+  sectionMeta,
+  sectionsInDisplayOrder,
+  settingKind,
+  settingMeta,
+  unwrapSchema,
+} from "./ui-model.js";
 export type { SettingsScope, WriteSettingOptions } from "./write-setting.js";
 export { writeSetting } from "./write-setting.js";
 

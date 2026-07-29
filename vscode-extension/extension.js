@@ -87,7 +87,7 @@ async function fetchUpdate() {
 }
 
 async function fetchModel() {
-  const [stats, status, accounts] = await Promise.all([
+  const [stats, status, accounts, surface] = await Promise.all([
     // Rolling 24h savings window (Decision 23 — savings is situational); the CLI
     // widens to 7d/all when the last day recorded nothing, and reports which
     // window it used via `window_applied`.
@@ -96,8 +96,66 @@ async function fetchModel() {
     // Cache the account list so the "Switch upstream" quick-pick can render
     // instantly instead of waiting for a CLI round-trip each time it opens.
     golemJson(["account", "list", "--json", "--dir", cwd()]),
+    // The control surface: labels, widget kinds, values, provenance, and writable
+    // scopes for settings + guidance rules + runtime state. The CLI is the single
+    // source of truth, so a new settings key needs no extension change.
+    golemJson(["config", "schema", "--json", "--dir", cwd()]),
   ]);
-  return buildModel(stats, status, lastUpdate, accounts);
+  return buildModel(stats, status, lastUpdate, accounts, surface);
+}
+
+/**
+ * Apply one control change through the CLI, then refresh.
+ *
+ * Routed by the control's id prefix, mirroring `applyControl` in
+ * src/config/control-surface.ts — settings go through `golem config set/unset`
+ * (which validates against the schema), guidance rules through `golem guidance`,
+ * and runtime state through the command that owns its side effects. A rejected
+ * write surfaces the CLI's own message; the refresh then puts the row back to
+ * whatever is actually on disk.
+ */
+async function applyControlChange(id, value, scope) {
+  if (typeof id !== "string" || id.length === 0) return;
+  const sep = id.indexOf(":");
+  const family = sep === -1 ? "" : id.slice(0, sep);
+  const name = sep === -1 ? "" : id.slice(sep + 1);
+  const dir = ["--dir", cwd()];
+  let out = null;
+
+  if (family === "setting") {
+    // null / empty means "remove it from this scope" so lower layers apply again.
+    out =
+      value === null || value === undefined || value === ""
+        ? await golemText(["config", "unset", name, "--scope", scope || "project", ...dir])
+        : await golemText([
+            "config",
+            "set",
+            name,
+            String(value),
+            "--scope",
+            scope || "project",
+            ...dir,
+          ]);
+  } else if (family === "guidance") {
+    const verb = value === true || value === "true" ? "enable" : "disable";
+    const personal = scope === "user" ? ["--user"] : [];
+    out = await golemText(["guidance", verb, name, ...personal, ...dir]);
+  } else if (family === "runtime" && name === "slider") {
+    await applySlider(Number(value));
+    return;
+  } else if (family === "runtime" && name === "account") {
+    out = await golemText(["account", "use", String(value), ...dir]);
+  } else if (family === "runtime" && name === "proxy") {
+    await setProxy(value === true || value === "true");
+    return;
+  }
+
+  if (out === null) {
+    vscode.window.showWarningMessage(
+      `Golem: could not change ${id}. Run \`golem config set ${name} <value>\` in a terminal to see why.`,
+    );
+  }
+  await refresh();
 }
 
 /** Run `golem update` in an integrated terminal so the user sees the upgrade. */
@@ -135,6 +193,10 @@ class GolemViewProvider {
         await setProxy(false);
       } else if (msg.type === "update") {
         runUpdate();
+      } else if (msg.type === "apply") {
+        await applyControlChange(msg.id, msg.value, msg.scope);
+      } else if (msg.type === "refresh") {
+        await refresh();
       }
     });
     refresh();
@@ -298,6 +360,10 @@ function activate(context) {
     vscode.commands.registerCommand("golem.toggleProxy", () => setProxy(!lastModel?.proxyReachable)),
     vscode.commands.registerCommand("golem.update", runUpdate),
     vscode.commands.registerCommand("golem.setAccount", pickAccount),
+    // The Settings section lives in the panel, so "Configure" just focuses it.
+    vscode.commands.registerCommand("golem.configure", () =>
+      vscode.commands.executeCommand("golem.panel.focus"),
+    ),
     vscode.commands.registerCommand("golem.setSlider", async () => {
       const pick = await vscode.window.showQuickPick(
         SLIDER_LEVELS.map((l) => ({

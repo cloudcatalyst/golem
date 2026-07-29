@@ -1,0 +1,356 @@
+---
+title: golem ui — one control surface behind three UIs
+type: debrief
+tags: [config, tui, vscode, control-surface, ui, settings, performance, startup-latency]
+sources: [src/config/ui-model.ts, src/config/control-surface.ts, src/tui/, src/cli/main.ts, src/cli/fast-path.ts, vscode-extension/render.js, docs/golem-spec.md]
+created: 2026-07-30
+updated: 2026-07-30
+---
+
+# 2026-07-30 — the config was fine; nobody could see it
+
+Asked for a Claude-Code-style terminal panel: an info header, a purple
+block-character pet on the left, and a way to toggle settings — plus terminal,
+CLI, and VS Code ways to manage preferences at user and project level. The ask
+came with an expectation that "this will likely cause the config to need to be
+refactored".
+
+Shipped under [spec Decision 50], then reworked the same day under
+[spec Decision 51] — ink and React were measured out again once the panel proved
+slow. **The sections below are in the order they happened**, so the early ones
+describe the ink-era code; "And then ink came out again" is where it lands. The
+concept page [[Configuration Surfaces]] describes the *current* state; related:
+[[Guidance Rules]], [[Slider Levels]], [[Architecture]].
+
+## The config did NOT need refactoring
+
+Worth recording, because the instinct was reasonable and wrong. Precedence,
+provenance, atomic scoped writes, and env overrides already worked correctly
+(`src/config/loader.ts`, `write-setting.ts`, `env.ts`) and were well covered by
+tests. Not one line of the loader changed.
+
+What was actually missing was **presentation**. `schema.ts` describes 37 settings
+leaves as zod validators with genuinely good doc comments — and doc comments are
+invisible at runtime. So any UI had to re-type every label, which is precisely why
+the VS Code panel had, for months, exposed only the slider and the account. The
+fix was to add a layer, not to rework one.
+
+The second half of the problem was fragmentation: three unrelated stores, three
+unrelated verbs, no shared vocabulary.
+
+| Family | Store | Scopes | Verb |
+|---|---|---|---|
+| Settings | `.golem/settings.json` + `GOLEM_*` | user · project · local · env | `golem config` |
+| Guidance | `.claude/rules/golem-<name>.md` (presence = toggle) | project · user | `golem guidance` |
+| Runtime | slider · active account · proxy daemon | each its own | `slider` / `account use` / `proxy` |
+
+## Compile-enforced metadata, derived widgets
+
+`SETTING_META` in the new `src/config/ui-model.ts` sits beside `SETTINGS_LEAVES`
+rather than replacing it, and is annotated:
+
+```ts
+} as const satisfies { readonly [P in LeafPath]: SettingMeta };
+```
+
+`LeafPath` is a mapped-type union derived from the leaf table, so **adding a
+settings key without describing it is a compile error**. No sync test, no drift.
+(A parallel table was chosen over widening `SETTINGS_LEAVES` into
+`{schema, ...meta}` objects specifically to avoid touching the 11 existing
+`leafSchema()` / `Object.keys()` call sites in the loader, env mapper, and writer.)
+
+Widget kinds are **derived from zod** (`deriveKind`), not hand-declared, so a type
+change can't leave a stale widget behind. `SettingMeta.kind` overrides only where
+zod genuinely can't express intent — a hex colour is just a validated string.
+
+`ownedBy` earns its place: `slider.level` and `proxy.active_account` are omitted
+from the settings groups because a Runtime control edits the same key with a better
+affordance. Without it, the panel would offer two different ways to change one key.
+
+## Two rules that came out of building it
+
+**Env-supplied controls must be locked.** The first draft let you toggle a row
+whose effective value came from `GOLEM_*`. The write succeeded, the file changed,
+and nothing happened — env beats every file layer. That is a worse experience than
+refusing. Such rows now render with the reason and `applyControl` throws rather
+than writing.
+
+**A `danger` confirm belongs on the direction, not the control.** Slider level 0 is
+the redaction-off full bypass (Decision 30), so *going to* 0 asks for an explicit
+`y`; coming back never does. Prompting on the safe direction trains people to
+dismiss the prompt.
+
+## The pure-reducer split paid for itself immediately
+
+`src/tui/state.ts` is `(state, event) → {state, effects}` with no ink, no terminal,
+no filesystem. `tests/unit/tui-state.test.ts` covers 32 behaviours — cursor
+anchoring past group headings, enum wrap vs list clamp, locked-row refusal,
+empty-field-means-unset, cancel-on-anything-but-`y` — in 19ms, with no rendering.
+`app.tsx` only performs effects. Every interaction bug found during the build was
+found there rather than by squinting at a frame.
+
+The one real ink render (`tests/integration/tui-render.test.tsx`) exists only to
+prove the components mount and the pet, header, and rows appear.
+
+## ink was the user's call; two guards make it safe *(superseded — see below)*
+
+Offered a hand-rolled dependency-free TUI (the repo already has a raw-mode TTY
+prompt in `src/credentials/prompt.ts`) versus ink + React. The user chose ink.
+Both are pure JS — no native or GPU components — so CLAUDE.md's heavyweight-deps
+ban isn't engaged, but it did take `golem-run` from 6 runtime dependencies to ~34
+transitively (38 packages added). That trade is recorded in Decision 50 rather
+than left implicit.
+
+Guard one, and the most important thing in this batch: **ink is reachable only
+through a dynamic import.** `golem hook pre-tool-use` runs on *every* Claude Code
+tool call, and the proxy and MCP daemons share `src/cli/main.ts` — a static import
+of ink + React + yoga-layout would have put that load on all of them. It is the
+kind of regression nothing else would catch, so
+`tests/unit/tui-lazy-import.test.ts` asserts no static `src/tui` import exists in
+`main.ts`, and that no module outside `src/tui/` statically imports ink or React at
+all. `src/tui/index.tsx` defers ink one step further, so a config error reports
+itself as plain text instead of from inside a half-mounted alternate screen.
+
+Guard two is the reducer split above.
+
+## Bare `golem` without breaking commander
+
+The obvious implementation — a root `program.action()` — quietly broke error
+reporting: with an action handler on the root, commander treats an unknown
+subcommand as an excess positional and says *"error: too many arguments. Expected
+0 arguments but got 1"* instead of *"error: unknown command 'bogus'"*. Caught by
+checking it after the build rather than assuming.
+
+The panel is now chosen **before** `program.parseAsync`, gated on
+`argv.length <= 2 && stdin.isTTY && stdout.isTTY`. Verified unchanged afterwards:
+`golem --help`, `golem --version`, `golem bogus`, and `golem | cat`.
+
+## Toolchain friction worth remembering *(ink-era; mostly moot now)*
+
+Recorded in full in verification-notes §85; the parts that cost time:
+
+- **`tsx` ignores tsconfig's `jsx` setting** (`ReferenceError: React is not
+  defined`), and a `@jsxImportSource` pragma didn't rescue it. `tsc` and vitest
+  both honour it. Run ad-hoc panel scripts against `dist/`.
+- **`exactOptionalPropertyTypes` vs ink**: `<Text color={undefined}>` is a type
+  error. Rather than thread "maybe no colour" through every component, the
+  `ui.color: "never"` policy sets `FORCE_COLOR=0` before ink is imported (chalk
+  fixes its level at import time), keeping every theme field a real string; a
+  `col()` helper spreads in the genuinely-optional ones.
+- **Enabling `jsx` made Biome lint the whole repo as React**, so pre-existing
+  `useAccount(...)` calls in plain `.ts` tripped `useHookAtTopLevel`. That rule is
+  now scoped off for `**/*.ts` and left on for `src/tui/**`. Biome's config is
+  strict JSON — a `"//"` comment key is a hard config error, which is why the
+  rationale lives here and in [[Configuration Surfaces]] instead.
+- **`ink-testing-library@4` does work with ink 7**, despite pinning `ink ^5` in its
+  own devDependencies. That was flagged as a risk up front; it turned out to be a
+  non-issue.
+
+## Two rendering bugs the frame preview caught
+
+Neither would have failed a test that only checked for substrings:
+
+1. The header rule was `RULE_CHAR.repeat(width - 1)`, which wrapped onto a second
+   line because the outer `<Box paddingX={1}>` costs two columns. Now `width - 4`.
+2. `proxy.accounts` rendered as `[object Object], [object …` — `formatValue`
+   checked `Array.isArray` before considering element type. A structured array now
+   reads `3 entries`.
+
+Rendering a real frame and *looking at it* was worth more than the assertions.
+
+## Verified
+
+`tsc --noEmit`, `biome check`, `format:check`, and `vitest run` (141 files, 1530
+tests) all green **by exit code**; 43 `node --test` tests in the extension. Then,
+against a throwaway project through `applyControl` itself: a project-scope write
+producing a one-key file diff; a user-scope write correctly reporting that project
+still wins; a guidance rule file appearing with its restart hint; the slider
+writing `settings.local.json` regardless of the scope asked for (Decision 43) and
+raising the level-0 redaction warning; and an out-of-range `proxy.port` rejected
+with the file untouched.
+
+## Follow-up: it was slow, and the profile was surprising
+
+The panel took "a number of seconds" to appear. Full numbers in
+verification-notes §86; what's worth carrying forward:
+
+**Measure in fresh processes.** The first profile ran several imports in one
+process, which made whichever loaded first pay for all the shared sub-dependencies
+— it reported `src/config` at 620ms when the real figure is ~130ms. That reading
+would have sent the fix somewhere useless.
+
+**I had caused part of it.** Re-exporting `control-surface.js` from
+`src/config/index.ts` took that barrel from ~130ms to ~530ms, and
+`src/hooks/pre-tool-use.ts` imports the barrel — so I'd added ~400ms to a path that
+runs on *every Claude Code tool call*. The panel was the visible symptom; the hook
+regression was the more serious one, and nothing would have caught it. There's a
+test for it now.
+
+**The fix was "don't load", not "load in parallel".** Making ink, the components,
+and the config load concurrently saved **70ms out of 1800**: module evaluation is
+single-threaded CPU work, so it doesn't overlap. What worked was removing things
+from the path — `main.ts` became a dependency-free shim that dynamically imports
+either the panel or the CLI (~790ms of commander-and-everything skipped on a bare
+`golem`), the header became nullable and lazy, and the slider's read half moved to
+`cli/slider-read.ts` so *displaying* a level no longer loads the write path's
+`init.js`.
+
+**The best UX win was the cheapest change.** An ANSI pre-paint of the pet — three
+lines of constants, no imports — puts something on screen at **~80ms**. Panel
+interactive went ~2.5–3s → ~1.15s, but the pre-paint is what makes it stop feeling
+broken.
+
+`module.enableCompileCache()` measured *worse* (948 → 1022ms warm) and was dropped.
+
+**ink is now ~75% of the remaining startup**, and it's spread across its dependency
+tree (`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws`
+~72ms, …) rather than concentrated anywhere patchable. Going materially below ~1s
+means replacing ink — which is the trade Decision 50 recorded, now with a number
+attached.
+
+## The hot paths turned out to matter more than the panel
+
+Fixed in a follow-up pass at the user's request (verification-notes §86b). The
+panel was the visible complaint; these run constantly:
+
+| Command | Before | After |
+|---|---|---|
+| `golem hook post-tool-use` (every tool call) | ~765ms | **129ms** |
+| `golem hook pre-tool-use` (every tool call) | ~765ms | **137ms** |
+| `golem statusline` (every prompt) | ~985ms | **301ms** |
+
+Two things did it. The obvious one: `src/cli/fast-path.ts` handles those commands
+without commander at all, which the `main.ts` shim made easy.
+
+The non-obvious one, and the more generally useful finding: **`undici` is the
+heaviest leaf in the CLI (~270ms)**, and it was reaching hot paths through *barrel*
+imports for functions that only read a JSON file. `hooks/pre-tool-use.ts` imported
+`../proxy/index.js` for `readLimitState`; `cli/statusline.ts` imported it for
+`servedModelFor`; `cli/local-model.ts` imported `../inference/index.js` statically
+when only `resolveCoderModel` needs it. Narrowing those imports alone took
+pre-tool-use 352ms → 127ms and statusline 473ms → 142ms, before any routing change.
+
+Generalise it: **a barrel import is a hot-path liability.** Prefer the narrowest
+module, and look at what its transitive graph drags in before putting it anywhere
+that runs per-tool-call or per-prompt.
+
+**Equivalence was verified, not assumed.** Nine payloads — including an empty one
+and `--max-inline-chars 4` forcing a real CCR-ref swap, whose output embeds a
+content hash — went through both the fast path and `runCli`, diffing stdout and exit
+code. All identical. The one assumption that makes `post-tool-use` safe to
+fast-path (that `program.ts` injects no `PostToolUseOptions` field) is asserted by a
+test, so it can't rot silently.
+
+## And then ink came out again
+
+The user asked the obvious follow-up: what is ink actually giving us, would removing
+it keep the functionality, and would it be faster? Answering it properly meant
+inventorying real usage rather than ink's feature list — **8 layout props, 3 text
+props, 3 hooks**, and three layouts (a vertical stack, one two-column row, one
+space-between row). That is not much framework for 892ms.
+
+The numbers decided it: everything the panel needs *except* ink cost **150ms**; with
+ink, **1091ms**. ink was ~85% of the load, spread thinly across its dependency tree
+(`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws` ~72ms, …),
+so there was nothing to defer.
+
+Replaced by ~765 lines across five focused modules: `render.ts` (layout),
+`screen.ts` (diffed repaint, cursor, resize), `keys.ts` (raw-mode key decoding),
+`ansi.ts` (hex → 24-bit/256/16/none, replacing chalk), `width.ts` (ANSI- and
+wide-char-aware measurement, replacing `string-width`/`cli-truncate`). Same layout,
+same keys, same colours, same pet. **~170ms to a fully-populated first frame**, and
+`golem-run` back to **6 runtime dependencies**.
+
+**The reducer split was the whole reason this was cheap.** `tests/unit/tui-state.test.ts`
+— 32 tests over every interaction rule — passed **unchanged**, because `KeyPress` was
+always an ink-agnostic shape and `state.ts` never imported ink. Only the view was
+rewritten, and the new view is *easier* to test: `renderPanel` is `state → string[]`,
+so the string-based tests need no mount and no `ink-testing-library`. Designing for
+testability turned out to be designing for replaceability.
+
+Two things that were a dependency's problem are now ours, so both are tested head-on:
+colour capability detection across the `NO_COLOR`/`FORCE_COLOR`/`COLORTERM`/`TERM`/
+`WT_SESSION` matrix, and display width for CJK/emoji/Ambiguous code points (including
+an assertion that the pet's U+25A0 measures 1, which the fixed-width column assumes).
+
+The `~80ms` ANSI splash from the previous round was **deleted**. It existed to cover a
+1.15s wait; at 170ms there is nothing to cover, and a placeholder that flashes is
+worse than none. Nice reminder that a mitigation can outlive its problem.
+
+One more find: `tui/header.ts` imported `renderUpstream` from `cli/status.js` — a
+string formatter sitting behind a ~430ms module graph, right on the render path. Both
+display helpers moved to a dependency-free `cli/upstream-display.ts`, taking
+`tui/header.js` from 260ms → 83ms.
+
+## The proxy was never the problem
+
+Also asked, so also measured rather than assumed. Against a canned local
+Anthropic-shaped upstream (so the number is Golem, not the network), 40 requests with
+a 9.7 KiB body: **+4.4ms p50** at the default slider level, +3.9ms at level 0 (full
+bypass). Against upstream calls that take 1000s of ms that is well under 1% — and the
+fact that level 0 is barely cheaper says the pipeline isn't where time goes. No proxy
+work was warranted, so none was done.
+
+## A flake, diagnosed instead of re-run
+
+`cli-init.test.ts` failed in 3 of ~6 full-suite runs, on a *different* test each time
+— the classic shape of something being waved through. It was `Error: Test timed out in
+5000ms`: three test files perform a real `golemInit` (~20 file writes to a temp dir),
+which on Windows under parallel load plus a virus scanner regularly beats vitest's 5s
+default. (Not the VS Code extension copy — the fake probe doesn't supply
+`vscodeExtensionsDir`, so that path never runs.)
+
+The instructive bit: my first fix was a timeout on that *file*, and the next full run
+simply failed in `e2e/golem-init-smoke.test.ts` instead. Treating the symptom moved
+it. The suite is I/O-heavy by nature — real inits, spawned daemons, port waits — so 5s
+was the wrong **default**, not the wrong per-file budget: `testTimeout: 20_000` in
+`vitest.config.ts`, one mechanism, reasoning recorded there. Three consecutive green
+full runs after (144 files / 1595 tests).
+
+## One entry point, and one command deliberately kept
+
+Two surface-area questions came back once the numbers were in.
+
+**`golem ui` turned out to be the slow way into the panel.** Bare `golem` skips
+commander (~170ms); `golem ui` went *through* it and paid ~810ms. Having measured
+that, the choice wasn't "keep or remove a convenience command", it was "remove a
+redundant entry point that happens to be 5x slower". Its flags (`--dir`, `--no-pet`,
+`--advanced`) moved onto the bare command.
+
+The interesting part was the reject side of `parsePanelArgs`. Accepting the panel
+flags is easy; the rule that matters is **any unrecognised flag falls through to
+commander**, so `golem --dirr x` still gets `error: unknown option '--dirr'` from the
+code that owns flag parsing, instead of a panel opening as if nothing were wrong.
+`golem ui` itself answers with a migration message and exit 2 rather than "unknown
+command" — a removal is worth explaining once.
+
+Two things that bit, both worth remembering:
+
+- **`main.ts` self-executes on import** (it's the `bin` entry), so the first version
+  of the test — which imported `parsePanelArgs` from it — was running the CLI against
+  vitest's own argv. It passed by luck. The parser moved to `src/cli/panel-args.ts`.
+- The panel has no subcommand to hang options off, so `golem --help` documents it in
+  an after-help block — which can drift from what the parser accepts. There's a test
+  that parses the help text and checks every advertised flag is actually accepted.
+
+**`golem status` was considered for removal and kept.** Worth checking dependencies
+before answering: the VS Code extension polls `golem status --json` every few
+seconds, the snooze-hold guidance rule tells agents to run it, and two skills
+reference it. The panel is the human surface; `--json` is a live machine surface, and
+it costs nothing when nobody invokes it. Removing it would have traded something that
+works for a shorter `--help`.
+
+## Left open
+
+- **The `bun build --compile` risk is GONE.** It was ink's `yoga-layout` WASM that
+  might not survive Bun's bundler; with ink removed, `src/tui/` is plain TypeScript
+  with no assets, so the panel should work in the standalone binaries. Still worth
+  including in R7.3's per-OS smoke-test, but it is no longer a known hazard.
+- **U+25A0 in the pet is Ambiguous-width**, so it may draw double-wide in a
+  CJK-configured terminal. Mitigated (fixed-width box) rather than solved;
+  `ui.pet false` / `--no-pet` is the out, and also covers legacy Windows consoles.
+- The panel edits values as text; there's no picker for `knowledge.watch_paths`
+  beyond comma-separated entry.
+- `golem --version` and other user-typed commands still pay commander's ~810ms.
+  Left alone deliberately: ~800ms isn't the bottleneck for something a human typed,
+  and keeping one parsing path keeps `--help` and error messages authoritative.

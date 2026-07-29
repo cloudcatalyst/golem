@@ -15,12 +15,17 @@ import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { resolveUpstreamDisplay } from "../providers/index.js";
-import { type LimitPrediction, readLimitState, servedModelFor } from "../proxy/index.js";
+// Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
+// which imports `undici` (~270ms), and both of these only read a JSON file.
+import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
+import { servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
-import { upstreamLabel } from "./statusline.js";
+// Pure display helpers live in ./upstream-display.js so the `golem` control panel can
+// render an upstream label without loading this module (see that file).
+import { renderUpstream } from "./upstream-display.js";
 
 /** One effective setting: value + which layer supplied it. */
 export interface ConfigKeyStatus {
@@ -321,42 +326,6 @@ export const REDACTION_OFF_WARNING =
   "Slider level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII " +
   "reach the upstream unredacted. Use level 1 to keep redaction on.";
 
-/**
- * Human-readable upstream line, e.g.
- *   `kimi (openai) · api.moonshot.ai · model kimi-k3`
- * or, when the proxy has served a model that differs from the configured one:
- *   `kimi (openai) · api.moonshot.ai · default model kimi-k3 · last served <m>`
- * When no account is active, the leading `<account> ` is dropped.
- */
-export function renderUpstream(upstream: StatusReport["upstream"]): string {
-  const host = upstreamLabel(upstream.base_url);
-  const who =
-    upstream.account !== null
-      ? `${upstream.account} (${upstream.provider})`
-      : `${upstream.provider}`;
-  const parts = [who];
-  // Skip the host when it's redundant with what `who` already conveys — e.g. an
-  // `anthropic` provider whose base URL also labels as `anthropic`.
-  if (host !== upstream.provider && host !== upstream.account) parts.push(host);
-  const dflt = upstream.default_model;
-  const served = upstream.last_served_model ?? null;
-  // Model ids are shown verbatim on both sides, so the comparison is a plain
-  // id-vs-id one (see providers/model-display.ts — no prettified family labels).
-  if (dflt !== null && served !== null && served !== dflt) {
-    // A configured default exists AND the proxy served something else — show both
-    // so the divergence is visible (e.g. a translating upstream mid-switch).
-    parts.push(`default model ${dflt}`);
-    parts.push(`last served ${served}`);
-  } else if (served !== null) {
-    // No configured default (byte-faithful Anthropic), or it matches: the served
-    // model IS the live model — show it as the current model.
-    parts.push(`model ${served}`);
-  } else if (dflt !== null) {
-    parts.push(`model ${dflt}`);
-  }
-  return parts.join(" · ");
-}
-
 /** One-line rendering of the usage-limit prediction + freshness. */
 export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
   const pct = Math.round(limits.five_hour_utilization * 100);
@@ -446,3 +415,6 @@ export function renderStatus(report: StatusReport): string {
   }
   return `${lines.join("\n")}\n`;
 }
+
+// Re-exported for the callers that have always imported them from here.
+export { renderUpstream, upstreamLabel } from "./upstream-display.js";

@@ -167,6 +167,8 @@ deferred to the user** — machinery is in place; the `v0.1.1` tag exists but
 | R7.3 | ~~Standalone binary via `bun build --compile` (`scripts/build-binary.mjs`) + CI release workflow.~~ — **DONE (build-wired)** (#22, Dec 41d): cross-compile script + tag-triggered Release workflow shipped. **Binaries still unverified per-OS** (no Bun/mac/linux in-session; and CI itself is billing-blocked) — the 🔬 smoke-test remains, verification-notes §70. | 🔬 | Dec 41d |
 | R7.4 | ~~Self-update: `golem update [--check --json]` (install-method aware) + `updateAvailable` in status/statusline + extension status-bar badge & `golem.update`.~~ — **DONE** (#21, Dec 41e; hardened in #20/#25/#26/#27/#28): install-method-aware `golem update`, cached/offline-tolerant check surfaced in status/statusline + VS Code badge; follow-ups fixed the `.golem/` footprint leaks in non-Golem projects and the Passthrough off-state label. | ✅ | Dec 41e |
 | R7.5 | First `npm publish` + Marketplace publish + tag `v0.1.0` (USER-triggered; machinery + `RELEASING.md` shipped, publish deferred to the user). **Still pending — `v0.1.1` tagged locally, npm 404 (unpublished).** | 🚀 | Dec 41 |
+| R7.6 | ~~Interactive control panel + one config surface: `src/config/ui-model.ts` (compile-exhaustive setting metadata, zod-derived widget kinds) + `src/config/control-surface.ts` (settings + guidance + runtime as one `Control` list, env-locked rows, danger confirms) behind `golem ui` / bare `golem`, `golem config schema [--json]`, and a Settings section in the VS Code webview.~~ — **DONE** (Dec 50): the config loader was untouched; only presentation was missing. | ✅ | Dec 50 |
+| R7.7 | ~~CLI startup latency: `main.ts` as a dependency-free router, `fast-path.ts` for the per-tool-call hooks + status line, read/write module splits (`slider-read.ts`, `upstream-display.ts`), barrel-import narrowing (`undici` off the hot paths), **ink/React removed** (`src/tui/` renders itself via `render/screen/keys/ansi/width`), and the panel reduced to ONE entry point (`golem ui`/`golem settings` deleted, their flags moved onto bare `golem`).~~ — **DONE** (Dec 51): panel first frame ~2.5–3s → **~170ms**; `hook post-tool-use` ~765ms → **126ms**; `statusline` ~985ms → **275ms**; runtime deps back to **6**. The proxy was measured at **+4.4ms p50** per request and needed no work; `golem status` was considered for removal and deliberately kept (live machine surface). Notes §86/§86b/§86c/§86d. | ✅ | Dec 51 |
 
 ---
 
@@ -186,6 +188,9 @@ What remains:
 2. **🔬 R7.3 standalone-binary verification** — the Bun `--compile` binaries are
    build-wired but never run per-OS (no Bun/mac/linux in-session; CI itself is
    billing-blocked). Smoke-test each before relying on the binary channel.
+   (Previously this also carried a `golem ui` risk — ink's `yoga-layout` WASM. With
+   ink removed in Decision 51, `src/tui/` is plain TypeScript with no assets, so the
+   panel should bundle cleanly; still worth including in the smoke-test.)
 3. **🚀 R7.5 first publish** (USER) + the golem.run nginx host stand-up (USER) —
    machinery shipped; the outward, credentialed acts are the user's.
 

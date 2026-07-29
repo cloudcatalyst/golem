@@ -10,6 +10,8 @@ const {
   buildModel,
   statusBarText,
   renderHtml,
+  settingsHtml,
+  controlValueText,
 } = require("./render.js");
 
 test("fmtTokens", () => {
@@ -448,4 +450,153 @@ test("upstreamLabel can never carry HTML metacharacters into renderHtml", () => 
   const html = renderHtml(model, "n7");
   assert.doesNotMatch(html, /<script>/);
   assert.match(html, /<span class="pill">upstream<\/span>/);
+});
+
+// --- Settings section (rendered from `golem config schema --json`) -----------
+
+/** A minimal control surface, shaped like `golem config schema --json`. */
+function surfaceFixture(controls) {
+  return {
+    groups: [{ id: "settings:knowledge", title: "Knowledge", summary: "Search", tab: "settings", controls }],
+  };
+}
+
+const toggleControl = {
+  id: "setting:knowledge.enabled",
+  family: "setting",
+  label: "Vector knowledge base",
+  summary: "Master switch",
+  kind: "toggle",
+  value: true,
+  layer: "project",
+  writableScopes: ["project", "local", "user"],
+  advanced: false,
+};
+
+test("settingsHtml renders a checkbox, its provenance, and a scope select", () => {
+  const html = settingsHtml(surfaceFixture([toggleControl]));
+  assert.match(html, /<summary>Knowledge<\/summary>/);
+  assert.match(html, /Vector knowledge base/);
+  assert.match(html, /type="checkbox"[^>]*data-id="setting:knowledge\.enabled"/);
+  assert.match(html, / checked>/);
+  assert.match(html, /<span class="lay">project<\/span>/);
+  // Three writable scopes → a select with all three.
+  assert.match(html, /<select class="scope"/);
+  for (const scope of ["project", "local", "user"]) {
+    assert.match(html, new RegExp(`<option value="${scope}">`));
+  }
+});
+
+test("settingsHtml omits the scope select when there is only one scope", () => {
+  const html = settingsHtml(surfaceFixture([{ ...toggleControl, writableScopes: ["local"] }]));
+  assert.doesNotMatch(html, /<select class="scope"/);
+});
+
+test("settingsHtml renders an enum as a select with the current value selected", () => {
+  const html = settingsHtml(
+    surfaceFixture([
+      {
+        ...toggleControl,
+        id: "setting:ui.color",
+        label: "Panel colour",
+        kind: "enum",
+        value: "auto",
+        options: [
+          { value: "auto", label: "auto" },
+          { value: "never", label: "never" },
+        ],
+      },
+    ]),
+  );
+  assert.match(html, /data-kind="enum"/);
+  assert.match(html, /<option value="auto" selected>/);
+  assert.match(html, /<option value="never">/);
+});
+
+test("settingsHtml renders a locked control as read-only text with a lock", () => {
+  const html = settingsHtml(
+    surfaceFixture([{ ...toggleControl, locked: "set by GOLEM_KNOWLEDGE_ENABLED", writableScopes: [] }]),
+  );
+  assert.match(html, /🔒/);
+  // No input at all: the value can't be changed from here.
+  assert.doesNotMatch(html, /type="checkbox"/);
+  assert.doesNotMatch(html, /<select class="scope"/);
+  assert.match(html, /GOLEM_KNOWLEDGE_ENABLED/);
+});
+
+test("settingsHtml marks advanced rows so the checkbox can hide them", () => {
+  const html = settingsHtml(surfaceFixture([{ ...toggleControl, advanced: true }]));
+  assert.match(html, /class="crow adv"/);
+});
+
+test("settingsHtml carries a danger warning onto the row for a confirm", () => {
+  const html = settingsHtml(
+    surfaceFixture([{ ...toggleControl, danger: "redaction would be OFF" }]),
+  );
+  assert.match(html, /data-danger="redaction would be OFF"/);
+});
+
+test("settingsHtml degrades to a hint when the CLI gave nothing", () => {
+  for (const empty of [null, undefined, {}, { groups: [] }]) {
+    const html = settingsHtml(empty);
+    assert.match(html, /<h2>Settings<\/h2>/);
+    assert.match(html, /golem init/);
+  }
+});
+
+test("settingsHtml escapes every field a settings file could poison", () => {
+  // Labels come from Golem's own table, but VALUES come from the user's settings
+  // file, and an id/scope could too — all of them reach the HTML.
+  const html = settingsHtml(
+    surfaceFixture([
+      {
+        ...toggleControl,
+        id: `setting:x"><script>alert(1)</script>`,
+        label: `<img src=x onerror=alert(1)>`,
+        kind: "text",
+        value: `"><script>alert(2)</script>`,
+        layer: `<b>project</b>`,
+        writableScopes: [`"><script>alert(3)</script>`, "local"],
+        summary: `<script>alert(4)</script>`,
+      },
+    ]),
+  );
+  assert.doesNotMatch(html, /<script>/);
+  assert.doesNotMatch(html, /<img src=x/);
+  assert.match(html, /&lt;script&gt;/);
+});
+
+test("controlValueText formats the shapes a settings value can take", () => {
+  const base = { kind: "text", value: null };
+  assert.equal(controlValueText(base), "(unset)");
+  assert.equal(controlValueText({ ...base, value: undefined }), "(unset)");
+  // The text-input path wants an empty string, not the "(unset)" placeholder.
+  assert.equal(controlValueText({ ...base, value: null }, ""), "");
+  assert.equal(controlValueText({ ...base, value: "docs/wiki" }), "docs/wiki");
+  assert.equal(controlValueText({ ...base, value: 4653 }), "4653");
+  assert.equal(controlValueText({ ...base, value: ["a", "b"] }), "a, b");
+  assert.equal(controlValueText({ ...base, value: [] }), "(none)");
+  // A structured array must never render as "[object Object]".
+  assert.equal(controlValueText({ ...base, value: [{ id: "x" }, { id: "y" }] }), "2 entries");
+  assert.equal(controlValueText({ ...base, value: [{ id: "x" }] }), "1 entry");
+});
+
+test("renderHtml includes the settings section and its apply script", () => {
+  const model = buildModel({}, {}, null, [], surfaceFixture([toggleControl]));
+  const html = renderHtml(model, "n8");
+  assert.match(html, /<h2>Settings<\/h2>/);
+  assert.match(html, /Vector knowledge base/);
+  // The webview posts a generic apply message; it knows nothing about the key.
+  assert.match(html, /type: 'apply'/);
+  assert.match(html, /id="advToggle"/);
+});
+
+test("buildModel tolerates a missing control surface", () => {
+  // An older `golem` without `config schema` returns null; the panel must still
+  // render everything else.
+  for (const bad of [undefined, null, "nope", 7]) {
+    const model = buildModel({}, {}, null, [], bad);
+    assert.equal(model.surface, null);
+    assert.doesNotThrow(() => renderHtml(model, "n9"));
+  }
 });

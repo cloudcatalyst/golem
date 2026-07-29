@@ -263,6 +263,28 @@ export function guidanceRuleBody(feature: GuidanceFeature): string {
 }
 
 /**
+ * Whether a feature's rule file exists in ONE specific scope — the literal
+ * on-disk fact, with no other conditions folded in.
+ *
+ * Use this (not {@link guidanceEnabled}) when reporting state to a user: a
+ * settings UI must show which scope a rule is enabled at, and must not report
+ * `local-coder` as "off" merely because `inference.local_coder_enabled` is false
+ * — that is a separate toggle with its own row.
+ */
+export async function guidanceRuleExists(
+  projectDir: string,
+  name: string,
+  scope: GuidanceScope,
+): Promise<boolean> {
+  try {
+    await readFile(guidanceRulePath(projectDir, name, scope), "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a guidance feature is active for a project — i.e. its rule file is
  * present in either scope (presence *is* the toggle; `golem guidance
  * enable/disable` add/remove it). Used to gate enforcement on "if guided".

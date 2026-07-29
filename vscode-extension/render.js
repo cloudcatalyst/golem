@@ -67,7 +67,7 @@ function levelLabel(model) {
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
  */
-function buildModel(stats, status, update, accounts) {
+function buildModel(stats, status, update, accounts, surface) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
   const accountList = Array.isArray(accounts) ? accounts : [];
@@ -130,6 +130,10 @@ function buildModel(stats, status, update, accounts) {
     : label;
 
   return {
+    // `golem config schema --json`: the control surface the Settings section
+    // renders. Null when the CLI didn't answer (older golem, or a non-Golem
+    // window) — settingsHtml degrades to a hint rather than an empty section.
+    surface: surface && typeof surface === "object" ? surface : null,
     requests: Number(s.requests) || 0,
     before,
     after,
@@ -250,6 +254,106 @@ function esc(s) {
 }
 
 /** Full webview HTML. `nonce` gates inline script under the CSP. */
+/**
+ * The Settings section, rendered from `golem config schema --json` (the same
+ * control surface the `golem ui` terminal panel uses).
+ *
+ * Nothing about the key set is hard-coded here: labels, widget kinds, current
+ * values, provenance, and writable scopes all come from the CLI. A new settings
+ * key therefore appears in this panel with no extension change and no version
+ * skew between the two.
+ *
+ * `surface` is the parsed JSON, or null when the CLI didn't answer (an older
+ * `golem` without `config schema`, or a non-Golem window).
+ */
+function settingsHtml(surface) {
+  if (!surface || !Array.isArray(surface.groups) || surface.groups.length === 0) {
+    return '<h2>Settings</h2><div class="sub">Run <code>golem init</code>, or upgrade the golem CLI, to manage settings here.</div>';
+  }
+  const groups = surface.groups
+    .map((group) => {
+      const rows = (group.controls || []).map((c) => controlRowHtml(c)).join("");
+      if (!rows) return "";
+      const summary = group.summary ? `<div class="sub gsum">${esc(group.summary)}</div>` : "";
+      return `<details class="grp" open><summary>${esc(group.title || group.id)}</summary>${summary}${rows}</details>`;
+    })
+    .join("");
+  return `<h2>Settings</h2>${groups}`;
+}
+
+/**
+ * One control as a labelled row. The `data-*` attributes carry everything the
+ * webview script needs to post back an apply message, so the script itself stays
+ * generic — it never knows what any particular setting means.
+ */
+function controlRowHtml(control) {
+  const id = esc(control.id);
+  const label = esc(control.label || control.id);
+  // Provenance is the answer to "why is it that value?", so it's always shown.
+  const layer = esc(control.layer || "default");
+  const title = esc(
+    control.locked
+      ? `${control.summary || ""}\n\nLocked: ${control.locked}`
+      : control.detail || control.summary || "",
+  );
+  const scopes = Array.isArray(control.writableScopes) ? control.writableScopes : [];
+  const scopeSelect =
+    scopes.length > 1
+      ? `<select class="scope" data-id="${id}" title="Which settings scope a change is written to">${scopes
+          .map((s) => `<option value="${esc(s)}">${esc(s)}</option>`)
+          .join("")}</select>`
+      : "";
+
+  let input;
+  if (control.locked) {
+    input = `<span class="sub">${esc(controlValueText(control))} 🔒</span>`;
+  } else if (control.kind === "toggle") {
+    input = `<input type="checkbox" class="ctl" data-id="${id}" data-kind="toggle"${
+      control.value === true ? " checked" : ""
+    }>`;
+  } else if (control.kind === "enum" && Array.isArray(control.options)) {
+    input = `<select class="ctl" data-id="${id}" data-kind="enum">${control.options
+      .map(
+        (o) =>
+          `<option value="${esc(o.value)}"${
+            String(control.value) === String(o.value) ? " selected" : ""
+          }>${esc(o.label || o.value)}</option>`,
+      )
+      .join("")}</select>`;
+  } else if (control.kind === "opaque") {
+    input = `<span class="sub">${esc(controlValueText(control))}</span>`;
+  } else {
+    // text / number / url / list / color all edit as one line of text; the CLI
+    // validates against the zod schema and rejects anything invalid.
+    input = `<input type="text" class="ctl txt" data-id="${id}" data-kind="${esc(
+      control.kind,
+    )}" value="${esc(controlValueText(control, ""))}" placeholder="(unset)">`;
+  }
+
+  const danger = control.danger ? ` data-danger="${esc(control.danger)}"` : "";
+  const advanced = control.advanced ? " adv" : "";
+  return (
+    `<div class="crow${advanced}"${danger} title="${title}">` +
+    `<span class="clabel">${label}</span>` +
+    `<span class="cval">${input}${scopeSelect}<span class="lay">${layer}</span></span>` +
+    "</div>"
+  );
+}
+
+/** A control's value as display text. `fallback` is used for unset values. */
+function controlValueText(control, fallback = "(unset)") {
+  const v = control.value;
+  if (v === undefined || v === null) return fallback;
+  if (Array.isArray(v)) {
+    if (v.length === 0) return fallback === "" ? "" : "(none)";
+    return v.every((i) => typeof i !== "object" || i === null)
+      ? v.join(", ")
+      : `${v.length} entr${v.length === 1 ? "y" : "ies"}`;
+  }
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
+
 function renderHtml(model, nonce) {
   const sliderButtons = SLIDER_LEVELS.map(
     (l) =>
@@ -289,6 +393,21 @@ function renderHtml(model, nonce) {
        background:var(--vscode-button-secondaryBackground);color:var(--vscode-button-secondaryForeground);
        border-radius:5px;cursor:pointer;font:11px var(--vscode-font-family)}
   .toggle:hover{background:var(--vscode-button-secondaryHoverBackground,var(--vscode-button-background))}
+  /* Settings section (rendered from the golem config schema control surface). */
+  .grp{margin:6px 0}
+  .grp>summary{cursor:pointer;font-weight:600;opacity:.9;padding:2px 0}
+  .gsum{margin:0 0 4px 2px;font-size:11px}
+  .crow{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:2px 0 2px 2px}
+  .crow:hover{background:var(--vscode-list-hoverBackground)}
+  .clabel{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .cval{flex:0 0 auto;display:flex;align-items:center;gap:6px}
+  .lay{font-size:10px;opacity:.55;min-width:46px;text-align:right}
+  .ctl.txt{width:110px}
+  .ctl,.scope{background:var(--vscode-input-background);color:var(--vscode-input-foreground);
+       border:1px solid var(--vscode-input-border,var(--vscode-widget-border,#444));border-radius:4px;
+       font:11px var(--vscode-font-family);padding:1px 3px}
+  .scope{opacity:.75}
+  .hideadv .adv{display:none}
 </style></head><body>
   <div class="big">${model.savedPct}%</div>
   <div class="sub">saved · ${fmtTokens(model.before)} → ${fmtTokens(model.after)} tokens · ${
@@ -333,6 +452,11 @@ function renderHtml(model, nonce) {
     stageRows || '<tr><td colspan="4" class="sub">no traffic yet</td></tr>'
   }</table>
 
+  ${settingsHtml(model.surface)}
+  <div class="row"><span class="sub">
+    <label><input type="checkbox" id="advToggle"> show advanced</label>
+  </span></div>
+
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     for (const b of document.querySelectorAll('.lvl')) {
@@ -342,6 +466,46 @@ function renderHtml(model, nonce) {
     if (pt) pt.addEventListener('click', () => vscode.postMessage({ type: pt.dataset.running === '1' ? 'proxyStop' : 'proxyStart' }));
     const ub = document.getElementById('updateBtn');
     if (ub) ub.addEventListener('click', () => vscode.postMessage({ type: 'update' }));
+
+    // Advanced rows are hidden by default; the preference lives in the webview's
+    // own state so it survives a repaint (the panel re-renders on every refresh).
+    const advBox = document.getElementById('advToggle');
+    const saved = vscode.getState && vscode.getState();
+    const showAdv = !!(saved && saved.showAdvanced);
+    if (advBox) advBox.checked = showAdv;
+    document.body.classList.toggle('hideadv', !showAdv);
+    if (advBox) advBox.addEventListener('change', () => {
+      document.body.classList.toggle('hideadv', !advBox.checked);
+      if (vscode.setState) vscode.setState({ showAdvanced: advBox.checked });
+    });
+
+    // The scope select is per-row and only chooses WHERE the next write goes; it
+    // never applies anything on its own.
+    const scopeFor = (id) => {
+      const sel = document.querySelector('.scope[data-id="' + id + '"]');
+      return sel ? sel.value : 'project';
+    };
+    const apply = (el, value) => {
+      const row = el.closest('.crow');
+      const danger = row && row.dataset.danger;
+      // A dangerous change needs an explicit confirm, same as the terminal panel.
+      if (danger && !confirm(danger + '\\n\\nApply it?')) {
+        vscode.postMessage({ type: 'refresh' });
+        return;
+      }
+      vscode.postMessage({ type: 'apply', id: el.dataset.id, value: value, scope: scopeFor(el.dataset.id) });
+    };
+    for (const el of document.querySelectorAll('.ctl')) {
+      if (el.dataset.kind === 'toggle') {
+        el.addEventListener('change', () => apply(el, el.checked));
+      } else if (el.tagName === 'SELECT') {
+        el.addEventListener('change', () => apply(el, el.value));
+      } else {
+        // Commit on blur or Enter, not per keystroke — every apply is a CLI spawn.
+        el.addEventListener('change', () => apply(el, el.value === '' ? null : el.value));
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter') el.blur(); });
+      }
+    }
   </script>
 </body></html>`;
 }
@@ -355,4 +519,7 @@ module.exports = {
   buildModel,
   statusBarText,
   renderHtml,
+  settingsHtml,
+  controlRowHtml,
+  controlValueText,
 };
