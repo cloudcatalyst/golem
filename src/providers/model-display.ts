@@ -112,3 +112,20 @@ export function sniffRequestModel(body: Buffer | null): string | undefined {
   const model = match?.[1];
   return model !== undefined && model !== "" ? model : undefined;
 }
+
+/**
+ * Strip a leading vendor/provider prefix from a model id when forwarding to an
+ * OpenAI-schema or Gemini upstream. Some gateways (OpenRouter, account registries)
+ * use slugs like `moonshotai/kimi-k3`, but the upstream API itself expects just
+ * `kimi-k3`. Display surfaces keep the raw configured value; this normalization is
+ * applied only at the translating-provider boundary.
+ *
+ * Strips one leading `<vendor>/` segment where `vendor` is non-empty and contains no
+ * `/`. Leaves every other shape unchanged, including already-bare ids and ids with
+ * multiple slashes (which are treated as opaque).
+ */
+export function stripVendorPrefix(modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash <= 0 || slash !== modelId.lastIndexOf("/")) return modelId;
+  return modelId.slice(slash + 1);
+}

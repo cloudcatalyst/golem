@@ -1,8 +1,4 @@
 {
-  "env": {
-    "ENABLE_TOOL_SEARCH": "true",
-    "ANTHROPIC_BASE_URL": "http://localhost:4930"
-  },
   "permissions": {
     "allow": [
       "Bash(golem:*)",
@@ -112,7 +108,12 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "golem statusline"
+    "command": "golem statusline",
+    "refreshInterval": 2
   },
-  "defaultMode": "default"
+  "defaultMode": "default",
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:4930",
+    "ENABLE_TOOL_SEARCH": "true"
+  }
 }

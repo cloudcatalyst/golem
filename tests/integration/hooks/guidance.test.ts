@@ -3,7 +3,7 @@
  * registry, rule read/write, seed-once, and removal.
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -111,6 +111,18 @@ describe("guidanceEnabled (presence is the toggle)", () => {
     if (f === undefined || f === null) throw new Error("expected local-coder");
     await writeGuidanceRule(projectDir, f, "project");
     await removeGuidanceRule(projectDir, "local-coder", "both");
+    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
+  });
+
+  it("is false for local-coder when inference.local_coder_enabled is false", async () => {
+    const f = guidanceFeature("local-coder");
+    if (f === undefined || f === null) throw new Error("expected local-coder");
+    await writeGuidanceRule(projectDir, f, "project");
+    await mkdir(path.join(projectDir, ".golem"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".golem", "settings.json"),
+      JSON.stringify({ inference: { local_coder_enabled: false } }),
+    );
     expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
   });
 });

@@ -509,15 +509,33 @@ describe("coder tool", () => {
     }
   }
 
+  // The coder tool is registered from `deps.coder` (the CLI passes it only when
+  // `inference.local_coder_enabled` is true); `deps.inference` drives the other
+  // local roles. Tests exercising the tool wire both to the same fake.
   function depsWithInference(inference: InferenceService): Deps {
     return {
       ...createStandaloneDeps(),
       inference,
+      coder: inference,
     };
   }
 
-  it("is not listed when deps.inference is omitted", async () => {
+  it("is not listed when deps.coder is omitted", async () => {
     const client = await connectInMemory(createStandaloneDeps());
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name)).not.toContain("coder");
+  });
+
+  it("is not listed when deps.inference is wired but deps.coder is not (coder disabled)", async () => {
+    const fake = new FakeInferenceService(async (role) => ({
+      text: "unused",
+      model: "qwen2.5-coder:7b",
+      role,
+      promptTokens: 1,
+      completionTokens: 1,
+      finishReason: "stop",
+    }));
+    const client = await connectInMemory({ ...createStandaloneDeps(), inference: fake });
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).not.toContain("coder");
   });
@@ -910,10 +928,12 @@ describe("tool telemetry (R4.3 — §59 gap)", () => {
   it("records a per-call tool event for search and coder (with model + draft length)", async () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-tooltel-"));
     const store = new JsonlTelemetryStore(dir);
+    const drafter = new DrafterInferenceService();
     const client = await connectInMemory({
       ...createStandaloneDeps(),
       knowledge: new OneHitKnowledgeBase(),
-      inference: new DrafterInferenceService(),
+      inference: drafter,
+      coder: drafter,
       defaultProjectId: "projA",
       telemetry: store,
     });

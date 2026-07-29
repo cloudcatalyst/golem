@@ -73,15 +73,18 @@ export interface StatusReport {
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
   /**
-   * Whether a local model (Ollama) is reachable. When true, Golem is a
-   * local+upstream hybrid — the local model is available via the `coder` MCP
-   * tool at any slider level (Decision 30/31) — and `coder_model` names the
-   * concrete model that role runs at this machine's hardware tier.
+   * Whether a local model (Ollama) is reachable, and whether the `coder` MCP
+   * tool is enabled. When reachable AND enabled, Golem is a local+upstream
+   * hybrid — the local model is available via the `coder` MCP tool at any slider
+   * level (Decision 30/31) — and `coder_model` names the concrete model that
+   * role runs at this machine's hardware tier.
    */
   readonly local_model: {
     readonly reachable: boolean;
     /** The `coder`/`drafter` model (e.g. `qwen2.5-coder:7b`) when reachable. */
     readonly coder_model?: string;
+    /** Whether `inference.local_coder_enabled` is true (default). */
+    readonly coder_enabled: boolean;
     /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
@@ -240,6 +243,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     config,
     local_model: {
       reachable: localInfo.reachable,
+      coder_enabled: settings.inference.local_coder_enabled,
       ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
       base_url: settings.inference.ollama_base_url,
     },
@@ -393,12 +397,16 @@ export function renderStatus(report: StatusReport): string {
   );
   // Inference topology: a reachable local model makes Golem local+upstream —
   // available via the `coder` MCP tool at any level (Decision 30/31). Name the
-  // concrete coder model when known.
+  // concrete coder model when known. If the coder tool is disabled, show only
+  // the upstream backend (the local model may still be used for rerank/local-answer).
   const coder = report.local_model.coder_model;
+  const localCoderActive = report.local_model.coder_enabled && report.local_model.reachable;
   lines.push(
-    report.local_model.reachable
+    localCoderActive
       ? `Inference: local + upstream${coder !== undefined ? ` · coder ${coder}` : ""}`
-      : "Inference: upstream only",
+      : report.local_model.coder_enabled
+        ? "Inference: upstream only"
+        : "Inference: upstream only (local coder disabled)",
   );
   if (report.update !== undefined) {
     lines.push(

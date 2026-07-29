@@ -10,6 +10,7 @@ import {
   friendlyModelVersionLabel,
   localModelVersionLabel,
   sniffRequestModel,
+  stripVendorPrefix,
 } from "../../../src/providers/model-display.js";
 
 describe("friendlyModelLabel", () => {
@@ -106,5 +107,27 @@ describe("sniffRequestModel", () => {
       JSON.stringify({ model: "claude-opus-4-8", messages: [{ text: "x".repeat(500_000) }] }),
     );
     expect(sniffRequestModel(body)).toBe("claude-opus-4-8");
+  });
+});
+
+describe("stripVendorPrefix", () => {
+  it("strips a single vendor prefix from an OpenRouter-style slug", () => {
+    expect(stripVendorPrefix("moonshotai/kimi-k2.7-code")).toBe("kimi-k2.7-code");
+    expect(stripVendorPrefix("openai/gpt-5.2")).toBe("gpt-5.2");
+  });
+
+  it("leaves bare model ids unchanged", () => {
+    expect(stripVendorPrefix("kimi-k3")).toBe("kimi-k3");
+    expect(stripVendorPrefix("qwen2.5-coder:7b")).toBe("qwen2.5-coder:7b");
+    expect(stripVendorPrefix("claude-sonnet-5")).toBe("claude-sonnet-5");
+  });
+
+  it("leaves multi-slash ids opaque (e.g. Hugging Face paths)", () => {
+    expect(stripVendorPrefix("org/model/name")).toBe("org/model/name");
+  });
+
+  it("leaves leading-slash and empty-prefix shapes unchanged", () => {
+    expect(stripVendorPrefix("/kimi-k3")).toBe("/kimi-k3");
+    expect(stripVendorPrefix("//kimi-k3")).toBe("//kimi-k3");
   });
 });
