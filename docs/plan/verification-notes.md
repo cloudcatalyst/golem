@@ -3062,3 +3062,81 @@ reasoning and emitted **zero** content blocks (`stop_reason: max_tokens`,
 is on yet no thinking deltas arrived, suggesting OpenRouter needs an explicit
 `reasoning: {...}` request field to stream the trace — **UNVERIFIED, open
 question** (Golem currently sends only `reasoning_effort`).
+
+---
+
+## §85 — ink 7 / React 19 for the `golem ui` panel (2026-07-30)
+
+Checked against the npm registry on **2026-07-30**, before adding them
+(Decision 50 chose ink over a hand-rolled TUI).
+
+| Package | Version | Notes |
+|---|---|---|
+| `ink` | **7.1.1** | `engines.node >= 22` — matches this repo's floor. |
+| `react` | **19.2.8** | ink 7 peers `react >= 19.2.0`. |
+| `@types/react` | 19.x | Listed as an **optional** peer (`peerDependenciesMeta`). |
+| `react-devtools-core` | — | Also an **optional** peer; deliberately not installed. |
+| `ink-testing-library` | 4.0.0 | Last published 2024-05-22 against `ink ^5`. |
+
+**All pure JS — no native or GPU components**, so CLAUDE.md's
+"no heavyweight native deps in the default install" rule is not engaged. It is
+still a real install-weight change: `npm install ink react` added **38 packages**,
+taking `golem-run` from 6 runtime dependencies to ~34 transitively.
+`yoga-layout` (ink's flexbox engine) is WASM-backed but ships no native build.
+
+`npm audit` afterwards reported the same 3 pre-existing production advisories
+(`@hono/node-server` via `@modelcontextprotocol/sdk`, `fast-uri`) — **none
+introduced by ink or React**.
+
+### `ink-testing-library@4` DOES work with ink 7 — VERIFIED
+
+Its published `devDependencies` pin `ink ^5` / `react ^18`, so this was flagged as
+a risk before starting. It was tested directly: `tests/integration/tui-render.test.tsx`
+mounts the real `<App>` and asserts on `lastFrame()`, and passes on ink 7.1.1 +
+React 19.2.8. No fallback to a hand-rolled fake-stdout harness was needed.
+
+### TSX under this repo's toolchain
+
+- `tsc` honours `tsconfig.json`'s `"jsx": "react-jsx"` and emits
+  `import { jsx as _jsx } from "react/jsx-runtime"` — verified in `dist/tui/app.js`.
+- `vitest` (esbuild) picks the same setting up from tsconfig; `*.test.tsx` had to
+  be added to `vitest.config.ts`'s `include`.
+- **`tsx` (the CLI runner) does NOT read tsconfig's `jsx` setting** and fails with
+  `ReferenceError: React is not defined`; an inline
+  `/** @jsxImportSource react */` pragma did not fix it either. Run ad-hoc panel
+  scripts against `dist/` instead of through `tsx`.
+- Under `exactOptionalPropertyTypes`, ink's `<Text color>` **rejects an explicit
+  `undefined`**. Two consequences: the `ui.color: "never"` policy is applied by
+  setting `FORCE_COLOR=0` before ink is imported (chalk decides its level at
+  import time) so every theme field stays a real string; and genuinely-optional
+  colours are spread in via a `col()` helper rather than passed as `undefined`.
+- Enabling `jsx` in tsconfig makes **Biome apply React rules repo-wide**, so
+  pre-existing `useAccount(...)` calls in plain `.ts` tripped
+  `lint/correctness/useHookAtTopLevel`. Scoped that rule off for `**/*.ts` in
+  `biome.json` `overrides`, leaving it active for the real React files in
+  `src/tui/**`. (Biome's config is strict JSON — a `"//"` comment key is a hard
+  config error, so the rationale lives in the commit and
+  `docs/wiki/concepts/Configuration Surfaces.md`, not the file.)
+
+### OPEN QUESTION — does `bun build --compile` bundle yoga-layout's WASM?
+
+**UNVERIFIED.** The standalone-binary tier (Decision 41d,
+`scripts/build-binary.mjs`) bundles with Bun, and Bun is not installed on this dev
+box, so `golem ui` inside a compiled binary is untested. If Bun does not embed
+`yoga-layout`'s WASM asset, the panel will fail at runtime **in binary builds
+only** — the npm install path is verified working. Test this in the CI release
+workflow before advertising `golem ui` for the no-Node install tier, and if it
+fails, have `runTui` detect it and print "use the npm install for the panel"
+rather than crashing.
+
+### U+25A0 in the pet is Ambiguous-width
+
+The pet's first glyph (`■`, U+25A0 BLACK SQUARE) is East Asian Width
+**Ambiguous** — single-width in most terminals, double-width in a CJK-configured
+one. The other seven glyphs are Block Elements (U+2580–U+259F), unambiguously
+narrow. `string-width` (which ink measures with) treats Ambiguous as 1. Mitigated
+rather than solved: the pet renders inside a fixed-width `<Box>`, so a double-wide
+draw can shift that one glyph but cannot push the header text out of alignment.
+`ui.pet false` / `golem ui --no-pet` is the escape hatch — and the same switch
+covers legacy Windows consoles (codepage 437/850) that cannot draw block elements
+at all.

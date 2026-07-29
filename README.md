@@ -62,6 +62,37 @@ present, and falls back to a self-contained binary (no Node needed) otherwise
 `npm i -g golem-run` works directly. Keep current with `golem update` (the VS
 Code extension also surfaces an update prompt). Release process: [RELEASING.md](RELEASING.md).
 
+## Settings
+
+Run **`golem`** in a terminal (or `golem ui`) for an interactive control panel:
+live status in the header, then every setting, guidance rule, and runtime control
+as a toggle or picker — each showing which layer supplied its value, writable at
+**project**, **local**, or **user** scope.
+
+```
+ ■▜▛▜▆▛▜▙   Golem 0.1.1 · ~/code/my-project
+ ▝▜██▀███   Proxy ● http://localhost:4653   Level 1 lossless   Upstream anthropic
+ ▚▟█▛▚█▛▘   Local ● qwen2.5-coder:7b   Limits 5h 20% used
+────────────────────────────────────────────────────────────────────────────────
+   SETTINGS    Guidance    Runtime                                scope: project
+────────────────────────────────────────────────────────────────────────────────
+ Knowledge — Vector search, the wiki, local answers, and the web cache
+ ▸ [x] Vector knowledge base              on                    default
+   [x] Answer locally from the wiki       on                    default
+   [ ] Rerank search hits locally         off                   default
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space toggle · enter edit · s scope · tab group · ? help · q quit
+```
+
+`space` toggles, `enter` edits a value (empty = unset), `s` cycles the write
+scope, `tab` switches group, `a` reveals advanced settings. Rows set by a
+`GOLEM_*` environment variable are locked, since env beats every file layer.
+
+The same controls are available non-interactively (`golem config list|get|set|unset`,
+`golem guidance`, `golem slider`) and in the VS Code panel's Settings section —
+all three render from one surface, `golem config schema --json`. See
+[Configuration Surfaces](docs/wiki/concepts/Configuration%20Surfaces.md).
+
 - **Spec:** [docs/golem-spec.md](docs/golem-spec.md) (source of truth)
 - **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md) · [docs/plan/ROADMAP.md](docs/plan/ROADMAP.md)
 - **Live-doc findings:** [docs/plan/verification-notes.md](docs/plan/verification-notes.md)

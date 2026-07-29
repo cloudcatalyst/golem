@@ -18,6 +18,19 @@
 import { type SliderPolicy, sliderPolicyForLevel } from "../interfaces/policy.js";
 import type { GolemSettings } from "./schema.js";
 
+export type {
+  ApplyControlOptions,
+  ApplyResult,
+  Control,
+  ControlFamily,
+  ControlGroup,
+  ControlKind,
+  ControlOption,
+  ControlSurface,
+  ControlSurfaceOptions,
+  ControlTab,
+} from "./control-surface.js";
+export { applyControl, CONTROL_TABS, collectControlSurface } from "./control-surface.js";
 export type { EnvLayer, EnvOverride } from "./env.js";
 export { coerceEnvValue, ENV_PREFIX, readEnvLayer } from "./env.js";
 export { ConfigError } from "./errors.js";
@@ -41,15 +54,31 @@ export {
   USER_DIR_NAME,
 } from "./paths.js";
 export type {
+  CompressionSettings,
   GolemSettings,
   InferenceSettings,
   KnowledgeSettings,
   ProxySettings,
   SectionName,
   SliderSettings,
+  SnoozeSettings,
   TelemetrySettings,
+  UiSettings,
 } from "./schema.js";
 export { allLeafPaths, DEFAULT_SETTINGS, leafSchema, SECTION_NAMES } from "./schema.js";
+export type { LeafPath, SectionMeta, SettingKind, SettingMeta } from "./ui-model.js";
+export {
+  deriveKind,
+  enumOptionsFor,
+  numericRangeFor,
+  SECTION_META,
+  SETTING_META,
+  sectionMeta,
+  sectionsInDisplayOrder,
+  settingKind,
+  settingMeta,
+  unwrapSchema,
+} from "./ui-model.js";
 export type { SettingsScope, WriteSettingOptions } from "./write-setting.js";
 export { writeSetting } from "./write-setting.js";
 

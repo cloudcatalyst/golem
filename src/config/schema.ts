@@ -30,6 +30,10 @@ import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
+/** `#rgb` / `#rrggbb` — the only colour form the TUI/webview both understand. */
+const hexColorSchema = z
+  .string()
+  .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "expected a hex colour like #a78bfa");
 
 /**
  * One zod schema per settings leaf. This table is the single source of truth
@@ -257,6 +261,25 @@ export const SETTINGS_LEAVES = {
     /** Port for the local savings dashboard. */
     dashboard_port: portSchema,
   },
+  ui: {
+    /**
+     * Draw the Golem "pet" (the 3x8 block-character mascot) in the `golem ui`
+     * panel header. Set false on terminals that can't render Unicode block
+     * elements (legacy Windows consoles on codepage 437/850) — `golem ui
+     * --no-pet` does the same for one run.
+     */
+    pet: z.boolean(),
+    /** Pet colour as a hex triplet; ink downgrades 24-bit → 256 → 16 as needed. */
+    pet_color: hexColorSchema,
+    /**
+     * Colour policy for the panel: `auto` respects the terminal (and `NO_COLOR`
+     * / `FORCE_COLOR`), `always` forces colour even when piped, `never` renders
+     * plain text.
+     */
+    color: z.enum(["auto", "always", "never"]),
+    /** Show advanced/rarely-touched controls when the panel opens. */
+    advanced: z.boolean(),
+  },
   snooze: {
     /**
      * Enforce the document-and-hold park at the usage limit (spec Decision 45).
@@ -348,6 +371,13 @@ export interface TelemetrySettings {
   readonly dashboard_port: number;
 }
 
+export interface UiSettings {
+  readonly pet: boolean;
+  readonly pet_color: string;
+  readonly color: "auto" | "always" | "never";
+  readonly advanced: boolean;
+}
+
 export interface SnoozeSettings {
   readonly enforce: boolean;
 }
@@ -359,6 +389,7 @@ export interface GolemSettings {
   readonly compression: CompressionSettings;
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
+  readonly ui: UiSettings;
   readonly snooze: SnoozeSettings;
 }
 
@@ -407,6 +438,13 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   telemetry: {
     enabled: true,
     dashboard_port: 4654,
+  },
+  ui: {
+    pet: true,
+    // Violet-400: readable purple on both light and dark terminal backgrounds.
+    pet_color: "#a78bfa",
+    color: "auto",
+    advanced: false,
   },
   snooze: {
     enforce: true,

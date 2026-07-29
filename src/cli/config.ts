@@ -11,6 +11,7 @@ import { z } from "zod";
 import { ConfigError } from "../config/errors.js";
 import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js";
 import { allLeafPaths, leafSchema } from "../config/schema.js";
+import { unwrapSchema } from "../config/ui-model.js";
 
 export interface ConfigReadOptions {
   readonly projectDir: string;
@@ -96,7 +97,7 @@ export function parseConfigValue(key: string, raw: string): unknown {
       { key },
     );
   }
-  const target = baseSchema(leaf);
+  const target = unwrapSchema(leaf);
 
   if (target instanceof z.ZodBoolean) {
     const token = raw.trim().toLowerCase();
@@ -245,17 +246,6 @@ function leafForKey(key: string) {
   return leafSchema(section, leafKey);
 }
 
-function baseSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
-  let current = schema;
-  for (;;) {
-    if (current instanceof z.ZodOptional || current instanceof z.ZodNullable) {
-      current = current.unwrap() as z.ZodTypeAny;
-    } else if (current instanceof z.ZodDefault) {
-      current = current.removeDefault() as z.ZodTypeAny;
-    } else if (current instanceof z.ZodEffects) {
-      current = current.innerType() as z.ZodTypeAny;
-    } else {
-      return current;
-    }
-  }
-}
+// The wrapper-stripping helper this used to own now lives in config/ui-model.ts
+// as `unwrapSchema`, shared with the control surface so the CLI's value parsing
+// and the panel's widget choice can never disagree about a leaf's real type.

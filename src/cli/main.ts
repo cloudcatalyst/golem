@@ -23,7 +23,12 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
-import { findProjectDir, loadConfig, settingsFilePaths } from "../config/index.js";
+import {
+  collectControlSurface,
+  findProjectDir,
+  loadConfig,
+  settingsFilePaths,
+} from "../config/index.js";
 import type { SettingsScope } from "../config/write-setting.js";
 import { startDashboard } from "../dashboard/index.js";
 import {
@@ -172,6 +177,66 @@ program
   .name("golem")
   .description("Golem — universal pre-LLM processing layer (golem.run)")
   .version(VERSION);
+
+/**
+ * Launch the `golem ui` control panel.
+ *
+ * The `src/tui/` tree (ink + React + yoga-layout) is reached ONLY through this
+ * dynamic import. `golem hook pre-tool-use` runs on every Claude Code tool call,
+ * so a static import would put that whole load on the hook path.
+ * tests/unit/tui-lazy-import.test.ts asserts this file never imports it statically.
+ */
+async function launchUi(opts: { dir: string; pet: boolean; advanced: boolean }): Promise<void> {
+  const { runTui } = await import("../tui/index.js");
+  const result = await runTui({
+    projectDir: opts.dir,
+    version: VERSION,
+    ...(opts.pet === false && { noPet: true }),
+    ...(opts.advanced && { advanced: true }),
+    ...(process.argv[1] !== undefined && { cliPath: process.argv[1] }),
+  });
+  if (!result.started) {
+    process.stderr.write(`golem: ${result.reason ?? "could not start the panel"}\n`);
+    process.exitCode = 1;
+  }
+}
+
+for (const name of ["ui", "settings"] as const) {
+  program
+    .command(name)
+    .description(
+      name === "ui"
+        ? "Open the interactive control panel (settings, guidance rules, runtime state)"
+        : "Open the control panel (alias of `golem ui`)",
+    )
+    .option("--dir <path>", "project directory", DEFAULT_DIR)
+    .option("--no-pet", "hide the pet in the header (also `golem config set ui.pet false`)")
+    .option("--advanced", "show advanced controls on open", false)
+    .action(async (opts: { dir: string; pet: boolean; advanced: boolean }) => {
+      try {
+        await launchUi(opts);
+      } catch (err) {
+        fail(err);
+      }
+    });
+}
+
+/**
+ * Should a bare `golem` open the panel instead of printing help?
+ *
+ * Only for `golem` with NO arguments at all, in a terminal. Deliberately decided
+ * here rather than with a root `program.action()`: an action handler on the root
+ * command makes commander treat an unknown subcommand as an excess positional
+ * argument ("too many arguments") instead of reporting "unknown command", which
+ * is a worse error for a typo'd command.
+ *
+ * The TTY check is inline (not the tui module's `canRunTui`) so the help path
+ * loads nothing extra; `runTui` re-checks and fails safely on its own anyway. It
+ * keeps `golem | cat`, CI, hook invocations, and the daemon on the help path.
+ */
+function shouldOpenPanel(argv: readonly string[] = process.argv): boolean {
+  return argv.length <= 2 && process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
 
 function printReport(report: InitReport): void {
   for (const action of report.actions) {
@@ -2158,6 +2223,40 @@ configCmd
     }
   });
 
+// The machine-readable control surface: labels, widget kinds, current values,
+// provenance, and writable scopes for settings + guidance rules + runtime state.
+// This is what the VS Code webview renders from, so a new settings key shows up
+// there with no extension change (and no version skew between the two).
+configCmd
+  .command("schema")
+  .description("Print every control (settings, guidance, runtime) with labels, kinds, and values")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  // Human listing by default with `--json` opt-in, exactly like every sibling
+  // (`config list`, `status`, `stats`). The VS Code webview and the `golem ui`
+  // panel are the JSON consumers.
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const surface = await collectControlSurface({ projectDir: opts.dir, version: VERSION });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(surface, null, 2)}\n`);
+        return;
+      }
+      for (const group of surface.groups) {
+        process.stdout.write(`${group.title}\n`);
+        for (const control of group.controls) {
+          const lock = control.locked !== undefined ? " (locked)" : "";
+          process.stdout.write(
+            `  ${control.id.padEnd(44)} ${control.kind.padEnd(7)} ` +
+              `${JSON.stringify(control.value)} — ${control.layer}${lock}\n`,
+          );
+        }
+      }
+    } catch (err) {
+      fail(err);
+    }
+  });
+
 function parseConfigScope(raw: string): SettingsScope {
   if (raw === "user" || raw === "project" || raw === "local") return raw;
   throw new InvalidArgumentError(`invalid scope "${raw}" (expected user, project, or local)`);
@@ -2504,7 +2603,14 @@ hookCmd
 
 program.addCommand(hookCmd);
 
-program.parseAsync(process.argv).catch((err: unknown) => {
+// A bare, interactive `golem` opens the control panel; every other invocation —
+// including `golem --help`, a pipe, and an unknown subcommand — goes to commander
+// exactly as before (see shouldOpenPanel).
+const entry = shouldOpenPanel()
+  ? launchUi({ dir: DEFAULT_DIR, pet: true, advanced: false })
+  : program.parseAsync(process.argv);
+
+entry.catch((err: unknown) => {
   process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
   process.exitCode = 1;
 });

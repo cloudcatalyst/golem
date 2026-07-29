@@ -37,6 +37,7 @@ export {
   guidanceEnabled,
   guidanceFeature,
   guidanceRuleBody,
+  guidanceRuleExists,
   guidanceRulePath,
   PERSONAL_RULES_GITIGNORE,
   promptTranslationGuidanceSnippet,

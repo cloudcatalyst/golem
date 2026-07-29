@@ -61,6 +61,10 @@
       {
         "command": "golem.menu",
         "title": "Golem: Actions Menu"
+      },
+      {
+        "command": "golem.configure",
+        "title": "Golem: Configure Settings"
       }
     ],
     "configuration": {
