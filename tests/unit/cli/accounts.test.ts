@@ -244,6 +244,86 @@ describe("addAccount", () => {
     ).rejects.toThrow();
   });
 
+  it("warns that --model is inert on a byte-faithful provider (Decision 48)", async () => {
+    // A byte-faithful upstream forwards the client's own `claude-*` id, so a
+    // configured model never reaches the wire. Registering it silently is how an
+    // account ends up unable to serve the model its own config names.
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await addAccount(
+        dir,
+        { id: "foundry", provider: "azure-foundry", base_url: "https://x.example/anthropic" },
+        "2026-07-26T00:00:00.000Z",
+      );
+      expect(warnings.join("")).toBe(""); // no model → nothing to warn about
+      await addAccount(
+        dir,
+        {
+          id: "foundry-pinned",
+          provider: "azure-foundry",
+          base_url: "https://x.example/anthropic",
+          model: "claude-opus-5",
+        },
+        "2026-07-26T00:00:00.000Z",
+      );
+      expect(warnings.join("")).toMatch(/IGNORED on the wire/);
+    } finally {
+      process.stderr.write = original;
+    }
+    // The account is still registered — this is a warning, not a rejection.
+    const { settings } = await loadConfig({ projectDir: dir });
+    expect((settings.proxy.accounts ?? []).map((a) => a.id)).toContain("foundry-pinned");
+  });
+
+  it("warns when the base URL composes into a doubled version segment", async () => {
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await addAccount(
+        dir,
+        { id: "or-native", provider: "anthropic", base_url: "https://openrouter.ai/api/v1" },
+        "2026-07-26T00:00:00.000Z",
+      );
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(warnings.join("")).toMatch(/api\/v1\/v1\/messages/);
+  });
+
+  it("does NOT warn for a translating provider with a model — the normal case", async () => {
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await addAccount(
+        dir,
+        {
+          id: "openrouter-laguna",
+          provider: "openrouter",
+          base_url: "https://openrouter.ai/api/v1",
+          model: "poolside/laguna-s-2.1:free",
+          auth_scheme: "bearer",
+        },
+        "2026-07-26T00:00:00.000Z",
+      );
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(warnings.join("")).toBe("");
+  });
+
   it("writes to the LOCAL scope so a pre-existing local-layer accounts array cannot mask it", async () => {
     // Regression: a `proxy.accounts` array in a higher-precedence layer
     // wholesale-replaces lower layers, so writing to project settings.json left

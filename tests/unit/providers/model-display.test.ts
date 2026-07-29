@@ -1,84 +1,13 @@
 /**
  * Upstream model DISPLAY helpers (R6.2, src/providers/model-display.ts):
- * friendly family labels for status surfaces, and read-only request-model
- * sniffing on the byte-faithful Anthropic path.
+ * read-only request-model sniffing on the byte-faithful Anthropic path, and the
+ * wire-level vendor-prefix strip. There are deliberately no "friendly" model
+ * labels to test — every surface prints the model id verbatim (only Claude ids
+ * had a family/version to fold into, which made mixed lines inconsistent).
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  friendlyModelLabel,
-  friendlyModelVersionLabel,
-  localModelVersionLabel,
-  sniffRequestModel,
-  stripVendorPrefix,
-} from "../../../src/providers/model-display.js";
-
-describe("friendlyModelLabel", () => {
-  it("maps Claude ids (including the [1m] context suffix) to a family label", () => {
-    expect(friendlyModelLabel("claude-opus-4-8[1m]")).toBe("opus");
-    expect(friendlyModelLabel("claude-opus-4-8")).toBe("opus");
-    expect(friendlyModelLabel("claude-sonnet-5")).toBe("sonnet");
-    expect(friendlyModelLabel("claude-haiku-4-5-20251001")).toBe("haiku");
-    expect(friendlyModelLabel("claude-fable-5")).toBe("fable");
-    expect(friendlyModelLabel("claude-3-5-sonnet-20241022")).toBe("sonnet");
-  });
-
-  it("is case-insensitive", () => {
-    expect(friendlyModelLabel("Claude-OPUS-4-8")).toBe("opus");
-  });
-
-  it("returns an unrecognised id unchanged (non-Claude / future name)", () => {
-    expect(friendlyModelLabel("kimi-k3")).toBe("kimi-k3");
-    expect(friendlyModelLabel("gpt-5.2")).toBe("gpt-5.2");
-    expect(friendlyModelLabel("")).toBe("");
-  });
-});
-
-describe("friendlyModelVersionLabel", () => {
-  it("maps Claude ids to a capitalized family + version", () => {
-    expect(friendlyModelVersionLabel("claude-opus-4-8[1m]")).toBe("Opus 4.8");
-    expect(friendlyModelVersionLabel("claude-opus-4-8")).toBe("Opus 4.8");
-    expect(friendlyModelVersionLabel("claude-sonnet-5")).toBe("Sonnet 5");
-    expect(friendlyModelVersionLabel("claude-fable-5")).toBe("Fable 5");
-  });
-
-  it("drops a trailing date/build stamp segment", () => {
-    expect(friendlyModelVersionLabel("claude-haiku-4-5-20251001")).toBe("Haiku 4.5");
-  });
-
-  it("is case-insensitive", () => {
-    expect(friendlyModelVersionLabel("Claude-OPUS-4-8")).toBe("Opus 4.8");
-  });
-
-  it("returns the family alone when no numeric version follows", () => {
-    // A `claude-3-5-sonnet-…` id: `sonnet` is the family but the digits precede
-    // it, so there's no numeric version *after* the family to show.
-    expect(friendlyModelVersionLabel("claude-3-5-sonnet-20241022")).toBe("Sonnet");
-  });
-
-  it("returns an unrecognised id unchanged (non-Claude / future name)", () => {
-    expect(friendlyModelVersionLabel("kimi-k3")).toBe("kimi-k3");
-    expect(friendlyModelVersionLabel("gpt-5.2")).toBe("gpt-5.2");
-    expect(friendlyModelVersionLabel("")).toBe("");
-  });
-});
-
-describe("localModelVersionLabel", () => {
-  it("maps Ollama ids to a capitalized family + version, dropping the tag", () => {
-    expect(localModelVersionLabel("qwen2.5-coder:7b")).toBe("Qwen 2.5");
-    expect(localModelVersionLabel("llama3.1:8b")).toBe("Llama 3.1");
-    expect(localModelVersionLabel("qwen2.5-coder")).toBe("Qwen 2.5");
-  });
-
-  it("returns the family alone when no numeric version immediately follows", () => {
-    expect(localModelVersionLabel("deepseek-coder-v2:16b")).toBe("Deepseek");
-  });
-
-  it("returns empty for empty, and an id with no alphabetic family unchanged", () => {
-    expect(localModelVersionLabel("")).toBe("");
-    expect(localModelVersionLabel("7b")).toBe("7b");
-  });
-});
+import { sniffRequestModel, stripVendorPrefix } from "../../../src/providers/model-display.js";
 
 describe("sniffRequestModel", () => {
   it("extracts the top-level model from an Anthropic messages body", () => {

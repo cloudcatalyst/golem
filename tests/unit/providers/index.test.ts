@@ -7,19 +7,27 @@
 import { describe, expect, it } from "vitest";
 import {
   defaultAuthScheme,
+  doubledVersionSegment,
   isGeminiProvider,
   isTranslatingProvider,
   makeAuthMapper,
+  preservesVendorPrefix,
   resolveAuthScheme,
   upstreamAssumesCaching,
+  upstreamBasePath,
   upstreamChatCompletionsPath,
+  upstreamRequestUrl,
 } from "../../../src/providers/index.js";
 
 describe("translating providers (case b)", () => {
-  it("classifies openai/ollama as translating and the case-(a) set as not", () => {
+  it("classifies openai/ollama/openrouter as translating and the case-(a) set as not", () => {
     expect(isTranslatingProvider("openai")).toBe(true);
     expect(isTranslatingProvider("ollama")).toBe(true);
-    for (const p of ["anthropic", "azure-foundry", "openrouter", "custom"] as const) {
+    // Decision 48: OpenRouter moved from case (a) to case (b) — its Anthropic
+    // endpoint can only serve Claude models, so byte-faithful made every
+    // non-Claude model (including the free tier) unreachable.
+    expect(isTranslatingProvider("openrouter")).toBe(true);
+    for (const p of ["anthropic", "azure-foundry", "custom"] as const) {
       expect(isTranslatingProvider(p)).toBe(false);
     }
   });
@@ -48,6 +56,76 @@ describe("translating providers (case b)", () => {
     expect(upstreamChatCompletionsPath("https://host/openai/v1/")).toBe(
       "/openai/v1/chat/completions",
     );
+    // OpenRouter's documented base URL — the one the user actually pastes.
+    expect(upstreamChatCompletionsPath("https://openrouter.ai/api/v1")).toBe(
+      "/api/v1/chat/completions",
+    );
+  });
+
+  it("tolerates a base URL that already names the chat-completions endpoint", () => {
+    // Copied straight out of a provider's curl example; appending produced a
+    // doubled `/chat/completions/chat/completions` that 404s.
+    expect(upstreamChatCompletionsPath("https://openrouter.ai/api/v1/chat/completions")).toBe(
+      "/api/v1/chat/completions",
+    );
+  });
+
+  it("keeps the vendor/ prefix ONLY for the multi-vendor gateway", () => {
+    // OpenRouter's canonical id IS `vendor/model`; stripping it resolves to a
+    // different vendor's model or 400s. Single-vendor upstreams want it bare.
+    expect(preservesVendorPrefix("openrouter")).toBe(true);
+    for (const p of ["openai", "ollama", "gemini", "anthropic", "custom"] as const) {
+      expect(preservesVendorPrefix(p)).toBe(false);
+    }
+  });
+
+  it("keeps OpenRouter fail-safe on caching despite being translated", () => {
+    // A multi-vendor gateway fronts both caching and non-caching models, so Golem
+    // cannot know per-gateway — it stays fail-safe (no lossy history rewriting)
+    // rather than inheriting the translating providers' `false`.
+    expect(upstreamAssumesCaching("openrouter")).toBe(true);
+  });
+});
+
+describe("request-URL composition (probe/proxy agreement)", () => {
+  it("derives the base path the way the proxy prepends it", () => {
+    expect(upstreamBasePath("https://api.anthropic.com")).toBe("");
+    expect(upstreamBasePath("https://api.anthropic.com/")).toBe("");
+    expect(upstreamBasePath("https://openrouter.ai/api/v1")).toBe("/api/v1");
+    expect(upstreamBasePath("https://openrouter.ai/api/v1/")).toBe("/api/v1");
+  });
+
+  it("predicts the real POST target per provider case", () => {
+    // Case (a): the proxy appends the client's own `/v1/messages`.
+    expect(upstreamRequestUrl("anthropic", "https://api.anthropic.com")).toBe(
+      "https://api.anthropic.com/v1/messages",
+    );
+    expect(upstreamRequestUrl("azure-foundry", "https://x.services.ai.azure.com/anthropic")).toBe(
+      "https://x.services.ai.azure.com/anthropic/v1/messages",
+    );
+    // Case (b): the translated chat-completions endpoint.
+    expect(upstreamRequestUrl("openrouter", "https://openrouter.ai/api/v1")).toBe(
+      "https://openrouter.ai/api/v1/chat/completions",
+    );
+    expect(upstreamRequestUrl("openai", "https://api.openai.com/v1")).toBe(
+      "https://api.openai.com/v1/chat/completions",
+    );
+  });
+
+  it("flags a base URL whose composed path repeats the version segment", () => {
+    // The exact trap: an OpenRouter base URL on a byte-faithful provider composes
+    // `/api/v1/v1/messages`, which 404s with an HTML page — while a credential
+    // probe against `/api/v1/models` happily reports the key as accepted.
+    expect(doubledVersionSegment("anthropic", "https://openrouter.ai/api/v1")).toBe(
+      "https://openrouter.ai/api/v1/v1/messages",
+    );
+    expect(doubledVersionSegment("custom", "https://gateway.internal/v1")).toBe(
+      "https://gateway.internal/v1/v1/messages",
+    );
+    // Sane compositions are not flagged.
+    expect(doubledVersionSegment("anthropic", "https://api.anthropic.com")).toBeUndefined();
+    expect(doubledVersionSegment("openrouter", "https://openrouter.ai/api/v1")).toBeUndefined();
+    expect(doubledVersionSegment("openai", "https://api.openai.com/v1")).toBeUndefined();
   });
 });
 

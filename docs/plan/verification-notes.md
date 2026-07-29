@@ -2989,3 +2989,76 @@ must be written to the **local** scope — both so it wins the merge and so it
 stays out of the committable project settings file. Verified: `account add` →
 `list` shows it immediately, `use` then fails closed on the missing credential,
 `remove` deletes it; a unit test asserts the local-scope write.
+
+## §84 — OpenRouter free models were unreachable: case (a) misclassification (2026-07-29, corrects §73)
+
+Found by dogfooding, live-verified against `openrouter.ai` and a local echo
+upstream. An account added exactly as the docs suggest —
+`golem account add openrouter-laguna --provider openrouter --base-url
+https://openrouter.ai/api/v1 --model poolside/laguna-s-2.1:free --auth-scheme
+bearer`, key stored with `golem account login` — could not serve **one** request.
+Four independent defects stacked, each of which hid the next. Fixed under
+Decision 48.
+
+**1. `openrouter` was case (a) (byte-faithful), so the configured model never
+reached the wire.** Byte-faithful means the body is never parsed or rewritten, so
+Claude Code's own `claude-opus-5[1m]` was forwarded and `model=poolside/...` was
+inert. OpenRouter's Anthropic-Messages endpoint serves only *Claude* models, so
+every non-Claude model — the whole free tier — was unreachable by construction.
+§73 already concluded "reaching non-Claude models / the normalized surface is
+OpenAI-schema = **case (b)**"; the R6.1 implementation classified it as (a)
+anyway, on the strength of §73's *other* observation that an Anthropic endpoint
+also exists. **§73's "case (a)" recommendation for OpenRouter is superseded** —
+the Anthropic endpoint is real but only useful for Claude models, so it is now
+reached deliberately via `--provider custom --base-url https://openrouter.ai/api`.
+
+**2. Path composition doubled the version segment.** The proxy appends the
+client's request target to the base URL's path prefix
+(`GolemProxy.basePath + forward.url`), so `https://openrouter.ai/api/v1` +
+`/v1/messages` = `/api/v1/v1/messages`. Probed live:
+
+| URL | Status |
+| --- | --- |
+| `POST https://openrouter.ai/api/v1/v1/messages` | **404** (HTML error page, not JSON) |
+| `POST https://openrouter.ai/api/v1/messages` | 401 (endpoint exists — Anthropic-native) |
+| `POST https://openrouter.ai/api/v1/chat/completions` | 401 (endpoint exists — OpenAI-schema) |
+
+**3. `golem account login` reported success anyway.** The Decision 46 probe GETs
+a model-list URL composed by its *own* rule (`/\/v\d+$/` → append `/models`), so
+it hit the real `https://openrouter.ai/api/v1/models` and returned `accepted`.
+The key was always valid; the probe simply does not test the route traffic uses.
+**Rule:** a pre-flight probe must report the request URL it is NOT testing.
+
+**4. `stripVendorPrefix` mangled the model id — the subtle one.** Even with
+provider `openai` (the working workaround), the translating boundary stripped the
+vendor segment, so a configured `poolside/laguna-s-2.1:free` went upstream as
+`laguna-s-2.1:free`. Captured on the wire against a local echo server:
+`{"path":"/api/v1/chat/completions","model":"laguna-s-2.1:free"}`. The helper was
+added for single-vendor upstreams (`moonshotai/kimi-k3` → `kimi-k3`, §79), but
+OpenRouter is multi-vendor and `vendor/model` IS its canonical id — the segment
+disambiguates models several vendors publish under one name. OpenRouter happened
+to resolve the bare slug in testing, which is precisely why this would have
+surfaced later as a wrong-model-served bug rather than an error.
+
+**Also found:** the proxy startup banner printed
+`settings.proxy.upstream_base_url`, so two test proxies genuinely serving
+OpenRouter both announced `-> https://api.anthropic.com`. Any account switch
+looked inert from the banner alone.
+
+**Live verification after the fix** (throwaway proxies on spare ports, pinned via
+`GOLEM_PROXY_ACTIVE_ACCOUNT` so the session's own routing was untouched):
+
+- `openai/gpt-oss-20b:free` — 200 non-streaming; SSE streaming emits proper
+  `message_start` / `content_block_delta` / `message_stop`.
+- `poolside/laguna-s-2.1:free` — 200 non-streaming and streaming, text deltas
+  confirmed, model echoed with its vendor prefix intact.
+
+**Two operational caveats (not Golem defects).** (i) OpenRouter's free pool
+429s intermittently: 1 in 4 calls returned
+`limit_source: upstream_provider_shared_pool`. (ii) `poolside/laguna-s-2.1:free`
+is a reasoning model — at `max_tokens: 200` it spent the entire budget on
+reasoning and emitted **zero** content blocks (`stop_reason: max_tokens`,
+`output_tokens: 200`). Give it generous `max_tokens`. Note `map_reasoning_to_thinking`
+is on yet no thinking deltas arrived, suggesting OpenRouter needs an explicit
+`reasoning: {...}` request field to stream the trace — **UNVERIFIED, open
+question** (Golem currently sends only `reasoning_effort`).

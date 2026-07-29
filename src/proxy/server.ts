@@ -261,7 +261,7 @@ export class GolemProxy {
         // path must PARSE the body — so decode gzip first (undici doesn't
         // auto-decompress; some OpenAI-schema upstreams, e.g. Moonshot, gzip).
         const enc = this.header(upstream.headers, "content-encoding");
-        if (enc !== undefined && enc.toLowerCase().includes("gzip")) {
+        if (enc?.toLowerCase().includes("gzip")) {
           raw = gunzipSync(raw);
         }
       } catch {

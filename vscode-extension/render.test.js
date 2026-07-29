@@ -6,9 +6,6 @@ const assert = require("node:assert/strict");
 const {
   fmtTokens,
   upstreamLabel,
-  friendlyLocalModelLabel,
-  friendlyModelVersionLabel,
-  localModelVersionLabel,
   levelLabel,
   buildModel,
   statusBarText,
@@ -105,18 +102,18 @@ test("buildModel assumes the coder tool is enabled when an older CLI omits the f
   assert.equal(m.localModelActive, true);
 });
 
-test("buildModel shortens a Claude last_served_model to a family label", () => {
+test("buildModel surfaces a Claude last_served_model verbatim", () => {
   const status = {
     upstream: {
       provider: "anthropic",
       account: null,
       base_url: "https://api.anthropic.com",
-      last_served_model: "claude-opus-4-8[1m]",
+      last_served_model: "claude-opus-5[1m]",
     },
   };
   const m = buildModel({}, status);
-  assert.equal(m.model, "opus");
-  assert.equal(m.lastServedModel, "claude-opus-4-8[1m]"); // raw id preserved on the model
+  assert.equal(m.model, "claude-opus-5[1m]"); // the id as served, not a family label
+  assert.equal(m.lastServedModel, "claude-opus-5[1m]");
 });
 
 test("buildModel prefers the account-aware status.upstream block (R6.2)", () => {
@@ -212,16 +209,16 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
     }),
     "⬢ Golem · L1 → moonshotai (kimi-k3)",
   );
-  // Last-served wins over the configured default, and a Claude id is versioned.
+  // Last-served wins over the configured default; the Claude id is verbatim.
   assert.equal(
     statusBarText({
       proxyReachable: true,
       slider: 3,
       sliderName: "aggressive",
-      upstreamDisplay: "anthropic (Opus 4.8)",
+      upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem · Aggressive → local + anthropic (Opus 4.8)",
+    "⬢ Golem · Aggressive → local + anthropic (claude-opus-5[1m])",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
@@ -259,24 +256,16 @@ test("statusBarText — local segment appears whenever the local model is active
   );
 });
 
-test("friendlyLocalModelLabel shortens an Ollama model id to its family", () => {
-  assert.equal(friendlyLocalModelLabel("qwen2.5-coder:7b"), "qwen");
-  assert.equal(friendlyLocalModelLabel("llama3.1:8b"), "llama");
-  assert.equal(friendlyLocalModelLabel("deepseek-coder-v2:16b"), "deepseek");
-  assert.equal(friendlyLocalModelLabel("bge-m3"), "bge");
-  assert.equal(friendlyLocalModelLabel(""), "");
-});
-
-test("statusBarText names each backend with its own versioned model", () => {
+test("statusBarText names each backend with its own model id, verbatim", () => {
   assert.equal(
     statusBarText({
       proxyReachable: true,
       slider: 1,
-      upstreamDisplay: "anthropic (Opus 4.8)",
+      upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
       localCoderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → local (Qwen 2.5) + anthropic (Opus 4.8)",
+    "⬢ Golem · L1 → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])",
   );
 });
 
@@ -288,25 +277,14 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
     statusBarText({
       proxyReachable: true,
       slider: 1,
-      upstreamDisplay: "anthropic (Opus 4.8)",
+      upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelReachable: true,
       localCoderEnabled: false,
       localModelActive: false,
       localCoderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → anthropic (Opus 4.8)",
+    "⬢ Golem · L1 → anthropic (claude-opus-5[1m])",
   );
-});
-
-test("friendlyModelVersionLabel / localModelVersionLabel (mirror the CLI helpers)", () => {
-  assert.equal(friendlyModelVersionLabel("claude-opus-4-8[1m]"), "Opus 4.8");
-  assert.equal(friendlyModelVersionLabel("claude-haiku-4-5-20251001"), "Haiku 4.5");
-  assert.equal(friendlyModelVersionLabel("claude-sonnet-5"), "Sonnet 5");
-  assert.equal(friendlyModelVersionLabel("kimi-k3"), "kimi-k3");
-  assert.equal(localModelVersionLabel("qwen2.5-coder:7b"), "Qwen 2.5");
-  assert.equal(localModelVersionLabel("llama3.1:8b"), "Llama 3.1");
-  assert.equal(localModelVersionLabel("deepseek-coder-v2:16b"), "Deepseek");
-  assert.equal(localModelVersionLabel(""), "");
 });
 
 test("levelLabel is Passthrough when proxy is off or at level 0, else the title-cased name", () => {

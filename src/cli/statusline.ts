@@ -21,12 +21,7 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/index.js";
 import { VERSION } from "../index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
-import {
-  friendlyModelVersionLabel,
-  localModelVersionLabel,
-  resolveUpstreamDisplay,
-  type UpstreamProvider,
-} from "../providers/index.js";
+import { resolveUpstreamDisplay, type UpstreamProvider } from "../providers/index.js";
 import { servedModelFor } from "../proxy/index.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
@@ -163,19 +158,21 @@ export function providerUpstreamLabel(
 }
 
 /**
- * The versioned upstream-model label for the one-liner — the live/served model
- * when known (`claude-opus-4-8[1m]` → `Opus 4.8`), else the configured default
- * shown verbatim (an explicit id like `kimi-k3`), or `undefined` when neither is
- * known (a plain Anthropic passthrough that has served nothing yet).
+ * The upstream-model id for the one-liner — the live/served model when known
+ * (`claude-opus-5[1m]`), else the configured default (an explicit id like
+ * `kimi-k3`), or `undefined` when neither is known (a plain Anthropic
+ * passthrough that has served nothing yet). Shown verbatim: the id as
+ * configured/served, never a prettified family name (see
+ * `providers/model-display.ts`).
  */
 function upstreamModelLabel(golem: GolemState): string | undefined {
-  if (golem.lastServedModel !== undefined) return friendlyModelVersionLabel(golem.lastServedModel);
-  return golem.upstreamModel;
+  return golem.lastServedModel ?? golem.upstreamModel;
 }
 
 /**
- * The one-liner destination, e.g. `local (Qwen 2.5) + anthropic (Opus 4.8)`.
- * Each backend carries its own `(model)` parenthetical (versioned label). The
+ * The one-liner destination, e.g.
+ * `local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])`. Each backend
+ * carries its own `(model)` parenthetical — the model id verbatim. The
  * `local (…)` segment is present only when a local model is reachable
  * (Decision 30 — Golem is then a local+upstream hybrid at any level); when the
  * local model is up but its id is unknown it degrades to a bare `local`. Model
@@ -186,9 +183,10 @@ export function destinationLabel(golem: GolemState): string {
   const upstreamSeg =
     upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
   if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return upstreamSeg;
-  const localVer =
-    golem.localCoderModel !== undefined ? localModelVersionLabel(golem.localCoderModel) : "";
-  const localSeg = localVer !== "" ? `local (${localVer})` : "local";
+  const localSeg =
+    golem.localCoderModel !== undefined && golem.localCoderModel !== ""
+      ? `local (${golem.localCoderModel})`
+      : "local";
   return `${localSeg} + ${upstreamSeg}`;
 }
 
@@ -206,7 +204,7 @@ export interface RenderOptions {
 /**
  * Pure renderer — the unit-tested core. The line is the compact one-liner:
  *
- *   ⬢ Golem · Balanced → local (Qwen 2.5) + anthropic (Opus 4.8)
+ *   ⬢ Golem · Balanced → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])
  *
  * `_session` (Claude Code's per-turn context %, 5h quota, cost) is parsed and
  * captured by {@link parseSessionInput} but deliberately NOT rendered here yet:
@@ -239,8 +237,9 @@ export function renderStatusLine(
   const label = passthrough ? "Passthrough" : levelName(golem.sliderLevel);
 
   // Brand · Level → destination. The destination names each backend with its
-  // own versioned model (`local (Qwen 2.5) + anthropic (Opus 4.8)`); `local` is
-  // present only when a local model is reachable (Decision 30).
+  // own model id verbatim (`local (qwen2.5-coder:7b) + anthropic
+  // (claude-opus-5[1m])`); `local` is present only when a local model is
+  // reachable (Decision 30).
   parts.push(brand);
   parts.push(`${cyan(label)} ${dim("→")} ${cyan(destinationLabel(golem))}`);
 

@@ -14,7 +14,7 @@ import http from "node:http";
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
-import { friendlyModelLabel, resolveUpstreamDisplay } from "../providers/index.js";
+import { resolveUpstreamDisplay } from "../providers/index.js";
 import { type LimitPrediction, readLimitState, servedModelFor } from "../proxy/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
@@ -340,15 +340,17 @@ export function renderUpstream(upstream: StatusReport["upstream"]): string {
   if (host !== upstream.provider && host !== upstream.account) parts.push(host);
   const dflt = upstream.default_model;
   const served = upstream.last_served_model ?? null;
-  if (dflt !== null && served !== null && friendlyModelLabel(served) !== dflt && served !== dflt) {
+  // Model ids are shown verbatim on both sides, so the comparison is a plain
+  // id-vs-id one (see providers/model-display.ts — no prettified family labels).
+  if (dflt !== null && served !== null && served !== dflt) {
     // A configured default exists AND the proxy served something else — show both
     // so the divergence is visible (e.g. a translating upstream mid-switch).
     parts.push(`default model ${dflt}`);
-    parts.push(`last served ${friendlyModelLabel(served)}`);
+    parts.push(`last served ${served}`);
   } else if (served !== null) {
     // No configured default (byte-faithful Anthropic), or it matches: the served
     // model IS the live model — show it as the current model.
-    parts.push(`model ${friendlyModelLabel(served)}`);
+    parts.push(`model ${served}`);
   } else if (dflt !== null) {
     parts.push(`model ${dflt}`);
   }

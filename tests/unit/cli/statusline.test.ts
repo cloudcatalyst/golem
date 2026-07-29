@@ -122,19 +122,21 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain(String.fromCharCode(27));
   });
 
-  it("names each backend with its own versioned model (Decision 23 format)", () => {
+  it("names each backend with its own model id, verbatim (Decision 23 format)", () => {
     const line = renderStatusLine(
       {},
       {
         sliderLevel: 1,
         upstreamLabel: "anthropic",
-        lastServedModel: "claude-opus-4-8[1m]",
+        lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
         localCoderModel: "qwen2.5-coder:7b",
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Lossless → local (Qwen 2.5) + anthropic (Opus 4.8)");
+    expect(line).toContain(
+      "⬢ Golem · Lossless → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])",
+    );
   });
 
   it("shows the configured model in the destination when nothing served yet", () => {

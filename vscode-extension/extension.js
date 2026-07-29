@@ -250,7 +250,7 @@ async function refresh() {
     //   Local: <ollama url> (<full model>)        (only when a local model is up)
     //   Upstream: <base url> (<full model>)
     // Cost is intentionally absent (deferred until per-backend cost tracking).
-    // Full model ids here (not the compact versioned labels), since there's room.
+    // Full model ids here — same as the status bar, which also shows them raw.
     const modeLine = `Mode: ${levelLabel(model)} · saved ${model.savedPct}% (${fmtTokens(
       model.before,
     )} → ${fmtTokens(model.after)})${model.savingsWindow ? ` ${model.savingsWindow}` : ""}`;
