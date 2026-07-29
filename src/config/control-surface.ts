@@ -1,6 +1,6 @@
 /**
  * The control surface — one list of togglable/editable controls that every Golem
- * UI renders from: the `golem ui` terminal panel, `golem config schema --json`,
+ * UI renders from: the `golem` terminal panel, `golem config schema --json`,
  * and the VS Code webview.
  *
  * Golem's user-facing state lives in three unrelated stores, each with its own
@@ -158,7 +158,7 @@ export interface ControlSurfaceOptions {
   ) => Promise<{ readonly reachable: boolean; readonly coderModel?: string }>;
   /**
    * Include the header in the returned surface. Default false — building it costs
-   * ~400ms of module load plus a proxy/Ollama probe, which the `golem ui` panel
+   * ~400ms of module load plus a proxy/Ollama probe, which the `golem` control panel
    * deliberately keeps off its first paint (see {@link ControlSurface.header}).
    * `golem config schema --json` passes true.
    */

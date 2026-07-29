@@ -65,7 +65,7 @@ updated: YYYY-MM-DD
 - [[Architecture]] — **visual map**: component topology, proxy request lifecycle, local/LAN/upstream routing, observability, and the PreToolUse guardrail stack (Mermaid diagrams, the deep-dive entry point)
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
-- [[Configuration Surfaces]] — one control surface (settings + guidance + runtime) behind `golem ui`, `golem config`, and the VS Code webview; compile-enforced setting metadata, the pet, env-locked rows
+- [[Configuration Surfaces]] — one control surface (settings + guidance + runtime) behind the `golem` panel, `golem config`, and the VS Code webview; compile-enforced setting metadata, the pet, env-locked rows
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
 - [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
@@ -86,7 +86,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T5.md — graph-first lookup ahead of vector search in `search`
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
-- debriefs/2026-07-30-control-panel-and-config-surfaces.md — `golem ui` panel + the one control surface behind CLI/TUI/VS Code; why the config layering needed no refactor, only metadata
+- debriefs/2026-07-30-control-panel-and-config-surfaces.md — the `golem` control panel + the one control surface behind CLI/TUI/VS Code; why the config layering needed no refactor, only metadata
 - **ADRs live at `../decisions/`** (outside this wiki, spec Decision 44): `ADR-0001-file-watcher.md` (accepted: `node:fs.watch` behind a swappable `FileWatcher`), `ADR-0002-autonomy-approval-gates.md` (accepted: R5.4 autonomy threat model — PreToolUse allow/ask gate, fail-closed classifier), `ADR-0003-credential-storage-and-account-routing.md` (PROPOSED: R6.2 multi-account credential threat model + ToS scope)
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex
 - syntheses/r1.1-net-of-cache-ab.md — R1.1 live billed-`usage` A/B: level 1 vs 3 are pipeline-identical on Anthropic post-Decision-31, so there's currently nothing to A/B there

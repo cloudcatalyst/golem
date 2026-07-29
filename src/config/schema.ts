@@ -263,9 +263,9 @@ export const SETTINGS_LEAVES = {
   },
   ui: {
     /**
-     * Draw the Golem "pet" (the 3x8 block-character mascot) in the `golem ui`
+     * Draw the Golem "pet" (the 3x8 block-character mascot) in the `golem` control
      * panel header. Set false on terminals that can't render Unicode block
-     * elements (legacy Windows consoles on codepage 437/850) — `golem ui
+     * elements (legacy Windows consoles on codepage 437/850) — `golem
      * --no-pet` does the same for one run.
      */
     pet: z.boolean(),

@@ -23,7 +23,7 @@ import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
-// Pure display helpers live in ./upstream-display.js so the `golem ui` panel can
+// Pure display helpers live in ./upstream-display.js so the `golem` control panel can
 // render an upstream label without loading this module (see that file).
 import { renderUpstream } from "./upstream-display.js";
 

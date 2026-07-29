@@ -4,7 +4,7 @@
  *
  * These lived in statusline.ts and status.ts, whose module graphs are ~142ms and
  * ~430ms respectively (init.js, the hooks barrel, the proxy, the local-model probe).
- * The `golem ui` panel needs only these two functions to draw its header, and paying
+ * The `golem` control panel needs only these two functions to draw its header, and paying
  * 430ms for a string formatter put the whole first frame behind it — so they moved
  * here, where the only imports are types. statusline.ts and status.ts re-export them,
  * so every existing caller is unaffected. See verification-notes §86c.

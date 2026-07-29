@@ -2191,7 +2191,7 @@ configCmd
   .description("Print every control (settings, guidance, runtime) with labels, kinds, and values")
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   // Human listing by default with `--json` opt-in, exactly like every sibling
-  // (`config list`, `status`, `stats`). The VS Code webview and the `golem ui`
+  // (`config list`, `status`, `stats`). The VS Code webview and the `golem` control
   // panel are the JSON consumers.
   .option("--json", "machine-readable output", false)
   .action(async (opts: { dir: string; json: boolean }) => {

@@ -38,7 +38,7 @@ import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 // `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
 // write path (~426ms) and all that's wanted here is a lookup table.
 import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
-// Shared with status.ts and the `golem ui` header; lives in its own module so
+// Shared with status.ts and the control-panel header; lives in its own module so
 // rendering a label costs nothing to import (see upstream-display.ts).
 import { upstreamLabel } from "./upstream-display.js";
 

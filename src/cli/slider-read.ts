@@ -5,7 +5,7 @@
  * Reading is just a config lookup. Writing (`setSliderLevel`) has to be able to
  * activate a project, so slider.ts imports `./init.js` — which drags in the hooks
  * barrel and costs ~530ms to load. Anything that only wants to *display* the level
- * (the `golem ui` panel, the status line, `golem status`) imports this module
+ * (the `golem` control panel, the status line, `golem status`) imports this module
  * instead and pays ~130ms. See verification-notes §86.
  *
  * slider.ts re-exports both of these, so existing importers are unaffected and

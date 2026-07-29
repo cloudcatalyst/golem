@@ -1,5 +1,5 @@
 /**
- * Colours and glyphs for the `golem ui` panel.
+ * Colours and glyphs for the `golem` control panel.
  *
  * Every colour is a **hex triplet**; `ansi.ts` degrades it to whatever the terminal
  * advertises (24-bit → 256 → 16 → none). That replaced chalk when ink was removed,
@@ -58,7 +58,7 @@ export function themeFor(
  * **Ambiguous** — single-width in most terminals, double-width in a CJK-configured
  * one. The pet is drawn in a fixed-width column ({@link PET_WIDTH} plus padding), so
  * a double-wide render can shift that glyph without pushing the header text out of
- * alignment. `ui.pet false` / `golem ui --no-pet` turns it off, which is also the
+ * alignment. `ui.pet false` / `golem --no-pet` turns it off, which is also the
  * escape hatch for legacy Windows consoles that can't draw block elements.
  */
 export const PET_LINES: readonly string[] = ["■▜▛▜▆▛▜▙", "▝▜██▀███", "▚▟█▛▚█▛▘"];

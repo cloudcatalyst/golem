@@ -1,5 +1,5 @@
 /**
- * `golem ui` entry point: load the control surface, draw frames, feed keys to the
+ * Control-panel entry point: load the control surface, draw frames, feed keys to the
  * reducer, run the effects it asks for.
  *
  * This dispatch loop is the whole "framework" now that ink is gone — about 40 lines
@@ -51,7 +51,7 @@ export async function runTui(options: RunTuiOptions): Promise<RunTuiResult> {
     return {
       started: false,
       reason:
-        "golem ui needs an interactive terminal (stdin and stdout must both be a TTY). " +
+        "the control panel needs an interactive terminal (stdin and stdout must both be a TTY). " +
         "Use `golem status` and `golem config` for non-interactive use.",
     };
   }
