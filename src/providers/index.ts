@@ -41,13 +41,7 @@ export {
   geminiToAnthropic,
   mapGeminiFinish,
 } from "./gemini-translate.js";
-export {
-  friendlyModelLabel,
-  friendlyModelVersionLabel,
-  localModelVersionLabel,
-  sniffRequestModel,
-  stripVendorPrefix,
-} from "./model-display.js";
+export { sniffRequestModel, stripVendorPrefix } from "./model-display.js";
 export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-stream.js";
 export {
   type AnthropicMessageResponse,
@@ -61,10 +55,22 @@ export {
 /**
  * Upstreams Golem can front.
  * - Case (a) — Anthropic wire protocol, byte-faithful: `anthropic` (default),
- *   `azure-foundry`, `openrouter`, `custom`.
+ *   `azure-foundry`, `custom`.
  * - Case (b) — needs request/response translation (not byte-faithful):
- *   `openai`, `ollama` (OpenAI Chat Completions schema), `gemini` (Google
- *   `generateContent` schema).
+ *   `openai`, `openrouter`, `ollama` (OpenAI Chat Completions schema), `gemini`
+ *   (Google `generateContent` schema).
+ *
+ * `openrouter` was case (a) until Decision 48 (2026-07-29). OpenRouter's
+ * Anthropic-Messages endpoint can only serve *Claude* models, so a byte-faithful
+ * classification made every non-Claude model on the gateway — including its free
+ * tier, the main reason to point Golem at OpenRouter at all — unreachable by
+ * construction: byte-faithful forwards the client's own `claude-*` id and never
+ * applies the account's configured `model`. It is now translated over
+ * OpenRouter's normalized OpenAI Chat Completions surface
+ * (verification-notes §73 reached the same conclusion). To reach the
+ * Anthropic-native endpoint deliberately, use `--provider custom --base-url
+ * https://openrouter.ai/api` (note: no `/v1` — the proxy appends the client's
+ * own `/v1/messages`).
  */
 export const UPSTREAM_PROVIDERS = [
   "anthropic",
@@ -83,7 +89,29 @@ export type UpstreamProvider = (typeof UPSTREAM_PROVIDERS)[number];
  * byte-faithful passthrough (case a).
  */
 export function isTranslatingProvider(provider: UpstreamProvider): boolean {
-  return provider === "openai" || provider === "ollama" || provider === "gemini";
+  return (
+    provider === "openai" ||
+    provider === "openrouter" ||
+    provider === "ollama" ||
+    provider === "gemini"
+  );
+}
+
+/**
+ * Whether the provider's model ids keep their `vendor/` segment on the wire.
+ *
+ * Most OpenAI-schema upstreams are single-vendor and name a model bare
+ * (`kimi-k3`), so a registry slug like `moonshotai/kimi-k3` has its prefix
+ * stripped at the translating boundary ({@link stripVendorPrefix}). OpenRouter is
+ * the opposite: it is a *multi-vendor* gateway whose canonical model id IS
+ * `vendor/model` (`poolside/laguna-s-2.1:free`), and the vendor segment is what
+ * disambiguates models that several vendors publish under the same name
+ * (`openai/gpt-oss-20b:free` vs another host's `gpt-oss-20b`). Stripping it there
+ * either 400s or silently resolves to a different vendor's model, so OpenRouter
+ * ids are forwarded whole.
+ */
+export function preservesVendorPrefix(provider: UpstreamProvider): boolean {
+  return provider === "openrouter";
 }
 
 /** Whether the provider uses the Gemini `generateContent` schema (a distinct translator). */
@@ -189,6 +217,15 @@ export function makeAuthMapper(
  */
 export function upstreamAssumesCaching(provider: UpstreamProvider): boolean | undefined {
   if (provider === "anthropic") return undefined; // URL heuristic (default + custom anthropic URL)
+  // OpenRouter is a multi-vendor gateway: it fronts both prompt-cache-capable
+  // models (Anthropic/OpenAI upstreams) and non-caching ones, and which is which
+  // is a per-request property of the configured model, not of the gateway. Golem
+  // cannot know, so it stays fail-safe — treated as caching, semantic stage off,
+  // history never rewritten (Decision 31). Reclassifying it as a *translating*
+  // provider (Decision 48) deliberately did NOT change this: the case below keys
+  // off translation as a proxy for "genuinely non-caching", which OpenRouter is
+  // not.
+  if (provider === "openrouter") return true;
   // OpenAI/Ollama are genuinely non-caching — resent history is re-billed at
   // full price, so the lossy semantic stage may pay there (Decision 23/31).
   if (isTranslatingProvider(provider)) return false;
@@ -196,11 +233,63 @@ export function upstreamAssumesCaching(provider: UpstreamProvider): boolean | un
 }
 
 /**
+ * The upstream path prefix a base URL carries — its pathname with any trailing
+ * slash removed (`https://openrouter.ai/api/v1` → `/api/v1`, a bare host → `""`).
+ * This is exactly what {@link GolemProxy} prepends to the client's request
+ * target, so every surface that needs to predict the proxy's real request URL
+ * derives it from here rather than re-implementing the rule.
+ */
+export function upstreamBasePath(baseUrl: string): string {
+  return new URL(baseUrl).pathname.replace(/\/+$/, "");
+}
+
+/**
  * The OpenAI Chat Completions path for a translating provider's base URL, e.g.
  * `http://gpubox.lan:11434/v1` → `/v1/chat/completions`. Preserves any path
  * prefix the base URL carries; the proxy POSTs the translated body here.
+ *
+ * Tolerates a base URL that already names the endpoint — users copy
+ * `https://openrouter.ai/api/v1/chat/completions` straight out of a provider's
+ * curl example, and appending to that produced a doubled
+ * `/chat/completions/chat/completions` that 404s.
  */
 export function upstreamChatCompletionsPath(baseUrl: string): string {
-  const prefix = new URL(baseUrl).pathname.replace(/\/+$/, "");
+  const prefix = upstreamBasePath(baseUrl).replace(/\/chat\/completions$/, "");
   return `${prefix}/chat/completions`;
+}
+
+/**
+ * The absolute URL the proxy will actually POST to for this provider — the
+ * translated Chat Completions endpoint for case (b), or `<base>/v1/messages` for
+ * a byte-faithful case (a) upstream (where the proxy appends the client's own
+ * `/v1/messages` request target to the base path).
+ *
+ * Exists so a *pre-flight* surface (the credential probe) can report the same URL
+ * the request path will use instead of composing its own. Gemini is excluded: its
+ * path is per-request (model + `?key=`) and is built by `geminiPath`.
+ */
+export function upstreamRequestUrl(provider: UpstreamProvider, baseUrl: string): string {
+  const { origin } = new URL(baseUrl);
+  if (isGeminiProvider(provider)) return `${origin}${upstreamBasePath(baseUrl)}`;
+  if (isTranslatingProvider(provider)) return `${origin}${upstreamChatCompletionsPath(baseUrl)}`;
+  return `${origin}${upstreamBasePath(baseUrl)}/v1/messages`;
+}
+
+/**
+ * A base URL whose composed request path repeats the API-version segment, e.g.
+ * `https://openrouter.ai/api/v1` on a byte-faithful provider → the proxy appends
+ * the client's `/v1/messages` and POSTs `/api/v1/v1/messages`, which 404s (with
+ * an HTML error page, so it does not even surface as a clean API error).
+ *
+ * Returns the offending composed URL, or `undefined` when the composition looks
+ * sane. Callers use it to warn at *configuration* time — the failure is otherwise
+ * invisible until the first real request, and a credential probe against a
+ * separately-composed `/models` URL will happily report the key as good.
+ */
+export function doubledVersionSegment(
+  provider: UpstreamProvider,
+  baseUrl: string,
+): string | undefined {
+  const url = upstreamRequestUrl(provider, baseUrl);
+  return /\/v\d+\/v\d+\//.test(new URL(url).pathname) ? url : undefined;
 }

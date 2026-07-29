@@ -293,9 +293,9 @@ describe("renderStatus", () => {
       default_model: null,
     } as const;
 
-    it("shows the sniffed Claude model as a friendly family label (no configured default)", () => {
-      expect(renderUpstream({ ...base, last_served_model: "claude-opus-4-8[1m]" })).toBe(
-        "anthropic · model opus",
+    it("shows the sniffed Claude model id verbatim (no configured default)", () => {
+      expect(renderUpstream({ ...base, last_served_model: "claude-opus-5[1m]" })).toBe(
+        "anthropic · model claude-opus-5[1m]",
       );
     });
 

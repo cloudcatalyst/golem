@@ -612,7 +612,7 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     // persisted === "lexical" | null → leave localAnswerInference undefined so the
     // KB uses the hashing (lexical) embedder, matching the on-disk index.
   }
-  const { proxy, semantic } = buildProxyFromSettings(dir, settings, telemetry, {
+  const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     sliderStore,
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
@@ -624,8 +624,13 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
   const addr = await proxy.listen(port);
   await writeProxyPid(dir, { pid: process.pid, port: addr.port, ts: new Date().toISOString() });
+  // Report the RESOLVED upstream (active account), not the top-level config — see
+  // ProxyBuild.upstream. Naming the account and model makes a switch verifiable
+  // from the banner alone.
+  const via = upstream.accountId === null ? "" : ` [account ${upstream.accountId}]`;
+  const model = upstream.model === undefined ? "" : ` model ${upstream.model}`;
   process.stdout.write(
-    `golem proxy listening on http://localhost:${addr.port} -> ${settings.proxy.upstream_base_url} (slider level ${settings.slider.level})\n`,
+    `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
   );
   const shutdown = (): void => {
     semantic?.stop();
@@ -1231,6 +1236,9 @@ accountCmd
       });
       process.stdout.write(
         `stored credential for "${result.account}" — ${result.stored_in} (probe: ${result.probe}).\n` +
+          // The probe hits a model-list URL, which is NOT where traffic goes; name
+          // the real route so an accepted key is not mistaken for a working route.
+          (result.request_url !== undefined ? `requests will go to: ${result.request_url}\n` : "") +
           "It resolves automatically on every proxy start; nothing to export.\n",
       );
     } catch (err) {

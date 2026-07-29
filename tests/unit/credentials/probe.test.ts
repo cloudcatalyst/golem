@@ -117,4 +117,45 @@ describe("probeCredential", () => {
       expect(r.detail).not.toContain(secret);
     }
   });
+
+  // The probe validates the KEY; these assert it also reports the ROUTE, because
+  // an `accepted` verdict against a model-list URL says nothing about whether the
+  // base URL composes into an endpoint that exists.
+  it("reports the URL real traffic will use, not the probe URL", async () => {
+    const r = await probeCredential({
+      provider: "anthropic",
+      baseUrl,
+      authScheme: "x-api-key",
+      secret: GOOD,
+    });
+    expect(r.verdict).toBe("accepted");
+    expect(r.requestUrl).toBe(`${baseUrl}/v1/messages`);
+    expect(r.configWarning).toBeUndefined();
+  });
+
+  it("warns about a doubled version segment even when the key is accepted", async () => {
+    // The user's exact case: an OpenRouter-style `/api/v1` base on a byte-faithful
+    // provider. The model-list probe succeeds; every real request would 404.
+    const r = await probeCredential({
+      provider: "anthropic",
+      baseUrl: `${baseUrl}/v1`,
+      authScheme: "x-api-key",
+      secret: GOOD,
+    });
+    expect(r.verdict).toBe("accepted");
+    expect(r.requestUrl).toBe(`${baseUrl}/v1/v1/messages`);
+    expect(r.configWarning).toMatch(/version.*repeated|repeated.*version/i);
+  });
+
+  it("reports the chat-completions route for a translating provider", async () => {
+    const r = await probeCredential({
+      provider: "openrouter",
+      baseUrl: `${baseUrl}/v1`,
+      authScheme: "bearer",
+      secret: GOOD,
+    });
+    expect(r.requestUrl).toBe(`${baseUrl}/v1/chat/completions`);
+    // Translating providers do not append `/v1/...`, so there is nothing to double.
+    expect(r.configWarning).toBeUndefined();
+  });
 });

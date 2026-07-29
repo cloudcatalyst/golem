@@ -37,6 +37,17 @@ describe("anthropicToOpenAIChat", () => {
     expect(out.model).toBe("kimi-k2.7-code");
   });
 
+  it("keeps the vendor prefix when the upstream requires it (keepVendorPrefix)", () => {
+    // OpenRouter's canonical id IS `vendor/model` (Decision 48). Stripping it sent
+    // `laguna-s-2.1:free` upstream — a different id from the one configured, which
+    // either 400s or resolves to another vendor's model of the same name.
+    const out = anthropicToOpenAIChat(
+      buf({ model: "claude-opus-5[1m]", messages: [{ role: "user", content: "hi" }] }),
+      { model: "poolside/laguna-s-2.1:free", keepVendorPrefix: true },
+    );
+    expect(out.model).toBe("poolside/laguna-s-2.1:free");
+  });
+
   it("splits a user turn's text and tool_result into separate messages (b3)", () => {
     const out = anthropicToOpenAIChat(
       buf({

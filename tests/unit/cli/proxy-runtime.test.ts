@@ -96,6 +96,60 @@ describe("buildProxyFromSettings — R2.2 context-substitution wiring", () => {
   });
 });
 
+describe("buildProxyFromSettings — resolved-upstream reporting", () => {
+  it("reports the ACTIVE ACCOUNT, not the top-level upstream config", async () => {
+    // Regression: the startup banner printed settings.proxy.upstream_base_url, so a
+    // proxy genuinely serving an active account still announced
+    // `-> https://api.anthropic.com` — making a working `golem account use` look
+    // like it had not taken effect.
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: {
+        proxy: {
+          upstream_base_url: "https://api.anthropic.com",
+          upstream_provider: "anthropic",
+          accounts: [
+            {
+              id: "openrouter-laguna",
+              provider: "openrouter",
+              base_url: "https://openrouter.ai/api/v1",
+              model: "poolside/laguna-s-2.1:free",
+              auth_scheme: "bearer",
+            },
+          ],
+          active_account: "openrouter-laguna",
+        },
+      },
+    });
+
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+    expect(build.upstream).toMatchObject({
+      provider: "openrouter",
+      baseUrl: "https://openrouter.ai/api/v1",
+      accountId: "openrouter-laguna",
+      model: "poolside/laguna-s-2.1:free",
+    });
+  });
+
+  it("reports the top-level config when no account is active", async () => {
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: {
+        proxy: { upstream_base_url: "https://api.anthropic.com", upstream_provider: "anthropic" },
+      },
+    });
+    const build = buildProxyFromSettings(projectDir, settings, telemetry);
+    expect(build.upstream).toMatchObject({
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      accountId: null,
+    });
+    expect(build.upstream.model).toBeUndefined();
+  });
+});
+
 describe("buildProxyFromSettings — compression.headroom_sidecar wiring", () => {
   it("constructs and returns a HeadroomSidecar as `semantic` when headroom_sidecar is true", async () => {
     const { settings } = await loadConfig({
