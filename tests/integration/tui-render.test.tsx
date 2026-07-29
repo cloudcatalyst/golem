@@ -10,7 +10,7 @@
 import { render } from "ink-testing-library";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { StatusReport } from "../../src/cli/status.js";
-import type { ControlGroup, ControlSurface } from "../../src/config/index.js";
+import type { ControlGroup, ControlSurface } from "../../src/config/control-surface.js";
 import { App } from "../../src/tui/app.js";
 import { controlRowText, formatValue, scrollWindow, stateBox } from "../../src/tui/controls.js";
 import { Header, headerLines } from "../../src/tui/header.js";

@@ -3140,3 +3140,103 @@ draw can shift that one glyph but cannot push the header text out of alignment.
 `ui.pet false` / `golem ui --no-pet` is the escape hatch — and the same switch
 covers legacy Windows consoles (codepage 437/850) that cannot draw block elements
 at all.
+
+---
+
+## §86 — `golem` startup latency: measured, and what actually fixed it (2026-07-30)
+
+The `golem ui` panel took "a number of seconds" to appear (user report). Measured
+before guessing. Method: one **fresh node process per measurement**, best of 3–4,
+on this Windows dev box (node v24.13.1). Fresh processes matter — measuring several
+imports in one process makes whichever loads first pay for the shared
+sub-dependencies, which inflated an earlier reading of `src/config` from ~130ms to
+~620ms and would have sent the fix in the wrong direction.
+
+**node baseline (`node -e ""`): ~55–85ms.** Subtract that from everything below.
+
+### The three findings
+
+**1. A regression I had just introduced.** Exporting `./control-surface.js` from
+`src/config/index.ts` took that barrel from **~130ms → ~530ms**, because the
+control surface reaches into `src/cli` (status → init → the hooks barrel, proxy,
+update) and `src/hooks`. `src/hooks/pre-tool-use.ts` imports that barrel, and
+Claude Code runs `golem hook pre-tool-use` on **every tool call**. Fixed by not
+re-exporting it; consumers import `../config/control-surface.js` directly.
+Guarded by `tests/unit/tui-lazy-import.test.ts`.
+
+**2. The CLI's module graph was paid before anything could happen.**
+`dist/cli/program.js` (commander plus every command's imports) is **~790ms**, and
+ESM hoists imports — so a bare `golem` paid it, then paid ink on top, with nothing
+on screen. `src/cli/main.ts` is now a **dependency-free shim** that reads argv and
+dynamically imports exactly one of `../tui/index.js` or `./program.js`. `bin` still
+points at `dist/cli/main.js`, so installed shims and `detectInstallMethod`'s
+argv[1] matching are unaffected.
+
+**3. What the panel's first paint actually needed.** Measured members of the old
+critical path:
+
+| Module | Cold import |
+|---|---|
+| `ink` (+react-reconciler, yoga, chalk, …) | **~940ms** |
+| `cli/init.js` (via `cli/status.js`) | ~529ms |
+| `cli/statusline.js` | ~473ms |
+| `hooks/index.js` (barrel) | ~446ms |
+| `cli/slider.js` (imports init.js for the WRITE path) | ~426ms |
+| `cli/status.js` | ~414ms |
+| `proxy/index.js` | ~315ms |
+| `hooks/guidance.js` (direct, not the barrel) | ~117ms |
+| `cli/proxy-daemon.js` | ~75ms |
+
+Three of those were on the path only to *display* something:
+- `cli/status.js` → now imported **lazily** by `collectHeader`, and
+  `ControlSurface.header` is nullable. The panel paints its controls first and the
+  header slots in after mount.
+- `cli/slider.js` → the read half moved to **`cli/slider-read.ts`** (config lookup
+  only, ~130ms); `slider.ts` re-exports it, so no caller changed. `setSliderLevel`
+  is imported lazily at the point of writing.
+- `hooks/index.js` → replaced with a direct `hooks/guidance.js` import.
+
+### Result
+
+| Moment | Before | After |
+|---|---|---|
+| **Anything on screen** | nothing until the panel | **~80ms** (ANSI pre-paint of the pet) |
+| Panel interactive | ~2.5–3s | **~1.15s** |
+| Header values filled in | (same as panel) | ~1.45s |
+
+The pre-paint writes the pet + version + cwd with raw SGR before ink exists — all
+free data — then erases those lines with `ESC[nA ESC[0J` before ink renders.
+
+### Two things that did NOT work
+
+- **`module.enableCompileCache()`** (node 22+ on-disk V8 bytecode cache): measured
+  **worse** — ink went 948ms → 1022ms warm, and 2516ms on the cache-writing run.
+  Not adopted.
+- **Concurrent dynamic imports**: loading ink + the panel + the config surface with
+  `Promise.all` instead of sequentially saved only **~70ms of ~1800ms**. Module
+  evaluation is single-threaded CPU work, so it does not overlap. Kept (it is free
+  and it does help the I/O-bound reads) but it is not the lever — *not loading* is.
+
+### ink is now the floor, and it is not one fat dependency
+
+ink is **~890ms over baseline** — roughly 75% of what remains before first paint.
+Its cost is spread across its dependency tree, not concentrated:
+`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws` ~72ms,
+`wrap-ansi` ~65ms, `string-width` ~64ms, `yoga-layout` ~57ms, `scheduler` ~31ms,
+`chalk` ~23ms, and a dozen more at 5–20ms each. There is no single import to
+defer or patch around. **Getting first paint materially below ~1s means replacing
+ink with a hand-rolled renderer** (the option weighed and declined in Decision 50);
+nothing else in the panel's path is big enough to matter now.
+
+### Still slow, NOT addressed here (measured, for a later pass)
+
+Both go through `program.js`, so they still pay its ~725ms:
+
+- `golem hook pre-tool-use` — **~765ms**, on every Claude Code tool call.
+- `golem statusline` — **~835ms**, on every prompt.
+
+Making `../mcp/index.js` lazy in `program.ts` (it is ~700ms in isolation, but
+mostly shared deps) moved statusline 985ms → 835ms and `--version` 787ms → 725ms.
+The rest is the same "thousand cuts" spread. The shim in `main.ts` makes the real
+fix straightforward whenever it is worth doing: route `hook` and `statusline` to
+their own lightweight entries instead of through commander.

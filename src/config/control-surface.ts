@@ -33,15 +33,21 @@
 import path from "node:path";
 import { getConfig, listConfig, setConfig, unsetConfig } from "../cli/config.js";
 import { proxyStatus, startDetached, stopProxy } from "../cli/proxy-daemon.js";
-import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "../cli/slider.js";
-import { collectStatus, type StatusReport } from "../cli/status.js";
+// `./slider-read.js`, not `./slider.js`: the write path imports cli/init.js and
+// costs ~530ms to load, and collecting the surface only needs to READ the level.
+// `setSliderLevel` is imported lazily in applyRuntime. (verification-notes §86)
+import { getSliderInfo, SLIDER_LEVEL_NAMES } from "../cli/slider-read.js";
+import type { StatusReport } from "../cli/status.js";
+// `../hooks/guidance.js`, not the `../hooks/index.js` barrel: the barrel pulls
+// every hook handler (~446ms vs ~117ms) and all we need here is the feature table
+// plus the rule read/write helpers.
 import {
   GUIDANCE_FEATURES,
   type GuidanceScope,
   guidanceRuleExists,
   removeGuidanceRule,
   writeGuidanceRule,
-} from "../hooks/index.js";
+} from "../hooks/guidance.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { ConfigError } from "./errors.js";
 import { loadConfig } from "./loader.js";
@@ -121,8 +127,17 @@ export const CONTROL_TABS: readonly { readonly id: ControlTab; readonly title: s
 ];
 
 export interface ControlSurface {
-  /** The info header: exactly what `golem status` reports (no extra probing). */
-  readonly header: StatusReport;
+  /**
+   * The info header: exactly what `golem status` reports (no extra probing).
+   *
+   * **Null until it arrives.** Building it needs `../cli/status.js`, whose module
+   * graph (init.js → the hooks barrel, proxy, update, the local-model probe) costs
+   * ~400ms to load plus ~265ms of probing — so the panel paints its controls first
+   * and calls {@link collectHeader} after mounting, rather than making the whole UI
+   * wait on a proxy probe. `golem config schema --json`, which has no first-paint
+   * to protect, asks for it up front.
+   */
+  readonly header: StatusReport | null;
   readonly groups: readonly ControlGroup[];
   /** Config-load warnings (unknown env vars, unknown account, …). */
   readonly warnings: readonly string[];
@@ -137,7 +152,17 @@ export interface ControlSurfaceOptions {
   /** Forwarded to collectStatus — keep short so the panel opens fast. */
   readonly probeTimeoutMs?: number;
   /** Test injection, forwarded to collectStatus. */
-  readonly localProbe?: Parameters<typeof collectStatus>[0]["localProbe"];
+  readonly localProbe?: (
+    projectDir: string,
+    baseUrl: string,
+  ) => Promise<{ readonly reachable: boolean; readonly coderModel?: string }>;
+  /**
+   * Include the header in the returned surface. Default false — building it costs
+   * ~400ms of module load plus a proxy/Ollama probe, which the `golem ui` panel
+   * deliberately keeps off its first paint (see {@link ControlSurface.header}).
+   * `golem config schema --json` passes true.
+   */
+  readonly withHeader?: boolean;
 }
 
 /**
@@ -160,7 +185,13 @@ const ENV_LOCKED = (source: string | undefined): string =>
 // Collect
 // ---------------------------------------------------------------------------
 
-/** Build the full control surface: header + every group, ready to render. */
+/**
+ * Build the control surface: every group, and (only if `withHeader`) the header.
+ *
+ * Without the header this touches nothing more expensive than the config files,
+ * the `.claude/rules/` directory, and a pid-file/port check — which is what makes
+ * the panel's first paint fast. Call {@link collectHeader} for the rest.
+ */
 export async function collectControlSurface(
   options: ControlSurfaceOptions,
 ): Promise<ControlSurface> {
@@ -172,12 +203,7 @@ export async function collectControlSurface(
   };
 
   const [header, settingsGroups, guidance, runtime] = await Promise.all([
-    collectStatus({
-      ...shared,
-      version: options.version,
-      ...(options.probeTimeoutMs !== undefined && { probeTimeoutMs: options.probeTimeoutMs }),
-      ...(options.localProbe !== undefined && { localProbe: options.localProbe }),
-    }),
+    options.withHeader === true ? collectHeader(options) : Promise.resolve(null),
     settingControlGroups(shared),
     guidanceControlGroup(projectDir),
     runtimeControlGroup(shared),
@@ -186,8 +212,28 @@ export async function collectControlSurface(
   return {
     header,
     groups: [...settingsGroups, guidance, runtime].filter((g) => g.controls.length > 0),
-    warnings: header.warnings,
+    // Without a header, the load warnings come from the config read itself.
+    warnings: header?.warnings ?? (await loadConfig(shared)).warnings,
   };
+}
+
+/**
+ * The info header — `golem status`'s report, unchanged.
+ *
+ * `../cli/status.js` is imported LAZILY: its graph (init.js → the hooks barrel,
+ * plus proxy, update, and the local-model probe) is ~400ms to load, and the panel
+ * mounts before asking for any of it.
+ */
+export async function collectHeader(options: ControlSurfaceOptions): Promise<StatusReport> {
+  const { collectStatus } = await import("../cli/status.js");
+  return collectStatus({
+    projectDir: path.resolve(options.projectDir),
+    version: options.version,
+    ...(options.userDir !== undefined && { userDir: options.userDir }),
+    ...(options.env !== undefined && { env: options.env }),
+    ...(options.probeTimeoutMs !== undefined && { probeTimeoutMs: options.probeTimeoutMs }),
+    ...(options.localProbe !== undefined && { localProbe: options.localProbe }),
+  });
 }
 
 /** One group per settings section, in {@link sectionsInDisplayOrder}. */
@@ -577,6 +623,10 @@ async function applyRuntime(
   switch (name) {
     case "slider": {
       const level = migrateSliderLevel(coerceLevel(value));
+      // Lazy: the write path imports cli/init.js (it can activate a project on the
+      // first level choice), which is exactly the ~530ms this module avoids paying
+      // just to display a level.
+      const { setSliderLevel } = await import("../cli/slider.js");
       const result = await setSliderLevel(level, shared);
       return {
         id: "runtime:slider",

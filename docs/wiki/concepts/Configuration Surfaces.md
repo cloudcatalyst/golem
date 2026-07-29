@@ -107,7 +107,34 @@ Layout: the purple block-character **pet** on the left, three lines of live stat
 beside it (from the same `collectStatus` that `golem status` prints), then tabs,
 the control list, and a key-hint footer.
 
-Two structural choices worth knowing:
+**Startup latency is a design constraint here, not an afterthought** (measured in
+verification-notes §86). Three rules keep it honest:
+
+- **`src/cli/main.ts` is a dependency-free shim.** It reads argv and dynamically
+  imports exactly one of `../tui/index.js` or `./program.js` — because ESM hoists
+  imports, so the routing decision cannot live in a module that statically imports
+  either branch. A bare `golem` therefore never loads commander or any other
+  command's dependencies (~790ms saved).
+- **The panel pre-paints before ink exists.** `splashLines` writes the pet, the
+  version, and the cwd with raw SGR — all free data — within ~80ms of process
+  start, then erases those lines before ink renders. First *visible* feedback is
+  ~15× faster than first *interactive* frame, and that is the number a user feels.
+- **Nothing needed only for display is on the first-paint path.**
+  `ControlSurface.header` is nullable and `collectHeader` imports `cli/status.js`
+  lazily; the slider's read half lives in `cli/slider-read.ts` so displaying a level
+  doesn't load the write path's `cli/init.js`; guidance is imported from
+  `hooks/guidance.js` rather than the hooks barrel. Panel interactive went ~2.5–3s
+  → ~1.15s, with the header filling in a moment later.
+
+`tests/unit/tui-lazy-import.test.ts` enforces all of it, including that the config
+barrel never re-exports the control surface — doing so once added ~400ms to
+`golem hook pre-tool-use`, which runs on every Claude Code tool call.
+
+The remaining floor is ink itself (~890ms, spread across its dependency tree rather
+than concentrated in one import), so going materially below ~1s would mean
+replacing it.
+
+Two further structural choices worth knowing:
 
 - **`src/tui/state.ts` is a pure reducer.** `(state, event) → {state, effects}`.
   Every interaction rule lives there and is unit-tested with no ink, no terminal,

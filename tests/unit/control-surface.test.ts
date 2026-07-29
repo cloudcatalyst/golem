@@ -16,7 +16,8 @@ import {
   type Control,
   type ControlSurface,
   collectControlSurface,
-} from "../../src/config/index.js";
+  collectHeader,
+} from "../../src/config/control-surface.js";
 
 let base: string;
 let userDir: string;
@@ -72,11 +73,25 @@ describe("collectControlSurface", () => {
     expect(ids(surface)).toEqual(expect.arrayContaining(["runtime:slider", "runtime:proxy"]));
   });
 
-  it("reports the header from the same source as `golem status`", async () => {
+  it("omits the header by default, so the panel's first paint stays cheap", async () => {
     const surface = await collectControlSurface(OPTS());
-    expect(surface.header.version).toBe("9.9.9-test");
-    expect(surface.header.project_dir).toBe(path.resolve(projectDir));
-    expect(surface.header.slider.level).toBe(1);
+    expect(surface.header).toBeNull();
+    // Load warnings are still reported without it.
+    expect(surface.warnings).toEqual([]);
+  });
+
+  it("reports the header on request, from the same source as `golem status`", async () => {
+    const surface = await collectControlSurface({ ...OPTS(), withHeader: true });
+    expect(surface.header).not.toBeNull();
+    expect(surface.header?.version).toBe("9.9.9-test");
+    expect(surface.header?.project_dir).toBe(path.resolve(projectDir));
+    expect(surface.header?.slider.level).toBe(1);
+  });
+
+  it("collectHeader builds the same report on its own", async () => {
+    const header = await collectHeader(OPTS());
+    expect(header.version).toBe("9.9.9-test");
+    expect(header.project_dir).toBe(path.resolve(projectDir));
   });
 
   it("omits leaves a runtime control owns, so nothing is editable twice", async () => {

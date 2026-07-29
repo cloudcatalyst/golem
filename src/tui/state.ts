@@ -13,8 +13,14 @@
  * front end.
  */
 
-import type { Control, ControlGroup, ControlSurface, ControlTab } from "../config/index.js";
-import { CONTROL_TABS } from "../config/index.js";
+import type { StatusReport } from "../cli/status.js";
+import type {
+  Control,
+  ControlGroup,
+  ControlSurface,
+  ControlTab,
+} from "../config/control-surface.js";
+import { CONTROL_TABS } from "../config/control-surface.js";
 
 /** A drawable line: a group heading or a control. */
 export type PanelRow =
@@ -53,6 +59,8 @@ export type PanelEvent =
   | { readonly kind: "key"; readonly key: KeyPress }
   /** A fresh surface arrived (initial load, a reload, or a file watcher firing). */
   | { readonly kind: "surface"; readonly surface: ControlSurface }
+  /** The deferred info header arrived (see ControlSurface.header). */
+  | { readonly kind: "header"; readonly header: StatusReport }
   | { readonly kind: "applied"; readonly controlId: string; readonly message: string }
   | { readonly kind: "failed"; readonly controlId: string; readonly message: string };
 
@@ -173,12 +181,27 @@ export function reducePanel(state: PanelState, event: PanelEvent): PanelStep {
     case "surface": {
       // Keep the cursor where it was if that row still exists; a reload from a
       // file watcher must not jump the user somewhere else mid-scroll.
-      const next: PanelState = { ...state, surface: event.surface };
+      //
+      // Reloads collect WITHOUT the header (it's the expensive half), so a null
+      // header means "unchanged", never "gone" — otherwise every reload would blank
+      // the info block for a moment.
+      const surface: ControlSurface =
+        event.surface.header === null && state.surface.header !== null
+          ? { ...event.surface, header: state.surface.header }
+          : event.surface;
+      const next: PanelState = { ...state, surface };
       const rows = visibleRows(next);
       const cursor =
         rows[state.cursor]?.kind === "control" ? state.cursor : nextControlIndex(next, -1, 1);
       return step({ ...next, cursor, busy: [] });
     }
+    case "header":
+      // Slots the deferred header in without disturbing the cursor, the mode, or
+      // anything the user has done in the meantime.
+      return step({
+        ...state,
+        surface: { ...state.surface, header: event.header, warnings: event.header.warnings },
+      });
     case "applied":
       return step({
         ...state,

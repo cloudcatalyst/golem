@@ -7,7 +7,7 @@
  */
 
 import { Box, Text } from "ink";
-import type { Control } from "../config/index.js";
+import type { Control } from "../config/control-surface.js";
 import type { PanelState } from "./state.js";
 import { selectedControl, visibleRows } from "./state.js";
 import { col, type Theme } from "./theme.js";

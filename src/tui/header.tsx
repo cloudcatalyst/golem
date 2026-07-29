@@ -76,15 +76,42 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
   ];
 }
 
+/**
+ * The three lines shown before the status report arrives — same shape, same
+ * height, so the layout doesn't shift when the real values replace them.
+ */
+export function pendingHeaderLines(version: string, projectDir: string): readonly HeaderLine[] {
+  return [
+    [{ label: "Golem", value: `${version} · ${projectDir}` }],
+    [{ label: "Proxy", value: "…" }],
+    [{ label: "Local", value: "…" }],
+  ];
+}
+
 interface HeaderProps {
-  readonly report: StatusReport;
+  /** Null until the (deliberately deferred) status report arrives. */
+  readonly report: StatusReport | null;
   readonly theme: Theme;
   readonly showPet: boolean;
   readonly width: number;
+  /** Shown in place of the live values while `report` is null. */
+  readonly placeholder?: { readonly version: string; readonly projectDir: string };
 }
 
-export function Header({ report, theme, showPet, width }: HeaderProps): React.JSX.Element {
-  const lines = headerLines(report);
+export function Header({
+  report,
+  theme,
+  showPet,
+  width,
+  placeholder,
+}: HeaderProps): React.JSX.Element {
+  // The panel mounts before the header data exists (it costs a proxy probe and a
+  // ~400ms module load — see ControlSurface.header). Keep the block exactly three
+  // lines tall either way, so nothing below it jumps when the values land.
+  const lines =
+    report !== null
+      ? headerLines(report)
+      : pendingHeaderLines(placeholder?.version ?? "", placeholder?.projectDir ?? "");
   return (
     <Box flexDirection="column">
       <Box flexDirection="row">
@@ -117,7 +144,7 @@ export function Header({ report, theme, showPet, width }: HeaderProps): React.JS
           ))}
         </Box>
       </Box>
-      {report.warnings.length > 0 ? (
+      {report !== null && report.warnings.length > 0 ? (
         <Box flexDirection="column" marginTop={1}>
           {report.warnings.map((warning) => (
             <Text key={warning} color={theme.warn} wrap="truncate-end">

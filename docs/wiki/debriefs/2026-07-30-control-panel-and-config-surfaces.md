@@ -166,6 +166,45 @@ writing `settings.local.json` regardless of the scope asked for (Decision 43) an
 raising the level-0 redaction warning; and an out-of-range `proxy.port` rejected
 with the file untouched.
 
+## Follow-up: it was slow, and the profile was surprising
+
+The panel took "a number of seconds" to appear. Full numbers in
+verification-notes §86; what's worth carrying forward:
+
+**Measure in fresh processes.** The first profile ran several imports in one
+process, which made whichever loaded first pay for all the shared sub-dependencies
+— it reported `src/config` at 620ms when the real figure is ~130ms. That reading
+would have sent the fix somewhere useless.
+
+**I had caused part of it.** Re-exporting `control-surface.js` from
+`src/config/index.ts` took that barrel from ~130ms to ~530ms, and
+`src/hooks/pre-tool-use.ts` imports the barrel — so I'd added ~400ms to a path that
+runs on *every Claude Code tool call*. The panel was the visible symptom; the hook
+regression was the more serious one, and nothing would have caught it. There's a
+test for it now.
+
+**The fix was "don't load", not "load in parallel".** Making ink, the components,
+and the config load concurrently saved **70ms out of 1800**: module evaluation is
+single-threaded CPU work, so it doesn't overlap. What worked was removing things
+from the path — `main.ts` became a dependency-free shim that dynamically imports
+either the panel or the CLI (~790ms of commander-and-everything skipped on a bare
+`golem`), the header became nullable and lazy, and the slider's read half moved to
+`cli/slider-read.ts` so *displaying* a level no longer loads the write path's
+`init.js`.
+
+**The best UX win was the cheapest change.** An ANSI pre-paint of the pet — three
+lines of constants, no imports — puts something on screen at **~80ms**. Panel
+interactive went ~2.5–3s → ~1.15s, but the pre-paint is what makes it stop feeling
+broken.
+
+`module.enableCompileCache()` measured *worse* (948 → 1022ms warm) and was dropped.
+
+**ink is now ~75% of the remaining startup**, and it's spread across its dependency
+tree (`es-toolkit` ~194ms, `cli-truncate` ~78ms, `react-reconciler` ~77ms, `ws`
+~72ms, …) rather than concentrated anywhere patchable. Going materially below ~1s
+means replacing ink — which is the trade Decision 50 recorded, now with a number
+attached.
+
 ## Left open
 
 - **`bun build --compile` + yoga-layout's WASM is UNVERIFIED** (no Bun on this
@@ -177,3 +216,8 @@ with the file untouched.
   `ui.pet false` / `--no-pet` is the out, and also covers legacy Windows consoles.
 - The panel edits values as text; there's no picker for `knowledge.watch_paths`
   beyond comma-separated entry.
+- **`golem hook pre-tool-use` (~765ms, every tool call) and `golem statusline`
+  (~835ms, every prompt) still route through commander** and pay its ~725ms. In
+  aggregate that costs far more than the panel ever did. The `main.ts` shim makes
+  the fix straightforward — give those two their own lightweight entries — but it
+  was out of scope here and is measured in verification-notes §86.

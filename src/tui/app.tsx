@@ -17,7 +17,8 @@ import {
   type ControlSurface,
   type ControlSurfaceOptions,
   collectControlSurface,
-} from "../config/index.js";
+  collectHeader,
+} from "../config/control-surface.js";
 import { ControlList } from "./controls.js";
 import { Header } from "./header.js";
 import {
@@ -139,6 +140,25 @@ export function App({
     });
   });
 
+  // The header is fetched AFTER mount, on purpose: `collectHeader` costs a ~400ms
+  // module load plus a proxy/Ollama probe, and the panel must not wait on either to
+  // appear. It slots into place a moment later (Header renders a same-height
+  // placeholder until then), and reloads pick it up like any other data.
+  useEffect(() => {
+    let cancelled = false;
+    void collectHeader({ ...options, probeTimeoutMs: 1_000 })
+      .then((header) => {
+        if (!cancelled) dispatch({ kind: "header", header });
+      })
+      .catch(() => {
+        // A header we can't build is not worth breaking the panel over; the
+        // controls — the reason the user opened it — are already on screen.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [options]);
+
   // Watch the settings files so an external change is reflected without a
   // keypress. Debounced: editors often write a file two or three times.
   useEffect(() => {
@@ -168,7 +188,13 @@ export function App({
 
   return (
     <Box flexDirection="column" paddingX={1}>
-      <Header report={state.surface.header} theme={theme} showPet={showPet} width={width} />
+      <Header
+        report={state.surface.header}
+        theme={theme}
+        showPet={showPet}
+        width={width}
+        placeholder={{ version: options.version, projectDir: options.projectDir }}
+      />
       <Text color={theme.dim}>{rule}</Text>
       <Tabs state={state} theme={theme} />
       <Text color={theme.dim}>{rule}</Text>

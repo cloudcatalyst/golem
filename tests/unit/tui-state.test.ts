@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { StatusReport } from "../../src/cli/status.js";
-import type { Control, ControlGroup, ControlSurface } from "../../src/config/index.js";
+import type { Control, ControlGroup, ControlSurface } from "../../src/config/control-surface.js";
 import {
   effectiveScope,
   hiddenAdvancedCount,
