@@ -16,6 +16,15 @@ account is required.
 - **Activity-bar panel** ("Golem" → *Savings*): big saved-% number, tokens
   before→after, request count, upstream + proxy status, a 0–5 **slider** (click a
   level to change it), and a per-stage savings table.
+- **Settings** (same panel, below the savings table): every Golem setting and
+  guidance rule as a checkbox / picker / text field, each showing which layer
+  supplied its value, with a per-row **scope** selector (project · local · user).
+  Rendered from `golem config schema --json` — the CLI is the single source of
+  truth, so new settings appear here without an extension update. Rows supplied by
+  a `GOLEM_*` environment variable are read-only (🔒), because env overrides every
+  file layer. Advanced rows are hidden behind a checkbox, and a dangerous change
+  (slider level 0 disables redaction) asks first. `Golem: Configure Settings`
+  focuses it.
 - **Status-bar item** (right side): a compact presence line,
   `⬢ Golem · <level> → [local + ]<upstream>` — brand, slider level, and where
   traffic is fronting (cumulative savings stay in the hover tooltip and panel,

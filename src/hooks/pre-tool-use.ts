@@ -21,8 +21,10 @@ import {
   readAutonomyLevel,
 } from "../autonomy/index.js";
 import { loadConfig } from "../config/index.js";
-import { readLimitState } from "../proxy/index.js";
-import type { LimitPrediction } from "../proxy/limit-prediction.js";
+// `../proxy/limit-prediction.js`, not the `../proxy/index.js` barrel: the barrel
+// reaches server.ts, which imports `undici` (~270ms). This hook runs on EVERY
+// Claude Code tool call and only reads a JSON file. See verification-notes §86.
+import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
 import {
   coderFirstNudgeReason,
   decideCoderFirstNudge,

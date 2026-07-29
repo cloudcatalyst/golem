@@ -10,27 +10,16 @@
  * `golem slider`, and `loadConfig()` all see one value (verification-notes §20).
  */
 
-import { type LayerName, loadConfig, writeSetting } from "../config/index.js";
+import { loadConfig, writeSetting } from "../config/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { golemInit, golemInitStatus, type InitProbe } from "./init.js";
+import { getSliderInfo, type SliderInfo } from "./slider-read.js";
 
-/** Human names for the four levels (spec §4 / interfaces/policy.ts, Decision 30). */
-export const SLIDER_LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
-  0: "passthrough",
-  1: "lossless",
-  2: "balanced",
-  3: "aggressive",
-};
-
-/** The effective slider level plus where it came from. */
-export interface SliderInfo {
-  readonly level: SliderLevel;
-  readonly name: string;
-  /** Which settings layer supplied the effective value. */
-  readonly layer: LayerName;
-  /** File path or env var behind that layer (absent for defaults/overrides). */
-  readonly source?: string;
-}
+// The read half lives in ./slider-read.js so that displaying the level doesn't
+// have to load `./init.js` (and the hooks barrel behind it) — see that file. Both
+// are re-exported here so every existing importer of `slider.js` is unaffected.
+export type { SliderInfo, SliderReadOptions } from "./slider-read.js";
+export { getSliderInfo, SLIDER_LEVEL_NAMES } from "./slider-read.js";
 
 /** Options shared by the read/write entry points (test injection). */
 export interface SliderOptions {
@@ -50,19 +39,6 @@ function loadOpts(options: SliderOptions): {
     projectDir: options.projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
-  };
-}
-
-/** Effective slider level with provenance. */
-export async function getSliderInfo(options: SliderOptions): Promise<SliderInfo> {
-  const { settings, provenance } = await loadConfig(loadOpts(options));
-  const level = settings.slider.level;
-  const entry = provenance["slider.level"];
-  return {
-    level,
-    name: SLIDER_LEVEL_NAMES[level],
-    layer: entry?.layer ?? "default",
-    ...(entry?.source !== undefined && { source: entry.source }),
   };
 }
 

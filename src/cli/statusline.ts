@@ -16,18 +16,31 @@
  * "cache slow ops" guidance) so the line can show local+upstream.
  */
 
+// Claude Code renders this line on EVERY prompt, so each import here is on a hot
+// path: prefer the narrowest module over a barrel, and the read-only half of
+// anything that also has a write path (verification-notes §86).
 import path from "node:path";
 import { loadConfig } from "../config/index.js";
-import { readSessionState } from "../hooks/index.js";
-import { VERSION } from "../index.js";
+// `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
+// pulls every hook handler) for one function.
+import { readSessionState } from "../hooks/session-state.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { resolveUpstreamDisplay, type UpstreamProvider } from "../providers/index.js";
-import { servedModelFor } from "../proxy/index.js";
+// `../proxy/served-model.js`, not the `../proxy/index.js` barrel: the barrel reaches
+// server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
+import { servedModelFor } from "../proxy/served-model.js";
 import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
+// `../version.js`, not `../index.js` (which also re-exports every interface).
+import { VERSION } from "../version.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
-import { SLIDER_LEVEL_NAMES } from "./slider.js";
+// `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
+// write path (~426ms) and all that's wanted here is a lookup table.
+import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
+// Shared with status.ts and the control-panel header; lives in its own module so
+// rendering a label costs nothing to import (see upstream-display.ts).
+import { upstreamLabel } from "./upstream-display.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
 export interface SessionInput {
@@ -121,18 +134,6 @@ export function parseSessionInput(raw: string): SessionInput {
 }
 
 /** Short label for the configured upstream (foundry / anthropic / host). */
-export function upstreamLabel(url: string): string {
-  try {
-    const host = new URL(url).host.toLowerCase();
-    if (host.includes("azure")) return "foundry";
-    if (host === "api.anthropic.com") return "anthropic";
-    if (host.includes("openrouter")) return "openrouter";
-    return host;
-  } catch {
-    return "upstream";
-  }
-}
-
 /**
  * R6.2: the honest upstream label given the resolved provider + active account.
  * An active account shows its id (that's what the user switched to); otherwise a
@@ -351,3 +352,6 @@ export async function collectGolemState(
   }
   return state;
 }
+
+// Re-exported: callers have always imported `upstreamLabel` from here.
+export { upstreamLabel } from "./upstream-display.js";
