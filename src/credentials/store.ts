@@ -1,13 +1,18 @@
 /**
- * The credential resolution chain (ADR-0003 amendment; spec Decision 46).
+ * The credential resolution chain (ADR-0003 amendment; spec Decisions 46, 47).
  *
  * Resolution order, first hit wins:
  *
- *   1. `env`      — `GOLEM_UPSTREAM_API_KEY__<ID>`. Deliberately highest, so a
- *                   CI job, a container, or a one-off `$env:...` override always
- *                   beats a stored credential and no existing setup regresses.
- *   2. `keychain` — the platform's OS-backed store.
- *   3. `file`     — plaintext, only if such a file already exists.
+ *   1. `keychain` — the platform's OS-backed store.
+ *   2. `file`     — plaintext, only if such a file already exists.
+ *
+ * **No env backend (Decision 47).** `GOLEM_UPSTREAM_API_KEY[__<ID>]` used to sit
+ * at the head of this chain; it was removed as a credential *source* because an
+ * exported-in-one-terminal key is precisely the failure Decision 46 set out to
+ * end, and having it outrank the store meant a stale export could silently
+ * shadow a correctly-stored key. Setting a credential now means
+ * `golem account login <id>`; the var name lives on only as the internal
+ * CLI→daemon handoff (see {@link ../credentials/backends.js envVarForAccount}).
  *
  * **Read vs write asymmetry, on purpose.** Resolution *reads* the plaintext
  * `file` backend (otherwise a user who opted into it could not use it), but
@@ -33,7 +38,6 @@ import {
   type CredentialBackend,
   type CredentialBackendId,
   type CredentialLocation,
-  envBackend,
   fileBackend,
   keychainBackend,
 } from "./backends.js";
@@ -83,7 +87,6 @@ export interface CredentialStore {
 export interface CredentialStoreOptions {
   readonly userDir?: string;
   readonly platform?: NodeJS.Platform;
-  readonly env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -93,23 +96,21 @@ export interface CredentialStoreOptions {
 export function createCredentialStore(options: CredentialStoreOptions = {}): CredentialStore {
   const userDir = options.userDir ?? defaultUserDir();
   const platform = options.platform ?? process.platform;
-  const env = options.env ?? process.env;
 
-  const envB = envBackend(env);
   const keychainB = keychainBackend(platform, userDir);
   const fileB = fileBackend(userDir, platform);
 
   /** Read order. `file` is last and read-only-by-default (see module doc). */
   const readChain: readonly CredentialBackend[] = [
-    envB,
     ...(keychainB === null ? [] : [keychainB]),
     fileB,
   ];
 
   /**
    * Consult backends in order. A backend that FAILS is recorded and skipped
-   * rather than aborting the chain — a broken keychain must not hide a working
-   * env var. Faults are returned so callers can surface them (never swallowed).
+   * rather than aborting the chain — a broken keychain must not hide an opted-in
+   * plaintext file. Faults are returned so callers can surface them (never
+   * swallowed).
    */
   async function consult(
     account: string,
@@ -134,9 +135,8 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
     if (target === "file") return fileB;
     if (keychainB === null) {
       throw new Error(
-        `no OS credential store is available on ${platform}. Export ` +
-          "GOLEM_UPSTREAM_API_KEY__<ID> instead, or opt into plaintext storage with " +
-          "--store file (understanding it is NOT encrypted).",
+        `no OS credential store is available on ${platform}. Opt into plaintext ` +
+          "storage with --store file (understanding it is NOT encrypted).",
       );
     }
     if (!(await keychainB.available())) {
@@ -146,9 +146,8 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
             "headless sessions often have neither"
           : "the platform credential tool could not be invoked";
       throw new Error(
-        `the OS credential store is not usable here: ${hint}. Export ` +
-          "GOLEM_UPSTREAM_API_KEY__<ID> instead, or opt into plaintext storage with " +
-          "--store file (understanding it is NOT encrypted).",
+        `the OS credential store is not usable here: ${hint}. Opt into plaintext ` +
+          "storage with --store file (understanding it is NOT encrypted).",
       );
     }
     return keychainB;
@@ -176,7 +175,7 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
 
     forget: async (account) => {
       const removed: CredentialLocation[] = [];
-      // Only the writable backends; env cannot be unset by a child process.
+      // Every backend is writable now, so a forget really is complete.
       for (const backend of [...(keychainB === null ? [] : [keychainB]), fileB]) {
         const had = await backend.get(account).catch(() => null);
         if (had === null) continue;

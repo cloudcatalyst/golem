@@ -1,11 +1,9 @@
 /**
- * Credential backends (ADR-0003 amendment; spec Decision 46).
+ * Credential backends (ADR-0003 amendment; spec Decision 46; Decision 47).
  *
  * One API key per account id, stored in the best mechanism the platform
- * actually offers. Three backends, in resolution order:
+ * actually offers. Two backends, in resolution order:
  *
- * - `env`    — `GOLEM_UPSTREAM_API_KEY__<ID>` (the R6.2 v1 mechanism; still
- *              wins, so CI/scripted setups keep working unchanged). Read-only.
  * - `keychain` — the OS-backed store, shelling out to a tool that ships with
  *              the platform (no native dependency, per CLAUDE.md):
  *              macOS `security`, Linux `secret-tool`, Windows DPAPI via
@@ -13,6 +11,13 @@
  * - `file`   — plaintext, mode 0600. **Never selected automatically** (see
  *              store.ts); an explicit opt-out for headless boxes with no
  *              secret service, and labelled honestly as unencrypted.
+ *
+ * **There is no `env` backend (Decision 47).** An environment variable is no
+ * longer a way to *set* a credential: `GOLEM_UPSTREAM_API_KEY[__<ID>]` was
+ * removed as a user-facing mechanism because it produced exactly the
+ * "works in one terminal, not another" failure Decision 46 set out to end.
+ * The name survives only as the internal CLI→daemon handoff channel — see
+ * {@link envVarForAccount} — and is not documented to users as configuration.
  *
  * Two invariants hold throughout:
  *
@@ -40,7 +45,7 @@ import path from "node:path";
 import { perAccountEnvVar } from "../providers/index.js";
 
 /** Which mechanism a credential lives in. */
-export type CredentialBackendId = "env" | "keychain" | "file";
+export type CredentialBackendId = "keychain" | "file";
 
 /**
  * How well a stored credential is actually protected. Deliberately granular so
@@ -48,11 +53,7 @@ export type CredentialBackendId = "env" | "keychain" | "file";
  * the same claim as `dpapi-user` (user+machine-bound encrypted file), which is
  * not the same claim as `file-permissions` (plaintext, perms only).
  */
-export type CredentialProtection =
-  | "process-env"
-  | "os-keychain"
-  | "dpapi-user"
-  | "file-permissions";
+export type CredentialProtection = "os-keychain" | "dpapi-user" | "file-permissions";
 
 /** Where a credential lives, and an honest description of its protection. */
 export interface CredentialLocation {
@@ -78,21 +79,31 @@ export interface CredentialBackend {
 }
 
 /**
- * The reserved account id for the top-level (legacy) upstream config — the one
- * `proxy.upstream_*` describes when no named account is active. It keeps the
- * original `GOLEM_UPSTREAM_API_KEY` env var, so existing setups are unaffected.
+ * The reserved account id for the top-level upstream config — the one
+ * `proxy.upstream_*` describes when no named account is active. Its stored
+ * credential and internal handoff var are the plain, un-suffixed ones.
  */
 export const DEFAULT_ACCOUNT_ID = "default";
 
-/** The env var carrying the top-level/legacy credential. */
+/** The internal handoff var for the top-level account's credential. */
 export const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
 
 /**
- * The env var holding account `id`'s secret. {@link DEFAULT_ACCOUNT_ID} maps to
- * plain `GOLEM_UPSTREAM_API_KEY`; every other id delegates to
- * {@link perAccountEnvVar} so there is exactly ONE definition of the
- * `GOLEM_UPSTREAM_API_KEY__<ID>` spelling in the codebase (a divergence here
- * would silently break every existing per-account key).
+ * The environment variable the CLI injects account `id`'s secret into when it
+ * spawns the proxy — an INTERNAL transport, not a user-facing setting
+ * (Decision 47). There is no `env` credential backend any more, so exporting
+ * this by hand configures nothing: a credential is set with
+ * `golem account login <id>` and read back out of the OS store.
+ *
+ * It still exists because the proxy daemon is detached and may have no desktop
+ * session, which is where every OS keychain is least reliable (ADR-0003) — so
+ * the CLI resolves the secret and hands it to the child process here rather
+ * than making the daemon reach for the keychain itself.
+ *
+ * {@link DEFAULT_ACCOUNT_ID} maps to plain `GOLEM_UPSTREAM_API_KEY`; every
+ * other id delegates to {@link perAccountEnvVar} so there is exactly ONE
+ * definition of the `GOLEM_UPSTREAM_API_KEY__<ID>` spelling in the codebase
+ * (a divergence here would break the handoff silently).
  */
 export function envVarForAccount(id: string): string {
   return id === DEFAULT_ACCOUNT_ID ? DEFAULT_KEY_ENV : perAccountEnvVar(id);
@@ -153,47 +164,6 @@ async function run(cmd: string, args: readonly string[], stdin?: string): Promis
 /** Trim the one trailing newline a CLI helper adds, without touching the secret. */
 function trimOutput(s: string): string {
   return s.replace(/\r?\n$/, "").trim();
-}
-
-// ---------------------------------------------------------------------------
-// env — the R6.2 v1 mechanism, read-only
-// ---------------------------------------------------------------------------
-
-/**
- * Read a credential from the process environment. Read-only by nature: a child
- * process cannot durably set its parent's (or a future shell's) environment, so
- * `set`/`remove` throw with that explanation rather than pretending to work —
- * which is precisely the failure mode that motivated Decision 46.
- */
-export function envBackend(
-  env: Readonly<Record<string, string | undefined>> = process.env,
-): CredentialBackend {
-  return {
-    id: "env",
-    available: async () => true,
-    get: async (account) => {
-      const v = env[envVarForAccount(account)];
-      return v === undefined || v === "" ? null : v;
-    },
-    set: async (account) => {
-      throw new Error(
-        `Golem cannot set environment variables for you — ${envVarForAccount(account)} must be ` +
-          "exported by your shell or profile. Use a stored backend instead: golem account login " +
-          `${account}`,
-      );
-    },
-    remove: async (account) => {
-      throw new Error(
-        `Golem cannot unset environment variables — remove ${envVarForAccount(account)} from the ` +
-          "shell or profile that exports it.",
-      );
-    },
-    describe: () => ({
-      backend: "env",
-      label: "environment variable (visible to this process only)",
-      protection: "process-env",
-    }),
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -379,8 +349,7 @@ function windowsDpapi(userDir: string): CredentialBackend {
     "DPAPI needs a working PowerShell host, and none was found: the inbox " +
     "`powershell.exe` could not load its security module here and `pwsh` (PowerShell 7) " +
     "is not installed. Fixes, best first: (1) install PowerShell 7 " +
-    "(`winget install Microsoft.PowerShell`); (2) export the key as " +
-    "GOLEM_UPSTREAM_API_KEY__<ID> instead; (3) opt into UNENCRYPTED file storage with " +
+    "(`winget install Microsoft.PowerShell`); (2) opt into UNENCRYPTED file storage with " +
     "`golem account login <id> --store file`.";
 
   return {
@@ -434,8 +403,8 @@ function windowsDpapi(userDir: string): CredentialBackend {
 
 /**
  * The OS-backed backend for `platform`, or `null` on a platform with no
- * supported mechanism (callers then fall back to env, or ask the user to opt
- * into {@link fileBackend} explicitly).
+ * supported mechanism (callers then ask the user to opt into
+ * {@link fileBackend} explicitly — there is no env fallback, Decision 47).
  */
 export function keychainBackend(
   platform: NodeJS.Platform,

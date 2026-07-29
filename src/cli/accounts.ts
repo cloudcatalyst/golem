@@ -1,18 +1,21 @@
 /**
- * R6.2 v1 + Decision 46 — `golem account` CLI (spec Decision 21d; ADR-0003, amended).
+ * R6.2 v1 + Decisions 46/47 — `golem account` CLI (spec Decision 21d; ADR-0003, amended).
  *
  * Explicit switching between the user's own configured accounts/providers, plus
  * Golem-managed credentials. ADR-0003 invariants surfaced here:
  * - **No secret is ever printed or stored as a setting.** `list` reports only
- *   WHERE each account's credential resolves from (env var or OS store) and
- *   whether it resolves at all — never its value; switching writes only the
- *   non-secret `proxy.active_account` selector. Stored credentials live in the
- *   OS credential store (Decision 46), never in settings or `.golem/` state.
+ *   WHERE each account's credential resolves from (the OS store, or an opted-in
+ *   plaintext file) and whether it resolves at all — never its value; switching
+ *   writes only the non-secret `proxy.active_account` selector. Stored
+ *   credentials live in the OS credential store (Decision 46), never in
+ *   settings, `.golem/` state, or an environment variable (Decision 47).
  * - **Fail-closed.** `use <id>` refuses an id that is not in `proxy.accounts`,
  *   and refuses to switch onto an account whose credential does not resolve
  *   unless you pass `--yes` (no silent switch to an un-credentialed account).
  * - **Audit.** Every switch, login, and logout is appended to
  *   `.golem/state/account-log.jsonl` (non-secret metadata only).
+ * - **No orphaned secrets.** `remove <id>` logs the account out first, so
+ *   de-registering an account never leaves its key behind in the OS store.
  */
 
 import { appendFile, mkdir } from "node:fs/promises";
@@ -25,12 +28,12 @@ import {
   canPrompt,
   createCredentialStore,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_KEY_ENV,
   envVarForAccount,
   type StoreTarget,
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import { PromptCancelled, promptSecret } from "../credentials/prompt.js";
+import { clearServedModel } from "../proxy/index.js";
 import { InitError } from "./init.js";
 
 /**
@@ -53,14 +56,12 @@ export interface AccountRow {
   readonly provider: string;
   readonly base_url: string;
   readonly model: string | null;
-  /** The env var carrying this account's secret (name only). */
-  readonly key_env: string;
   /** Whether a credential resolves for this account (never the value). */
   readonly key_set: boolean;
   /**
-   * Where the credential resolves from — the env var or the OS store — so the
-   * user can see *why* a key is or isn't picked up (Decision 46). Absent when
-   * `key_set` is false.
+   * Where the credential resolves from — the OS store, or an opted-in plaintext
+   * file — so the user can see *why* a key is or isn't picked up (Decision 46).
+   * Absent when `key_set` is false.
    */
   readonly key_location?: string;
   /** Credential backends that errored while being consulted (surfaced, not swallowed). */
@@ -99,9 +100,8 @@ export function defaultAccountId(provider: string): string {
 /**
  * The credential-store id for the synthetic default account. The display id is
  * the provider name (`anthropic`); the store id is the reserved
- * {@link DEFAULT_ACCOUNT_ID}, which maps to the plain `GOLEM_UPSTREAM_API_KEY`
- * env var — so a stored default credential and the legacy env var are the same
- * account.
+ * {@link DEFAULT_ACCOUNT_ID}, so the top-level upstream config's credential is
+ * stored under one stable key regardless of which provider it currently names.
  */
 const DEFAULT_STORE_ID = DEFAULT_ACCOUNT_ID;
 
@@ -154,21 +154,21 @@ async function resolveAccountTarget(
 
 /**
  * Read the account registry + which is active (best-effort; never reads secret
- * values). `env` overrides the process environment used to detect env-carried
- * credentials, so tests can simulate a set/unset var without touching the real
- * environment (the OS-store backends are still consulted; on a machine with a
- * stored key the `key_set` flags may be true regardless).
+ * values). `env` overrides the process environment used for the non-secret
+ * `GOLEM_<SECTION>_<KEY>` settings overrides only — credentials come from the
+ * OS store, never the environment (Decision 47), so on a machine with a stored
+ * key the `key_set` flags are true regardless of what `env` says.
  */
 export async function collectAccounts(
   projectDir: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<AccountsReport> {
   const { settings } = await loadConfig({ projectDir, env });
-  const userDir = defaultUserDir();
   const selected = settings.proxy.active_account ?? null;
   const accounts = settings.proxy.accounts ?? [];
   const defaultId = defaultAccountId(settings.proxy.upstream_provider);
-  const store = createCredentialStore({ userDir, env });
+  const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
   // The default is active whenever no named account is selected, or the
   // selection names the default id itself.
@@ -179,7 +179,6 @@ export async function collectAccounts(
     provider: settings.proxy.upstream_provider,
     base_url: settings.proxy.upstream_base_url,
     model: settings.proxy.upstream_model ?? null,
-    key_env: DEFAULT_KEY_ENV,
     key_set: defStatus.present,
     ...(defStatus.location !== undefined ? { key_location: defStatus.location.label } : {}),
     ...(defStatus.faults.length > 0 ? { key_faults: defStatus.faults } : {}),
@@ -195,7 +194,6 @@ export async function collectAccounts(
         provider: a.provider,
         base_url: a.base_url,
         model: a.model ?? null,
-        key_env: envVarForAccount(a.id),
         key_set: st.present,
         ...(st.location !== undefined ? { key_location: st.location.label } : {}),
         ...(st.faults.length > 0 ? { key_faults: st.faults } : {}),
@@ -243,6 +241,7 @@ export async function useAccount(
   opts: {
     readonly assumeYes?: boolean;
     readonly env?: Readonly<Record<string, string | undefined>>;
+    readonly store_backend?: CredentialStore;
   } = {},
 ): Promise<{ readonly active: string | null }> {
   const env = opts.env ?? process.env;
@@ -272,15 +271,12 @@ export async function useAccount(
   // break the normal revert path. This is the guarantee that "set the key
   // first" is enforced rather than advised.
   if (opts.assumeYes !== true && target !== null) {
-    const store = createCredentialStore({ userDir: defaultUserDir(), env });
+    const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
     const hit = await store.resolve(target);
     if (hit === null) {
-      const envVar = envVarForAccount(target);
       throw new InitError(
-        `no credential resolves for "${target}" (checked env ${envVar} and the OS credential store). ` +
-          `Set one first — either:\n` +
-          `  • golem account login ${target}    (prompt and store it in the OS credential store), or\n` +
-          `  • export ${envVar}=…\n` +
+        `no credential is stored for "${target}". Set one first:\n` +
+          `  golem account login ${target}    (prompts, verifies it, stores it in the OS credential store)\n` +
           `Then retry. To switch anyway (fail-closed override): golem account use ${target} --yes`,
       );
     }
@@ -289,6 +285,11 @@ export async function useAccount(
   // A single-leaf write: `undefined` deletes the key (revert to the default),
   // a string sets it. writeSetting validates against the schema.
   await writeSetting("local", "proxy.active_account", target ?? undefined, { projectDir });
+  // Drop the last-served-model snapshot: it describes the account we just left,
+  // and leaving it would make `status`/statusline/the extension report the
+  // PREVIOUS model as the current one until the new upstream serves a request.
+  // Best-effort — a switch must not fail over a display cache.
+  await clearServedModel(projectDir).catch(() => {});
   await appendAudit(
     projectDir,
     { action: target === null ? "clear" : "use", account: target },
@@ -319,6 +320,11 @@ export interface LoginOptions {
  * rejected key is NOT stored (fail-closed) unless the caller probes first and
  * the verdict is merely inconclusive (provider unreachable / no probe endpoint),
  * in which case it is stored with a warning.
+ *
+ * `opts.secret` supplies the key without prompting — how the CLI feeds a piped
+ * key through on a non-TTY stdin. This is the only non-interactive path now that
+ * there is no env-var backend (Decision 47), so it is the CI/headless story; the
+ * secret still never touches argv.
  */
 export async function loginAccount(
   projectDir: string,
@@ -334,8 +340,8 @@ export async function loginAccount(
   if (secret === undefined) {
     if (!canPrompt()) {
       throw new InitError(
-        `cannot prompt for a credential: stdin is not a terminal. Either run this in an ` +
-          `interactive terminal, or export ${envVarForAccount(storeId)}=… instead.`,
+        "cannot prompt for a credential: stdin is not a terminal. Either run this in an " +
+          `interactive terminal, or pipe the key in: echo "<key>" | golem account login ${id}`,
       );
     }
     try {
@@ -379,9 +385,9 @@ export async function loginAccount(
 }
 
 /**
- * Remove an account's stored credential from every writable backend (the OS
- * store and any plaintext file). The env var, if set, cannot be unset by a
- * child process — that is reported, not attempted.
+ * Remove an account's stored credential from every backend (the OS store and any
+ * opted-in plaintext file). Since Decision 47 there is no environment-variable
+ * backend, so a logout is complete — there is no un-unsettable copy left behind.
  */
 export async function logoutAccount(
   projectDir: string,
@@ -391,18 +397,12 @@ export async function logoutAccount(
 ): Promise<{
   readonly account: string;
   readonly removed: readonly string[];
-  readonly env_note: string | null;
 }> {
   const { storeId } = await resolveAccountTarget(projectDir, id);
   const store = opts.store_backend ?? createCredentialStore({});
   const removed = await store.forget(storeId);
   await appendAudit(projectDir, { action: "logout", account: storeId }, nowIso);
-  const envVar = envVarForAccount(storeId);
-  const envNote =
-    process.env[envVar] !== undefined
-      ? `note: ${envVar} is still set in this shell's environment — Golem cannot unset it; remove it from your profile if you want it gone.`
-      : null;
-  return { account: id, removed: removed.map((l) => l.label), env_note: envNote };
+  return { account: id, removed: removed.map((l) => l.label) };
 }
 
 /** Input for {@link addAccount}. All fields are NON-SECRET (ADR-0003 invariant 1). */
@@ -471,16 +471,32 @@ export async function addAccount(
 
 /**
  * Remove an account from `proxy.accounts` (local scope — see {@link addAccount}
- * for why local, not project). Does NOT delete the stored credential — say so
- * and point at `account logout`, which does. Fail-closed on an unknown id; if
- * the removed account was active, clears `active_account` back to the default
- * rather than leaving a dangling reference. Audit-logged.
+ * for why local, not project). Fail-closed on an unknown id; if the removed
+ * account was active, clears `active_account` back to the default rather than
+ * leaving a dangling reference. Audit-logged.
+ *
+ * **Logs the account out first.** De-registering an account used to leave its
+ * secret sitting in the OS credential store, reachable by nobody and forgotten
+ * by everybody — a credential with no account is pure liability. So `remove`
+ * now runs the same `forget` that `account logout` does, *before* it edits the
+ * registry (the credential's store id is derived from the registry entry, so the
+ * order matters), and reports what it deleted. Pass `keepCredential` to keep the
+ * stored key — the escape hatch for re-adding the same account shortly after.
  */
 export async function removeAccount(
   projectDir: string,
   id: string,
   nowIso: string,
-): Promise<{ readonly account: string; readonly was_active: boolean }> {
+  opts: {
+    readonly keepCredential?: boolean;
+    readonly store_backend?: CredentialStore;
+  } = {},
+): Promise<{
+  readonly account: string;
+  readonly was_active: boolean;
+  /** Backends the credential was deleted from; empty when none held one or `keepCredential`. */
+  readonly credential_removed: readonly string[];
+}> {
   const { settings } = await loadConfig({ projectDir });
   const p = settings.proxy;
   const accounts = p.accounts ?? [];
@@ -495,6 +511,16 @@ export async function removeAccount(
     throw new InitError(`unknown account "${id}"; configured accounts: ${ids}`);
   }
 
+  // Log out BEFORE de-registering: logoutAccount resolves the credential's store
+  // id from the registry entry, which is about to disappear.
+  let credentialRemoved: readonly string[] = [];
+  if (opts.keepCredential !== true) {
+    const logout = await logoutAccount(projectDir, id, nowIso, {
+      ...(opts.store_backend !== undefined ? { store_backend: opts.store_backend } : {}),
+    });
+    credentialRemoved = logout.removed;
+  }
+
   const remaining = accounts.filter((a) => a.id !== id);
   await writeSetting("local", "proxy.accounts", remaining, { projectDir });
 
@@ -503,7 +529,7 @@ export async function removeAccount(
     await writeSetting("local", "proxy.active_account", undefined, { projectDir });
   }
   await appendAudit(projectDir, { action: "remove", account: id }, nowIso);
-  return { account: id, was_active: wasActive };
+  return { account: id, was_active: wasActive, credential_removed: credentialRemoved };
 }
 
 /**
@@ -512,19 +538,19 @@ export async function removeAccount(
  *
  * This is the mechanism that makes a stored credential actually reach the
  * proxy: the daemon is spawned from a minimal env (it does NOT inherit the
- * shell), so the CLI resolves the active account's credential from the store —
- * env var first, then the OS credential store — and injects it under exactly
- * the env var name the proxy's auth mapping already reads
- * (`GOLEM_UPSTREAM_API_KEY` for the default, `GOLEM_UPSTREAM_API_KEY__<ID>` for
- * a named account). Returns `{}` when nothing resolves — the proxy then
- * forwards the client's own auth as it always has, so this never breaks a
- * keyless/inherit setup.
+ * shell), so the CLI resolves the active account's credential from the OS store
+ * and injects it under the var name the proxy's auth mapping reads. That var is
+ * an INTERNAL handoff, not a configuration surface (Decision 47) — exporting it
+ * by hand sets nothing, because the store no longer reads the environment.
+ * Returns `{}` when nothing resolves — the proxy then forwards the client's own
+ * auth as it always has, so this never breaks a keyless/inherit setup.
  *
  * Never logs the secret; the caller passes the map straight to spawn.
  */
 export async function credentialEnvForProxy(
   projectDir: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
+  opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<Record<string, string>> {
   const { settings } = await loadConfig({ projectDir, env });
   const selected = settings.proxy.active_account ?? null;
@@ -533,7 +559,7 @@ export async function credentialEnvForProxy(
   // selection names the default id; its credential rides the plain var.
   const onDefault = selected === null || selected === defaultId;
   const storeId = onDefault ? DEFAULT_STORE_ID : selected;
-  const store = createCredentialStore({ userDir: defaultUserDir(), env });
+  const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
   const hit = await store.resolve(storeId);
   if (hit === null) return {};
   return { [envVarForAccount(storeId)]: hit.secret };
@@ -546,8 +572,8 @@ export function renderAccounts(report: AccountsReport): string {
   for (const a of report.accounts) {
     const mark = a.active ? "*" : " ";
     const key = a.key_set
-      ? `key set — ${a.key_location ?? a.key_env}`
-      : `key MISSING (set via: golem account login ${a.id}  |  export ${a.key_env}=…)`;
+      ? `key set — ${a.key_location ?? "stored"}`
+      : `key MISSING (set it with: golem account login ${a.id})`;
     const model = a.model !== null ? ` model=${a.model}` : "";
     const tag = a.is_default === true ? " (default)" : "";
     lines.push(`  ${mark} ${a.id.padEnd(12)} ${a.provider} ${a.base_url}${model}`);

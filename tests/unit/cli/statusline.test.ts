@@ -338,11 +338,47 @@ describe("collectGolemState", () => {
       { projectDir: dir },
     );
     await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
-    await writeServedModel(dir, { model: "kimi-k3-0724", servedAtIso: "2026-07-24T00:00:00.000Z" });
+    await writeServedModel(dir, {
+      model: "kimi-k3-0724",
+      servedAtIso: "2026-07-24T00:00:00.000Z",
+      accountId: "kimi",
+    });
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
     expect(state.lastServedModel).toBe("kimi-k3-0724");
+  });
+
+  /**
+   * The stale-model bug: a snapshot written under a different upstream must not
+   * be reported as the current model — the line falls back to the configured one.
+   */
+  it("ignores a served-model snapshot from a different account", async () => {
+    await writeSetting(
+      "project",
+      "proxy.accounts",
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          model: "kimi-k3",
+        },
+        { id: "work", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-5.2" },
+      ],
+      { projectDir: dir },
+    );
+    await writeSetting("project", "proxy.active_account", "work", { projectDir: dir });
+    await writeServedModel(dir, {
+      model: "kimi-k3-0724",
+      servedAtIso: "2026-07-24T00:00:00.000Z",
+      accountId: "kimi",
+    });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
+    expect(state.lastServedModel).toBeUndefined();
+    expect(state.upstreamModel).toBe("gpt-5.2"); // falls back to the configured model
   });
 
   it("labels a translating provider set at the top level (no account)", async () => {

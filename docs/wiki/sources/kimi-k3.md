@@ -52,11 +52,14 @@ No new provider — front it via the `openai` translating provider (R6.1 case b)
 proxy.upstream_provider  = openai
 proxy.upstream_base_url  = https://api.moonshot.ai/v1
 proxy.upstream_model     = kimi-k3
-# secret (never a setting): GOLEM_UPSTREAM_API_KEY=<moonshot key>
 # optional: proxy.upstream_reasoning_effort = low | high | max
 ```
-Or as a switchable account (`proxy.accounts` + `golem account use kimi`, secret
-in `GOLEM_UPSTREAM_API_KEY__KIMI`).
+The secret is never a setting: store it with `golem account login openai`
+(spec Decision 47 — there is no environment-variable path any more).
+
+Or as a switchable account: `golem account add kimi --provider openai
+--base-url https://api.moonshot.ai/v1 --model kimi-k3`, then
+`golem account login kimi` and `golem account use kimi`.
 
 K3's reasoning trace and images are carried by the translator enhancements
 shipped alongside this note: `reasoning_content` → Anthropic `thinking` blocks

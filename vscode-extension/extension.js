@@ -254,11 +254,16 @@ async function refresh() {
     const modeLine = `Mode: ${levelLabel(model)} · saved ${model.savedPct}% (${fmtTokens(
       model.before,
     )} → ${fmtTokens(model.after)})${model.savingsWindow ? ` ${model.savingsWindow}` : ""}`;
-    const localLine = model.localModelReachable
+    // Only when the local model is ACTIVE (reachable AND the coder tool enabled).
+    // A reachable-but-disabled Ollama is called out explicitly instead, so the
+    // hover explains why the status bar shows no `local` segment.
+    const localLine = model.localModelActive
       ? `\nLocal: ${model.localBaseUrl || "local"}${
           model.localCoderModel ? ` (${model.localCoderModel})` : ""
         }`
-      : "";
+      : model.localCoderEnabled === false
+        ? "\nLocal: disabled (golem local enable)"
+        : "";
     const upstreamFull = model.lastServedModel || model.defaultModel;
     const upstreamLine = `\nUpstream: ${model.upstream || model.upstreamLabel}${
       upstreamFull ? ` (${upstreamFull})` : ""
@@ -335,16 +340,22 @@ function activate(context) {
     }),
   );
 
-  // Event-driven refresh: watch the on-disk slider/served-model so a change made
-  // OUTSIDE the extension (terminal `golem slider`, the MCP `level` tool, a new
-  // served model) reflects near-instantly rather than waiting for the poll.
+  // Event-driven refresh: watch the on-disk settings/served-model so a change made
+  // OUTSIDE the extension (terminal `golem slider`, `golem local enable`, an
+  // account switch, the MCP `level` tool, a new served model) reflects
+  // near-instantly rather than waiting for the poll. `settings.local.json` is
+  // watched too — the gitignored local scope holds the slider level, the account
+  // selection, and anything written with `--scope local` (Decision 43).
   // Changes made IN the extension already repaint optimistically via applySlider.
   // The periodic timer below is now just a safety net (proxy up/down, telemetry
   // savings, update checks), so it can run less often.
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (folder) {
     const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(folder, ".golem/{settings.json,state/served-model.json}"),
+      new vscode.RelativePattern(
+        folder,
+        ".golem/{settings.json,settings.local.json,state/served-model.json}",
+      ),
     );
     watcher.onDidChange(scheduleRefresh);
     watcher.onDidCreate(scheduleRefresh);

@@ -132,7 +132,9 @@ const LOCAL_CODER = [
   "denies the first non-trivial hand-written code Write/Edit of a session and",
   "redirects you here (a one-shot reminder — if you already drafted with `coder`,",
   "say so and proceed). Disable the guidance with `golem guidance disable local-coder`;",
-  "disable the local coder globally with `golem config set inference.local_coder_enabled false`.",
+  "disable the local coder itself with `golem local disable` (`golem local status`",
+  "shows whether it is on and which endpoint it uses — including a LAN box set with",
+  "`golem local url <url>`).",
 ].join("\n");
 
 const PROMPT_TRANSLATION = [

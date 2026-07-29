@@ -186,11 +186,56 @@ setting), 3 (no silent fallback — the preflight fails closed and `--yes` is
 explicit), 4 (no MCP/tool surface touches credentials — `src/credentials/` is
 imported only by the CLI), 5 (no auto route-on-exhaustion), 6 (audited).
 
+## Amendment — invariant 2, second pass (2026-07-29, spec Decision 47)
+
+**What changed.** The `env` backend is **removed entirely**. The 2026-07-26
+amendment kept it at the head of the chain "so CI, containers, and scripted
+setups are untouched"; that turned out to be the wrong trade. Nobody set keys
+that way once `golem account login` existed, and keeping env *above* the OS
+store meant a stale export in one shell could silently shadow a correctly-stored
+key — a fresh instance of the very bug class that amendment was written to kill.
+
+**The resolution chain is now:**
+
+1. `keychain` — the platform's OS-backed store (unchanged).
+2. `file` — plaintext 0600, explicit `--store file` opt-in only (unchanged).
+
+`golem account login <id>` is the one way to set a credential. Every
+`export GOLEM_UPSTREAM_API_KEY…` remediation is gone from help text,
+`account list`, the `use` preflight, and the proxy's startup warnings, because
+following that advice would now configure nothing.
+
+**The var name survives as an internal transport, and only that.** The reasoning
+in the previous amendment — every OS store is weakest for exactly the
+session-less daemon that needs the key — is unchanged, so the CLI still resolves
+the secret and injects it into the daemon's environment at spawn. What changed is
+that this is no longer *also* a user-facing input: `credentialEnvForProxy` sources
+the value from the store, never from an ambient var. A foreground
+`golem proxy start` now performs the same resolve (it used to lean on the ambient
+env), assigning with `??=` so a value the parent CLI already injected wins.
+
+**The gap this opens, and how it is closed.** With no env path and a prompt that
+needs a TTY, a headless/CI machine could not set a key at all. So
+`golem account login <id>` reads the key from **stdin** on a non-TTY
+(`echo "<key>" | golem account login kimi`) — still never through argv. This is
+now the documented CI story in place of an exported var.
+
+**`account remove` logs out first.** De-registering an account used to leave its
+secret in the store, unreachable by any command (the store id is derived from the
+registry entry that just vanished). `remove` now runs `forget` **before** editing
+the registry — that order is load-bearing — reports which backends it deleted
+from, and audit-logs both actions. `--keep-credential` opts out. Fail-closed is
+preserved: an unknown id deletes nothing.
+
+**Unchanged invariants.** 1, 3, 4, 5, 6 all hold exactly as before; invariant 2's
+rejection of plaintext-as-default is, if anything, stronger now that there is no
+weaker backend above the keychain.
+
 ## Consequences
 - **Blocked until accepted + ToS answered.** This ADR + the user's ToS scope
   decision are prerequisites for any R6.2 code (ADR-0002 precedent).
-- Env-var-first keeps R6.2 dependency-free and off-disk; a keychain backend is a
-  later, separately-verified addition.
+- Env-var-first kept R6.2 dependency-free and off-disk; superseded by the two
+  amendments above (keychain added 2026-07-26, env removed 2026-07-29).
 - Builds on R6.1 (adapters/translation, shipped). 21a escalation stays out.
 
 Related: [[ADR-0002 — Cruise-control autonomy modes & approval gates]] (the

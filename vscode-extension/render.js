@@ -215,6 +215,21 @@ function buildModel(stats, status, update, accounts) {
     lastServedModel,
     proxyReachable: !!(st.proxy && st.proxy.reachable),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
+    // `inference.local_coder_enabled`. Absent on an older CLI → assume enabled,
+    // matching the CLI statusline's fail-open reading of the same setting.
+    localCoderEnabled:
+      st.local_model && typeof st.local_model.coder_enabled === "boolean"
+        ? st.local_model.coder_enabled
+        : true,
+    // The local model counts as ACTIVE only when it is enabled AND reachable —
+    // reachability alone is not enough. Ollama running with the coder tool turned
+    // off used to still render as `local + …` here (the CLI statusline already
+    // gated on both), claiming a hybrid Golem isn't actually offering.
+    localModelActive:
+      !!(st.local_model && st.local_model.reachable) &&
+      (st.local_model && typeof st.local_model.coder_enabled === "boolean"
+        ? st.local_model.coder_enabled
+        : true),
     localCoderModel:
       st.local_model && typeof st.local_model.coder_model === "string"
         ? st.local_model.coder_model
@@ -255,10 +270,12 @@ function buildModel(stats, status, update, accounts) {
  * The destination is still shown in every state (it's the configured upstream);
  * a hollow glyph (⬡) signals a stopped proxy.
  *
- * When a local model is reachable, `local` is folded into the destination
- * ahead of the upstream provider (`→ local + <provider>`) at ANY slider level —
- * Golem is then a local+upstream hybrid (`coder` at every level; auto-draft
- * / local-first at level 3), Decision 30. The arrow always precedes the
+ * When a local model is reachable AND the coder tool is enabled, `local` is
+ * folded into the destination ahead of the upstream provider
+ * (`→ local + <provider>`) at ANY slider level — Golem is then a local+upstream
+ * hybrid (`coder` at every level; auto-draft / local-first at level 3),
+ * Decision 30. A disabled coder tool means no local traffic, so the segment is
+ * omitted however reachable Ollama happens to be. The arrow always precedes the
  * destination, whether it's one provider or local-plus-provider.
  *
  * R6.2: the current model (last-served, else configured default) is shown as
@@ -276,16 +293,17 @@ function statusBarText(model) {
 /**
  * The one-liner destination — `local (Qwen 2.5) + anthropic (Opus 4.8)`. Each
  * backend carries its own versioned `(model)`; the `local (…)` segment is
- * present only when a local model is reachable (Decision 30 — Golem is then a
- * local+upstream hybrid at any level). Shown in every state (including
- * passthrough/off): it's the configured destination traffic goes to.
+ * present only when the local model is ACTIVE — reachable *and* enabled
+ * (Decision 30 — Golem is then a local+upstream hybrid at any level). Shown in
+ * every state (including passthrough/off): it's the configured destination
+ * traffic goes to.
  */
 function destinationLabel(model) {
   // R6.2: use the vendor/model-name display label (e.g. `moonshotai (kimi-k3)`)
   // built in buildModel; it already incorporates the last-served or configured
   // model and matches the CLI's `golem status` output.
   const upstreamSeg = model.upstreamDisplay || model.upstreamLabel || "upstream";
-  if (!model.localModelReachable) return upstreamSeg;
+  if (!model.localModelActive) return upstreamSeg;
   const localVer = model.localCoderModel ? localModelVersionLabel(model.localCoderModel) : "";
   const localSeg = localVer ? `local (${localVer})` : "local";
   return `${localSeg} + ${upstreamSeg}`;
@@ -359,9 +377,11 @@ function renderHtml(model, nonce) {
     model.model ? ` · ${esc(model.model)}` : ""
   }</span></div>
   <div class="row"><span>Inference</span><span class="sub">${
-    model.localModelReachable
+    model.localModelActive
       ? `local + upstream${model.localCoderModel ? ` · coder ${esc(model.localCoderModel)}` : ""}`
-      : "upstream only"
+      : model.localCoderEnabled === false
+        ? "upstream only · local coder disabled"
+        : "upstream only"
   }</span></div>
   <div class="row"><span>Stats source</span><span class="sub">${esc(model.source)}</span></div>
   <div class="row"><span>Version</span><span>${

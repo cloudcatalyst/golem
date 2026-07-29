@@ -66,7 +66,8 @@ export const SETTINGS_LEAVES = {
      * `x-api-key`, `api-key` (Azure Foundry), or `bearer` (OpenRouter /
      * Azure Entra). `inherit` on a non-Anthropic provider falls back to that
      * provider's default scheme. The credential itself is NOT a setting (it is
-     * a secret): set it via the `GOLEM_UPSTREAM_API_KEY` environment variable.
+     * a secret): set it with `golem account login <provider>`, which stores it
+     * in the OS credential store (Decisions 46/47 — there is no env-var path).
      */
     upstream_auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES),
     /**
@@ -95,9 +96,10 @@ export const SETTINGS_LEAVES = {
      * R6.2 (spec Decision 21d; ADR-0003): the account registry for switching
      * between the user's own accounts/providers. Each entry is NON-SECRET
      * identity only (id, provider, base_url, optional model/auth_scheme); the
-     * credential for account `<id>` is read from the env var
-     * `GOLEM_UPSTREAM_API_KEY__<ID>` — secrets are never a setting. Legitimate
-     * switching only; there is no automated quota-evasion (ADR-0003 ToS scope).
+     * credential for account `<id>` lives in the OS credential store, set with
+     * `golem account login <id>` (Decisions 46/47) — secrets are never a setting
+     * and never an env var. Legitimate switching only; there is no automated
+     * quota-evasion (ADR-0003 ToS scope).
      */
     accounts: z
       .array(
