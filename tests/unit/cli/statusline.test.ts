@@ -179,6 +179,23 @@ describe("renderStatusLine", () => {
     expect(line).toContain("→ local + kimi (kimi-k3)");
   });
 
+  it("omits the local prefix when the local coder is disabled, even if reachable", () => {
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "kimi",
+        upstreamModel: "kimi-k3",
+        localModelReachable: true,
+        localCoderEnabled: false,
+        localCoderModel: "qwen2.5-coder:7b",
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("→ kimi (kimi-k3)");
+    expect(line).not.toContain("local");
+  });
+
   it("omits the parenthetical for a plain Anthropic passthrough (no model known)", () => {
     const line = renderStatusLine(
       {},
@@ -425,6 +442,7 @@ describe("collectGolemState", () => {
       upstreamLabel: "anthropic",
       upstreamProvider: "anthropic",
       proxyRunning: false,
+      localCoderEnabled: true,
       localModelReachable: false,
     });
   });

@@ -78,7 +78,15 @@ export interface GolemMcpServerDeps {
   /**
    * WS-D tiered inference (task B3). When present, the `coder` tool
    * is registered, letting Claude offload a task to a local model (the
-   * "drafter" role). Omitted when local inference is unavailable or disabled.
+   * "drafter" role). Omitted when local inference is unavailable or when
+   * `inference.local_coder_enabled` is false.
+   */
+  readonly coder?: InferenceService;
+  /**
+   * WS-D tiered inference used for non-coder local roles: rerank
+   * (`knowledge.rerank_enabled`) and the proxy's local-answer semantic embedder.
+   * Independent of {@link coder}; may be present even when the coder tool is
+   * disabled.
    */
   readonly inference?: InferenceService;
   /** projectId used by knowledge tools when a call omits `project_id`. */
@@ -419,10 +427,10 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
     );
   }
 
-  if (deps.inference !== undefined) {
+  if (deps.coder !== undefined) {
     registerCoderTool(
       server,
-      deps.inference,
+      deps.coder,
       {
         knowledge: deps.knowledge,
         wiki: deps.wikiSearch ?? deps.wiki,
