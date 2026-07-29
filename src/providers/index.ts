@@ -15,8 +15,11 @@
  * (b) — a separate, larger build with its own response-transform seam. Nothing
  * here translates bodies.
  *
- * The credential itself is a secret and is NEVER a settings leaf — it is read
- * from the `GOLEM_UPSTREAM_API_KEY` environment variable by the CLI wiring.
+ * The credential itself is a secret and is NEVER a settings leaf — the CLI
+ * resolves it from the OS credential store (`golem account login`) and hands it
+ * to the proxy process at spawn. Setting it via an environment variable was
+ * removed in Decision 47; {@link perAccountEnvVar} names only that internal
+ * handoff channel.
  */
 
 export {

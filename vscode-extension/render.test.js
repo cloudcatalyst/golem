@@ -79,11 +79,30 @@ test("buildModel surfaces local_model reachability + coder model from status --j
   const status = {
     slider: { level: 3, name: "aggressive" },
     proxy: { reachable: true },
-    local_model: { reachable: true, coder_model: "qwen2.5-coder:7b" },
+    local_model: { reachable: true, coder_enabled: true, coder_model: "qwen2.5-coder:7b" },
   };
   const m = buildModel({}, status);
   assert.equal(m.localModelReachable, true);
+  assert.equal(m.localCoderEnabled, true);
+  assert.equal(m.localModelActive, true);
   assert.equal(m.localCoderModel, "qwen2.5-coder:7b");
+});
+
+test("buildModel reports the local model inactive when the coder tool is disabled", () => {
+  const status = {
+    proxy: { reachable: true },
+    local_model: { reachable: true, coder_enabled: false, coder_model: "qwen2.5-coder:7b" },
+  };
+  const m = buildModel({}, status);
+  assert.equal(m.localModelReachable, true); // Ollama IS up — that stays honest
+  assert.equal(m.localCoderEnabled, false);
+  assert.equal(m.localModelActive, false); // but nothing local is on offer
+});
+
+test("buildModel assumes the coder tool is enabled when an older CLI omits the flag", () => {
+  const m = buildModel({}, { local_model: { reachable: true } });
+  assert.equal(m.localCoderEnabled, true);
+  assert.equal(m.localModelActive, true);
 });
 
 test("buildModel shortens a Claude last_served_model to a family label", () => {
@@ -200,7 +219,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       slider: 3,
       sliderName: "aggressive",
       upstreamDisplay: "anthropic (Opus 4.8)",
-      localModelReachable: true,
+      localModelActive: true,
     }),
     "⬢ Golem · Aggressive → local + anthropic (Opus 4.8)",
   );
@@ -211,20 +230,20 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
   );
 });
 
-test("statusBarText — local segment appears whenever a local model is reachable, at any level", () => {
+test("statusBarText — local segment appears whenever the local model is active, at any level", () => {
   // No local model reachable: no local segment.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry" }),
     "⬢ Golem · L1 → foundry",
   );
-  // Local model reachable at ANY level (Decision 30): "local" is folded into the
+  // Local model active at ANY level (Decision 30): "local" is folded into the
   // destination with "+", the arrow before the destination always present.
   assert.equal(
     statusBarText({
       proxyReachable: true,
       slider: 1,
       upstreamDisplay: "anthropic",
-      localModelReachable: true,
+      localModelActive: true,
     }),
     "⬢ Golem · L1 → local + anthropic",
   );
@@ -234,7 +253,7 @@ test("statusBarText — local segment appears whenever a local model is reachabl
       proxyReachable: false,
       slider: 3,
       upstreamDisplay: "anthropic",
-      localModelReachable: true,
+      localModelActive: true,
     }),
     "⬡ Golem · Passthrough → local + anthropic",
   );
@@ -254,10 +273,28 @@ test("statusBarText names each backend with its own versioned model", () => {
       proxyReachable: true,
       slider: 1,
       upstreamDisplay: "anthropic (Opus 4.8)",
-      localModelReachable: true,
+      localModelActive: true,
       localCoderModel: "qwen2.5-coder:7b",
     }),
     "⬢ Golem · L1 → local (Qwen 2.5) + anthropic (Opus 4.8)",
+  );
+});
+
+test("statusBarText omits the local segment when the coder tool is disabled", () => {
+  // Regression: a reachable Ollama with `inference.local_coder_enabled` false was
+  // still shown as `local + …`, advertising a hybrid Golem wasn't offering. The
+  // CLI statusline already gated on both conditions; the status bar did not.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      slider: 1,
+      upstreamDisplay: "anthropic (Opus 4.8)",
+      localModelReachable: true,
+      localCoderEnabled: false,
+      localModelActive: false,
+      localCoderModel: "qwen2.5-coder:7b",
+    }),
+    "⬢ Golem · L1 → anthropic (Opus 4.8)",
   );
 });
 
