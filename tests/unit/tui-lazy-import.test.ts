@@ -49,26 +49,31 @@ function staticSpecifiers(code: string): string[] {
 }
 
 describe("the CLI keeps the panel off the hot path", () => {
-  it("keeps src/cli/main.ts free of ALL static imports", async () => {
+  it("keeps src/cli/main.ts free of ALL runtime static imports", async () => {
     // main.ts is the `bin` entry: it decides between the panel and the rest of the
     // CLI, and ESM hoists imports, so ANY static import here is paid by every
     // `golem` process — including every `golem hook pre-tool-use`. It must route
-    // with dynamic imports only.
+    // with dynamic imports only. (A type-only import is erased, hence free.)
     const specifiers = staticSpecifiers(await source("src/cli/main.ts"));
     expect(specifiers).toEqual([]);
   });
 
-  it("routes to both branches dynamically, and to neither statically", async () => {
+  it("routes to every branch dynamically, and to none statically", async () => {
     const code = await source("src/cli/main.ts");
     expect(code).toMatch(/import\(\s*"\.\.\/tui\/index\.js"\s*\)/);
     expect(code).toMatch(/import\(\s*"\.\/program\.js"\s*\)/);
+    expect(code).toMatch(/import\(\s*"\.\/fast-path\.js"\s*\)/);
+    expect(code).toMatch(/import\(\s*"\.\/panel-args\.js"\s*\)/);
   });
 
-  it("does not statically import src/tui from the CLI program", async () => {
+  it("does not reference src/tui from the CLI program at all", async () => {
+    // Since Decision 51 the panel has no subcommand — `golem` on its own is the
+    // panel, routed by main.ts — so program.ts should not reach the tui by any means,
+    // static or dynamic. It documents the panel in help text only.
     const code = await source("src/cli/program.ts");
-    const offenders = staticSpecifiers(code).filter((s) => s.includes("tui"));
-    expect(offenders).toEqual([]);
-    expect(code).toMatch(/import\(\s*"\.\.\/tui\/index\.js"\s*\)/);
+    expect(staticSpecifiers(code).filter((s) => s.includes("tui"))).toEqual([]);
+    expect(code).not.toContain("tui/index.js");
+    expect(code).toContain("Control panel:");
   });
 
   it("keeps the expensive status graph out of the control surface's static imports", async () => {

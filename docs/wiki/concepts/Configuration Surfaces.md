@@ -9,8 +9,8 @@ updated: 2026-07-30
 
 # Configuration Surfaces
 
-How Golem's settings are described once and rendered everywhere: the `golem ui`
-terminal panel, the `golem config` CLI, and the VS Code webview all read one
+How Golem's settings are described once and rendered everywhere: the `golem` terminal
+panel, the `golem config` CLI, and the VS Code webview all read one
 runtime-introspectable **control surface**.
 
 ## The problem this solves
@@ -86,7 +86,7 @@ releases.
                     └── applyControl()           → write
                               │
         ┌─────────────────────┼──────────────────────────┐
-   golem ui (src/tui/)   golem config          VS Code webview
+   golem (src/tui/)      golem config          VS Code webview
    self-rendered, no     schema/get/set/unset  (via `config schema --json`)
    framework
 ```
@@ -95,14 +95,25 @@ releases.
 Code side maintenance-free: a new settings key appears there with no extension
 change and no version skew.
 
-### `golem ui` — the terminal panel
+### `golem` — the terminal panel
 
-Reached by `golem ui` / `golem settings`, or by a bare `golem` in a terminal.
-Bare-`golem` is gated on no arguments **and** both stdin/stdout being a TTY, so
-`golem --help`, a pipe, CI, hook invocations, and the daemon all keep printing
-help. It is decided before `program.parseAsync` rather than with a root
-`program.action()` — an action handler on the root makes commander report a typo'd
-subcommand as "too many arguments" instead of "unknown command".
+**There is no subcommand: `golem` on its own IS the panel** (Decision 51 removed
+`golem ui` / `golem settings` and moved their flags onto the bare command, so the
+panel has one entry point and gets the fast path instead of commander's ~810ms).
+It accepts `--dir <path>`, `--no-pet`, and `--advanced`.
+
+Routing lives in `src/cli/main.ts` (`parsePanelArgs`), and the accept/reject boundary
+is deliberate: **any unrecognised flag falls through to commander**, so a mistyped
+flag is reported by the code that owns flag parsing rather than silently opening a
+UI. `--help`, `--version`, and every named command go to commander too. A bare
+`golem` outside a terminal still prints help, which is what `golem | cat`, CI, and a
+stray hook invocation get; panel *flags* outside a terminal say why they can't run.
+
+It is decided before `program.parseAsync` rather than with a root `program.action()`
+— an action handler on the root makes commander report a typo'd subcommand as "too
+many arguments" instead of "unknown command". `golem --help` documents the panel in
+an after-help block, since it has no subcommand to carry its options, and a test
+asserts the documented flags and the accepted flags agree.
 
 Layout: the purple block-character **pet** on the left, three lines of live state
 beside it (from the same `collectStatus` that `golem status` prints), then tabs,
@@ -176,7 +187,7 @@ The leading glyph is U+25A0 BLACK SQUARE, whose East Asian Width is
 **Ambiguous** — single-width in most terminals, double-width in a CJK-configured
 one. The pet is therefore drawn in a fixed-width box, so a double-wide render can
 shift that glyph without pushing the header text out of alignment. `ui.pet false`
-(or `golem ui --no-pet`) turns it off, which is also the escape hatch for legacy
+(or `golem --no-pet`) turns it off, which is also the escape hatch for legacy
 Windows consoles on codepage 437/850, where the block glyphs can't be drawn.
 
 ### VS Code

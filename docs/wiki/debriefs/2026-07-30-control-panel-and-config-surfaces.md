@@ -295,12 +295,50 @@ work was warranted, so none was done.
 
 `cli-init.test.ts` failed in 3 of ~6 full-suite runs, on a *different* test each time
 — the classic shape of something being waved through. It was `Error: Test timed out in
-5000ms`: every test in that file performs a real `golemInit` (~20 file writes to a
-temp dir), which on Windows under parallel load plus a virus scanner regularly beats
-vitest's 5s default. (Not the VS Code extension copy — the fake probe doesn't supply
-`vscodeExtensionsDir`, so that path never runs.) The work is real, so the budget was
-wrong: `{ timeout: 30_000 }` on the file's three `describe`s. Three consecutive green
-full runs after.
+5000ms`: three test files perform a real `golemInit` (~20 file writes to a temp dir),
+which on Windows under parallel load plus a virus scanner regularly beats vitest's 5s
+default. (Not the VS Code extension copy — the fake probe doesn't supply
+`vscodeExtensionsDir`, so that path never runs.)
+
+The instructive bit: my first fix was a timeout on that *file*, and the next full run
+simply failed in `e2e/golem-init-smoke.test.ts` instead. Treating the symptom moved
+it. The suite is I/O-heavy by nature — real inits, spawned daemons, port waits — so 5s
+was the wrong **default**, not the wrong per-file budget: `testTimeout: 20_000` in
+`vitest.config.ts`, one mechanism, reasoning recorded there. Three consecutive green
+full runs after (144 files / 1595 tests).
+
+## One entry point, and one command deliberately kept
+
+Two surface-area questions came back once the numbers were in.
+
+**`golem ui` turned out to be the slow way into the panel.** Bare `golem` skips
+commander (~170ms); `golem ui` went *through* it and paid ~810ms. Having measured
+that, the choice wasn't "keep or remove a convenience command", it was "remove a
+redundant entry point that happens to be 5x slower". Its flags (`--dir`, `--no-pet`,
+`--advanced`) moved onto the bare command.
+
+The interesting part was the reject side of `parsePanelArgs`. Accepting the panel
+flags is easy; the rule that matters is **any unrecognised flag falls through to
+commander**, so `golem --dirr x` still gets `error: unknown option '--dirr'` from the
+code that owns flag parsing, instead of a panel opening as if nothing were wrong.
+`golem ui` itself answers with a migration message and exit 2 rather than "unknown
+command" — a removal is worth explaining once.
+
+Two things that bit, both worth remembering:
+
+- **`main.ts` self-executes on import** (it's the `bin` entry), so the first version
+  of the test — which imported `parsePanelArgs` from it — was running the CLI against
+  vitest's own argv. It passed by luck. The parser moved to `src/cli/panel-args.ts`.
+- The panel has no subcommand to hang options off, so `golem --help` documents it in
+  an after-help block — which can drift from what the parser accepts. There's a test
+  that parses the help text and checks every advertised flag is actually accepted.
+
+**`golem status` was considered for removal and kept.** Worth checking dependencies
+before answering: the VS Code extension polls `golem status --json` every few
+seconds, the snooze-hold guidance rule tells agents to run it, and two skills
+reference it. The panel is the human surface; `--json` is a live machine surface, and
+it costs nothing when nobody invokes it. Removing it would have traded something that
+works for a shorter `--help`.
 
 ## Left open
 

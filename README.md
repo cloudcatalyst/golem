@@ -64,7 +64,7 @@ Code extension also surfaces an update prompt). Release process: [RELEASING.md](
 
 ## Settings
 
-Run **`golem`** in a terminal (or `golem ui`) for an interactive control panel:
+Run **`golem`** in a terminal — that's it, no subcommand — for an interactive control panel:
 live status in the header, then every setting, guidance rule, and runtime control
 as a toggle or picker — each showing which layer supplied its value, writable at
 **project**, **local**, or **user** scope.
@@ -87,6 +87,9 @@ as a toggle or picker — each showing which layer supplied its value, writable 
 `space` toggles, `enter` edits a value (empty = unset), `s` cycles the write
 scope, `tab` switches group, `a` reveals advanced settings. Rows set by a
 `GOLEM_*` environment variable are locked, since env beats every file layer.
+
+Flags: `golem --dir <path>` opens it for another project, `--no-pet` hides the
+mascot, `--advanced` starts with advanced settings shown.
 
 It opens in about **170ms** — the panel renders itself with no UI framework, and the
 CLI's hot paths are kept deliberately thin (`golem hook post-tool-use`, which Claude

@@ -3376,11 +3376,68 @@ pipeline itself is not where time goes. No proxy work was warranted and none was
 
 ### Also fixed: a pre-existing test flake this surfaced
 
-`tests/integration/cli-init.test.ts` failed intermittently (3 of ~6 full-suite runs),
-on a *different* test each time. Diagnosed rather than retried: `Error: Test timed out
-in 5000ms` — every test in that file runs a real `golemInit`/`golemUninit` (~20 file
-writes to a temp dir), which on Windows under parallel suite load plus a virus scanner
-regularly exceeds vitest's 5s default. (Not the VS Code extension copy — the fake
-probe doesn't supply `vscodeExtensionsDir`, so that path is skipped.) The work is real,
-so the budget was wrong: the three `describe`s now carry `{ timeout: 30_000 }`. Three
-consecutive full-suite runs green afterwards.
+Tests failed intermittently — first `cli-init.test.ts` (3 of ~6 full-suite runs), then
+`e2e/golem-init-smoke.test.ts` — and on a *different* test each time, which is the
+classic shape of something being waved through. Diagnosed rather than retried:
+`Error: Test timed out in 5000ms`. Three test files run a real
+`golemInit`/`golemUninit` (~20 file writes to a temp dir each), and on Windows under
+parallel suite load plus a virus scanner they regularly exceed vitest's 5s default.
+(Not the VS Code extension copy — the fake probe doesn't supply
+`vscodeExtensionsDir`, so that path never runs.)
+
+Fixed **globally** rather than per file, after a per-file timeout in `cli-init` merely
+moved the failure to the next-unluckiest file: `testTimeout: 20_000` in
+`vitest.config.ts`, with the reasoning recorded there. This suite is genuinely
+I/O-heavy — real inits, spawned proxy daemons, port waits — so 5s was the wrong
+default for it, and one mechanism beats sprinkling local overrides. A hung test still
+fails, 20s later, which is a fine trade in a ~30s suite. **Three consecutive
+full-suite runs green afterwards** (144 files / 1595 tests).
+
+### §86d — one entry point for the panel; `golem status` kept (2026-07-30, USER decisions)
+
+Two surface-area questions, both settled with measurements rather than taste.
+
+**`golem ui` was the slow way in — so it's gone.** With bare `golem` already opening
+the panel, the named command was redundant *and* slower: it went through commander
+and paid its ~810ms graph, versus ~170ms for the bare command, which skips commander
+entirely. Rather than fast-path a second entry point, the user chose to remove
+`golem ui` / `golem settings` and move their flags onto the bare command.
+
+`parsePanelArgs` (`src/cli/panel-args.ts`) now accepts `--dir <path>` (also
+`--dir=<path>`), `--no-pet`, and `--advanced`, in any order. The reject side is the
+part worth pinning, and it is (11 assertions in `tests/unit/cli-panel-args.test.ts`):
+
+| argv | goes to |
+|---|---|
+| `golem`, `golem --no-pet`, `golem --dir <p> --advanced` | the panel |
+| `golem --help` / `-h` / `--version` / `-V` | commander |
+| any named command, with or without panel flags | commander |
+| **any unrecognised flag** (`--pet`, `--dirr`, `--json`, `-x`) | commander |
+| `--dir` with no value, or followed by another flag | commander |
+
+That last-but-one row is the point: a typo must be reported by the code that owns
+flag parsing, not silently open a UI. Verified end to end afterwards, including exit
+codes: `golem ui` → migration message, exit **2** (not "unknown command"); panel
+flags outside a TTY → "needs an interactive terminal", exit **1**; bare `golem |
+cat` → help, unchanged; `golem --dirr x` → `error: unknown option '--dirr'`;
+`golem bogus` → `error: unknown command 'bogus'`, exit 1; `golem --version` → exit 0.
+
+Two implementation notes:
+- `parsePanelArgs` lives in its own module, not in `main.ts`, because **main.ts
+  self-executes on import** (it is the `bin` entry) — a test importing it would run
+  the CLI against vitest's own argv. main.ts reaches it via `await import()`, which
+  costs nothing for a module that only does string handling, and the "no static
+  imports in main.ts" guard still holds.
+- The panel has no subcommand to hang its options off, so `golem --help` documents it
+  in an `addHelpText("after", …)` block. A test parses that block and asserts every
+  flag it advertises is one `parsePanelArgs` accepts — otherwise the two would drift
+  silently.
+
+**`golem status` was considered for removal and deliberately KEPT.** Checked what
+actually depends on it before answering: the VS Code extension polls
+`golem status --json` every few seconds (`extension.js`), the `snooze-hold` guidance
+rule tells agents to run it, two skills in `src/cli/skills.ts` reference it, and it is
+the scriptable/CI path. The panel is the *human* surface; `status --json` is the
+*machine* surface, and it costs nothing when not invoked (commander path, on demand
+only). Removing it would have meant reworking the extension's polling and editing the
+rule plus two skills — trading a working machine surface for a shorter command list.

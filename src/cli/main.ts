@@ -6,80 +6,96 @@
  *
  * Why this file exists at all: the CLI's own module graph (`./program.js` —
  * commander plus every command's dependencies, including the MCP SDK) costs
- * **~750ms** to load, and it used to be paid by every invocation before anything
- * else could happen. Bare `golem` then paid ink on top of that, so the panel took
- * multiple seconds to appear (measured in verification-notes §86).
+ * **~810ms** to load, and it used to be paid by every invocation before anything
+ * else could happen (verification-notes §86).
  *
  * ESM imports are hoisted and evaluated before any statement runs, so the routing
  * decision cannot live in a module that statically imports either branch. Hence a
  * shim: it looks at argv, then dynamically imports exactly ONE of
  *
- *   - `../tui/index.js`  — bare, interactive `golem`: the control panel, which
- *                          never needs commander or any other command's deps;
- *   - `./fast-path.js`   — the two commands Claude Code invokes constantly
- *                          (`hook <event>` on every tool call, `statusline` on
- *                          every prompt), handled without commander at all; or
- *   - `./program.js`     — everything else, unchanged.
+ *   - `../tui/index.js`  — the control panel. `golem` on its own IS the panel
+ *                          (Decision 51); it needs neither commander nor any other
+ *                          command's dependencies, and opens in ~170ms;
+ *   - `./fast-path.js`   — the commands Claude Code invokes constantly (`hook
+ *                          <event>` on every tool call, `statusline` on every
+ *                          prompt), handled without commander at all; or
+ *   - `./program.js`     — every named command, unchanged.
  *
  * Keep this file dependency-free. Anything imported here is imported by every
- * `golem` process on the machine, including `golem hook pre-tool-use`, which
- * Claude Code runs on every single tool call.
+ * `golem` process on the machine, including `golem hook pre-tool-use`, which Claude
+ * Code runs on every single tool call.
  *
  * `bin` in package.json still points here (`dist/cli/main.js`), so installed shims
  * and `detectInstallMethod`'s argv[1] matching are unaffected.
  */
 
-/**
- * Should a bare `golem` open the panel instead of printing help?
- *
- * Only for `golem` with NO arguments at all, in a terminal. `--help`, `--version`,
- * every subcommand, a pipe (`golem | cat`), CI, hook invocations, and the detached
- * proxy daemon all fall through to the normal CLI.
- *
- * Note this is NOT a commander root `.action()`: an action handler on the root
- * makes commander report a typo'd subcommand as "too many arguments" instead of
- * "unknown command".
- */
-export function shouldOpenPanel(
-  argv: readonly string[] = process.argv,
-  stdin: { isTTY?: boolean } = process.stdin,
-  stdout: { isTTY?: boolean } = process.stdout,
-): boolean {
-  return argv.length <= 2 && stdin.isTTY === true && stdout.isTTY === true;
+import type { PanelArgs } from "./panel-args.js";
+
+async function openPanel(panel: PanelArgs): Promise<void> {
+  const [{ runTui }, { VERSION }, { findProjectDir }] = await Promise.all([
+    import("../tui/index.js"),
+    import("../version.js"),
+    import("../config/paths.js"),
+  ]);
+  const result = await runTui({
+    projectDir: panel.dir ?? findProjectDir(process.cwd()) ?? process.cwd(),
+    version: VERSION,
+    ...(panel.pet === false && { noPet: true }),
+    ...(panel.advanced && { advanced: true }),
+    ...(process.argv[1] !== undefined && { cliPath: process.argv[1] }),
+  });
+  if (!result.started) {
+    process.stderr.write(`golem: ${result.reason ?? "could not start the panel"}\n`);
+    process.exitCode = 1;
+  }
 }
 
 async function main(): Promise<void> {
-  if (shouldOpenPanel()) {
-    // The panel path: ink + the control surface, and nothing from ./program.js.
-    const [{ runTui }, { VERSION }] = await Promise.all([
-      import("../tui/index.js"),
-      import("../version.js"),
-    ]);
-    const { findProjectDir } = await import("../config/paths.js");
-    const result = await runTui({
-      projectDir: findProjectDir(process.cwd()) ?? process.cwd(),
-      version: VERSION,
-      ...(process.argv[1] !== undefined && { cliPath: process.argv[1] }),
-    });
-    if (!result.started) {
-      process.stderr.write(`golem: ${result.reason ?? "could not start the panel"}\n`);
-      process.exitCode = 1;
-    }
+  const argv = process.argv;
+
+  // Tiny, no-dependency module — see panel-args.ts for why it isn't inlined here.
+  const { parsePanelArgs, REMOVED_PANEL_COMMANDS } = await import("./panel-args.js");
+
+  if (REMOVED_PANEL_COMMANDS.includes(argv[2] ?? "")) {
+    process.stderr.write(
+      `golem: \`golem ${argv[2]}\` was removed — run \`golem\` on its own to open the panel ` +
+        "(flags: --dir <path>, --no-pet, --advanced)\n",
+    );
+    process.exitCode = 2;
     return;
+  }
+
+  const panel = parsePanelArgs(argv);
+  if (panel !== null) {
+    if (process.stdin.isTTY === true && process.stdout.isTTY === true) {
+      await openPanel(panel);
+      return;
+    }
+    // Panel flags outside a terminal are a clear statement of intent, so say why it
+    // can't run. A BARE `golem` outside a terminal keeps its old behaviour of
+    // printing help — that's what `golem | cat`, CI, and a stray hook invocation get.
+    if (argv.length > 2) {
+      process.stderr.write(
+        "golem: the control panel needs an interactive terminal (stdin and stdout must " +
+          "both be a TTY). Use `golem status` and `golem config` for non-interactive use.\n",
+      );
+      process.exitCode = 1;
+      return;
+    }
   }
 
   // The commands Claude Code invokes constantly (hook events on every tool call,
   // statusline on every prompt) skip commander entirely. `fastPathFor` returns null
   // for anything it doesn't handle exactly, so the CLI stays authoritative.
   const { fastPathFor, runFastPath } = await import("./fast-path.js");
-  const fast = fastPathFor(process.argv);
+  const fast = fastPathFor(argv);
   if (fast !== null) {
-    await runFastPath(fast, process.argv);
+    await runFastPath(fast, argv);
     return;
   }
 
   const { runCli } = await import("./program.js");
-  await runCli(process.argv);
+  await runCli(argv);
 }
 
 main().catch((err: unknown) => {

@@ -178,48 +178,22 @@ program
   .description("Golem — universal pre-LLM processing layer (golem.run)")
   .version(VERSION);
 
-/**
- * `golem ui` / `golem settings`. A bare interactive `golem` does NOT come through
- * here — src/cli/main.ts routes that straight to the panel so it never loads this
- * module at all (see main.ts). This is the explicit, flag-accepting form.
- *
- * The `src/tui/` tree (ink + React + yoga-layout) is reached only through a
- * dynamic import; tests/unit/tui-lazy-import.test.ts asserts that stays true.
- */
-async function launchUi(opts: { dir: string; pet: boolean; advanced: boolean }): Promise<void> {
-  const { runTui } = await import("../tui/index.js");
-  const result = await runTui({
-    projectDir: opts.dir,
-    version: VERSION,
-    ...(opts.pet === false && { noPet: true }),
-    ...(opts.advanced && { advanced: true }),
-    ...(process.argv[1] !== undefined && { cliPath: process.argv[1] }),
-  });
-  if (!result.started) {
-    process.stderr.write(`golem: ${result.reason ?? "could not start the panel"}\n`);
-    process.exitCode = 1;
-  }
-}
-
-for (const name of ["ui", "settings"] as const) {
-  program
-    .command(name)
-    .description(
-      name === "ui"
-        ? "Open the interactive control panel (settings, guidance rules, runtime state)"
-        : "Open the control panel (alias of `golem ui`)",
-    )
-    .option("--dir <path>", "project directory", DEFAULT_DIR)
-    .option("--no-pet", "hide the pet in the header (also `golem config set ui.pet false`)")
-    .option("--advanced", "show advanced controls on open", false)
-    .action(async (opts: { dir: string; pet: boolean; advanced: boolean }) => {
-      try {
-        await launchUi(opts);
-      } catch (err) {
-        fail(err);
-      }
-    });
-}
+// The control panel has no subcommand: `golem` on its own IS the panel, routed by
+// src/cli/main.ts before this module is even loaded (Decision 51 — that is what
+// makes it open in ~170ms instead of paying commander's ~810ms graph). It is
+// documented here so `golem --help` still tells people it exists and what flags it
+// takes; main.ts's `parsePanelArgs` is the code that actually accepts them, and
+// tests/unit/cli-panel-args.test.ts asserts the two agree.
+program.addHelpText(
+  "after",
+  `
+Control panel:
+  golem                     open the interactive control panel (settings,
+                            guidance rules, runtime state) — no subcommand
+  golem --dir <path>        open it for another project
+  golem --no-pet            hide the pet in the header
+  golem --advanced          show advanced controls on open`,
+);
 
 function printReport(report: InitReport): void {
   for (const action of report.actions) {
