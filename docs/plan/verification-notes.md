@@ -3441,3 +3441,63 @@ the scriptable/CI path. The panel is the *human* surface; `status --json` is the
 *machine* surface, and it costs nothing when not invoked (commander path, on demand
 only). Removing it would have meant reworking the extension's polling and editing the
 rule plus two skills — trading a working machine surface for a shorter command list.
+
+## §87 — Caveman is output-side and prompt-delivered, not a compression library (2026-07-30)
+
+Checked before designing against it, per the verify-don't-assume rule. Source:
+`github.com/JuliusBrussee/caveman` README (repo page + raw `main/README.md`),
+fetched 2026-07-30. MIT licence, no telemetry, no backend, Node ≥18 for the
+installer. Recorded because a design proposal (`proposals/golem-brevity.md`,
+spec Decision 52 PROPOSED) rests on these facts.
+
+**It is not a payload transformer.** Install "drops a skill file into your agent",
+and that file "tells agent: drop filler, keep substance, use fragments — but never
+touch code, commands, or errors." Privacy section: "the skill is a prompt, the
+hooks are local scripts." Nothing intercepts or rewrites the request; the
+instruction enters the model's context and the model complies at generation time.
+
+**It saves output tokens only, and it costs input tokens.** The README's own chart
+puts **"input tokens saved" at 0%**, and it volunteers that the skill "adds ~1–1.5k
+input tokens per turn," so on terse workloads savings "can go net-negative."
+Headline claim is "65% fewer output tokens"; stats are "local estimates" computed
+by `/caveman-stats` from the local session log. Treat all three numbers as
+unverified vendor claims — including "technical accuracy 100%", which is an
+assertion about how well a *prompt* is followed, with no enforcement mechanism.
+
+**Levels:** `lite` / `full` (default) / `ultra` / `wenyan` (renders the answer in
+classical Chinese). The README says "six levels" but enumerates only these four
+plus the normal-agent baseline — two are never named, so the page is
+self-inconsistent; do not assume a fifth/sixth exists. Switching is `/caveman
+<level>`, sticky until changed or session end. It "compresses the *style*, never
+translates" and preserves the input language — `wenyan` is the deliberate exception.
+
+**Auto-on uses a local side channel:** on Claude Code "a hook writes a tiny flag
+file each session" so caveman speech starts without typing `/caveman`. Relevant
+because it means an installed Caveman can be active *invisibly* — any Golem-side
+injection must detect and not double it.
+
+**Two adjacent components are NOT the speech skill** and were initially conflated:
+
+- `/caveman-compress <file>` rewrites a memory file (e.g. `CLAUDE.md`) into
+  caveman-speak — genuinely **input**-side, claimed "~46% input tokens every
+  session after", "code, URLs, paths byte-preserved". One-off, not per-request.
+- **`caveman-shrink`** — "MCP middleware. Wraps any MCP server, compresses its tool
+  descriptions." Input-side, per-request, npm package. **Its install and config
+  steps are not documented on the README** — the page only links to npm, with no
+  wrapper syntax, config schema, or MCP server-block example. Anything beyond "it
+  wraps an MCP server and shrinks tool descriptions" would be invention; fetch the
+  npm page before implementing against it.
+
+**Consequence for Golem.** Depending on the package is the wrong shape: its
+installer targets specific agents' skill directories and hooks, whereas Golem is
+the proxy and can inject in-flight for every client with zero deps. The substance
+is a prompt, and the licence is MIT, so vendoring the directive text with
+attribution is both sufficient and cleaner. See `proposals/golem-brevity.md`.
+
+**Pricing check that motivates the dial** (`claude-api` skill, cached 2026-06-24,
+re-read 2026-07-30): Opus 5 is $5/MTok input, $25/MTok output → output is **5×
+uncached input**; cache reads are ~0.1× input → output is **~50× cache-read
+input**, and output is never cached. So Decision 23's "compression pays ~0% on
+cached traffic" is an input-side finding that does **not** transfer to an
+output-side dial. That is the whole argument for the proposal, and it is a
+hypothesis to measure, not a claim to ship on.
