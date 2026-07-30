@@ -133,6 +133,16 @@ function parseEvent(line: string): TelemetryEvent | null {
       : {}),
     ...(typeof parsed.toolModel === "string" ? { toolModel: parsed.toolModel } : {}),
     ...(typeof parsed.toolDraftChars === "number" ? { toolDraftChars: parsed.toolDraftChars } : {}),
+    // R8.1. These were written by the proxy but NOT carried here, so
+    // `aggregateCacheStats` could never see a verdict and always reported "none
+    // recorded" — the field-by-field reconstruction in this function is an
+    // allow-list, and a new TelemetryEvent field is invisible until added to it.
+    // Any future field needs a line here AND a round-trip test through the store;
+    // a unit test that feeds objects straight to an aggregator will not catch it.
+    ...(typeof parsed.cachePrefix === "string" ? { cachePrefix: parsed.cachePrefix } : {}),
+    ...(typeof parsed.cacheBustComponent === "string"
+      ? { cacheBustComponent: parsed.cacheBustComponent }
+      : {}),
   };
 }
 
