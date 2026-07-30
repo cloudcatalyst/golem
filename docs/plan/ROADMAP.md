@@ -112,6 +112,24 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.4 — the context ledger** (2026-07-30): `golem stats --context` attributes
+  every token in the outgoing request to a bucket and resolves each `tool_result`
+  back to the tool that produced it (`tool_use_id` → name), so context pruning is
+  aimed instead of guessed. Latest-only state file (`writeLimitState`'s
+  fail-open contract); the pipeline stays clock-free (`ContextLedgerCore` + the CLI
+  stamps `capturedAt`); no prompt content is stored, tool names are. **First
+  capture (§95) moved three things:** the `tools` block measured **18,827 tokens**
+  — ~5× §88's figure and the largest single block, promoting R8.S1 schema
+  shrinking; **Bash** is the biggest tool consumer (36,968 tokens / 132 results),
+  quantifying the RTK case and confirming R8.3's descoping; and one `expand` cost
+  6,356. +24 tests. Debrief `2026-07-30-r8.4-context-ledger.md`.
+- **R8.2 — STRUCK, not built** (2026-07-30, §94): the memo proposed
+  suffix-only tool-result dedup as novel; `src/compression/native-lossless.ts` has
+  shipped it since task A2 (Decision 18), and achieves the cache-safety property by
+  *purity* (the transform of `messages[i]` depends only on the original bytes of
+  `messages[0..i]`) rather than by special-casing the suffix. Measured on real
+  traffic: **4,449,703 tokens saved**, 4,878 refs stored, **2** retrieved. The
+  lesson is the repo's own rule the memo skipped — check the code before proposing.
 - **R8.1 — cache-hit observability + prefix-bust detection** (2026-07-30):
   `golem stats --cache` reports the billed hit rate (authoritative, from the R1.1
   usage sniffer) beside a per-request prefix verdict (`first`/`append`/`bust` with

@@ -3,6 +3,27 @@
  * (owned by agent-proxy).
  */
 
+export {
+  type CacheBustComponent,
+  type CachePrefixFingerprint,
+  type CachePrefixObservation,
+  CachePrefixObserver,
+  type CachePrefixVerdict,
+  cachePrefixFingerprint,
+  classifyPrefixChange,
+} from "./cache-prefix.js";
+export {
+  buildContextLedger,
+  type ContextBucket,
+  type ContextLargestBlock,
+  type ContextLedger,
+  type ContextLedgerCore,
+  type ContextPerTool,
+  contextLedgerPath,
+  contextLedgerSchema,
+  readContextLedger,
+  writeContextLedger,
+} from "./context-ledger.js";
 export { mapUpstreamError, PROXY_ERROR_HEADER } from "./errors.js";
 export {
   forwardableRequestHeaders,

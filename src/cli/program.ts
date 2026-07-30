@@ -1145,6 +1145,7 @@ program
   .option("--window <window>", "savings window: 24h | 7d | all", "24h")
   .option("--brevity", "report billed output tokens by brevity level (Decision 52)", false)
   .option("--cache", "report prompt-cache hit rate and what broke the prefix (R8.1)", false)
+  .option("--context", "report what the last request's context window is made of (R8.4)", false)
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
@@ -1153,6 +1154,7 @@ program
       window: string;
       brevity: boolean;
       cache: boolean;
+      context: boolean;
       json: boolean;
     }) => {
       try {
@@ -1174,6 +1176,20 @@ program
             return;
           }
           process.stdout.write(renderBrevityReport(rows));
+          return;
+        }
+        // R8.4 — the context ledger: a snapshot of the LAST request, not a
+        // window, so it is neither a savings figure nor aggregatable. Its own
+        // report for the same reason as the two above.
+        if (opts.context) {
+          const [{ readContextLedger }, { renderContextLedger }] = await Promise.all([
+            import("../proxy/index.js"),
+            import("./context.js"),
+          ]);
+          const ledger = await readContextLedger(opts.dir);
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(ledger, null, 2)}\n` : renderContextLedger(ledger),
+          );
           return;
         }
         // R8.1 — the cache rollup, likewise its own report: it mixes an

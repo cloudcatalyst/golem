@@ -3828,3 +3828,115 @@ shipping the rollup is that anyone can now measure their own.
 recorded" over 14,776 pipeline events, correctly — the running proxy predated the
 build. That is the disclosure working as designed rather than a bug: an
 unobserved request is reported as unobserved, never as a hit.
+
+## §94 — R8.2 was already built in 2026 (A2 / Decision 18); the memo proposed existing work (2026-07-30)
+
+Checked the code before building R8.2 ("suffix-only tool-result dedup"), which the
+R8 memo had described as novel and ranked as its highest-confidence lever. It is
+not novel. `src/compression/native-lossless.ts` has shipped it since task A2:
+
+> "exact repeats of large content within one conversation are replaced by CCR
+> reference markers; **the first occurrence is always kept in place**"
+
+and it achieves the cache-safety property the memo claimed as the new idea — not
+by special-casing the suffix, but by **purity**: the transform of `messages[i]`
+depends only on the original bytes of `messages[0..i]`, the dedup seen-set is
+rebuilt from the input on every call, and the marker text is a pure function of
+(refId, tokenEstimate). Extending a conversation therefore *cannot* change the
+compressed form of earlier messages, from any process. That is a stronger
+guarantee than "only rewrite the newest block", and it was designed for exactly
+the reason the memo re-derived (§14 prefix byte-stability).
+
+**Measured on this repo's real traffic** (`golem stats --window all`, 14,791
+requests):
+
+| stage | before | after | saved |
+|---|--:|--:|--:|
+| dedup | 4,763,725 | 314,022 | **4,449,703** |
+
+A 93% reduction on the content it touches, with 4,878 CCR refs stored and **2**
+retrieved — i.e. the elision marker is almost never insufficient, which is the
+same signal R2.1 recorded (0 misses in 1,051 swaps) and further evidence the
+technique is safe.
+
+**Correction to the memo.** R8.2 is struck as a build task. The lesson is the
+repo's own standing rule, which the memo skipped: check the KB and the code before
+proposing. Writing the proposal from the *shape* of the external projects (Aider,
+RTK) rather than from this codebase produced a confident recommendation to build
+something that already existed and was already measured.
+
+**What is genuinely NOT covered**, for anyone tempted to reopen this:
+
+- **Near-identical** content (the same file re-read with one line changed) is not
+  deduped — only byte-exact repeats above `DEFAULT_MIN_DEDUP_CHARS` (256). A
+  fuzzy matcher would be lossy and would break the purity guarantee above, so it
+  is not a small change.
+- **Large content that appears only once** is untouched by definition. Given §93
+  (~83% of input cost is re-reading an already-cached context), *this* is the real
+  remaining target — which is R8.5's repo map and oversized-`Read` swap, not dedup.
+- `DEFAULT_MIN_DEDUP_CHARS = 256` looks right rather than tuned: the marker itself
+  is ~150 chars, so below ~256 the swap stops paying. Changing it invalidates live
+  cache prefixes (the file says so), so it needs a measurement, not a guess.
+
+## §95 — First real context ledger: tool definitions are 18.8k tokens, and Bash output is the biggest tool (2026-07-30)
+
+R8.4's first capture, taken from the live proxy during the session that built it
+(550 messages, ~312k tokens in the request). Every number below is re-sent and
+re-read on **every subsequent turn** of that conversation, which is what §93
+established as ~83% of input cost.
+
+| bucket | tokens | share |
+|---|--:|--:|
+| assistant text + tool calls | 102,868 | 33.5% |
+| tool results | 95,463 | 31.1% |
+| thinking blocks | 54,074 | 17.6% |
+| user text | 32,199 | 10.5% |
+| **tool definitions** | **18,827** | 6.1% |
+| system prompt | 3,365 | 1.1% |
+
+Tool results by producing tool:
+
+| tool | tokens | results |
+|---|--:|--:|
+| **Bash** | **36,968** | 132 |
+| Read | 27,056 | 18 |
+| WebFetch | 17,015 | 10 |
+| `mcp__golem__expand` | 6,356 | **1** |
+| Edit | 4,836 | 68 |
+| Write | 1,615 | 26 |
+| others (search/TodoWrite/ToolSearch/snooze) | <1,700 | 12 |
+
+**Three findings that change priorities.**
+
+1. **The `tools` block is ~5× bigger than §88 measured — 18,827 tokens, and the
+   single largest individual block in the request.** §88 measured *Golem's own 11
+   MCP tool descriptions* at ~902 tokens (~3,847 with schemas); a real session adds
+   Claude Code's built-ins plus every other MCP server, and the total is 18.8k
+   re-read every turn. That materially strengthens **R8.S1 (tool-schema
+   shrinking)**, which §89 had already identified as the remaining headroom, and it
+   raises the ceiling from "~3.8k" to "~18.8k". It does *not* revive the rejected
+   prose shrinker — the accuracy verdict there stands (§89) — but it justifies
+   re-running `golem bench tools` against schemas specifically.
+
+2. **Bash output is the biggest single tool consumer: 36,968 tokens across 132
+   results.** This is precisely what RTK compacts (§90), and it is the first
+   quantified case for the tier-3a recommendation: ~37k tokens of shell output,
+   re-read every turn, on one session. It also confirms **R8.3's descoping was
+   right** — do not rebuild Bash filters, install the tool that has 100+ of them.
+
+3. **One `expand` call cost 6,356 tokens** — the fourth-largest tool consumer, from
+   a single result. The `golem-ccr-refs` guidance rule already warns that expanding
+   "costs the tokens the swap saved"; this is the measured version, and it argues
+   for the rule being stated as strongly as it is.
+
+**Also notable, not yet actionable:** thinking blocks are 54,074 tokens (17.6%) —
+a bucket nothing in Golem currently touches, and one that cannot be touched at
+levels ≤1 (proxy fidelity: thinking blocks pass through byte-faithful). Worth
+knowing before anyone proposes a "just drop old thinking" transform: it would be a
+fidelity-rule change, not a tuning knob.
+
+**Caveats.** One capture, one conversation, this repo, an unusually tool-heavy
+session (it installed MCP servers and ran a 1,800-test suite repeatedly). The
+buckets are estimates from `estimateTokens`, not a tokenizer. The ledger is
+latest-only by design, so this is a snapshot rather than a distribution — anyone
+wanting a distribution should sample `golem stats --context --json` over time.

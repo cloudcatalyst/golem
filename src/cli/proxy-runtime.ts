@@ -42,6 +42,7 @@ import type { UpstreamTranslator } from "../proxy/index.js";
 import {
   GolemProxy,
   parseLimitPrediction,
+  writeContextLedger,
   writeLimitState,
   writeServedModel,
 } from "../proxy/index.js";
@@ -224,6 +225,12 @@ export function buildProxyFromSettings(
     onEvent: (event) => {
       const nowIso = new Date().toISOString();
       void recordPipelineEvent(telemetry, event, nowIso).catch(() => {});
+      // R8.4 — latest-only context ledger. Best-effort and fire-and-forget, the
+      // same contract as the limit-prediction state write: an observability file
+      // must never be able to affect a request.
+      if (event.contextLedger !== undefined) {
+        void writeContextLedger(dir, event.contextLedger, nowIso).catch(() => {});
+      }
       if (event.avoidedUpstreamInputTokens > 0 || event.avoidedUpstreamOutputTokens > 0) {
         void recordAvoidedUpstream(
           telemetry,

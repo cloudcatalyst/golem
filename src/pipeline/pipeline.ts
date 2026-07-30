@@ -39,6 +39,7 @@ import {
   CachePrefixObserver,
   type CachePrefixVerdict,
 } from "../proxy/cache-prefix.js";
+import { buildContextLedger, type ContextLedgerCore } from "../proxy/context-ledger.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
 import { applyBrevity } from "./brevity.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
@@ -125,6 +126,15 @@ export interface PipelineEvent {
   readonly cachePrefix?: CachePrefixVerdict;
   /** R8.1: which component broke the prefix. Set only when `cachePrefix === "bust"`. */
   readonly cacheBustComponent?: CacheBustComponent;
+  /**
+   * R8.4: token attribution for the outgoing request — which buckets, which
+   * biggest blocks, which tools produced the `tool_result` bulk. Carried on the
+   * event so the CLI layer owns the (latest-only) file write, keeping file I/O out
+   * of the pipeline. Never persisted per-request into telemetry: only the most
+   * recent ledger is useful, and the per-request history is already covered by the
+   * savings and usage events.
+   */
+  readonly contextLedger?: ContextLedgerCore;
 }
 
 export interface GolemPipelineOptions {
@@ -458,6 +468,10 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       // Never allowed to affect the request: pure, and the observer cannot throw.
       const cacheObservation = cacheObserver.observe(body);
 
+      // R8.4 — attribute the outgoing request's tokens. Pure and content-free;
+      // the CLI layer decides whether to persist it.
+      const contextLedger = buildContextLedger(body);
+
       if (!changed) {
         // Nothing to do — preserve original bytes exactly.
         return request;
@@ -485,6 +499,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         brevity: brevityDirectiveTokens > 0 ? policy.brevity : "off",
         brevityDirectiveTokens,
         cachePrefix: cacheObservation.verdict,
+        contextLedger,
         ...(cacheObservation.component !== undefined && {
           cacheBustComponent: cacheObservation.component,
         }),
