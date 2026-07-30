@@ -4176,3 +4176,110 @@ and it deserves the data now in hand:
 the billed section as the answer.** The renderer already labels verdicts a
 prediction and names the heuristic; that wording is now load-bearing rather than
 cautious boilerplate.
+
+## §100 — R8.S1 answered: 93.9% of the tools block is not Golem's, and the "schemas are the headroom" finding was an artifact (2026-07-30)
+
+R8.S1 (tool-schema shrinking) was the roadmap's "next by evidence", promoted twice:
+§89 closed with "the target is the input schemas (~2900 tokens)" and §95 raised the
+ceiling from ~3.8k to **18,827 tokens** by measuring a real request. Both numbers
+were right about their own subject and wrong about the conclusion drawn from them.
+The ledger now decomposes the `tools` block per definition, and the first capture
+ends the workstream.
+
+### The measurement
+
+`golem stats --context`, live capture on this repo, 188 messages, ~139,327 tokens:
+
+| owner | tokens | share | tools |
+|---|--:|--:|--:|
+| **client built-ins** | **17,473** | **93.9%** | 18 |
+| **Golem MCP tools** | **1,130** | **6.1%** | 6 |
+
+Within the block: **descriptions ~12,146 · input schemas ~5,947 · everything else
+~510**.
+
+Biggest single definitions, all of them the client's:
+
+| tool | tokens | desc | schema |
+|---|--:|--:|--:|
+| `Workflow` | 5,264 | 4,753 | 444 |
+| `Artifact` | 2,621 | 1,591 | 1,001 |
+| `PowerShell` | 2,141 | 1,929 | 172 |
+| `AskUserQuestion` | 1,225 | 447 | 756 |
+| `ScheduleWakeup` | 953 | 672 | 261 |
+
+### Four findings
+
+1. **Golem's own tool definitions are 1,130 tokens — 6.1% of the block and 0.8% of
+   the request.** That is the entire budget R8.S1 could ever have worked with. The
+   18.8k of §95 was a *ceiling*, and a ceiling is not a lever: 93.9% of it belongs
+   to Claude Code, and rewriting a client's own tool definitions from the proxy
+   would be a fidelity change, not a dial. One built-in (`Workflow`, 5,264 tokens)
+   is **4.7× Golem's entire contribution**.
+2. **§89's "the schemas are the real headroom (~2900 of ~3847)" was an artifact of
+   measuring the wrong surface.** It subtracted descriptions from the *`listTools`*
+   definition total and attributed the remainder to input schemas. Golem's actual
+   input schemas are **~1,128 tokens**; the missing ~1,800 is `outputSchema`
+   (~1,522), plus `title`/`annotations`/`execution`/`_meta`. On the real wire,
+   `other keys` averages **~21 tokens per tool** — just `name` and `type` — so
+   **Claude Code forwards none of that MCP metadata to the API.** It costs nothing
+   and there was never anything to reclaim there. On the wire, prose outweighs
+   schemas **2:1** (12,146 vs 5,947), inverting the §89 conclusion entirely.
+3. **The three schema transforms measured, and the honest verdict is REJECTED — but
+   for a new reason.** `golem bench tools` was extended to render schemas to the
+   chooser (a schema transform scored against a description-only prompt shows a zero
+   delta *by construction*) and to score **argument construction** against the
+   ORIGINAL schemas — the failure mode a selection gate structurally cannot see.
+   Chooser `qwen2.5-coder:7b`, temperature 0, `--role drafter` (the tier's
+   `classifier` model is still not pulled — the same gap §89 flagged, unchanged):
+
+   | transform | schema tokens | selection acc | args valid | fields correct |
+   |---|--:|--:|--:|--:|
+   | `schema-meta` (drop `$schema`) | 1128 → 998 (−130) | 92.0% → 88.5% | 92.9% → 92.9% | 92.9% → 92.9% |
+   | `schema-validation` (+bounds, `additionalProperties`) | 1128 → 854 (−274) | 92.0% → 92.3% | 92.9% → 92.9% | 92.9% → 92.9% |
+   | `schema-descriptions` (+every property description) | 1128 → **357 (−771, 68%)** | 92.0% → 92.3% | 92.9% → 92.9% | 92.9% → 92.9% |
+
+   **Read the argument columns as an instrument failure, not a clean pass.** They
+   are byte-identical in every mode, and the single failing case is the same one in
+   both arms: `arg-search-2` passes `k: 100` when `maximum: 50` is **present in the
+   schema it was shown**. A 7B coder model at temperature 0 is answering from the
+   prompt text and the tool name, not from schema annotations — so removing all of
+   them changes nothing it does. That makes "no delta" evidence about the chooser,
+   not about the transform. The production reader is Claude, and §89's caveat
+   applies with more force here: a null result from this harness is weak evidence of
+   safety, never proof.
+4. **Claude Code's deferral appears to be client-side and genuinely shrinks the
+   wire — which the API docs' description does not cover.** The forwarded array has
+   24 entries, 8 flagged `defer_loading: true`, and includes an entry literally
+   named **`DeferredToolPlaceholder` (51 tokens)** alongside a client tool
+   `ToolSearch` (360 tokens). There is **no** `tool_search_tool_regex_20251119` /
+   `_bm25_20251119` server-tool entry. Of Golem's 11 tools only **6** are present,
+   and they are the 6 this session had already used. §89(1) recorded, correctly from
+   the docs, that the *API feature* still transmits every deferred definition;
+   Claude Code's own MCP deferral evidently does not — it sends a placeholder plus
+   the definitions discovered so far. **Stated as an observation, not a documented
+   contract:** it is undocumented, it is the client's internal behaviour, and it
+   could change. But it means an unused Golem tool costs approximately nothing, and
+   the 1,130 is the bill for tools actually in play.
+
+### Consequence
+
+**R8.S1 is closed as REJECTED, and the whole tools-block line of work is
+de-prioritised.** Even the one transform that is provably invisible to the model —
+`schema-meta`, which drops a JSON-Schema dialect URI — is worth **~72 tokens on the
+wire** across Golem's 6 forwarded tools: 0.05% of this request, in exchange for
+mutating a cached prefix. That is not a trade worth making, and saying so with a
+number is the deliverable.
+
+What ships instead is the instrument: the ledger's per-definition decomposition
+(owner, description/schema/other split, deferred count), so nobody promotes this
+workstream a third time on an aggregate. The two gates built here
+(`--render full`, `ARGUMENT_CASES` + `validateAgainstSchema`) stay in the tree —
+they are the right shape for judging *any* future schema change, and they carry the
+recorded caveat that the local chooser cannot currently exercise them.
+
+**Standing gap, now twice-observed.** The tier-2 `classifier` model
+(`qwen2.5:7b`) has never been pulled on this machine, so both §89 and this run used
+`--role drafter`. `golem devices` lists the tier's *catalog*, not what Ollama has
+downloaded — the same class of gap as the 2026-07-17 judge bug. Worth a real check
+rather than a third caveat.

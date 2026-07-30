@@ -1304,7 +1304,9 @@ benchCmd
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option(
     "--shrink <mode>",
-    "score a candidate transform: whitespace | first-sentence (omit for census only)",
+    "score a candidate transform: whitespace | first-sentence (descriptions) | " +
+      "schema-meta | schema-validation | schema-descriptions (input schemas) — " +
+      "omit for census only",
   )
   .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
   .option(
@@ -1328,8 +1330,10 @@ benchCmd
           renderToolBench,
           SHRINK_MODES,
           shrinkCatalog,
+          isSchemaMode,
           compareCatalogs,
           SELECTION_CASES,
+          ARGUMENT_CASES,
         } = await import("../tools/index.js");
         const census = await golemToolCensus();
         if (opts.shrink === undefined) {
@@ -1363,6 +1367,10 @@ benchCmd
         if (!roles.includes(role)) {
           throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
         }
+        // A schema transform is invisible to a description-only chooser, and its
+        // real hazard is argument construction rather than selection — so the two
+        // gates are switched on together, never separately (R8.S1).
+        const schemaMode = isSchemaMode(mode);
         const result = await compareCatalogs({
           inference,
           baseline: census.tools,
@@ -1370,6 +1378,13 @@ benchCmd
           cases: SELECTION_CASES,
           repeats,
           role,
+          ...(schemaMode
+            ? {
+                render: "full" as const,
+                measuring: "schemas" as const,
+                argumentCases: ARGUMENT_CASES,
+              }
+            : {}),
         });
         const report = {
           census,

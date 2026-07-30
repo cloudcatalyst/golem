@@ -14,6 +14,7 @@ import {
   buildContextLedger,
   contextLedgerPath,
   readContextLedger,
+  toolOrigin,
   writeContextLedger,
 } from "../../../src/proxy/context-ledger.js";
 import { rmTemp } from "../../helpers/tmp.js";
@@ -199,6 +200,136 @@ describe("buildContextLedger", () => {
   });
 });
 
+/**
+ * R8.S1 — the `tools` block decomposition.
+ *
+ * The load-bearing behaviour here is *ownership*: §95's 18.8k aggregate promoted a
+ * shrinker without saying whose tokens they were, and a shrinker aimed at the
+ * client's built-ins is a fidelity change rather than a dial. So the origin split
+ * and the description/schema split are what these tests pin down.
+ */
+describe("toolOrigin", () => {
+  it("reads ownership off Claude Code's MCP namespacing", () => {
+    expect(toolOrigin("mcp__golem__search")).toBe("golem");
+    expect(toolOrigin("mcp__context7__query-docs")).toBe("mcp");
+    expect(toolOrigin("Read")).toBe("builtin");
+    // A server tool is not Golem's either, and must not be mistaken for one.
+    expect(toolOrigin("tool_search_tool_bm25_20251119")).toBe("builtin");
+  });
+
+  it("does not treat a lookalike name as Golem's", () => {
+    expect(toolOrigin("mcp__golemish__thing")).toBe("mcp");
+    expect(toolOrigin("golem_search")).toBe("builtin");
+  });
+});
+
+describe("buildContextLedger — tools block", () => {
+  const body = {
+    tools: [
+      {
+        name: "mcp__golem__search",
+        description: "d".repeat(400),
+        input_schema: { type: "object", properties: { query: { type: "string" } } },
+      },
+      { name: "Read", description: "r".repeat(800), input_schema: { type: "object" } },
+      {
+        name: "mcp__context7__query-docs",
+        description: "q".repeat(200),
+        input_schema: { type: "object" },
+        defer_loading: true,
+      },
+    ],
+    messages: [],
+  };
+
+  it("splits the block by origin", () => {
+    const block = buildContextLedger(body).toolsBlock;
+    expect(block).toBeDefined();
+    expect(block?.count).toBe(3);
+    const origins = Object.fromEntries((block?.byOrigin ?? []).map((r) => [r.origin, r]));
+    expect(origins.golem?.count).toBe(1);
+    expect(origins.mcp?.count).toBe(1);
+    expect(origins.builtin?.count).toBe(1);
+    // `Read` has the longest description, so the client owns the most tokens here.
+    expect(origins.builtin?.tokens).toBeGreaterThan(origins.golem?.tokens ?? 0);
+  });
+
+  it("splits each definition into description, schema, and other", () => {
+    const block = buildContextLedger(body).toolsBlock;
+    const read = block?.tools.find((t) => t.name === "Read");
+    expect(read?.descriptionTokens).toBeGreaterThan(0);
+    expect(read?.schemaTokens).toBeGreaterThan(0);
+    // The parts are estimated independently of the whole, so the remainder must
+    // never go negative — that would make the split look free.
+    for (const tool of block?.tools ?? []) {
+      expect(tool.otherTokens).toBeGreaterThanOrEqual(0);
+      expect(tool.descriptionTokens + tool.schemaTokens).toBeLessThanOrEqual(tool.tokens);
+    }
+    expect(block?.descriptionTokens).toBe(
+      (block?.tools ?? []).reduce((n, t) => n + t.descriptionTokens, 0),
+    );
+  });
+
+  it("counts deferred definitions", () => {
+    const block = buildContextLedger(body).toolsBlock;
+    expect(block?.deferred).toBe(1);
+    expect(block?.tools.find((t) => t.name === "mcp__context7__query-docs")?.deferred).toBe(true);
+    expect(block?.tools.find((t) => t.name === "Read")?.deferred).toBe(false);
+  });
+
+  it("accepts the MCP `inputSchema` spelling as well as the wire `input_schema`", () => {
+    const block = buildContextLedger({
+      tools: [
+        { name: "x", inputSchema: { type: "object", properties: { a: { type: "string" } } } },
+      ],
+      messages: [],
+    }).toolsBlock;
+    expect(block?.tools[0]?.schemaTokens).toBeGreaterThan(0);
+  });
+
+  it("sorts definitions largest first", () => {
+    const block = buildContextLedger(body).toolsBlock;
+    const tokens = (block?.tools ?? []).map((t) => t.tokens);
+    expect([...tokens].sort((a, b) => b - a)).toEqual(tokens);
+  });
+
+  it("agrees with the `tools` bucket", () => {
+    const ledger = buildContextLedger(body);
+    expect(ledger.toolsBlock?.tokens).toBe(ledger.buckets.tools);
+  });
+
+  it("records absence rather than a row of zeros", () => {
+    expect(buildContextLedger({ messages: [] }).toolsBlock).toBeUndefined();
+    expect(buildContextLedger({ tools: [], messages: [] }).toolsBlock).toBeUndefined();
+    expect(buildContextLedger({ tools: "nope", messages: [] }).toolsBlock).toBeUndefined();
+  });
+
+  it("counts an unrecognised definition instead of dropping it", () => {
+    const block = buildContextLedger({ tools: ["not-an-object"], messages: [] }).toolsBlock;
+    expect(block?.count).toBe(1);
+    expect(block?.tools[0]?.name).toBe("(unrecognised)");
+    expect(block?.otherTokens).toBeGreaterThan(0);
+  });
+
+  it("stores tool names but no description or schema content", () => {
+    const json = JSON.stringify(
+      buildContextLedger({
+        tools: [
+          {
+            name: "mcp__golem__search",
+            description: "SECRET-DESC",
+            input_schema: { properties: { SECRET_PROP: { type: "string" } } },
+          },
+        ],
+        messages: [],
+      }),
+    );
+    expect(json).toContain("mcp__golem__search");
+    expect(json).not.toContain("SECRET-DESC");
+    expect(json).not.toContain("SECRET_PROP");
+  });
+});
+
 describe("context ledger persistence", () => {
   let dir: string;
 
@@ -228,6 +359,45 @@ describe("context ledger persistence", () => {
     await writeContextLedger(dir, buildContextLedger({ messages: [] }), "2026-07-30T12:00:00.000Z");
     await writeFile(file, "{ not json", "utf8");
     expect(await readContextLedger(dir)).toBeNull();
+  });
+
+  it("still reads a ledger written before the tools block existed", async () => {
+    // `toolsBlock` is optional precisely so an added field cannot discard a whole
+    // ledger through the schema-drift null path.
+    const file = contextLedgerPath(dir);
+    await writeContextLedger(dir, buildContextLedger({ messages: [] }), "t");
+    const legacy = {
+      totalTokens: 10,
+      messages: 1,
+      buckets: {
+        tools: 0,
+        system: 0,
+        userText: 10,
+        assistantText: 0,
+        thinking: 0,
+        toolResult: 0,
+        image: 0,
+        other: 0,
+      },
+      largest: [],
+      perTool: [],
+      capturedAt: "2026-07-29T00:00:00.000Z",
+    };
+    await writeFile(file, JSON.stringify(legacy), "utf8");
+    const read = await readContextLedger(dir);
+    expect(read?.capturedAt).toBe("2026-07-29T00:00:00.000Z");
+    expect(read?.toolsBlock).toBeUndefined();
+  });
+
+  it("round-trips the tools block", async () => {
+    const core = buildContextLedger({
+      tools: [{ name: "mcp__golem__search", description: "d", input_schema: { type: "object" } }],
+      messages: [],
+    });
+    await writeContextLedger(dir, core, "2026-07-30T12:00:00.000Z");
+    const read = await readContextLedger(dir);
+    expect(read?.toolsBlock?.count).toBe(1);
+    expect(read?.toolsBlock?.tools[0]?.origin).toBe("golem");
   });
 
   it("returns null when the file does not match the schema", async () => {

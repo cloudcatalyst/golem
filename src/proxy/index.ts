@@ -19,9 +19,14 @@ export {
   type ContextLedger,
   type ContextLedgerCore,
   type ContextPerTool,
+  type ContextToolDef,
+  type ContextToolsBlock,
   contextLedgerPath,
   contextLedgerSchema,
   readContextLedger,
+  TOOL_ORIGINS,
+  type ToolOrigin,
+  toolOrigin,
   writeContextLedger,
 } from "./context-ledger.js";
 export { mapUpstreamError, PROXY_ERROR_HEADER } from "./errors.js";

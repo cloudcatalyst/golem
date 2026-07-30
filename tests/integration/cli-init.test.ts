@@ -160,7 +160,6 @@ describe("golem init", () => {
     // own Golem MCP rules alongside it.
     expect(settings.permissions).toStrictEqual({
       allow: ["Bash(ls:*)", "mcp__golem__*"],
-      ask: ["mcp__golem__wiki_upsert"],
     });
     expect((settings.env as Record<string, unknown>).FOO).toBe("bar");
     const mcp = await readJson(".mcp.json");
@@ -170,19 +169,45 @@ describe("golem init", () => {
     });
   });
 
-  it("pre-approves Golem's MCP tools (all but wiki_upsert), and uninit removes them", async () => {
+  it("pre-approves every Golem MCP tool including wiki_upsert, and uninit removes them", async () => {
     await golemInit({ projectDir, probe: okProbe });
     const settings = await readJson(".claude/settings.json");
     const perms = settings.permissions as { allow?: string[]; ask?: string[] };
-    // All Golem tools auto-approved via the anchored wildcard rule; wiki_upsert kept on ask.
+    // All Golem tools auto-approved via the anchored wildcard rule. wiki_upsert is
+    // NOT held on `ask` (USER decision 2026-07-30): Decision 44 un-gated wiki
+    // authoring because git makes every write reviewable, and an `ask` rule prompts
+    // even when an `allow` rule also matches (deny → ask → allow precedence), so
+    // leaving one here would have silently kept the gate.
     expect(perms.allow).toContain("mcp__golem__*");
-    expect(perms.ask).toContain("mcp__golem__wiki_upsert");
+    expect(perms.ask).toBeUndefined();
 
     await golemUninit({ projectDir, probe: okProbe });
     const after = await readJson(".claude/settings.json");
     // The rules are gone; on a project init created (no other permission rules),
     // the now-empty permissions object is cleaned up entirely.
     expect(after.permissions).toBeUndefined();
+  });
+
+  it("removes a legacy wiki_upsert ask rule left by an older init", async () => {
+    // A project initialized before 2026-07-30 carries the `ask` entry. Re-running
+    // init must drop it, or the gate survives the change that removed it.
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify({
+        permissions: { allow: ["mcp__golem__*"], ask: ["mcp__golem__wiki_upsert", "Bash(rm:*)"] },
+      }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+
+    const perms = (await readJson(".claude/settings.json")).permissions as {
+      allow?: string[];
+      ask?: string[];
+    };
+    expect(perms.ask).toStrictEqual(["Bash(rm:*)"]);
+    expect(perms.allow).toContain("mcp__golem__*");
   });
 
   it("dry-run reports actions but writes nothing", async () => {

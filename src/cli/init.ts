@@ -172,15 +172,29 @@ const MCP_SERVER_KEY = "golem";
  * prompting on first use and had to be added one-by-one via "always allow"
  * (`delegate`, then the new `snooze`). The `__*` is anchored to the server —
  * only fully-unanchored globs like `mcp__*` are skipped as allow rules — so it
- * is valid and covers every current and future golem tool at once. `wiki_upsert`
- * is held on `ask` (it writes committed wiki files; an `ask` rule prompts even
- * when an `allow` rule also matches — deny → ask → allow precedence). Note:
- * these rules are read at Claude Code session start (and activate only after the
- * one-time workspace-trust accept), so a running session must be restarted to
+ * is valid and covers every current and future golem tool at once — including
+ * `wiki_upsert`.
+ *
+ * **`wiki_upsert` is no longer held on `ask` (USER decision 2026-07-30).** It used
+ * to be, on the grounds that it writes committed wiki files. That was the pre-
+ * Decision-44 posture and it outlived the decision: Decision 44 un-gated wiki
+ * authoring precisely because every write lands in git — reviewable and revertible
+ * — so a per-write prompt bought nothing and taught people to click through
+ * prompts. Every living surface already says "author wiki pages freely"; this rule
+ * was the last place still disagreeing, and a fresh `golem init` now matches. ADRs
+ * are unaffected: they live at `docs/decisions/`, outside the wiki, and keep the
+ * stricter human-driven rule.
+ *
+ * `uninit` still knows about the old `ask` entry so it cleans up projects
+ * initialized before this change.
+ *
+ * Note: these rules are read at Claude Code session start (and activate only after
+ * the one-time workspace-trust accept), so a running session must be restarted to
  * pick up a newly-added rule — mid-session edits/`always allow` don't apply live.
  */
 const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
-const MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
+/** Legacy `ask` entry, removed by `uninit` but never written by `init`. */
+const LEGACY_MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /**
  * Per-server wall-clock cap (ms) for the golem MCP server in `.mcp.json`. Sized
  * above `snooze`'s own 6h cap (src/mcp/snooze.ts) so a full park completes
@@ -539,26 +553,45 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   }
 
   // 1c. .claude/settings.json — pre-approve Golem's own MCP tools so they don't
-  // prompt on first use (all except wiki_upsert, which writes committed files).
+  // prompt on first use. All of them, wiki_upsert included (Decision 44 / USER
+  // 2026-07-30): wiki writes are un-gated because git makes them reviewable.
   {
     const permissions = objectEntry(settings, "permissions");
     const allow = stringArrayEntry(permissions, "allow");
-    const ask = stringArrayEntry(permissions, "ask");
     let permsChanged = false;
+    let allowAdded = false;
     if (!allow.includes(MCP_ALLOW_RULE)) {
       allow.push(MCP_ALLOW_RULE);
+      allowAdded = true;
       permsChanged = true;
     }
-    if (!ask.includes(MCP_ASK_RULE)) {
-      ask.push(MCP_ASK_RULE);
-      permsChanged = true;
+    // Drop the legacy wiki_upsert `ask` rule if an earlier init left one: an `ask`
+    // entry prompts even when an `allow` rule also matches (deny → ask → allow
+    // precedence), so leaving it would silently keep the gate this change removes.
+    // Read in place rather than through `stringArrayEntry` — that would *create* an
+    // empty `ask: []`, which is footprint init no longer has any reason to add.
+    const existingAsk = permissions.ask;
+    let legacyRemoved = false;
+    if (Array.isArray(existingAsk)) {
+      const index = existingAsk.indexOf(LEGACY_MCP_ASK_RULE);
+      if (index >= 0) {
+        existingAsk.splice(index, 1);
+        if (existingAsk.length === 0) delete permissions.ask;
+        legacyRemoved = true;
+        permsChanged = true;
+      }
     }
     actions.push(
       permsChanged
         ? {
             kind: settingsExisted ? "modify" : "create",
             path: rel(projectDir, settingsPath),
-            detail: `permissions.allow += ${MCP_ALLOW_RULE}, permissions.ask += ${MCP_ASK_RULE}`,
+            // Report only what actually moved: on an already-configured project the
+            // only change is dropping the legacy `ask` entry.
+            detail: [
+              ...(allowAdded ? [`permissions.allow += ${MCP_ALLOW_RULE}`] : []),
+              ...(legacyRemoved ? [`permissions.ask -= ${LEGACY_MCP_ASK_RULE}`] : []),
+            ].join(", "),
           }
         : {
             kind: "skip",
@@ -939,14 +972,16 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     }
   }
 
-  // 1b. Remove only the MCP permission rules init added (exact rules only).
+  // 1b. Remove only the MCP permission rules init added (exact rules only). The
+  // `ask` rule is legacy — init no longer writes it — but a project initialized
+  // before 2026-07-30 still has one, so uninit must still clean it up.
   const perms = settings?.permissions;
   if (settings && typeof perms === "object" && perms !== null && !Array.isArray(perms)) {
     const permsObj = perms as JsonObject;
     let changed = false;
     for (const [key, rule] of [
       ["allow", MCP_ALLOW_RULE],
-      ["ask", MCP_ASK_RULE],
+      ["ask", LEGACY_MCP_ASK_RULE],
     ] as const) {
       const arr = permsObj[key];
       if (Array.isArray(arr)) {

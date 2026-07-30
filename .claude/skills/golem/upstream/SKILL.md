@@ -19,6 +19,6 @@ through Golem:
 3. **Reconnect MCP.** Tell the user any live `golem mcp serve` connection must
    be reconnected by Claude Code for the change to reflect in the MCP tools.
 4. **Confirm.** Report the now-active account and its upstream URL. If a provider
-   has no stored credential, say so and give the fix (`golem account login <id>`)
-   rather than leaving auth silently broken — there is no environment variable to
-   export (spec Decision 47).
+   has no stored credential, say so and give the fix
+   (`golem account login <id>`) rather than leaving auth silently broken —
+   there is no environment variable to export (spec Decision 47).
