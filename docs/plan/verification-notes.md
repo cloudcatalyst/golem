@@ -3940,3 +3940,59 @@ session (it installed MCP servers and ran a 1,800-test suite repeatedly). The
 buckets are estimates from `estimateTokens`, not a tokenizer. The ledger is
 latest-only by design, so this is a snapshot rather than a distribution — anyone
 wanting a distribution should sample `golem stats --context --json` over time.
+
+## §96 — Installing RTK silently degraded Golem's autonomy gate (found and fixed) (2026-07-30)
+
+R8.12's real finding, and not the one §91 predicted. §91 flagged the *undocumented*
+question — precedence between a rewriting hook and a denying one — which remains
+open because it is Claude Code's behaviour, not Golem's. Looking for what Golem's
+half could get wrong turned up something concrete and testable instead.
+
+**The asymmetry.** `src/autonomy/classify.ts` anchors its two danger lists on word
+boundaries (`/\bgit\s+push\b/i`, `/\brm\s+-[a-z]*[rf]/i`) but anchors its
+safe-list on the **start of the string** (`/^(npx\s+)?(tsc|vitest|biome)(\s|$)/`).
+RTK rewrites `vitest` into `rtk vitest`. So:
+
+| command | before | after |
+|---|---|---|
+| `rtk git push` | `outward` ✅ | `outward` ✅ |
+| `rtk rm -rf build` | `destructive` ✅ | `destructive` ✅ |
+| `rtk vitest` | **`unknown`** → prompt | `read` → auto-approvable |
+
+**Nothing was unsafe** — the gate is fail-closed, so the failure mode was a prompt,
+not an approval. But it means a user who installs RTK finds previously
+auto-approved commands suddenly asking, with no indication why, and the natural
+response to that is to loosen the autonomy level. A safety mechanism that gets
+disabled out of irritation is a safety problem.
+
+**Fix.** `stripOutputWrapper` retries **only the safe-list** against the command
+with a known wrapper token removed. The danger checks still run first, on the
+original string, so unwrapping cannot downgrade a classification — it can only
+turn `unknown` into `read` for a command that would already be safe unwrapped.
+Deliberately shallow: one level, exact `rtk ` prefix (so `rtkfoo` is untouched),
+and RTK's own command-taking subcommands (`rtk proxy <cmd>`, `rtk err <cmd>`,
+`rtk test <cmd>`, `rtk summary <cmd>`) are left to fall through to `unknown`
+because unwrapping them yields a meaningless bare subcommand name. 13 tests,
+including the composition cases (`rtk vitest; rm -rf /` → `destructive`,
+`rtk vitest | tee out` → `unknown`).
+
+**Second fix in the same pass — don't destroy another compactor's escape hatch.**
+RTK tees full unfiltered output to a file and points at it inline
+(`[full output: ~/.local/share/rtk/tee/….log]`). Golem's PostToolUse swap replaces
+oversized output with a head/tail excerpt, which can drop that pointer into the
+elided middle — a compaction *of a compaction* losing the other tool's only route
+back. `buildDigest` now carries the pointer through in its own section when it
+would otherwise be lost, matched loosely (`[full output: …]`) because the wording
+belongs to another project. 4 tests.
+
+**Still open (unchanged):** §91's precedence question. Golem never emits
+`updatedInput`, so it cannot itself conflict; what happens when RTK's rewrite races
+Golem's `deny` is Claude Code's to define, and the docs do not. Anyone running both
+should treat it as unverified until `hooks-reference#pretooluse-decision-control`
+is read.
+
+**Generalisation worth keeping:** the bug class is "a peer rewrites the input your
+classifier reads". Any future tier-3a peer that mutates tool arguments needs the
+same audit — check whether every pattern that matters is anchored in a way that
+survives the rewrite. Start-anchored allow-lists are the fragile ones; the
+word-boundary deny-lists survived by luck, not design.

@@ -112,6 +112,19 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.12 — coexistence with an output-compacting peer (RTK)** (2026-07-30, §96):
+  the finding was not §91's predicted one. Golem's autonomy deny-lists are
+  word-boundary anchored so they saw through `rtk git push` (safe by luck), but the
+  **allow**-list was start-anchored, so `rtk vitest` fell through to `unknown` → a
+  prompt. Fail-closed, never unsafe — but a user whose auto-approvals start asking
+  loosens the autonomy level, and a safety mechanism disabled out of irritation is a
+  safety problem. Fixed by retrying **only the allow-list** against the unwrapped
+  command (danger checks run first, on the original, so unwrapping can never
+  downgrade). Second fix: `buildDigest` now preserves an external compactor's
+  `[full output: …]` recovery pointer instead of eliding it — a compaction of a
+  compaction must not destroy the other tool's way back. +17 tests. **§91 stays
+  open**: precedence between a rewriting hook and a denying one is Claude Code's to
+  define and the docs do not.
 - **R8.4 — the context ledger** (2026-07-30): `golem stats --context` attributes
   every token in the outgoing request to a bucket and resolves each `tool_result`
   back to the tool that produced it (`tool_use_id` → name), so context pruning is

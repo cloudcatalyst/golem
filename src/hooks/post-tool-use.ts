@@ -158,18 +158,43 @@ function tailExcerpt(text: string, max: number): string {
  * Contains A2's CCR marker (`hash=<64-hex>` — CCR_MARKER_RE) so the model can
  * expand it with the `expand` MCP tool / `/golem/expand`.
  */
+/**
+ * R8.12 — an external compactor's own recovery pointer, if the output carries one.
+ *
+ * RTK (spec Decision 53 tier-3a peer) tees the full unfiltered output to a file on
+ * failure and points at it inline: `[full output: ~/.local/share/rtk/tee/….log]`.
+ * If Golem then swaps that output for a head/tail excerpt, the pointer can land in
+ * the elided middle — so a compaction *of a compaction* silently destroys the other
+ * tool's way back to the original. Cheap to prevent: find the line and carry it.
+ *
+ * Matched loosely (any `[full output: …]` line) because the exact wording belongs
+ * to another project and may change; a false positive costs one preserved line.
+ */
+const EXTERNAL_RECOVERY_RE = /^.*\[full output:[^\]]+\].*$/m;
+
+function externalRecoveryPointer(text: string): string | null {
+  const match = EXTERNAL_RECOVERY_RE.exec(text);
+  return match === null ? null : match[0].trim();
+}
+
 export function buildDigest(toolName: string | undefined, text: string, refId: string): string {
   const bytes = Buffer.byteLength(text, "utf8");
   const lines = text.split("\n").length;
   const tokens = estimateTokens(text);
   const head = headExcerpt(text, DIGEST_HEAD_CHARS);
   const tail = tailExcerpt(text, DIGEST_TAIL_CHARS);
+  const external = externalRecoveryPointer(text);
+  const preserved =
+    external !== null && !head.includes(external) && !tail.includes(external)
+      ? `--- preserved pointer from an external compactor ---\n${external}\n`
+      : "";
   return (
     `[Golem: oversized ${toolName ?? "tool"} output (${bytes} bytes, ${lines} lines, ` +
     `~${tokens} tokens) swapped for a head/tail excerpt. The full original is stored ` +
     `losslessly. Retrieve original: hash=${refId}]\n` +
     `--- head ---\n${head}\n` +
     `--- tail ---\n${tail}\n` +
+    preserved +
     `--- end of excerpt: to see the full output, call the expand MCP tool with ` +
     `ref_id "${refId}" (or /golem/expand ${refId}) ---`
   );

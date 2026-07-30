@@ -109,15 +109,57 @@ function bashCommand(input: unknown): string | null {
   return null;
 }
 
+/**
+ * Output-compacting wrappers that rewrite a Bash command in front of Golem
+ * (R8.12, spec Decision 53 tier-3a peers — currently RTK, whose PreToolUse hook
+ * turns `git status` into `rtk git status`).
+ *
+ * Why this list exists: the danger patterns above are `\b`-anchored, so they
+ * already see straight through a wrapper (`rtk git push` matches
+ * `\bgit\s+push\b`) — but {@link SAFE_BASH} is `^`-anchored, so a wrapped *safe*
+ * command stopped matching and fell through to `unknown`. The gate is
+ * fail-closed, so nothing became less safe; it became **more annoying**, silently
+ * turning previously auto-approved commands into prompts the moment a user
+ * installed RTK. Only the safe-list check consults this, never the
+ * destructive/outward checks, so unwrapping can never downgrade a classification.
+ */
+const OUTPUT_WRAPPERS = ["rtk"];
+
+/**
+ * Strip one known wrapper token from the front of `cmd`, or return it unchanged.
+ *
+ * Deliberately shallow and deliberately not applied to RTK's own
+ * command-taking subcommands (`rtk proxy <cmd>`, `rtk err <cmd>`,
+ * `rtk test <cmd>`, `rtk summary <cmd>`): those run an arbitrary inner command,
+ * so unwrapping them to a bare subcommand name would be meaningless. They keep
+ * falling through to `unknown` and stay gated.
+ */
+function stripOutputWrapper(cmd: string): string {
+  for (const wrapper of OUTPUT_WRAPPERS) {
+    const prefix = `${wrapper} `;
+    if (cmd.toLowerCase().startsWith(prefix)) {
+      return cmd.slice(prefix.length).trimStart();
+    }
+  }
+  return cmd;
+}
+
 /** Classify a Bash command string. Escalate-only: outward/destructive win over safe. */
 export function classifyBash(command: string): ActionClass {
   const cmd = command.trim();
+  // Danger first, on the ORIGINAL string. These patterns are word-boundary
+  // anchored, so a wrapper prefix cannot hide `git push` or `rm -rf` from them.
   if (OUTWARD_BASH.some((re) => re.test(cmd))) return "outward";
   if (DESTRUCTIVE_BASH.some((re) => re.test(cmd))) return "destructive";
   // Composition (redirection, chaining, pipes, substitution) can hide a write
   // or a second command behind a safe leading token — never classify it read.
   if (SHELL_COMPOSITION_RE.test(cmd)) return "unknown";
   if (SAFE_BASH.some((re) => re.test(cmd))) return "read";
+  // R8.12: retry the safe-list against the unwrapped command, so an installed
+  // output compactor does not turn auto-approved reads into prompts. Safe-list
+  // only — the danger checks already ran on the original.
+  const unwrapped = stripOutputWrapper(cmd);
+  if (unwrapped !== cmd && SAFE_BASH.some((re) => re.test(unwrapped))) return "read";
   // A shell can do anything; an unrecognized command is gated, not assumed safe.
   return "unknown";
 }

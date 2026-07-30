@@ -18,6 +18,7 @@ import {
   NativeLosslessCompression,
 } from "../../../src/compression/index.js";
 import {
+  buildDigest,
   DEFAULT_MAX_INLINE_CHARS,
   type HookIo,
   identityRedact,
@@ -280,5 +281,54 @@ describe("runPostToolUseHook — CCR store shape", () => {
     expect(envelope.v).toBe(1);
     expect(envelope.contentType).toBe("text/plain");
     expect(envelope.content).toBe(big);
+  });
+});
+
+/**
+ * R8.12 — do not destroy another compactor's recovery pointer.
+ *
+ * RTK (spec Decision 53 tier-3a peer) tees full output to a file on failure and
+ * points at it inline. Golem swapping that output for a head/tail excerpt can drop
+ * the pointer into the elided middle, so a compaction-of-a-compaction would lose
+ * the other tool's only way back to the original.
+ */
+describe("buildDigest — external compactor interop (R8.12)", () => {
+  const teeLine = "[full output: ~/.local/share/rtk/tee/1707753600_cargo_test.log]";
+
+  /** Marker in the middle, far from both the head and the tail excerpt. */
+  function bigWith(marker: string): string {
+    return `${"a".repeat(6000)}
+${marker}
+${"b".repeat(6000)}`;
+  }
+
+  it("preserves an RTK tee pointer that would otherwise be elided", () => {
+    const digest = buildDigest("Bash", bigWith(teeLine), "f".repeat(64));
+    expect(digest).toContain(teeLine);
+    expect(digest).toContain("preserved pointer from an external compactor");
+  });
+
+  it("does not duplicate a pointer that already survives in the head", () => {
+    const digest = buildDigest(
+      "Bash",
+      `${teeLine}
+${"a".repeat(12000)}`,
+      "f".repeat(64),
+    );
+    expect(digest.split(teeLine).length - 1).toBe(1);
+    expect(digest).not.toContain("preserved pointer from an external compactor");
+  });
+
+  it("adds no section when there is no external pointer", () => {
+    expect(buildDigest("Bash", "x".repeat(12000), "f".repeat(64))).not.toContain(
+      "preserved pointer",
+    );
+  });
+
+  it("keeps Golem's own CCR marker alongside the preserved pointer", () => {
+    const refId = "e".repeat(64);
+    const digest = buildDigest("Bash", bigWith(teeLine), refId);
+    expect(digest).toContain(`hash=${refId}`);
+    expect(digest).toContain(teeLine);
   });
 });

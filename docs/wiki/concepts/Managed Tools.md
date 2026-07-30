@@ -126,6 +126,33 @@ than an enumeration:
 version-gate on what the installed package reports. Do not hand-enumerate an API
 surface you do not own.
 
+## Coexisting with a peer that rewrites your input (R8.12)
+
+A tier-3a peer acting on the same surface can change what Golem's own logic reads.
+RTK rewrites `vitest` into `rtk vitest` via its `PreToolUse` hook, and that turned
+up a real degradation (§96):
+
+- Golem's autonomy **deny**-lists are word-boundary anchored, so they saw straight
+  through the wrapper — `rtk git push` was still `outward`. Safe by luck.
+- Golem's **allow**-list was start-anchored, so `rtk vitest` stopped matching and
+  fell through to `unknown` → a prompt. Fail-closed, so never unsafe, but a user
+  whose auto-approvals suddenly start asking tends to loosen the autonomy level.
+  A safety mechanism disabled out of irritation is a safety problem.
+
+Fixed by retrying **only the allow-list** against the unwrapped command, so
+unwrapping can never downgrade a classification. Also fixed: Golem's oversized-output
+swap now preserves an external compactor's own `[full output: …]` recovery pointer
+rather than eliding it — a compaction of a compaction must not destroy the other
+tool's way back.
+
+**The general rule.** When admitting a peer that mutates tool arguments, audit every
+pattern that matters for whether its anchoring survives the rewrite.
+Start-anchored allow-lists are the fragile ones.
+
+Still open: what Claude Code does when a rewriting hook and a denying hook fire on
+the same call is **undocumented** (§91). Golem never emits `updatedInput`, so it
+cannot itself conflict; treat the combination as unverified.
+
 ## Related
 
 - [[Compression]] — the Headroom sidecar's only caller, and why it stays idle
