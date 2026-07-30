@@ -785,7 +785,10 @@ knobs drive the absent ML stage). The 5.48% decomposes into two transforms:
    + LLMLingua/Kompress) — a heavyweight GPU/ML dep that CLAUDE.md mandates be
    **opt-in, never in the default install**. Its ceiling is **unmeasured** (no
    torch here) and must be measured on a torch-enabled box before any claim.
-3. **NET-savings caveat (Decision-23 gate, §31/§32 lesson — UNRESOLVED).** The
+3. **NET-savings caveat (Decision-23 gate, §31/§32 lesson — UNRESOLVED).**
+   *[ANSWERED 2026-07-30 — see §103: measured net-NEGATIVE on caching traffic,
+   8.7×–11.3× worse than not compressing, because divergence starts at message 6.
+   The gross number below stands; the net question it flagged is now closed.]* The
    5.48% is a **gross input-token** reduction. Headroom *rewrites* content
    (`router`) and *drops mid-history reads* (`read_lifecycle`), which changes
    prefix bytes → risks breaking Anthropic prompt-cache (0.1×→1.0× on the whole
@@ -4359,3 +4362,143 @@ One case went the other way (`brevity-dial`) — recorded, not hidden.
   chooser error ⇒ inconclusive" let one reproducible unusable reply erase a delta
   4.7× the resolution. It now scores excluded errors the worst possible way and
   asks whether the sign survives (here: +18.2%, so it cannot flip).
+
+## §102 — Ollama's OpenAI-compat `/v1/embeddings` silently discards `keep_alive`; native `/api/embed` honours it (2026-07-30)
+
+Checked because a visible GPU spike prompted the question of whether Golem should
+refresh the embedding model's keep-alive on each knowledge-path use. Probed live
+against **ollama 0.32.5** on the dev box (RTX 3070, `nomic-embed-text:latest`,
+323 MB, 100% GPU) rather than reasoned about, because both halves of the answer
+turned out to be counter-intuitive.
+
+**What the probes showed.**
+
+| probe | `ollama ps` → `UNTIL` | reading |
+|---|---|---|
+| plain `POST /v1/embeddings` | 56 min → **59 min** | idle timer **is** refreshed by an ordinary request |
+| `POST /v1/embeddings` + `"keep_alive":"10m"` | **stays 59 min** | param accepted, **silently ignored**, HTTP 200 |
+| `POST /api/embed` + `"keep_alive":"10m"` | → **9 min** | native endpoint honours it |
+
+**Consequence 1 — the nudge already happens, so there is nothing to add.** Every
+embed request resets the unload timer, including through the compat path. The
+knowledge path *is* the keep-alive nudge; an extra refresh call would be redundant
+work. No code change was made.
+
+**Consequence 2 — the silent-failure trap.** `src/inference/ollama-client.ts` posts
+to `/v1/embeddings` (chosen so the "point it at any OpenAI-compat server" story of
+Decision 12 holds). Had we added `keep_alive` there, it would have returned 200,
+passed review, shipped, and done **nothing** — no error, no warning, no log line.
+Setting the duration requires Ollama-native `/api/embed`, which costs the
+endpoint-portability property that endpoint choice exists to preserve. Recorded as
+a deliberate non-change: bad trade for a ~3 s cold load a few times a day.
+
+**Where the observed 1h window actually came from.** The machine's **User** env
+`OLLAMA_KEEP_ALIVE=1h`, not this repo — `grep -rE 'keep_alive|keepAlive|KEEP_ALIVE'`
+over the tree has **zero hits**. So keep-alive behaviour here is *machine state*, and
+a contributor without that variable gets Ollama's own default instead. That default
+is documented as 5 minutes but was **not verified in this pass** — if anything ever
+depends on it, probe it.
+
+**Method caveat worth keeping.** These probes mutate shared local state: the 10 min
+arm left the live model on a 10 min timer, which was explicitly restored to 1h with
+a follow-up `/api/embed` call. A keep-alive probe is not read-only — restore it, or
+the next person's cold-start measurement is measuring your leftover.
+
+**Unrelated but observed while measuring:** the GPU sat at **89 °C while drawing
+36 W of 115 W** at near-idle. That is a thermal/fan condition on the box, not
+anything Ollama or Golem is doing, and it is noted here only so a future latency
+measurement on this hardware is not read as a software regression.
+
+## §103 — Headroom's net effect on CACHING traffic MEASURED: 8.7×–11.3× WORSE than not compressing (2026-07-30, answers §34 conclusion 3)
+
+§34 measured Headroom's gross saving and closed with an explicit refusal to claim a
+net number: *"No net savings may be claimed until this is measured live."* That
+question stayed open for 25 days. It is now measured, offline, on two real
+transcripts from this repo. **The gate in Decision 31 is correct, and the margin is
+not close.**
+
+### The gross number is real — and larger than §34 recorded
+
+`scripts/measure_headroom.py`, `headroom-ai==0.30.0` (the shipped pin), no torch:
+
+| transcript | messages | tokens before | gross saved |
+|---|--:|--:|--:|
+| `9d45e10b…` (2026-07-30) | 1,404 | 445,116 | **7.08%** |
+| `fa06e9c0…` (2026-07-15) | 4,631 | 2,010,745 | **21.69%** |
+| §34's session (2026-07-05) | 2,008 | 787,169 | 5.48% |
+
+**Savings scale with session length**, which §34's single sample could not show —
+1,433 transforms fired on the 4,631-message history. `read_lifecycle` earns more the
+longer an agent works, because more files get re-read and superseded. Still flat
+across `target_ratio` / `savings_profile` / `compress_user_messages` (confirming
+§34/§35: those knobs drive the absent ML stage, and §35 already showed ML is
+irrelevant on code traffic regardless).
+
+### The net number, and the structural reason it is bad
+
+New: `scripts/measure_headroom_cache.py`. The insight that makes this cheap to
+measure — **you do not need live billing to answer it.** Find the first index where
+the compressed history stops matching the original; everything from there on is a
+changed prefix, so it cannot be a cache hit. That index is the whole ballgame.
+
+| | `fa06e9c0…` | `9d45e10b…` |
+|---|--:|--:|
+| first divergence | message **6** of 4,631 | message **21** of 1,404 |
+| untouched prefix still cache-readable | **0.01%** of history | **1.00%** |
+| A: no compression (0.1× on all) | 126,814 units | 30,426 units |
+| B: compressed (0.1× prefix + 1.25× suffix) | 1,107,999 units | 342,388 units |
+| **verdict** | **NET LOSS 8.74×** | **NET LOSS 11.25×** |
+
+**Why divergence is always early, and why that is not fixable by tuning.**
+`read_lifecycle` saves tokens by dropping the *earliest superseded* copy of a
+re-read file. The transform's value and its cache damage are the *same act*: the
+stalest copy is by construction near the start of the history. A transform that
+paid off later in the history would be a different, weaker transform. So this is
+not a bad default to be tuned around — it is inherent to how the saving is earned.
+
+Against a **98.4% billed hit rate** (§93), 0.1× on everything beats 1.25× on 70% of
+it by an order of magnitude. Trading a 21.7% gross reduction for near-total prefix
+loss is the §31 artifact trap in its purest form: the gross number looks like a win
+and the bill goes up ~9×.
+
+### On a non-caching upstream it is a clean win
+
+Same runs, priced without a cache: **9.06%** and **30.09%** saved. This is exactly
+Decision 23's "compression is situational" claim, now measured on *both* sides
+rather than asserted on one. The sidecar is worth keeping for the case (a)
+non-caching providers; it must never engage on Anthropic.
+
+### Consequences
+
+1. **`force_semantic_on_caching` must stay `false`.** Its doc comment said the risk
+   was unproven ("until proven net-safe by a real `aggregateUsageBySemanticForced`
+   comparison"). It is now proven *un*safe. The live-A/B path remains available for
+   research, but nobody should flip this expecting savings.
+2. **The R2.6 live A/B is no longer worth spending real tokens on.** It was scoped
+   to answer this question against live billing. An 8.7×–11.3× predicted loss does
+   not need confirming at cost; if it is ever run, run it to validate the *model*,
+   not to look for a win.
+3. **`golem status` was lying by omission.** It reported `Slider: level 3
+   (aggressive)` while the two stages that distinguish levels 2–3 from level 1 were
+   gated off, so the observed behaviour was level 1. Fixed in the same batch — status
+   now reports the effective level beside the nominal one.
+4. **The script is the reusable gate.** Any future compressor (Caveman-class,
+   context substitution, a new Headroom release) gets held to the same bar: report
+   first-divergence index, not just gross tokens. A compressor that only touches the
+   *tail* of history could pass this gate where Headroom fails it — that is the shape
+   worth looking for.
+
+### Honest limits
+
+- The flattening tokenizer in the cache script counts 1,268,139 where Headroom's own
+  counts 2,010,745 (it does not descend every block shape). **Absolute cost-units are
+  understated; the A/B ratio is not affected** — both arms use the same counter. The
+  first-divergence index, which drives the verdict, is tokenizer-independent.
+- This prices one steady-state turn against a warm cache, not a full session replay
+  with Claude Code's real ≤4 cache breakpoints. A breakpoint-accurate simulation would
+  change the multiple, not the sign: with divergence at message 6, no breakpoint
+  placement rescues the prefix.
+- Measured on this repo's own agent traffic (heavy Read/Edit, long sessions). A
+  workload with a different re-read profile would show a different gross number; the
+  net argument depends only on divergence being early, which follows from the
+  transform's design rather than from this workload.
