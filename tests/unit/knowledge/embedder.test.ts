@@ -20,6 +20,7 @@ import {
   inferenceEmbedFn,
   openKnowledgeBase,
 } from "../../../src/knowledge/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 /** Fake InferenceService: deterministic lexical embeddings; chat unused here. */
 class FakeInference implements InferenceService {
@@ -62,7 +63,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-c3-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("inferenceEmbedFn", () => {

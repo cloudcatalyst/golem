@@ -17,6 +17,7 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../../../src/autonomy/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("autonomy policy", () => {
   let dir: string;
@@ -24,7 +25,7 @@ describe("autonomy policy", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-autonomy-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("defaults to manual when nothing is persisted", async () => {

@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, writeSetting } from "../../src/config/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -21,7 +22,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(base, { recursive: true, force: true });
+  await rm(base, rmTemp);
 });
 
 const dirs = () => ({ projectDir, userDir });

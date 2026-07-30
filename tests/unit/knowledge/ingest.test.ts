@@ -17,6 +17,7 @@ import {
   type VectorDriver,
 } from "../../../src/knowledge/index.js";
 import { describeKnowledgeBaseContract } from "../../contract/knowledge-contract.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 /**
  * Deterministic lexical embedder: hashes tokens into a fixed-dim bag-of-words
@@ -46,7 +47,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-ingest-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("planIngest traversal", () => {

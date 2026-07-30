@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { keychainBackend } from "../../src/credentials/backends.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const itOnWindows = process.platform === "win32" ? it : it.skip;
 
@@ -27,7 +28,7 @@ describe("DPAPI keychain backend (win32)", () => {
   });
 
   afterAll(async () => {
-    await rm(userDir, { recursive: true, force: true });
+    await rm(userDir, rmTemp);
   });
 
   itOnWindows("reports itself as a DPAPI file, never as Windows Credential Manager", () => {

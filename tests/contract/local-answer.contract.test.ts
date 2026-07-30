@@ -15,6 +15,7 @@ import {
   openKnowledgeBase,
 } from "../../src/knowledge/index.js";
 import { KnowledgeLocalAnswerService } from "../../src/knowledge/local-answer.js";
+import { rmTemp } from "../helpers/tmp.js";
 import { describeLocalAnswerContract } from "./local-answer-contract.js";
 
 /** Same deterministic bag-of-words embedder tests/unit/knowledge/ingest.test.ts uses. */
@@ -40,7 +41,7 @@ const PROJECT = "contract-test-project";
 const tempDirs: string[] = [];
 
 afterAll(async () => {
-  await Promise.all(tempDirs.map((d) => rm(d, { recursive: true, force: true })));
+  await Promise.all(tempDirs.map((d) => rm(d, rmTemp)));
 });
 
 describeLocalAnswerContract("KnowledgeLocalAnswerService", async () => {

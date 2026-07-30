@@ -9,6 +9,7 @@ import {
   semverGt,
   upgradeCommand,
 } from "../../../src/update/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("semverGt", () => {
   it("compares by field, numerically", () => {
@@ -70,7 +71,7 @@ describe("checkForUpdate", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-update-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("reports an available update and caches it", async () => {

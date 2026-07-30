@@ -1256,6 +1256,95 @@ benchCmd
     }
   });
 
+benchCmd
+  .command("tools")
+  .description(
+    "Tools-block token census, and optionally A/B a shrinking transform against " +
+      "the tool-selection case set (Workstream B gate, verification-notes §88/§89)",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option(
+    "--shrink <mode>",
+    "score a candidate transform: whitespace | first-sentence (omit for census only)",
+  )
+  .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
+  .option(
+    "--role <role>",
+    "local role that does the choosing: classifier (default) | drafter | judge — " +
+      "substitute when the tier's classifier model is not pulled",
+    "classifier",
+  )
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      dir: string;
+      shrink?: string;
+      repeats: string;
+      role: string;
+      json: boolean;
+    }) => {
+      try {
+        const {
+          golemToolCensus,
+          renderToolBench,
+          SHRINK_MODES,
+          shrinkCatalog,
+          compareCatalogs,
+          SELECTION_CASES,
+        } = await import("../tools/index.js");
+        const census = await golemToolCensus();
+        if (opts.shrink === undefined) {
+          const report = { census };
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderToolBench(report),
+          );
+          return;
+        }
+        const mode = opts.shrink as (typeof SHRINK_MODES)[number];
+        if (!SHRINK_MODES.includes(mode)) {
+          throw new InitError(
+            `invalid --shrink "${opts.shrink}" (expected ${SHRINK_MODES.join(" | ")})`,
+          );
+        }
+        const repeats = Number.parseInt(opts.repeats, 10);
+        if (!Number.isFinite(repeats) || repeats < 1) {
+          throw new InitError(`invalid --repeats "${opts.repeats}" (expected a positive integer)`);
+        }
+        // Scoring needs the local model. Unlike the census, this cannot degrade
+        // silently — a comparison with no chooser is not a result.
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const client = new OllamaClient({
+          baseUrl: settings.inference.ollama_base_url,
+          requestTimeoutMs: settings.inference.request_timeout_ms,
+        });
+        const facts = await detectCapability(createProbeRunner());
+        const inference = new OllamaInferenceService(client, facts);
+        const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+        const role = opts.role as (typeof roles)[number];
+        if (!roles.includes(role)) {
+          throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+        }
+        const result = await compareCatalogs({
+          inference,
+          baseline: census.tools,
+          candidate: shrinkCatalog(census.tools, mode),
+          cases: SELECTION_CASES,
+          repeats,
+          role,
+        });
+        const report = {
+          census,
+          comparison: { mode, cases: SELECTION_CASES.length, role, result },
+        };
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderToolBench(report),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
 const accountCmd = program
   .command("account")
   .description("Switch between configured upstream accounts/providers (R6.2, spec Decision 21d)");

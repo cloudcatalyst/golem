@@ -18,13 +18,14 @@ import {
   writeNoteDraftFile,
   writeSynthesisDraftFile,
 } from "../../../src/knowledge/distill-store.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-distill-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 const url = "https://example.com/widgets";

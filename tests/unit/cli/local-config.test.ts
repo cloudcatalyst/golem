@@ -19,6 +19,7 @@ import {
   setLocalCoderEnabled,
 } from "../../../src/cli/local-config.js";
 import { loadConfig, writeSetting } from "../../../src/config/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 
@@ -29,7 +30,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-local-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("isRemoteEndpoint", () => {

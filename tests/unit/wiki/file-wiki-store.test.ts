@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileWikiStore } from "../../../src/wiki/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 let today: string;
@@ -18,7 +19,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("FileWikiStore", () => {

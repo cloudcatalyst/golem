@@ -22,6 +22,7 @@ import {
 } from "../../../src/cli/config.js";
 import { ConfigError } from "../../../src/config/errors.js";
 import { writeSetting } from "../../../src/config/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("config engine", () => {
   let projectDir: string;
@@ -35,7 +36,7 @@ describe("config engine", () => {
   });
 
   afterEach(async () => {
-    await rm(path.dirname(projectDir), { recursive: true, force: true });
+    await rm(path.dirname(projectDir), rmTemp);
   });
 
   function opts() {

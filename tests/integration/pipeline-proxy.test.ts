@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../src/compression/index.js";
 import { type SliderLevel, sliderPolicyForLevel } from "../../src/interfaces/policy.js";
 import { createGolemPipeline } from "../../src/pipeline/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 import { rawRequest, startProxy, startUpstream } from "./helpers/test-servers.js";
 
 let projectDir: string;
@@ -19,7 +20,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-pipe-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 /** Fake upstream that records the last request body and returns 200 JSON. */

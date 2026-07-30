@@ -24,6 +24,7 @@ import { WebCache, webCacheDir } from "../../../src/knowledge/web-cache.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
 import type { TelemetryStore } from "../../../src/telemetry/types.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 let fakeUserDir: string;
@@ -40,8 +41,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await telemetry.close();
-  await rm(projectDir, { recursive: true, force: true });
-  await rm(path.dirname(fakeUserDir), { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
+  await rm(path.dirname(fakeUserDir), rmTemp);
 });
 
 /** Poll until a predicate holds, for asserting on a fire-and-forget telemetry write. */
@@ -192,7 +193,7 @@ describe("buildProxyFromSettings — R2.3 knowledge.local_answer_enabled wiring"
       const kb = openKnowledgeBase({ projectDir });
       await kb.ingest(seedDir, projectDir);
     } finally {
-      await rm(seedDir, { recursive: true, force: true });
+      await rm(seedDir, rmTemp);
     }
   }
 

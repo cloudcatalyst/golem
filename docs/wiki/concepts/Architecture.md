@@ -4,7 +4,7 @@ type: concept
 tags: [architecture, pipeline, routing, observability, diagrams]
 sources: [docs/golem-spec.md#2, src/proxy, src/mcp/server.ts, src/pipeline/pipeline.ts, src/inference/service.ts, src/inference/catalog.ts, src/providers/index.ts, src/hooks/session-state.ts, src/autonomy/gate.ts]
 created: 2026-07-25
-updated: 2026-07-25
+updated: 2026-07-30
 ---
 
 # Architecture
@@ -206,6 +206,75 @@ flowchart TB
   AUT -->|"read/write within level"| ALLOW["Auto-allow"]
   AUT -->|"otherwise"| NATIVE["Stay silent → native prompt governs"]
 ```
+
+---
+
+## 6. Task multiplexing and prompt translation — the two explicit local paths
+
+Two features route work to the local model **outside** the request pipeline. Both
+are engaged only by an explicit act — the compression dial never triggers either
+(Decision 31) — and both are drawn together here because they are the places
+people most often assume automation that does not exist.
+
+### 6a. Durable tasks serviced locally, escalated explicitly
+
+A queued task (R5.1, one zod JSON per task under `<project>/.golem/tasks/`) is
+serviced on the Ollama tier by `golem task run`, bounded so it respects the
+machine. A local result is never silently promoted: folding it into the prompt as
+grounding and handing the task to the Claude tier is a separate command.
+Source: `src/tasks/multiplex.ts`, `src/tasks/types.ts`.
+
+```mermaid
+flowchart TB
+  ADD["golem task add<br/>state: queued"] --> Q["Task store<br/>.golem/tasks/*.json"]
+  Q --> RUN["golem task run<br/>runQueueLocally (concurrency 2 default)"]
+  RUN --> MARK["mark running"]
+  MARK --> LOC{"Local model reachable?"}
+  LOC -->|"no — first task"| STOP["Stop early, don't hammer<br/>state: queued + lastError"]
+  LOC -->|"yes"| SVC["serviceTaskLocally<br/>(triage · draft · retrieval, with grounding)"]
+  SVC -->|"ok"| DONE["state: done + result persisted"]
+  SVC -->|"failure"| REQ["state: queued + lastError<br/>(fail-open, never stranded in running)"]
+  STOP --> Q
+  REQ --> Q
+  DONE --> REVIEW["You review the local result"]
+  REVIEW --> ESC{"Good enough?"}
+  ESC -->|"yes"| KEEP["Keep it — no cloud tokens spent"]
+  ESC -->|"no"| ECMD["golem task escalate<br/>escalateTask: local pass + project context<br/>folded into the prompt, escalated: true"]
+  ECMD --> Q
+  Q --> RES["golem task resume<br/>(prints argv; --spawn opt-in, no shell)"]
+  RES --> CLAUDE["Claude tier"]
+```
+
+The dogfooding origin is spec 20a: in-flight work was repeatedly lost to session
+limits, so a task is a **checkpoint**, not a job — an interruption re-queues it.
+`blocked` waits on a human, `paused` is capacity-gated, and `done`/`failed`/
+`cancelled` never auto-resume. Parking a live session at the limit is a different
+mechanism (see §5 and `.claude/rules/golem-snooze-hold.md`).
+
+### 6b. Prompt translation — shown, never sent
+
+`golem prompt translate` rewrites a rough note into a clearer prompt using the
+local model, few-shot-grounded in the user's own previously *accepted* rewrites.
+It sits entirely off the proxy path: the suggestion is printed for inspection and
+nothing is forwarded anywhere. A spike, demand-gated (R5.5).
+Source: `src/prompt/translate.ts`, `src/prompt/style-store.ts`.
+
+```mermaid
+flowchart LR
+  RAW["Your rough note"] --> T["golem prompt translate"]
+  EX["Accepted examples<br/>style-store"] -->|"last 3 as few-shot"| T
+  T --> LM{"Local model<br/>available?"}
+  LM -->|"no"| NULL["translated: null + error<br/>(degrade, never guess)"]
+  LM -->|"yes"| SUG["Suggestion PRINTED for you"]
+  SUG --> YOU{"You decide"}
+  YOU -->|"golem prompt accept"| EX
+  YOU -->|"discard"| DROP["Nothing happens"]
+  SUG -.->|"NEVER auto-sent · never on the proxy path"| X["Upstream"]
+```
+
+Intent preservation is the non-negotiable constraint: the system prompt forbids
+adding requirements the note didn't state, and because the output is only ever a
+printed suggestion, a bad rewrite costs a glance rather than a wrong request.
 
 ---
 

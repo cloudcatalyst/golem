@@ -18,6 +18,7 @@ import {
   renderCostBenchmark,
   windowStartMs,
 } from "../../../src/telemetry/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const NOW = Date.parse("2026-07-23T12:00:00.000Z");
 const DAY = 86_400_000;
@@ -189,7 +190,7 @@ describe("readTelemetryEvents", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-bench-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns [] when nothing was ever recorded", async () => {

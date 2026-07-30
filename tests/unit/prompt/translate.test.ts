@@ -20,6 +20,7 @@ import {
   translatePrompt,
   writeLastSuggestion,
 } from "../../../src/prompt/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 function fakeInference(
   text: string,
@@ -92,7 +93,7 @@ describe("style store", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-style-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("round-trips the last suggestion → accepted example", async () => {

@@ -14,13 +14,14 @@ import {
   notesFilePath,
   renderNotes,
 } from "../../../src/cli/notes.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-notes-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 describe("appendNote", () => {

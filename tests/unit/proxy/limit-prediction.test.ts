@@ -14,6 +14,7 @@ import {
   readLimitState,
   writeLimitState,
 } from "../../../src/proxy/limit-prediction.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const NOW_ISO = "2026-07-18T00:00:00.000Z";
 
@@ -88,7 +89,7 @@ describe("limit state round-trip", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-limit-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("writes then reads back an equal prediction", async () => {

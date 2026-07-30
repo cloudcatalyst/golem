@@ -19,6 +19,7 @@ import path from "node:path";
 import { afterEach } from "vitest";
 import { type EmbedFn, openKnowledgeBase } from "../../../src/knowledge/index.js";
 import { describeKnowledgeBaseContract } from "../../contract/knowledge-contract.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 /**
  * Deterministic lexical embedder: hashes tokens into a fixed-dim bag-of-words
@@ -50,7 +51,7 @@ function lexicalEmbed(dim = 256): EmbedFn {
 // instance per test.
 const projectDirs: string[] = [];
 afterEach(async () => {
-  await Promise.all(projectDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(projectDirs.splice(0).map((dir) => rm(dir, rmTemp)));
 });
 
 describeKnowledgeBaseContract("GolemKnowledgeBase (FileVectorDriver)", async () => {

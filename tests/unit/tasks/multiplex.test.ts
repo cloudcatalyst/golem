@@ -22,6 +22,7 @@ import {
   runQueueLocally,
   serviceTaskLocally,
 } from "../../../src/tasks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 function fakeInference(overrides: Partial<InferenceService> = {}): InferenceService {
   return {
@@ -127,7 +128,7 @@ describe("runQueueLocally", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-mux-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("services all queued tasks and persists results", async () => {

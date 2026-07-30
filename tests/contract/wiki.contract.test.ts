@@ -7,12 +7,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach } from "vitest";
 import { FileWikiStore } from "../../src/wiki/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 import { describeWikiStoreContract } from "./wiki-contract.js";
 
 const dirs: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(dirs.splice(0).map((dir) => rm(dir, rmTemp)));
 });
 
 describeWikiStoreContract("FileWikiStore", async () => {

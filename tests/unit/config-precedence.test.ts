@@ -10,6 +10,7 @@ import {
   loadConfig,
   policyFromSettings,
 } from "../../src/config/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -32,7 +33,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(base, { recursive: true, force: true });
+  await rm(base, rmTemp);
 });
 
 describe("loadConfig precedence", () => {

@@ -11,6 +11,7 @@ import type { AutonomyLevel } from "../../../src/autonomy/index.js";
 import { readActionLog } from "../../../src/autonomy/index.js";
 import { runPreToolUseHook } from "../../../src/hooks/pre-tool-use.js";
 import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 /** Minimal HookIo capturing stdout/stderr, feeding a fixed stdin string. */
 function io(input: string) {
@@ -46,7 +47,7 @@ describe("runPreToolUseHook", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-pre-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("auto-allows a read at outcome level", async () => {

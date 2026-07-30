@@ -13,6 +13,7 @@ import { golemInitStatus, type InitProbe } from "../../src/cli/init.js";
 import { getSliderInfo, setSliderLevel } from "../../src/cli/slider.js";
 import { loadConfig, settingsFilePaths } from "../../src/config/index.js";
 import { JsonFileSliderStore } from "../../src/mcp/slider-store.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 // Fake probe (as in cli-init.test.ts): no real ~/.claude / ~/.vscode touched.
 const okProbe: InitProbe = {
@@ -33,7 +34,7 @@ describe("golem slider", () => {
   });
 
   afterEach(async () => {
-    await rm(join(projectDir, ".."), { recursive: true, force: true });
+    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("defaults to level 1 (lossless) from the default layer", async () => {
