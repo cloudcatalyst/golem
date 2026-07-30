@@ -205,6 +205,27 @@ export function renderCacheReport(stats: CacheStats): string {
     );
   }
 
+  // R8.1/§99 — when the two signals disagree, say so instead of letting the reader
+  // believe the weaker one. A high billed hit rate alongside mostly-bust verdicts
+  // means the classifier is wrong, not that the cache is broken: the billed number
+  // is measured and the verdict is a prediction whose conversation grouping is a
+  // heuristic. This check is the reason the two are reported separately at all.
+  if (stats.hitRate !== null && observed > 0) {
+    const bustShare = bust / observed;
+    if (stats.hitRate > 0.8 && bustShare > 0.5) {
+      out.push("");
+      out.push(
+        `⚠ These two disagree: ${pct(stats.hitRate)} of billed input was a cache READ, ` +
+          `yet ${pct(bustShare)} of verdicts say "bust".`,
+      );
+      out.push("  The billed figure is measured; the verdict is a prediction whose conversation");
+      out.push(
+        "  grouping is a heuristic, and it is the one to distrust here (notes §99). Read the",
+      );
+      out.push("  billed section as the answer and ignore the bust count until §99 is resolved.");
+    }
+  }
+
   out.push("");
   out.push("Billed numbers are authoritative; verdicts explain them and are a prediction");
   out.push("from the forwarded bytes. Conversation grouping is a heuristic — see cache-prefix.ts.");

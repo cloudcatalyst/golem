@@ -173,3 +173,44 @@ describe("renderCacheReport", () => {
     expect(out).toContain("heuristic");
   });
 });
+
+/**
+ * R8.1 / §99 — when the measured and predicted signals disagree, the report must
+ * say so. Shipped after the live proxy produced 142 busts against a billed 98.4%
+ * hit rate: both cannot be true, and a reader must be told which to distrust.
+ */
+describe("renderCacheReport — contradiction warning (§99)", () => {
+  function withBoth(cacheRead: number, input: number, busts: number, appends: number): string {
+    const events: TelemetryEvent[] = [usageEvent({ cacheRead, input })];
+    for (let i = 0; i < busts; i += 1) events.push(requestEvent("bust", "messages"));
+    for (let i = 0; i < appends; i += 1) events.push(requestEvent("append"));
+    return renderCacheReport(aggregateCacheStats(events));
+  }
+
+  it("warns when a high billed hit rate coexists with mostly-bust verdicts", () => {
+    const out = withBoth(984, 16, 98, 2);
+    expect(out).toContain("These two disagree");
+    expect(out).toContain("notes §99");
+    expect(out).toContain("ignore the bust count");
+  });
+
+  it("stays quiet when the two signals agree (high hit rate, few busts)", () => {
+    const out = withBoth(984, 16, 2, 98);
+    expect(out).not.toContain("These two disagree");
+  });
+
+  it("stays quiet when a low hit rate genuinely matches many busts", () => {
+    const out = withBoth(100, 900, 98, 2);
+    expect(out).not.toContain("These two disagree");
+  });
+
+  it("stays quiet when there are no verdicts to contradict anything", () => {
+    const out = renderCacheReport(aggregateCacheStats([usageEvent({ cacheRead: 984, input: 16 })]));
+    expect(out).not.toContain("These two disagree");
+  });
+
+  it("stays quiet when there is no billed data", () => {
+    const out = renderCacheReport(aggregateCacheStats([requestEvent("bust", "tools")]));
+    expect(out).not.toContain("These two disagree");
+  });
+});

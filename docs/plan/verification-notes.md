@@ -4109,3 +4109,70 @@ every direct dependency incl. optional, the `.npmrc` posture still present, pins
 agreeing with what the lockfile resolved, and the runtime dependency count still
 ≤ 5. 12 tests drive it against synthetic trees — a gate that silently passes would
 be worse than none.
+
+## §99 — R8.1's verdict half is UNRELIABLE as shipped: 142 busts / 3 firsts / 0 appends against a billed 98.4% hit rate (2026-07-30)
+
+Found within minutes of deploying R8.1 to the live proxy, and it is two separate
+problems stacked.
+
+### Problem 1 — the verdict never reached the report (fixed)
+
+The proxy wrote verdicts to the JSONL correctly (`grep -o '"cachePrefix":"[a-z]*"'`
+→ 142 `bust`, 3 `first`), yet `golem stats --cache` said **"Prefix verdicts: none
+recorded"** over 14,919 events.
+
+Cause: `parseEvent` in `jsonl-store.ts` reconstructs a `TelemetryEvent`
+**field-by-field** — it is an allow-list, so a new field is invisible on read until
+a line is added for it. The R8.1 unit tests passed because they fed
+`TelemetryEvent` objects straight into `aggregateCacheStats`, never through the
+store.
+
+Fixed, plus `tests/integration/cache-verdict-roundtrip.test.ts` which writes
+through the real store, reads through the real reader, and aggregates. **Standing
+rule for this repo: a new `TelemetryEvent` field needs a `parseEvent` line AND a
+round-trip test; an aggregator unit test cannot catch this class of bug.**
+
+### Problem 2 — the classifier over-reports busts, badly (NOT fixed)
+
+With the read path fixed, the real distribution is **142 `bust` / 3 `first` /
+0 `append`** — i.e. ~98% of classified requests are called cache busts, while the
+**billed** numbers over the same period say a **98.4% hit rate** with cache-write
+at 1.5% of input. Both cannot be true. The billed number is ground truth, so the
+verdict is wrong ~98% of the time.
+
+**Most likely cause: the conversation key.** `cachePrefixFingerprint` groups
+requests by a hash of `messages[0]`, and a real client multiplexes *many* short
+conversations through one proxy — subagent runs, title/topic generation, WebFetch
+summarisation, quota probes — a large share of which open with an identical or
+near-identical first message. Those all collide onto one key and therefore read as
+each other's busts.
+
+**The documented caveat was wrong about severity.** `cache-prefix.ts` says a
+collision "costs at most one misattributed verdict, and never a wrong bill". The
+first clause is false: collisions are the *dominant* case, not the marginal one.
+The second clause holds — nothing about billing or request bytes is affected — which
+is the only reason this is a bad metric rather than an incident.
+
+**What this vindicates.** Keeping the billed and predicted signals separate and
+refusing to blend them into a "cache health score" (R8.1's central design call) is
+what made the contradiction visible in the first place. A blended number would have
+averaged a correct measurement with a 98%-wrong prediction and looked plausible.
+
+**Not fixed here, deliberately.** A better design is a real change, not a tweak,
+and it deserves the data now in hand:
+
+- **Candidate A — prefix-chain identity.** Keep a bounded set of seen
+  `messages[0..k]` hashes and classify a request as `append` when *any* prefix of
+  it was seen before, regardless of which "conversation" it belongs to. Removes
+  the notion of a conversation key entirely.
+- **Candidate B — require growth.** Only report `bust` when the message count is
+  ≥ the previous request's; a shorter or equal-length divergent request is more
+  likely a different conversation than an edit. Cheap, partial.
+- **Candidate C — use a client-supplied id if one exists.** Worth re-checking
+  whether Claude Code sends anything stable (a `metadata.user_id`, a header) that
+  the proxy could key on instead of guessing.
+
+**Until then, treat `golem stats --cache`'s verdict section as diagnostic noise and
+the billed section as the answer.** The renderer already labels verdicts a
+prediction and names the heuristic; that wording is now load-bearing rather than
+cautious boilerplate.
