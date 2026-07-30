@@ -86,8 +86,43 @@ export {
 } from "./knowledge-base.js";
 export type { RawPage, RawPageHeaders } from "./raw-fetch.js";
 export { fetchRawPage } from "./raw-fetch.js";
+export type {
+  RankedFile,
+  RepoFile,
+  RepoMapOptions,
+  RepoMapReady,
+  RepoMapResult,
+  RepoMapUnavailable,
+} from "./repo-map.js";
+export {
+  buildGraph,
+  buildRepoMap,
+  clearRepoMapCache,
+  DEFAULT_MAP_BUDGET_TOKENS,
+  MAX_MAP_BUDGET_TOKENS,
+  rankFiles,
+  renderFileSkeleton,
+  renderRepoMap,
+  scanRepoFiles,
+} from "./repo-map.js";
+export type {
+  BenchArm,
+  BenchOptions,
+  BenchVerdict,
+  RepoMapBenchReport,
+  RetrievalOutcome,
+  RetrievalRun,
+} from "./repo-map-bench.js";
+export { benchRepoMap, renderRepoMapBench, runRetrievalArm } from "./repo-map-bench.js";
+export type { RetrievalCase } from "./repo-map-cases.js";
+export { RETRIEVAL_CASES } from "./repo-map-cases.js";
 export { rerankHits } from "./rerank.js";
-export { chunkCodeSyntaxAware } from "./tree-sitter-chunker.js";
+export type { FileFacts, SymbolDef, SymbolKind } from "./tree-sitter-chunker.js";
+export {
+  chunkCodeSyntaxAware,
+  extractFileFacts,
+  isSymbolExtractable,
+} from "./tree-sitter-chunker.js";
 export type { WebCacheEntry, WebCacheMeta } from "./web-cache.js";
 export { isFresh, WebCache, webCacheDir, webCacheKey } from "./web-cache.js";
 

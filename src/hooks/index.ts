@@ -54,6 +54,8 @@ export {
   DIGEST_TAIL_CHARS,
   HOOK_EVENT_NAME,
   runPostToolUseHook,
+  SKELETON_CHARS,
+  stripReadLineNumbers,
 } from "./post-tool-use.js";
 export type { RedactFn } from "./redact.js";
 export {

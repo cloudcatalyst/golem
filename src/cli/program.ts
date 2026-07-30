@@ -883,6 +883,10 @@ mcp
           : {}),
         ...(inference !== undefined ? { inference } : {}),
         ...(coderInference !== undefined ? { coder: coderInference } : {}),
+        // R8.5: the `code` tool maps the filesystem via tree-sitter, so it is
+        // independent of the knowledge base — but it is a permanent per-request
+        // definition cost, so it is registered only when opted in.
+        ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),
         // R3.1 (spec Decision 34): opt-in chat-judge rerank, decoupled from the
         // slider (Decision 31) via its own settings leaf.
         ...(inference !== undefined && settings.knowledge.rerank_enabled
@@ -1303,6 +1307,94 @@ benchCmd
       fail(err);
     }
   });
+
+benchCmd
+  .command("map")
+  .description(
+    "R8.5 gate: what the repo map costs, and whether it lets the model name the right " +
+      "file WITHOUT reading it (retrieval-accuracy A/B against a plain path list)",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--score", "run the retrieval A/B (needs the local model); omit for cost only", false)
+  .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
+  .option(
+    "--role <role>",
+    "local role that does the choosing: classifier (default) | drafter | judge",
+    "classifier",
+  )
+  .option("--budget <n>", "token budget for the rendered map (default 1400)")
+  .option("--print", "also print the map itself", false)
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      dir: string;
+      score: boolean;
+      repeats: string;
+      role: string;
+      budget?: string;
+      print: boolean;
+      json: boolean;
+    }) => {
+      try {
+        const { benchRepoMap, renderRepoMapBench, RETRIEVAL_CASES, buildRepoMap } = await import(
+          "../knowledge/index.js"
+        );
+        let budgetTokens: number | undefined;
+        if (opts.budget !== undefined) {
+          const parsed = Number.parseInt(opts.budget, 10);
+          if (!Number.isFinite(parsed) || parsed < 200) {
+            throw new InitError(`invalid --budget "${opts.budget}" (expected an integer ≥ 200)`);
+          }
+          budgetTokens = parsed;
+        }
+        const repeats = Number.parseInt(opts.repeats, 10);
+        if (!Number.isFinite(repeats) || repeats < 1) {
+          throw new InitError(`invalid --repeats "${opts.repeats}" (expected a positive integer)`);
+        }
+        const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+        const role = opts.role as (typeof roles)[number];
+        if (!roles.includes(role)) {
+          throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+        }
+
+        // Scoring needs the local model, and unlike the census it cannot degrade
+        // silently — an A/B with no chooser is not a result.
+        let inference: OllamaInferenceService | undefined;
+        if (opts.score) {
+          const { settings } = await loadConfig({ projectDir: opts.dir });
+          const client = new OllamaClient({
+            baseUrl: settings.inference.ollama_base_url,
+            requestTimeoutMs: settings.inference.request_timeout_ms,
+          });
+          inference = new OllamaInferenceService(
+            client,
+            await detectCapability(createProbeRunner()),
+          );
+        }
+
+        const report = await benchRepoMap({
+          root: opts.dir,
+          cases: RETRIEVAL_CASES,
+          repeats,
+          role,
+          ...(inference !== undefined ? { inference } : {}),
+          ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+        });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderRepoMapBench(report),
+        );
+        if (opts.print) {
+          const map = await buildRepoMap(
+            opts.dir,
+            budgetTokens !== undefined ? { budgetTokens } : {},
+          );
+          process.stdout.write(`\n${map.available ? map.text : `No map: ${map.reason}\n`}`);
+        }
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 benchCmd
   .command("tools")
@@ -2913,6 +3005,16 @@ const hookCmd = buildHookCommand({
       return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
     } catch {
       return false; // config unreadable → behave as if disabled (pure-TTL)
+    }
+  },
+  // R8.5: the oversized-`Read` symbol skeleton, gated by
+  // `knowledge.read_skeleton_enabled` (default on) — same pattern, so src/hooks
+  // keeps no config dependency.
+  skeletonEnabled: async (projectDir) => {
+    try {
+      return (await loadConfig({ projectDir })).settings.knowledge.read_skeleton_enabled;
+    } catch {
+      return true; // config unreadable → default on
     }
   },
   // Decision 42: fetch + cache the RAW page ourselves instead of Claude Code's

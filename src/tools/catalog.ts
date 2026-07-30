@@ -82,7 +82,17 @@ function catalogDeps() {
     listPages: (): Promise<readonly WikiPage[]> => REJECT(),
     upsertPage: (): Promise<WikiPage> => REJECT(),
   };
-  return { ...createStandaloneDeps(), knowledge, inference, coder: inference, wiki };
+  return {
+    ...createStandaloneDeps(),
+    knowledge,
+    inference,
+    coder: inference,
+    wiki,
+    // R8.5: `code` registers only when a root is set, and its definition bills on
+    // every request like any other — so the census must see it. The path is never
+    // read here (nothing is invoked), it only satisfies registration.
+    codeRoot: process.cwd(),
+  };
 }
 
 /**

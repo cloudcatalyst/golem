@@ -53,6 +53,11 @@ import {
   WikiWriteConflictError,
 } from "../interfaces/index.js";
 import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
+import {
+  buildRepoMap,
+  DEFAULT_MAP_BUDGET_TOKENS,
+  MAX_MAP_BUDGET_TOKENS,
+} from "../knowledge/repo-map.js";
 import { rerankHits } from "../knowledge/rerank.js";
 import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
@@ -98,6 +103,14 @@ export interface GolemMcpServerDeps {
    * only this field is guaranteed to be a filesystem path.
    */
   readonly projectRootDir?: string;
+  /**
+   * R8.5 — absolute project root the `code` tool maps. The `code` tool is
+   * registered only when this is set (`knowledge.repo_map_enabled`), because a
+   * tool definition is a permanent per-request bill (§88/§100) and a map of
+   * nothing is worth none of it. Independent of {@link knowledge}: the map is
+   * built from the filesystem by tree-sitter, not from the vector index.
+   */
+  readonly codeRoot?: string;
   /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
@@ -443,9 +456,111 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
     );
   }
 
+  if (deps.codeRoot !== undefined) {
+    registerCodeTool(server, deps.codeRoot, tel);
+  }
+
   if (deps.wiki !== undefined) {
     registerWikiTools(server, deps.wiki, tel);
   }
+}
+
+/**
+ * R8.5 — the `code` tool: ONE tool with a `mode` parameter, never one tool per
+ * capability. §88/§100 measured tool definitions as a permanent per-request bill
+ * (11 tools ≈ 3,847 tokens as listed, ~1,130 as forwarded), so a map, and later
+ * R8.6's LSP surfaces, share a single definition and a single schema.
+ */
+function registerCodeTool(server: McpServer, root: string, tel?: ToolTelemetry): void {
+  server.registerTool(
+    "code",
+    {
+      title: "Map this repository's code",
+      description:
+        "Whole-repo code map: the files that matter, each with its key symbol " +
+        "signatures and line numbers, ranked by an import/reference graph and " +
+        "rendered to a token budget (~1.4k). Use it BEFORE reading files to find " +
+        "where something lives — pass the question as `query` and it re-ranks " +
+        "toward that topic. Cheaper than opening candidate files: read a narrow " +
+        "range of the file it names instead. Local, no network.",
+      inputSchema: {
+        mode: z
+          .enum(["map"])
+          .optional()
+          .describe("What to return; only `map` (the whole-repo skeleton) exists today"),
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("What you are looking for — re-ranks the map toward matching files/symbols"),
+        paths: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Repo-relative paths to weight heavily, e.g. files already in play"),
+        budget_tokens: z
+          .number()
+          .int()
+          .min(200)
+          .max(MAX_MAP_BUDGET_TOKENS)
+          .optional()
+          .describe(`Token budget for the rendered map (default ${DEFAULT_MAP_BUDGET_TOKENS})`),
+      },
+      outputSchema: {
+        mode: z.string(),
+        available: z.boolean(),
+        files_scanned: z.number().int().nonnegative(),
+        files_shown: z.number().int().nonnegative(),
+        symbols_total: z.number().int().nonnegative(),
+        symbols_shown: z.number().int().nonnegative(),
+        tokens: z.number().int().nonnegative(),
+        budget_tokens: z.number().int().nonnegative(),
+      },
+    },
+    async ({ mode, query, paths, budget_tokens }) => {
+      const startMs = Date.now();
+      const result = await buildRepoMap(root, {
+        ...(query !== undefined ? { query } : {}),
+        ...(paths !== undefined ? { focusPaths: paths } : {}),
+        ...(budget_tokens !== undefined ? { budgetTokens: budget_tokens } : {}),
+      });
+      if (!result.available) {
+        // Absence of the optional parser is a no-op, NOT an error path
+        // (CLAUDE.md's tier-2 rule): say so plainly and let the caller read files
+        // the ordinary way.
+        return instrumented(tel, "code", startMs, {
+          content: [
+            {
+              type: "text" as const,
+              text: `No repo map available: ${result.reason}`,
+            },
+          ],
+          structuredContent: {
+            mode: mode ?? "map",
+            available: false,
+            files_scanned: 0,
+            files_shown: 0,
+            symbols_total: 0,
+            symbols_shown: 0,
+            tokens: 0,
+            budget_tokens: 0,
+          },
+        });
+      }
+      return instrumented(tel, "code", startMs, {
+        content: [{ type: "text" as const, text: result.text }],
+        structuredContent: {
+          mode: mode ?? "map",
+          available: true,
+          files_scanned: result.filesScanned,
+          files_shown: result.filesShown,
+          symbols_total: result.symbolsTotal,
+          symbols_shown: result.symbolsShown,
+          tokens: result.tokens,
+          budget_tokens: result.budgetTokens,
+        },
+      });
+    },
+  );
 }
 
 /** Longest chunk preview echoed in a search result's text/summary. */

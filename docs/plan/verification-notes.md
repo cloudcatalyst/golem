@@ -4283,3 +4283,79 @@ recorded caveat that the local chooser cannot currently exercise them.
 `--role drafter`. `golem devices` lists the tier's *catalog*, not what Ollama has
 downloaded — the same class of gap as the 2026-07-17 judge bug. Worth a real check
 rather than a third caveat.
+
+---
+
+## §101 — R8.5 measured: the repo map wins the retrieval question by +21.4 points, for 57 tokens (2026-07-30)
+
+R8.5's gate was "does the map let the model find the right file **without** the
+read? Report saving and accuracy together." Built as `golem bench map`, on 22
+hand-labelled retrieval cases against this repo. Unlike the last three
+context-economy items, the instrument said **yes**.
+
+### The A/B
+
+Both arms are shown to the same chooser, on the same cases, in the same run. The
+baseline is deliberately not "no context" — it is the **plain file list**, which
+the model can already get for almost nothing (`Glob`, `ls`), capped to the same
+token budget. Chooser `qwen2.5-coder:7b`, temperature 0, `--role drafter`
+(the tier's `classifier` model is *still* not pulled — third occurrence, see
+§100's standing gap and the `local-models` task).
+
+| arm | context | mean tokens/call | correct/scored | accuracy |
+|---|---|--:|--:|--:|
+| baseline | plain path list (386 paths) | ~1,329 | 18/63 | **28.6%** |
+| candidate | repo map, re-ranked per question | ~1,386 | 33/66 | **50.0%** |
+
+**Delta +21.4 points for +57 tokens per call**, at 22 cases × 3 repeats.
+Resolution is 4.5% (one case), so the delta is 4.7× what the set can resolve, and
+it reproduced *exactly* across 1 and 3 repeats. Verdict **MAP-HELPS**.
+
+Cases the map won and the path list lost: `autonomy-classify`, `hardware-tier`,
+`model-catalog-roles`, `openai-translation`, `settings-precedence`, `statusline`.
+One case went the other way (`brevity-dial`) — recorded, not hidden.
+
+### What it costs, stated beside what it buys
+
+- **The map:** ~1,390 tokens at the default 1.4k budget — 386 files with symbols,
+  2,712 symbols extracted, 12 files / ~70 symbols shown.
+- **What it displaces:** a whole-file read of a labelled file averages **~2,238
+  tokens**, so the map costs **~0.6× one read**. It pays if it avoids one.
+- **The tool definition** (permanent, every request): `golem bench tools` before
+  11 tools / ~902 desc / ~1,128 schema; after 12 / ~1,003 / ~1,289. `code` is
+  **~101 description + ~161 schema = ~262 forwarded tokens** (§100: MCP metadata
+  and `outputSchema` are not forwarded, and an unused tool costs ~nothing until
+  first use).
+
+### Three things the measurement changed in the implementation
+
+1. **Only exported symbols may be graph targets.** Counting every top-level
+   definition as an edge target let file-local names (`body`, `url`, `draft`)
+   attract inbound reference weight from the whole repo, which floated
+   `tests/unit/proxy/cache-prefix.test.ts` above `src/interfaces/`. Restricting
+   targets to exported, non-member definitions fixed the ranking outright.
+2. **A queried map needs more than a personalized teleport vector.** With damping
+   0.85 the hubs still won: `src/cli/init.ts` ranked first for "where is the
+   oversized tool output digest built". A queried map now also lowers damping to
+   0.5 and scales the final rank by the file's own query affinity.
+3. **Word-part matching, not substring matching, and IDF weights.** `the` is a
+   substring of `pathExists` and `and` of `expand`; with raw substring matching
+   those function words out-scored `digest` (2 files). Splitting identifiers into
+   word parts (`runPostToolUseHook` → run, post, tool, use, hook) and weighting
+   each token by rarity put `src/hooks/post-tool-use.ts` first for that question.
+
+### Honest limits
+
+- The chooser is a **local 7B model**, not the frontier model that reads a map in
+  production. A positive result here is evidence the *map* carries the signal, not
+  a claim about how Opus would use it.
+- 22 cases resolve ~4.5% at best, and the labels are hand-written against this
+  repo. The harness reports labelled paths that no longer resolve rather than
+  scoring them wrong, so the set fails loudly when it rots.
+- **This does not answer memo open question 3.** It measures whether the map
+  *names* the right file, not whether the model then skips reading it.
+  Displacement needs live traffic, and remains open.
+- The verdict rule was tightened while running this: a blanket "any excluded
+  chooser error ⇒ inconclusive" let one reproducible unusable reply erase a delta
+  4.7× the resolution. It now scores excluded errors the worst possible way and
+  asks whether the sign survives (here: +18.2%, so it cannot flip).

@@ -264,6 +264,24 @@ export const SETTINGS_LEAVES = {
      */
     syntax_aware_chunking: z.boolean(),
     /**
+     * OPT-OUT (R8.5): register the `code` MCP tool, whose `map` mode renders a
+     * graph-ranked, budgeted signature skeleton of the repo so the model can
+     * find a file without reading three wrong ones. On by default, but it is a
+     * real cost either way — a tool definition bills on every request (§88/§100)
+     * — so set false to stop paying for it. The map itself needs the tier-2
+     * tree-sitter packages; without them the tool reports no map rather than
+     * failing (Decision 53).
+     */
+    repo_map_enabled: z.boolean(),
+    /**
+     * OPT-OUT (R8.5): when an oversized `Read` is swapped for a digest, include
+     * the file's symbol skeleton (every definition with its line number) beside
+     * the head/tail excerpt, so the cheap recovery is a narrow re-read rather
+     * than an `expand` that re-enters the whole original (§95 measured one
+     * expand at 6,356 tokens). Needs tree-sitter; degrades to the plain digest.
+     */
+    read_skeleton_enabled: z.boolean(),
+    /**
      * OPT-OUT (R3.4, spec Decision 20e's local/P1 tier): federate the
      * user-scope wiki (`~/.golem/wiki/`) into `search`/`fetch` alongside this
      * project's own wiki, read-only. On by default — set false if a user
@@ -419,6 +437,8 @@ export interface KnowledgeSettings {
   readonly local_answer_enabled: boolean;
   readonly local_answer_min_confidence: number;
   readonly syntax_aware_chunking: boolean;
+  readonly repo_map_enabled: boolean;
+  readonly read_skeleton_enabled: boolean;
   readonly user_wiki_enabled: boolean;
   readonly rerank_enabled: boolean;
   readonly memory_federation_enabled: boolean;
@@ -499,6 +519,8 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     local_answer_enabled: true,
     local_answer_min_confidence: 0.6,
     syntax_aware_chunking: false,
+    repo_map_enabled: true,
+    read_skeleton_enabled: true,
     user_wiki_enabled: true,
     rerank_enabled: false,
     memory_federation_enabled: false,

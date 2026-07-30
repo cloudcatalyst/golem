@@ -71,6 +71,7 @@ updated: YYYY-MM-DD
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
 - [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
+- [[Repo Map]] — R8.5: whole-repo signature skeleton, graph-ranked and budgeted (`code` tool, `mode: "map"`) plus the symbol skeleton on an oversized `Read`; **measured +21.4 accuracy points for +57 tokens** against a plain path list (§101), byte-stable so it is cache-safe
 - [[Tool Search]] — Anthropic's on-demand tool loading (GA): defer_loading sends full defs but keeps them out of the cached prefix; why Golem relays it rather than shrinking the tools block itself
 - [[Web Cache]] — WebFetch fetch-cache-serve flow (Decision 42 raw mode), freshness/revalidation, oversized → CCR ref
 - [[Knowledge Base]] — RAG ingest + graph-first-then-vector search, scopes/federation, FileVectorDriver (vs spec's Qdrant)
@@ -90,6 +91,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
 - debriefs/2026-07-30-control-panel-and-config-surfaces.md — the `golem` control panel + the one control surface behind CLI/TUI/VS Code; why the config layering needed no refactor, only metadata
+- debriefs/2026-07-30-r8.5-repo-map.md — R8.5: the first item in the R8 context-economy line its own instrument APPROVED (`golem bench map`: 28.6% → 50.0% retrieval accuracy for +57 tokens/call, 22 cases × 3 repeats); three ranking bugs found by reading real output (exported-only graph targets, damping + affinity for a queried map, word-part/IDF matching instead of substrings); displacement (memo open question 3) still unmeasured
 - debriefs/2026-07-30-r8.4-context-ledger.md — R8.4: `golem stats --context` attributes every token in the outgoing request to a bucket and resolves `tool_result` blocks back to the producing tool; first capture found the `tools` block at **18,827 tokens** (~5× §88's figure, promoting schema shrinking), Bash the biggest tool consumer at 36,968 across 132 results (quantifying the RTK case), and one `expand` costing 6,356
 - debriefs/2026-07-30-r8.1-cache-observability.md — R8.1: `golem stats --cache` (billed hit rate + prefix-bust verdicts); the instrument's first measurement (98.4% hit rate, uncached input 0.06%) demoted its own bust-detection half to a guard rail and promoted the context-shrinking levers
 - debriefs/2026-07-30-decision-53-managed-tools.md — spec Decision 53 (Workstream P of the R8 memo): the dependency-tier ladder written down + `src/ext/` registry + `golem ext`; the real invariant is "ship no third-party bytes", not "no binaries"; two audit fixes (`unpdf` was documented optional but mandatory; no `LICENSE` file); a pin is not a passthrough

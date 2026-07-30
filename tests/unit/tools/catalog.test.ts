@@ -6,8 +6,11 @@
 import { describe, expect, it } from "vitest";
 import { golemToolCensus } from "../../../src/tools/index.js";
 
-// The 7 Decision 27/35 tools plus devices + snooze + the two wiki tools.
+// The 7 Decision 27/35 tools plus devices + snooze, the two wiki tools, and
+// R8.5's `code` — which is ONE tool with a `mode` parameter, never one tool per
+// capability, because a definition bills on every request (§88/§100).
 const EXPECTED_TOOLS = [
+  "code",
   "coder",
   "devices",
   "expand",

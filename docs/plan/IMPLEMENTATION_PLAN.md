@@ -127,7 +127,8 @@ Level 0–3 → per-stage config (**simplified from 0–5 by Decision 30; local 
 > **Level 0 ("passthrough") runs nothing, redaction included** — the one sanctioned exception to the redaction hard rule (Decision 30), surfaced loudly wherever active. Legacy 0–5 configs migrate clamp-wise (0–3 face value; 4/5 → 3). Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams (Decision 31) to preserve prompt-cache prefixes — they run only on non-caching gateways. The local model is invoked only via the explicit `coder` MCP tool (Decision 35); a reachable local model shows "local + upstream" in the status surfaces.
 
 ### 2.5 MCP surface (names frozen — Decisions 27/35 gate renames)
-Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `coder`, `devices`, `wiki_read`, `wiki_upsert`.
+Tools: `search`, `fetch`, `ingest`, `expand` (CCR retrieve), `stats`, `level`, `coder`, `devices`, `snooze`, `wiki_read`, `wiki_upsert`, `code`.
+> `code` (R8.5) is **one tool with a `mode` parameter** — `mode: "map"` today, R8.6's LSP surfaces later. New code capabilities become modes, never new tools: §88/§100 measured a tool definition as a permanent per-request bill.
 Prompts (→ slash commands): `slider`, `index`, `search`, `stats`, `expand`, `bypass`, `devices`, `coder`.
 Skills: `/golem/<cmd>` incl. `research`, `wiki-ingest`, `note`, `develop` (and `plan`, R4.1).
 

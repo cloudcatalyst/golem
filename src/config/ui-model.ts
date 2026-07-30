@@ -364,6 +364,21 @@ export const SETTING_META = {
     detail: "Falls back to the heuristic chunker when the packages aren't installed.",
     advanced: true,
   },
+  "knowledge.repo_map_enabled": {
+    label: "Repo map tool",
+    summary: "Offer the `code` tool: a graph-ranked signature map of the repo",
+    detail:
+      "Lets the model find the right file without reading the wrong ones. Needs the " +
+      "optional tree-sitter packages; without them the tool reports no map. A tool " +
+      "definition costs tokens on every request, so turn it off if unused.",
+    restart: "mcp",
+  },
+  "knowledge.read_skeleton_enabled": {
+    label: "Symbol skeleton on oversized reads",
+    summary: "Add each definition and its line number to a swapped-out Read",
+    detail: "Makes the cheap recovery a narrow re-read instead of expanding the whole original.",
+    advanced: true,
+  },
   "knowledge.user_wiki_enabled": {
     label: "Federate the user wiki",
     summary: "Include ~/.golem/wiki/ in search results, read-only",
