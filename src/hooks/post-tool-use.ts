@@ -136,20 +136,73 @@ function findTextSlot(response: unknown): TextSlot | null {
   return null;
 }
 
-/** Cut `text` to `max` chars, preferring the last newline in the window. */
-function headExcerpt(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const window = text.slice(0, max);
-  const nl = window.lastIndexOf("\n");
-  return nl > max / 2 ? window.slice(0, nl) : window;
+/**
+ * R8.3 — line-aligned excerpts that say WHICH lines they are.
+ *
+ * These replace the original char-window excerpts (`text.slice(0, max)` nudged to
+ * the nearest newline), which were cheap but **positionless**: the model got text
+ * with no idea which lines it held, so the only way to see more was `expand`, which
+ * re-enters the whole original. §95 measured one `expand` call at **6,356 tokens** —
+ * the fourth-largest tool consumer in a real session, from a single result — while
+ * §95's `Read` bucket (27,056 tokens across 18 results) is exactly the surface an
+ * external Bash compactor cannot reach (§90).
+ *
+ * Naming the ranges makes the cheap recovery obvious: re-read lines 43–120, or
+ * grep the file, instead of pulling back 15k tokens. That is what
+ * `.claude/rules/golem-ccr-refs.md` already tells agents to prefer; this makes the
+ * digest support the advice instead of quietly working against it.
+ *
+ * Pure and deterministic — the digest is content-addressed and must stay
+ * byte-stable for a given input (prefix stability, §14).
+ */
+interface LineRange {
+  readonly text: string;
+  /** 1-based inclusive line numbers the excerpt covers. */
+  readonly firstLine: number;
+  readonly lastLine: number;
+  /**
+   * True when the char budget cut inside a line, so the range is only partly
+   * shown. Minified bundles and JSON blobs are one enormous line — line
+   * alignment must never let such an input through un-truncated, which is
+   * exactly what the first draft of this did.
+   */
+  readonly truncated: boolean;
 }
 
-/** Take the trailing `max` chars, preferring the first newline in the window. */
-function tailExcerpt(text: string, max: number): string {
-  if (text.length <= max) return text;
-  const window = text.slice(-max);
-  const nl = window.indexOf("\n");
-  return nl !== -1 && nl < max / 2 ? window.slice(nl + 1) : window;
+/** Leading whole lines that fit in `maxChars` (always at least one, char-capped). */
+function headLines(lines: readonly string[], maxChars: number): LineRange {
+  let used = 0;
+  let count = 0;
+  for (const line of lines) {
+    const next = used + line.length + 1;
+    if (count > 0 && next > maxChars) break;
+    used = next;
+    count += 1;
+  }
+  const joined = lines.slice(0, count).join("\n");
+  const text = joined.length > maxChars ? joined.slice(0, maxChars) : joined;
+  return { text, firstLine: 1, lastLine: count, truncated: text.length < joined.length };
+}
+
+/** Trailing whole lines that fit in `maxChars` (always at least one, char-capped). */
+function tailLines(lines: readonly string[], maxChars: number): LineRange {
+  let used = 0;
+  let count = 0;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i] as string;
+    const next = used + line.length + 1;
+    if (count > 0 && next > maxChars) break;
+    used = next;
+    count += 1;
+  }
+  const joined = lines.slice(lines.length - count).join("\n");
+  const text = joined.length > maxChars ? joined.slice(-maxChars) : joined;
+  return {
+    text,
+    firstLine: lines.length - count + 1,
+    lastLine: lines.length,
+    truncated: text.length < joined.length,
+  };
 }
 
 /**
@@ -179,24 +232,57 @@ function externalRecoveryPointer(text: string): string | null {
 
 export function buildDigest(toolName: string | undefined, text: string, refId: string): string {
   const bytes = Buffer.byteLength(text, "utf8");
-  const lines = text.split("\n").length;
+  const allLines = text.split("\n");
+  const lines = allLines.length;
   const tokens = estimateTokens(text);
-  const head = headExcerpt(text, DIGEST_HEAD_CHARS);
-  const tail = tailExcerpt(text, DIGEST_TAIL_CHARS);
+  const head = headLines(allLines, DIGEST_HEAD_CHARS);
+  const tail = tailLines(allLines, DIGEST_TAIL_CHARS);
+
+  // Overlapping excerpts mean the whole thing fits — emit it once rather than
+  // twice, and say so, instead of implying content was elided. Both conditions
+  // are required: line coverage AND no char-level truncation, or a single
+  // enormous line would be declared "complete" and pass through whole.
+  const complete = head.lastLine >= tail.firstLine - 1 && !head.truncated && !tail.truncated;
+  const elidedFrom = head.lastLine + 1;
+  const elidedTo = tail.firstLine - 1;
+  const elidedCount = complete ? 0 : Math.max(0, elidedTo - elidedFrom + 1);
+
   const external = externalRecoveryPointer(text);
   const preserved =
-    external !== null && !head.includes(external) && !tail.includes(external)
+    external !== null && !head.text.includes(external) && !tail.text.includes(external)
       ? `--- preserved pointer from an external compactor ---\n${external}\n`
       : "";
+
+  const partly = (range: LineRange): string => (range.truncated ? ", partial" : "");
+  const body = complete
+    ? `--- lines 1-${lines} of ${lines} ---\n${text}\n`
+    : `--- head: lines ${head.firstLine}-${head.lastLine} of ${lines}${partly(head)} ---\n` +
+      `${head.text}\n` +
+      `--- tail: lines ${tail.firstLine}-${tail.lastLine} of ${lines}${partly(tail)} ---\n` +
+      `${tail.text}\n`;
+
+  // R8.3: name the elided range and point at the CHEAP recovery first. Expanding
+  // re-enters the full original and costs back what the swap saved (§95 measured
+  // one expand at ~6.4k tokens), so a narrower re-read is almost always better.
+  const elided =
+    elidedCount > 0
+      ? `${elidedCount} line(s) elided (lines ${elidedFrom}-${elidedTo})`
+      : "content elided mid-line";
+  const recovery = complete
+    ? `--- end of excerpt: full output above. Retrieve original: expand MCP tool with ` +
+      `ref_id "${refId}" (or /golem/expand ${refId}) ---`
+    : `--- ${elided}. PREFER a narrower re-read of just what you need (e.g. Read with ` +
+      `offset/limit, or grep the file) — expanding re-enters the FULL original and costs ` +
+      `back the tokens this swap saved. To expand anyway: expand MCP tool with ` +
+      `ref_id "${refId}" (or /golem/expand ${refId}) ---`;
+
   return (
     `[Golem: oversized ${toolName ?? "tool"} output (${bytes} bytes, ${lines} lines, ` +
     `~${tokens} tokens) swapped for a head/tail excerpt. The full original is stored ` +
     `losslessly. Retrieve original: hash=${refId}]\n` +
-    `--- head ---\n${head}\n` +
-    `--- tail ---\n${tail}\n` +
+    body +
     preserved +
-    `--- end of excerpt: to see the full output, call the expand MCP tool with ` +
-    `ref_id "${refId}" (or /golem/expand ${refId}) ---`
+    recovery
   );
 }
 

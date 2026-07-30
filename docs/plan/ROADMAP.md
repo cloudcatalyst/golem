@@ -112,6 +112,17 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.3 — line-aware digests** (2026-07-30, §97): rescoped a second time by its own
+  evidence. §95's ledger shows Grep/Glob contributing **nothing** (that work went
+  through `Bash`, RTK's territory), while `Read` is the second-biggest consumer
+  (27,056 tokens) *and* the surface a Bash compactor cannot reach, and one `expand`
+  cost 6,356. So instead of Grep/Glob distillers, the oversized-output digest became
+  **line-aware**: it names the ranges it shows, names the elided range, and
+  recommends a narrow re-read *before* offering `expand` — same token budget,
+  strictly more useful, and now aligned with `golem-ccr-refs.md`'s own advice. A
+  first draft that aligned to lines *without* keeping a char cap let a single 30k
+  minified line through whole; two pre-existing tests caught it, and "complete" now
+  requires line coverage **and** no char truncation. +9 tests.
 - **R8.12 — coexistence with an output-compacting peer (RTK)** (2026-07-30, §96):
   the finding was not §91's predicted one. Golem's autonomy deny-lists are
   word-boundary anchored so they saw through `rtk git push` (safe by luck), but the

@@ -3996,3 +3996,63 @@ classifier reads". Any future tier-3a peer that mutates tool arguments needs the
 same audit — check whether every pattern that matters is anchored in a way that
 survives the rewrite. Start-anchored allow-lists are the fragile ones; the
 word-boundary deny-lists survived by luck, not design.
+
+## §97 — R8.3 rescoped again by its own evidence: Grep/Glob distillation has no measured demand (2026-07-30)
+
+R8.3 was already descoped once (§90: do not rebuild RTK's 100+ Bash filters; build
+only the surfaces a command wrapper cannot reach). Checking §95's ledger before
+building the remainder showed the *rest* of the plan was also speculative.
+
+**The plan said** structure-aware distillers for `Read` / `Grep` / `Glob` / MCP
+results. **The ledger says** where the tokens actually are:
+
+| tool | tokens | results |
+|---|--:|--:|
+| Bash | 36,968 | 132 |
+| **Read** | **27,056** | 18 |
+| WebFetch | 17,015 | 10 |
+| `expand` | 6,356 | 1 |
+| Edit | 4,836 | 68 |
+| Write | 1,615 | 26 |
+| **Grep / Glob** | **absent** | 0 |
+
+Grep and Glob do not appear at all — in this session the equivalent work went
+through `Bash` (`grep`/`ls` via the shell), which is RTK's territory. Building
+Grep/Glob distillers would have been polish on a surface with no measured traffic,
+which is exactly what §94 caught the memo doing for R8.2.
+
+**What shipped instead** is the evidence-supported piece: `Read` is the second
+biggest consumer *and* the one an external Bash compactor cannot touch, and one
+`expand` cost 6,356 tokens. So the digest became **line-aware** — it names the line
+ranges it shows, names the elided range, and recommends a narrow re-read *before*
+offering `expand`:
+
+```
+--- head: lines 1-42 of 1200 ---
+--- tail: lines 1181-1200 of 1200 ---
+--- 1138 line(s) elided (lines 43-1180). PREFER a narrower re-read of just what you
+    need (e.g. Read with offset/limit, or grep the file) — expanding re-enters the
+    FULL original and costs back the tokens this swap saved. ---
+```
+
+Same token budget, strictly more useful: the previous char-window excerpt was
+positionless, so `expand` was the *only* way to see more. This makes the digest
+support `.claude/rules/golem-ccr-refs.md`'s advice instead of quietly working
+against it.
+
+**A bug the existing tests caught.** The first draft aligned to lines without
+keeping a char cap, so a single enormous line (a minified bundle, a JSON blob — one
+line, 30k chars) was classified "complete" and passed through **whole**, defeating
+the swap entirely. Two pre-existing tests failed immediately. The fix requires
+*both* line coverage and no char-level truncation before declaring an output
+complete, and marks a char-clamped range `partial`. Recorded because the failure
+mode was silent bloat, not an error.
+
+**Also removed:** `headExcerpt`/`tailExcerpt` are gone rather than left beside their
+replacements — biome's unused-variable rule flagged them, which is the intended
+outcome for superseded code.
+
+**Still not built, deliberately:** MCP-result distillers. Golem's own tool results
+are 1,018 (`search`) + 40 (`snooze`) + 366 (`TodoWrite`) + 193 (`ToolSearch`)
+tokens in §95's capture — under 0.6% of context. Nothing to win yet; revisit if a
+ledger sample ever shows otherwise.
