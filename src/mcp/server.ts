@@ -32,6 +32,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { EffectiveCompression } from "../compression/effective-level.js";
 import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
 import type {
   CompressionService,
@@ -74,6 +75,15 @@ export const GOLEM_MCP_SERVER_VERSION = "0.1.0";
 export interface GolemMcpServerDeps {
   readonly compression: CompressionService;
   readonly sliderStore: SliderStore;
+  /**
+   * §103 — predicts what a slider level will ACTUALLY do on the configured
+   * upstream, so `level` reports the running level instead of the requested one.
+   * Levels 2–3 collapse to 1 on a prompt-caching upstream (Decision 31), and a
+   * reply saying "aggressive" teaches the model a false belief about its own
+   * context budget. Injected (not computed here) because the server takes no
+   * config dependency; omitted → the tool reports the nominal level as before.
+   */
+  readonly compressionGate?: (level: SliderLevel) => EffectiveCompression;
   /**
    * WS-C knowledge base (task B3). When present, the P1 knowledge tools
    * (`search`, `fetch`, `ingest`) are registered.
@@ -402,16 +412,31 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
           ? " ⚠ Level 0 is a full bypass: redaction is OFF, so secrets/PII reach" +
             " the upstream unredacted. Use level 1 to keep redaction on."
           : "";
+      // §103: say which level is actually running. Reporting the requested level
+      // alone would have the model believe compression it is not getting.
+      const gate = deps.compressionGate?.(sliderLevel);
+      const inert =
+        gate?.degraded === true
+          ? ` ⚠ On this upstream that behaves as level ${gate.effective} ` +
+            `(${LEVEL_NAMES[gate.effective]}), not ${sliderLevel}: ${gate.reason ?? ""}`
+          : "";
       return {
         content: [
           {
             type: "text",
-            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}`,
+            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}${inert}`,
           },
         ],
         structuredContent: {
           slider_level: sliderLevel,
           slider_level_name: LEVEL_NAMES[sliderLevel],
+          ...(gate !== undefined
+            ? {
+                effective_level: gate.effective,
+                effective_level_name: LEVEL_NAMES[gate.effective],
+                degraded: gate.degraded,
+              }
+            : {}),
         },
       };
     },

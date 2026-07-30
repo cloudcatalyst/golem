@@ -6,8 +6,12 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { SLIDER_LEVEL_NAMES } from "../../../src/cli/slider-read.js";
 import {
+  effectiveLevelBadge,
+  effectiveLevelSuffix,
   isCachingUpstream,
+  levelLabel,
   resolveEffectiveCompression,
 } from "../../../src/compression/effective-level.js";
 import type { SliderLevel } from "../../../src/interfaces/policy.js";
@@ -132,5 +136,32 @@ describe("resolveEffectiveCompression", () => {
   it("omits `reason` entirely when not degraded (exactOptionalPropertyTypes)", () => {
     const r = resolveEffectiveCompression({ ...LIVE, level: 3 });
     expect("reason" in r).toBe(false);
+  });
+});
+
+describe("display helpers", () => {
+  // The level names are duplicated so this module stays importable by the status
+  // line without the config loader (§86). Duplication is fine; silent drift is not.
+  it("keeps its level names identical to the CLI's", () => {
+    for (const level of [0, 1, 2, 3] as SliderLevel[]) {
+      expect(levelLabel(level)).toBe(SLIDER_LEVEL_NAMES[level]);
+    }
+  });
+
+  it("renders nothing when nothing is degraded — the common case costs no width", () => {
+    const ok = resolveEffectiveCompression({ ...LIVE, level: 3 });
+    expect(effectiveLevelSuffix(ok)).toBe("");
+    expect(effectiveLevelBadge(ok)).toBe("");
+  });
+
+  it("names the level that is RUNNING in the suffix, and the inert one in the badge", () => {
+    const bad = resolveEffectiveCompression({
+      level: 3,
+      upstreamBaseUrl: "https://api.anthropic.com",
+      headroomSidecar: true,
+      forceSemanticOnCaching: false,
+    });
+    expect(effectiveLevelSuffix(bad)).toBe(" → effectively 1 (lossless)");
+    expect(effectiveLevelBadge(bad)).toBe("⚠ 3 inert");
   });
 });

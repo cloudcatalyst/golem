@@ -21,6 +21,7 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
+import { resolveEffectiveCompression } from "../compression/effective-level.js";
 // Imported from the module, not the config barrel: the barrel deliberately does
 // not re-export the control surface (see src/config/index.ts).
 import { collectControlSurface } from "../config/control-surface.js";
@@ -64,7 +65,12 @@ import {
   translatePrompt,
   writeLastSuggestion,
 } from "../prompt/index.js";
-import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
+import {
+  resolveUpstreamDisplay,
+  UPSTREAM_AUTH_SCHEMES,
+  UPSTREAM_PROVIDERS,
+  upstreamAssumesCaching,
+} from "../providers/index.js";
 import {
   buildResumeArgv,
   createTask,
@@ -870,6 +876,19 @@ mcp
         // slider.level key) the E1 loader and `golem slider` use; the slider is a
         // personal, transient dial kept out of committed settings (Decision 43).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).local),
+        // §103: let `level` report the level that will actually run. Config is in
+        // scope here; the MCP server deliberately takes no config dependency.
+        compressionGate: (level) => {
+          const up = resolveUpstreamDisplay(settings.proxy);
+          const assumeCaching = upstreamAssumesCaching(up.provider);
+          return resolveEffectiveCompression({
+            level,
+            upstreamBaseUrl: up.baseUrl,
+            ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
+            headroomSidecar: settings.compression.headroom_sidecar,
+            forceSemanticOnCaching: settings.compression.force_semantic_on_caching,
+          });
+        },
         ...(knowledge !== undefined
           ? {
               knowledge,

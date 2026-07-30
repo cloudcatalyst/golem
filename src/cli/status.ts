@@ -389,9 +389,24 @@ function updateWarnings(latest: string, sliderLevel: number): string[] {
  * dials.ts but works off the JSON report (which is what the VS Code panel and
  * any script read), so the two surfaces cannot disagree.
  */
-function renderDial(kind: string, dial: DialStatus, sliderLevel: number): string {
-  if (!dial.pinned) return `${kind} ${dial.effective} (auto — follows slider ${sliderLevel})`;
-  return `${kind} ${dial.effective} (${dial.layer === "default" ? "default" : "pinned"})`;
+/**
+ * One dial's line. `effectiveValue` (§103) overrides the displayed value when the
+ * dial's setting is not what the pipeline will apply — the compression dial can
+ * read "3" while the upstream gate makes it behave as 1, and showing the setting
+ * alone is the misreport this exists to prevent.
+ */
+function renderDial(
+  kind: string,
+  dial: DialStatus,
+  sliderLevel: number,
+  effectiveValue?: string,
+): string {
+  const shown =
+    effectiveValue !== undefined && effectiveValue !== dial.effective
+      ? `${dial.effective}→${effectiveValue}`
+      : dial.effective;
+  if (!dial.pinned) return `${kind} ${shown} (auto — follows slider ${sliderLevel})`;
+  return `${kind} ${shown} (${dial.layer === "default" ? "default" : "pinned"})`;
 }
 
 /** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
@@ -477,24 +492,29 @@ export function renderStatus(report: StatusReport): string {
   );
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
   const slider = report.slider;
+  const ec = report.effective_compression;
+  // §103: the LABEL carries the truth. A warning line under a headline that still
+  // reads "aggressive" leaves the headline wrong — which is exactly what the first
+  // pass at this got wrong.
+  const effSuffix = ec.degraded ? ` → effectively ${ec.effective} (${ec.effective_name})` : "";
   lines.push(
-    `Slider: level ${slider.level} (${slider.name}) — set by ${slider.layer}` +
+    `Slider: level ${slider.level} (${slider.name})${effSuffix} — set by ${slider.layer}` +
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
   // Decision 52: the slider is a preset, so name both dials and whether the
   // slider is driving them. A pinned dial must never look like a preset.
   lines.push(
-    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial("compression", report.dials.compression, slider.level)}`,
+    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial(
+      "compression",
+      report.dials.compression,
+      slider.level,
+      String(ec.effective),
+    )}`,
   );
-  // §103: never let a nominal level stand alone when the pipeline will apply a
-  // lower one. "aggressive" read as "aggressive compression is running" when in
-  // fact the two lossy stages were gated off and the behaviour was lossless.
-  const eff = report.effective_compression;
-  if (eff.degraded) {
-    lines.push(
-      `  ⚠ compression is EFFECTIVELY level ${eff.effective} (${eff.effective_name}), ` +
-        `not ${eff.nominal} (${eff.nominal_name}): ${eff.reason ?? ""}`,
-    );
+  // The headline already says the effective level; this line says WHY and what to
+  // do about it, which does not fit in a label.
+  if (ec.degraded) {
+    lines.push(`  ⚠ level ${ec.nominal} (${ec.nominal_name}) is inert here: ${ec.reason ?? ""}`);
   }
   if (report.dials.brevity.effective !== "off") {
     lines.push(

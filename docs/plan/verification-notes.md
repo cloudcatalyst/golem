@@ -4478,10 +4478,18 @@ non-caching providers; it must never engage on Anthropic.
    to answer this question against live billing. An 8.7×–11.3× predicted loss does
    not need confirming at cost; if it is ever run, run it to validate the *model*,
    not to look for a win.
-3. **`golem status` was lying by omission.** It reported `Slider: level 3
-   (aggressive)` while the two stages that distinguish levels 2–3 from level 1 were
-   gated off, so the observed behaviour was level 1. Fixed in the same batch — status
-   now reports the effective level beside the nominal one.
+3. **Every surface that named the level was lying by omission.** `golem status`
+   reported `Slider: level 3 (aggressive)` while the two stages that distinguish
+   levels 2–3 from level 1 were gated off, so the observed behaviour was level 1.
+   Fixed in the same batch, and the fix took two passes worth recording: the first
+   added a *warning line beneath* the headline, which is not enough — a footnote
+   under a headline that still reads "aggressive" leaves the headline wrong. The
+   **label itself** now carries the effective level, at every surface that prints
+   one: `golem status` (headline, dial line, reason), `golem statusline` (leads with
+   the running level, badges the inert one — the per-prompt surface, so the
+   most-read version of the misreport), the `golem` TUI header, `golem slider <n>`
+   at set time, and the `level` MCP tool (whose reply otherwise teaches the *model*
+   a false belief about its own context budget).
 4. **The script is the reusable gate.** Any future compressor (Caveman-class,
    context substitution, a new Headroom release) gets held to the same bar: report
    first-divergence index, not just gross tokens. A compressor that only touches the

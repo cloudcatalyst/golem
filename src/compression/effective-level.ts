@@ -120,3 +120,43 @@ export function resolveEffectiveCompression(
 
   return { nominal, effective: nominal, degraded: false };
 }
+
+/**
+ * Human names for the four levels. Duplicated from `cli/slider-read.ts` on
+ * purpose: this module must stay importable by the status line without dragging
+ * in the config loader (verification-notes §86 — the status line runs on every
+ * prompt). `tests/unit/compression/effective-level.test.ts` asserts the two lists
+ * agree, so the duplication cannot drift silently.
+ */
+const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
+  0: "passthrough",
+  1: "lossless",
+  2: "balanced",
+  3: "aggressive",
+};
+
+export function levelLabel(level: SliderLevel): string {
+  return LEVEL_NAMES[level];
+}
+
+/**
+ * The suffix that makes a nominal level honest in prose, e.g.
+ * `" → effectively 1 (lossless)"`. Empty when nothing is degraded.
+ *
+ * Every surface that prints a level name uses this rather than appending its own
+ * warning underneath. A footnote below a headline reading "aggressive" still
+ * leaves the headline wrong — the label itself has to carry the truth (§103).
+ */
+export function effectiveLevelSuffix(eff: EffectiveCompression): string {
+  if (!eff.degraded) return "";
+  return ` → effectively ${eff.effective} (${levelLabel(eff.effective)})`;
+}
+
+/**
+ * The compact badge for dense, width-constrained displays (status line, TUI
+ * header): `"⚠ 3 inert"`. Empty when nothing is degraded, so the common case
+ * costs no width.
+ */
+export function effectiveLevelBadge(eff: EffectiveCompression): string {
+  return eff.degraded ? `⚠ ${eff.nominal} inert` : "";
+}
