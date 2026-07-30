@@ -15,6 +15,8 @@
  * has been trimmed into vagueness tends to over-trigger.
  */
 
+import type { ArgumentCase } from "./arguments.js";
+
 export interface SelectionCase {
   readonly id: string;
   readonly prompt: string;
@@ -148,4 +150,116 @@ export const SELECTION_CASES: readonly SelectionCase[] = [
   },
   { id: "none-4", prompt: "What did I ask you two messages ago?", expected: null },
   { id: "none-5", prompt: "Run the test suite and tell me if it's green.", expected: null },
+];
+
+/**
+ * R8.S1 — the labelled argument-construction case set.
+ *
+ * Same honesty caveat as above: the expectations are ours, not observed traffic.
+ * They are narrower on purpose. A selection label is a judgement about which tool
+ * fits; an argument label is only asserted where the prompt states the value
+ * outright — the hex id it prints, the level it names, the path it gives. Anything
+ * needing interpretation is left unasserted, so the score moves when the *schema*
+ * stops carrying information rather than when our taste differs from the model's.
+ *
+ * Every case names a tool with at least one required field, because "did it supply
+ * what the tool cannot run without" is the cheapest true signal here. Tools whose
+ * schema is entirely optional (`devices`, `stats`) are absent: nothing about them
+ * can fail.
+ */
+export const ARGUMENT_CASES: readonly ArgumentCase[] = [
+  {
+    id: "arg-expand-1",
+    tool: "expand",
+    prompt: "The output ended with `Retrieve original: hash=deadbeef12`. Recover the original.",
+    expect: { ref_id: "deadbeef12" },
+  },
+  {
+    id: "arg-expand-2",
+    tool: "expand",
+    // The id here is given as `ref=`, the standalone-stub spelling the description
+    // mentions parenthetically — exactly the kind of detail a schema trim removes.
+    prompt: "Expand the reference `[golem:ccr ref=4c1d9e77 bytes=920]`.",
+    expect: { ref_id: "4c1d9e77" },
+  },
+  {
+    id: "arg-fetch-1",
+    tool: "fetch",
+    prompt: "Give me the full text of chunk c_8f21ab — the preview is cut off.",
+    expect: { chunk_id: "c_8f21ab" },
+  },
+  {
+    id: "arg-level-1",
+    tool: "level",
+    prompt: "Set Golem's slider to level 2.",
+    expect: { level: 2 },
+  },
+  {
+    id: "arg-level-2",
+    tool: "level",
+    // Out-of-range bait: "maximum" is a word in the prompt, 0–5 is a bound in the
+    // schema. `schema-validation` removes that bound.
+    prompt: "Turn the slider up to the maximum aggressive setting.",
+    expect: { level: 3 },
+  },
+  {
+    id: "arg-search-1",
+    tool: "search",
+    prompt: "Search the knowledge base for prompt caching, and give me at most 3 hits.",
+    expect: { k: 3 },
+  },
+  {
+    id: "arg-search-2",
+    tool: "search",
+    // Over-range bait for `k` (maximum 50).
+    prompt: "Search for redaction and return a hundred hits.",
+  },
+  {
+    id: "arg-ingest-1",
+    tool: "ingest",
+    prompt: "Index ../vendor/sdk and keep watching it for changes.",
+    expect: { path: "../vendor/sdk", watch: true },
+  },
+  {
+    id: "arg-snooze-1",
+    tool: "snooze",
+    prompt: "Park this session until the limit resets at 2026-07-30T14:00:00Z.",
+    expect: { until: "2026-07-30T14:00:00Z" },
+  },
+  {
+    id: "arg-snooze-2",
+    tool: "snooze",
+    prompt: "Wait for 90 seconds, then carry on.",
+    expect: { duration_ms: 90000 },
+  },
+  {
+    id: "arg-wiki_read-1",
+    tool: "wiki_read",
+    prompt: 'Read the wiki page titled "Prompt Caching".',
+    expect: { title_or_path: "Prompt Caching" },
+  },
+  {
+    id: "arg-wiki_upsert-1",
+    tool: "wiki_upsert",
+    // `type` is an enum of 9 values and is required — the one field here that can
+    // only be got right by reading the schema.
+    prompt:
+      'Create the wiki page concepts/Tool Search.md titled "Tool Search" as a concept page, ' +
+      "with a paragraph saying tool search is generally available.",
+    expect: { rel_path: "concepts/Tool Search.md", title: "Tool Search", type: "concept" },
+  },
+  {
+    id: "arg-coder-1",
+    tool: "coder",
+    prompt:
+      "Draft a TypeScript function that parses an ISO duration into seconds. Don't ground it " +
+      "against the knowledge base.",
+    expect: { ground: false },
+  },
+  {
+    id: "arg-coder-2",
+    tool: "coder",
+    prompt: "Write a first cut of the retry wrapper class, and run the extra judge-revise pass.",
+    expect: { refine: true },
+  },
 ];

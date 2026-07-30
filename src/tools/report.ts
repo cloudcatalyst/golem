@@ -40,15 +40,25 @@ export function renderToolBench(report: ToolBenchReport): string {
   lines.push("");
   lines.push(`  tools registered      ${census.tools.length}`);
   lines.push(`  description tokens    ~${census.descriptionTokens}`);
-  lines.push(`  full definitions      ~${census.definitionTokens} (incl. input schemas)`);
+  lines.push(`  input schema tokens   ~${census.schemaTokens}`);
+  lines.push(
+    `  full definitions      ~${census.definitionTokens} (incl. schemas and MCP metadata)`,
+  );
   lines.push("");
   lines.push("  per tool (descending by description size):");
   for (const tool of census.tools) {
     lines.push(
       `    ${tool.name.padEnd(14)} ~${String(tool.descriptionTokens).padStart(4)} desc` +
+        `  ~${String(tool.schemaTokens).padStart(4)} schema` +
         `  ~${String(tool.definitionTokens).padStart(4)} full`,
     );
   }
+  lines.push("");
+  lines.push("  `full` is what listTools returns, including title/annotations/outputSchema.");
+  lines.push(
+    "  What reaches the API is the client's choice, not Golem's — `golem stats --context`",
+  );
+  lines.push("  measures the block as actually forwarded, and splits it by owner.");
   lines.push("");
   lines.push("  This block renders FIRST in the cached prefix, so it bills at ~0.1x after the");
   lines.push("  first turn — and an unstable transform invalidates the whole prefix every");
@@ -56,8 +66,9 @@ export function renderToolBench(report: ToolBenchReport): string {
 
   if (report.comparison === undefined) {
     lines.push("");
-    lines.push("No transform scored. Re-run with --shrink <whitespace|first-sentence> to");
-    lines.push("A/B a candidate against the tool-selection case set.");
+    lines.push("No transform scored. Re-run with --shrink <mode> to A/B a candidate:");
+    lines.push("  whitespace | first-sentence          descriptions (§89: both rejected)");
+    lines.push("  schema-meta | schema-validation | schema-descriptions   input schemas (R8.S1)");
     return `${lines.join("\n")}\n`;
   }
 
@@ -69,8 +80,9 @@ export function renderToolBench(report: ToolBenchReport): string {
     `  chooser model         ${result.candidate.model ?? "unavailable"} (role: ${report.comparison.role ?? "classifier"})`,
   );
   lines.push(`  cases x repeats       ${cases} x ${result.candidate.repeats}`);
+  lines.push(`  catalog shown as      ${result.render}`);
   lines.push(
-    `  tokens               ~${result.baselineTokens} -> ~${result.candidateTokens}` +
+    `  tokens (${result.measuring.padEnd(12)}) ~${result.baselineTokens} -> ~${result.candidateTokens}` +
       `  (saved ~${result.tokensSaved})`,
   );
   lines.push(
@@ -91,6 +103,32 @@ export function renderToolBench(report: ToolBenchReport): string {
         "   (excluded, never scored as wrong)",
     );
   }
+
+  const args = result.arguments;
+  if (args !== undefined) {
+    lines.push("");
+    lines.push(
+      `  Argument construction (${args.cases} case(s), graded against the ORIGINAL schemas):`,
+    );
+    lines.push(
+      `    schema-valid       ${pct(args.baseline.validity)} -> ${pct(args.candidate.validity)}` +
+        `  (${signedPct(args.validityDelta)})`,
+    );
+    lines.push(
+      `    fields correct     ${pct(args.baseline.fieldAccuracy)} -> ${pct(args.candidate.fieldAccuracy)}` +
+        `  (${signedPct(args.fieldAccuracyDelta)})`,
+    );
+    if (args.baseline.errors > 0 || args.candidate.errors > 0) {
+      lines.push(
+        `    harness errors     ${args.baseline.errors} baseline, ${args.candidate.errors} candidate` +
+          "   (excluded)",
+      );
+    }
+    lines.push("    A schema shrink usually keeps selection intact and breaks THIS — the model");
+    lines.push("    still picks the right tool, then fills it in wrongly.");
+  }
+
+  lines.push("");
   lines.push(`  verdict              ${result.verdict.toUpperCase()}`);
   for (const note of result.notes) {
     lines.push(`    ! ${note}`);

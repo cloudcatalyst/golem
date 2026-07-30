@@ -21,9 +21,6 @@
       "Bash(gh pr *)",
       "mcp__golem__snooze",
       "Edit(/.claude/skills/golem/**)"
-    ],
-    "ask": [
-      "mcp__golem__wiki_upsert"
     ]
   },
   "hooks": {

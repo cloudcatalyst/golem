@@ -37,11 +37,16 @@ multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
   start jobs) — recent PRs merged on green *local* runs; unblocking it is a USER
   account step.
 - **R8a (context economy) is shipped** and, unusually, its own instruments
-  redirected it twice: §93 (98.4% cache hit rate → bust prevention is a guard rail,
-  not a lever), §94 (R8.2 already existed), §95 (the `tools` block is 18.8k tokens;
-  Bash is the biggest tool consumer), §97 (Grep/Glob have no measured traffic).
-  **Next by evidence:** R8.S1 tool-*schema* shrinking (ceiling now 18.8k, harness
-  already built), then R8.5 repo map + oversized-`Read` swap.
+  redirected it *four* times: §93 (98.4% cache hit rate → bust prevention is a guard
+  rail, not a lever), §94 (R8.2 already existed), §95 (the `tools` block is 18.8k
+  tokens; Bash is the biggest tool consumer), §97 (Grep/Glob have no measured
+  traffic), and now **§100 — R8.S1 REJECTED**: of that 18.8k, **93.9% is Claude
+  Code's own built-ins** and Golem's entire share is **1,130 tokens (0.8% of the
+  request)**, so the ceiling was never a lever. §89's "the schemas are the headroom
+  (~2900)" was also an artifact — Golem's input schemas are ~1,128, and the rest was
+  `outputSchema` + MCP metadata that Claude Code never forwards.
+  **Next by evidence:** R8.5 repo map + oversized-`Read` swap — `Read` is the
+  second-biggest tool consumer and the one a Bash compactor cannot reach.
 - **The Windows suite flake is gone** (BACKLOG 2026-07-29): all 85 temp-tree
   deletes share a retry-hardened `rmTemp`; three consecutive full-suite runs green.
 - **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
@@ -119,6 +124,37 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.S1 — tool-schema shrinking: REJECTED, and the tools-block line closed**
+  (2026-07-30, §100). Promoted twice on figures that were each right about their own
+  subject and wrong about the conclusion. The ledger now decomposes the `tools` block
+  per definition — owner, description/schema/other split, `defer_loading` — and the
+  first capture ended the workstream: **93.9% of the block is client built-ins**
+  (`Workflow` alone is 5,264 tokens, **4.7× Golem's entire contribution**), Golem's
+  share is **1,130 tokens = 0.8% of a 139k request**, and on the wire prose outweighs
+  schemas **2:1**. §89's "~2900 tokens of input schemas" was an artifact of
+  subtracting descriptions from the `listTools` total: the real figure is ~1,128, the
+  remainder being `outputSchema` (~1,522) + `title`/`annotations`/`_meta`, **none of
+  which Claude Code forwards** (`other keys` averages ~21 tokens/tool). Also observed
+  and recorded as undocumented: Claude Code's MCP deferral is client-side and *does*
+  shrink the wire — a `DeferredToolPlaceholder` (51 tokens) plus only the tools
+  already discovered, so an unused Golem tool costs ~nothing. Three schema transforms
+  were built and measured anyway (`schema-meta` / `-validation` / `-descriptions`,
+  saving up to 68% of Golem's schema tokens) behind two **new** gates — `--render full`
+  so the chooser actually sees the schema, and an **argument-construction** harness
+  graded against the *original* schemas, which can veto. Their flat results are
+  reported as an **instrument limit, not a pass** (a 7B chooser ignores a `maximum: 50`
+  that is right in front of it). Rejected on arithmetic instead: even the provably
+  invisible `schema-meta` is worth **~72 tokens on the wire**, 0.05%, in exchange for
+  mutating a cached prefix. +66 tests (1837 → 1903). Debrief
+  `2026-07-30-r8.s1-tool-schema-shrinking.md`; concept pages [[Context Ledger]] (new)
+  + [[Tool Search]] (corrected).
+- **`golem init` stops gating `wiki_upsert`** (Decision 54, 2026-07-30, USER):
+  Decision 44 de-gated wiki authorship in every living *document* but `init` kept
+  writing a `permissions.ask` rule for `mcp__golem__wiki_upsert`, and an `ask` rule
+  prompts even when a matching `allow` rule exists — so the gate outlived the decision
+  in the mechanism. `init` now writes only the blanket allow rule, **removes** a legacy
+  ask entry (so re-running migrates an existing project), and no longer creates an
+  empty `permissions.ask: []`. ADRs at `docs/decisions/` keep the stricter rule.
 - **R8.10 — supply-chain hardening** (2026-07-30, §98): `.npmrc` sets
   `save-exact=true` + `min-release-age=2` (**verified working** on npm 11.12.1 —
   npm translates it into a rolling `before` timestamp, which is why
