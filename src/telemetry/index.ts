@@ -73,6 +73,13 @@ export function recordPipelineEvent(
     ...(event.brevityDirectiveTokens > 0
       ? { brevity: event.brevity, brevityDirectiveTokens: event.brevityDirectiveTokens }
       : {}),
+    // R8.1: written only when the prefix was actually observed, so pipeline-event
+    // bytes are unchanged for callers that do not classify (e.g. the MCP-side
+    // compression service, which has no conversation to compare against).
+    ...(event.cachePrefix !== undefined ? { cachePrefix: event.cachePrefix } : {}),
+    ...(event.cacheBustComponent !== undefined
+      ? { cacheBustComponent: event.cacheBustComponent }
+      : {}),
   };
   return store.record(telemetryEvent);
 }

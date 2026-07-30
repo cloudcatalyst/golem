@@ -53,9 +53,24 @@ the secrets — nothing is published to npm or the Marketplace without them:
 To publish manually instead (requires `npm login`):
 
 ```sh
+npm run verify:deps                  # exact pins + .npmrc posture (R8.10)
+npm run deps:shrinkwrap              # generate npm-shrinkwrap.json — see below
 npm publish --dry-run                # inspect the tarball contents first
 npm publish                          # publishes golem-run
 ```
+
+### Why the shrinkwrap step matters (R8.10)
+
+npm **ignores** a `package-lock.json` inside a published tarball, so without this
+step consumers of `golem-run` resolve transitive dependencies fresh at install
+time and inherit none of this repo's pinning. `npm-shrinkwrap.json` is the one
+lockfile npm honours when published, so generating it means a consumer installs
+the exact tree that was tested here.
+
+It is **generated, never committed** (`.gitignore`): `package-lock.json` stays the
+single ground truth, and keeping both in the tree would guarantee drift. Re-run
+`npm run deps:shrinkwrap` after any dependency change, immediately before
+publishing.
 
 After the first publish, `golem update` and the `curl … | sh` / `irm … | iex`
 installers start working (until then they fail gracefully — Decision 41b).

@@ -31,10 +31,17 @@ multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
 
 ## Where we are (validated 2026-07-30)
 
-- **Baseline green:** `tsc --noEmit`, `biome check`, and `vitest run`
-  (1668 tests) all pass locally, and `golem wiki check` reports 0 issues over 95
-  pages. **CI is billing-blocked** (GitHub Actions refuses to start jobs) — recent
-  PRs merged on green *local* runs; unblocking it is a USER account step.
+- **Baseline green:** `tsc --noEmit`, `biome check`, `npm run verify:deps`, and
+  `vitest run` (**1837 tests**) all pass locally, and `golem wiki check` reports 0
+  issues over **100 pages**. **CI is billing-blocked** (GitHub Actions refuses to
+  start jobs) — recent PRs merged on green *local* runs; unblocking it is a USER
+  account step.
+- **R8a (context economy) is shipped** and, unusually, its own instruments
+  redirected it twice: §93 (98.4% cache hit rate → bust prevention is a guard rail,
+  not a lever), §94 (R8.2 already existed), §95 (the `tools` block is 18.8k tokens;
+  Bash is the biggest tool consumer), §97 (Grep/Glob have no measured traffic).
+  **Next by evidence:** R8.S1 tool-*schema* shrinking (ceiling now 18.8k, harness
+  already built), then R8.5 repo map + oversized-`Read` swap.
 - **The Windows suite flake is gone** (BACKLOG 2026-07-29): all 85 temp-tree
   deletes share a retry-hardened `rmTemp`; three consecutive full-suite runs green.
 - **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
@@ -95,6 +102,88 @@ them, Decision 36).
   (fidelity already held, no bug). Remaining headroom is the **input schemas**
   (~2900 of the ~3847 total), not the prose. Debrief
   `2026-07-30-workstream-b-tool-selection.md`; concept page [[Tool Search]].
+
+- **Managed tools: the dependency-tier ladder + `golem ext`** (Decision 53,
+  2026-07-30): Workstream P of the new R8 memo
+  (`docs/plan/proposals/r8-context-economy.md`), shipped first at the user's
+  direction. Writes down the policy Headroom, Ollama and Caveman had already
+  converged on — **external tools are spawned or detected, never shipped** — as a
+  tier ladder (1/2/3a/3b), three integration shapes (only *callable* can be
+  wrapped), and a four-criterion admission bar the Caveman speech skill
+  deliberately fails. New `src/ext/` + `golem ext [--json] [--verbose]`, with
+  spawn-free `PATHEXT`-aware detection that **refuses to report "running"** and
+  carries a `gate` note instead — which immediately answered the question that
+  prompted the work (Headroom is enabled here and has never run). Two audit
+  findings fixed: `unpdf` was documented optional while being a mandatory static
+  import, and there was no `LICENSE` file. +45 tests. Notes §90 (RTK), §91 (hook
+  precedence — **open**), §92 (the audit); debrief
+  `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
+
+- **R8.10 — supply-chain hardening** (2026-07-30, §98): `.npmrc` sets
+  `save-exact=true` + `min-release-age=2` (**verified working** on npm 11.12.1 —
+  npm translates it into a rolling `before` timestamp, which is why
+  `npm config get` on the alias reports null while the effect is real); all 6
+  direct dependencies pinned **exactly**; `scripts/make-shrinkwrap.mjs` generates
+  the `npm-shrinkwrap.json` that published tarballs need (npm ignores
+  `package-lock.json` inside a tarball, so consumers previously inherited none of
+  our pinning) — generated, gitignored, documented in RELEASING.md;
+  `scripts/verify-deps.mjs` wired into `npm run check` enforces pins, the `.npmrc`
+  posture, pin↔lockfile agreement, and a ≤5 runtime-dependency ceiling. +12 tests.
+  Overdue before the R7.5 first publish.
+- **R8.3 — line-aware digests** (2026-07-30, §97): rescoped a second time by its own
+  evidence. §95's ledger shows Grep/Glob contributing **nothing** (that work went
+  through `Bash`, RTK's territory), while `Read` is the second-biggest consumer
+  (27,056 tokens) *and* the surface a Bash compactor cannot reach, and one `expand`
+  cost 6,356. So instead of Grep/Glob distillers, the oversized-output digest became
+  **line-aware**: it names the ranges it shows, names the elided range, and
+  recommends a narrow re-read *before* offering `expand` — same token budget,
+  strictly more useful, and now aligned with `golem-ccr-refs.md`'s own advice. A
+  first draft that aligned to lines *without* keeping a char cap let a single 30k
+  minified line through whole; two pre-existing tests caught it, and "complete" now
+  requires line coverage **and** no char truncation. +9 tests.
+- **R8.12 — coexistence with an output-compacting peer (RTK)** (2026-07-30, §96):
+  the finding was not §91's predicted one. Golem's autonomy deny-lists are
+  word-boundary anchored so they saw through `rtk git push` (safe by luck), but the
+  **allow**-list was start-anchored, so `rtk vitest` fell through to `unknown` → a
+  prompt. Fail-closed, never unsafe — but a user whose auto-approvals start asking
+  loosens the autonomy level, and a safety mechanism disabled out of irritation is a
+  safety problem. Fixed by retrying **only the allow-list** against the unwrapped
+  command (danger checks run first, on the original, so unwrapping can never
+  downgrade). Second fix: `buildDigest` now preserves an external compactor's
+  `[full output: …]` recovery pointer instead of eliding it — a compaction of a
+  compaction must not destroy the other tool's way back. +17 tests. **§91 stays
+  open**: precedence between a rewriting hook and a denying one is Claude Code's to
+  define and the docs do not.
+- **R8.4 — the context ledger** (2026-07-30): `golem stats --context` attributes
+  every token in the outgoing request to a bucket and resolves each `tool_result`
+  back to the tool that produced it (`tool_use_id` → name), so context pruning is
+  aimed instead of guessed. Latest-only state file (`writeLimitState`'s
+  fail-open contract); the pipeline stays clock-free (`ContextLedgerCore` + the CLI
+  stamps `capturedAt`); no prompt content is stored, tool names are. **First
+  capture (§95) moved three things:** the `tools` block measured **18,827 tokens**
+  — ~5× §88's figure and the largest single block, promoting R8.S1 schema
+  shrinking; **Bash** is the biggest tool consumer (36,968 tokens / 132 results),
+  quantifying the RTK case and confirming R8.3's descoping; and one `expand` cost
+  6,356. +24 tests. Debrief `2026-07-30-r8.4-context-ledger.md`.
+- **R8.2 — STRUCK, not built** (2026-07-30, §94): the memo proposed
+  suffix-only tool-result dedup as novel; `src/compression/native-lossless.ts` has
+  shipped it since task A2 (Decision 18), and achieves the cache-safety property by
+  *purity* (the transform of `messages[i]` depends only on the original bytes of
+  `messages[0..i]`) rather than by special-casing the suffix. Measured on real
+  traffic: **4,449,703 tokens saved**, 4,878 refs stored, **2** retrieved. The
+  lesson is the repo's own rule the memo skipped — check the code before proposing.
+- **R8.1 — cache-hit observability + prefix-bust detection** (2026-07-30):
+  `golem stats --cache` reports the billed hit rate (authoritative, from the R1.1
+  usage sniffer) beside a per-request prefix verdict (`first`/`append`/`bust` with
+  the component and turn named) — two signals deliberately **never merged**, since
+  one is ground truth and the other a prediction from the forwarded bytes. New
+  `src/proxy/cache-prefix.ts` (hash-only fingerprints, bounded observer) +
+  `src/telemetry/cache-report.ts`; verdicts ride on the pipeline event.
+  **Its first measurement re-ranked R8** (§93): 98.4% hit rate on this repo,
+  uncached input 0.06% of billed input, so **~83% of input cost is re-reading an
+  already-cached context** — bust prevention is a guard rail, and the levers are
+  R8.2 (dedup) and R8.5 (repo map). +44 tests. Debrief
+  `2026-07-30-r8.1-cache-observability.md`; concept page [[Cache Observability]].
 
 ## Carried-over loose ends (visible, not lost)
 

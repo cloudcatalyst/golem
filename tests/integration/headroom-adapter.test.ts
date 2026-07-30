@@ -108,3 +108,91 @@ describe("HeadroomSidecar (fake worker)", () => {
     expect(sc.isRunning()).toBe(false);
   });
 });
+
+/**
+ * Decision 53 — the opaque `CompressConfig` passthrough. The point of these is
+ * that Golem never enumerates Headroom's options: an unknown-to-Golem key must
+ * still reach the worker, and a key the *worker* rejects must be reported rather
+ * than silently dropped.
+ */
+describe("HeadroomSidecar config passthrough (Decision 53)", () => {
+  function configuredSidecar(
+    config: Readonly<Record<string, unknown>>,
+    log: (m: string) => void = () => {},
+  ): HeadroomSidecar {
+    return track(
+      new HeadroomSidecar({
+        command: process.execPath,
+        launchArgs: [],
+        workerPath: FAKE_WORKER,
+        startupTimeoutMs: 8000,
+        requestTimeoutMs: 5000,
+        config,
+        log,
+      }),
+    );
+  }
+
+  const MESSAGES = [
+    { role: "user", content: "one" },
+    { role: "assistant", content: "two" },
+  ];
+
+  it("forwards a key Golem has never heard of, as long as the worker accepts it", async () => {
+    // `kompress_model` is deliberately NOT referenced anywhere in Golem's TS.
+    const sc = configuredSidecar({ kompress_model: "some-model" });
+    expect(await sc.start()).toBe(true);
+    const result = await sc.compress(MESSAGES, "stale_turns");
+    expect(result).not.toBeNull();
+    const health = await sc.health();
+    expect(health?.supported_config).toContain("kompress_model");
+  });
+
+  it("sends no config key at all when the bag is empty", async () => {
+    // An empty object must not become `config: {}` chatter on every request; the
+    // worker's mode presets are the whole behaviour until a user reaches past them.
+    const logs: string[] = [];
+    const sc = configuredSidecar({}, (m) => logs.push(m));
+    expect(await sc.start()).toBe(true);
+    expect(await sc.compress(MESSAGES, "stale_turns")).not.toBeNull();
+    // Startup chatter is expected; what must be absent is any config diagnostic.
+    expect(logs.filter((l) => l.includes("headroom_config"))).toEqual([]);
+  });
+
+  it("warns once when the worker ignores an unsupported key, not once per request", async () => {
+    const logs: string[] = [];
+    const sc = configuredSidecar({ not_a_real_headroom_option: 1 }, (m) => logs.push(m));
+    expect(await sc.start()).toBe(true);
+    await sc.compress(MESSAGES, "stale_turns");
+    await sc.compress(MESSAGES, "stale_turns");
+    await sc.compress(MESSAGES, "stale_turns");
+    const warnings = logs.filter((l) => l.includes("headroom_config"));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("not_a_real_headroom_option");
+  });
+
+  it("still compresses when a key is ignored — a bad option costs the option, not the stage", async () => {
+    const sc = configuredSidecar({ not_a_real_headroom_option: 1 });
+    expect(await sc.start()).toBe(true);
+    const result = await sc.compress(MESSAGES, "stale_turns");
+    expect(result?.messages).toHaveLength(MESSAGES.length - 1);
+    expect(result?.tokensBefore).toBe(1000);
+  });
+
+  it("reports supported_config from the running worker, not from the pin", async () => {
+    const sc = configuredSidecar({});
+    expect(await sc.start()).toBe(true);
+    const health = await sc.health();
+    expect(health?.ok).toBe(true);
+    expect(health?.supported_config).toEqual([
+      "compress_user_messages",
+      "kompress_model",
+      "protect_recent",
+    ]);
+  });
+
+  it("returns null from health() when the worker is not running", async () => {
+    const sc = configuredSidecar({});
+    expect(await sc.health()).toBeNull();
+  });
+});

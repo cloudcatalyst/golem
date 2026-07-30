@@ -1,0 +1,229 @@
+/**
+ * R8.1 — cache-prefix fingerprinting and bust detection.
+ *
+ * The behaviour under test is the distinction that decides the bill: a normal
+ * agentic turn (append) versus an edit to already-sent bytes (bust), and which
+ * component to blame when the prefix breaks.
+ */
+
+import { describe, expect, it } from "vitest";
+import {
+  CachePrefixObserver,
+  cachePrefixFingerprint,
+  classifyPrefixChange,
+} from "../../../src/proxy/cache-prefix.js";
+
+const TOOLS = [{ name: "search", description: "find things", input_schema: { type: "object" } }];
+
+function body(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    model: "claude-opus-5",
+    tools: TOOLS,
+    system: [{ type: "text", text: "You are helpful." }],
+    messages: [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "second" },
+    ],
+    ...over,
+  };
+}
+
+describe("cachePrefixFingerprint", () => {
+  it("is stable for identical bodies", () => {
+    expect(cachePrefixFingerprint(body())).toEqual(cachePrefixFingerprint(body()));
+  });
+
+  it("ignores fields outside the cacheable prefix", () => {
+    const a = cachePrefixFingerprint(body());
+    const b = cachePrefixFingerprint(body({ max_tokens: 4096, stream: true, temperature: 0.7 }));
+    expect(a).toEqual(b);
+  });
+
+  it("treats a missing key and an explicit undefined as the same", () => {
+    const withoutTools = body();
+    delete withoutTools.tools;
+    expect(cachePrefixFingerprint(withoutTools).tools).toBe(
+      cachePrefixFingerprint(body({ tools: undefined })).tools,
+    );
+  });
+
+  it("keys the conversation on the first message, so it survives appends", () => {
+    const one = cachePrefixFingerprint(body());
+    const grown = cachePrefixFingerprint(
+      body({
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "second" },
+          { role: "user", content: "third" },
+        ],
+      }),
+    );
+    expect(grown.conversationKey).toBe(one.conversationKey);
+  });
+
+  it("produces an empty conversation key when there are no messages", () => {
+    expect(cachePrefixFingerprint({ messages: [] }).conversationKey).toBe("");
+  });
+
+  it("does not embed prompt content in the fingerprint", () => {
+    const fp = cachePrefixFingerprint(body({ system: "SECRET-MARKER-STRING" }));
+    expect(JSON.stringify(fp)).not.toContain("SECRET-MARKER-STRING");
+  });
+});
+
+describe("classifyPrefixChange", () => {
+  const base = cachePrefixFingerprint(body());
+
+  it("reports `first` when there is nothing to compare", () => {
+    const o = classifyPrefixChange(undefined, base);
+    expect(o.verdict).toBe("first");
+    expect(o.component).toBeUndefined();
+  });
+
+  it("reports `append` for an unchanged prefix with new messages", () => {
+    const next = cachePrefixFingerprint(
+      body({
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "second" },
+          { role: "user", content: "third" },
+        ],
+      }),
+    );
+    const o = classifyPrefixChange(base, next);
+    expect(o.verdict).toBe("append");
+    expect(o.detail).toContain("1 message(s) appended");
+  });
+
+  it("reports `append` for a byte-identical repeat", () => {
+    const o = classifyPrefixChange(base, cachePrefixFingerprint(body()));
+    expect(o.verdict).toBe("append");
+    expect(o.detail).toContain("full cache hit");
+  });
+
+  it("blames `tools` when the tool block changes", () => {
+    const next = cachePrefixFingerprint(body({ tools: [...TOOLS, { name: "extra" }] }));
+    const o = classifyPrefixChange(base, next);
+    expect(o.verdict).toBe("bust");
+    expect(o.component).toBe("tools");
+    expect(o.detail).toContain("renders first");
+  });
+
+  it("blames `tools` even when reordering preserves the set", () => {
+    // Byte-identity is the cache key, so a reorder is a bust, not a no-op.
+    const two = [TOOLS[0], { name: "b" }];
+    const prev = cachePrefixFingerprint(body({ tools: two }));
+    const next = cachePrefixFingerprint(body({ tools: [two[1], two[0]] }));
+    expect(classifyPrefixChange(prev, next).component).toBe("tools");
+  });
+
+  it("blames `system` when only the system block changes", () => {
+    const next = cachePrefixFingerprint(body({ system: [{ type: "text", text: "different" }] }));
+    const o = classifyPrefixChange(base, next);
+    expect(o.verdict).toBe("bust");
+    expect(o.component).toBe("system");
+  });
+
+  it("prefers the EARLIEST change when several components differ", () => {
+    // tools renders before system, and the earliest change is the expensive one.
+    const next = cachePrefixFingerprint(
+      body({ tools: [{ name: "other" }], system: [{ type: "text", text: "different" }] }),
+    );
+    expect(classifyPrefixChange(base, next).component).toBe("tools");
+  });
+
+  it("blames `messages` and names the turn when history is edited", () => {
+    const next = cachePrefixFingerprint(
+      body({
+        messages: [
+          { role: "user", content: "first" },
+          { role: "assistant", content: "EDITED" },
+          { role: "user", content: "third" },
+        ],
+      }),
+    );
+    const o = classifyPrefixChange(base, next);
+    expect(o.verdict).toBe("bust");
+    expect(o.component).toBe("messages");
+    expect(o.firstChangedMessage).toBe(1);
+  });
+
+  it("treats a shrinking history (compaction or rewind) as a bust", () => {
+    const next = cachePrefixFingerprint(body({ messages: [{ role: "user", content: "first" }] }));
+    const o = classifyPrefixChange(base, next);
+    expect(o.verdict).toBe("bust");
+    expect(o.component).toBe("messages");
+    expect(o.firstChangedMessage).toBe(1);
+    expect(o.detail).toContain("history shrank from 2 to 1");
+  });
+
+  it("always supplies a human-readable detail", () => {
+    for (const o of [
+      classifyPrefixChange(undefined, base),
+      classifyPrefixChange(base, base),
+      classifyPrefixChange(base, cachePrefixFingerprint(body({ tools: [] }))),
+    ]) {
+      expect(o.detail.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("CachePrefixObserver", () => {
+  it("reports first, then append, across a growing conversation", () => {
+    const observer = new CachePrefixObserver();
+    expect(observer.observe(body()).verdict).toBe("first");
+    const grown = body({
+      messages: [
+        { role: "user", content: "first" },
+        { role: "assistant", content: "second" },
+        { role: "user", content: "third" },
+      ],
+    });
+    expect(observer.observe(grown).verdict).toBe("append");
+  });
+
+  it("detects a bust on the request that causes it", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(body());
+    const o = observer.observe(body({ tools: [{ name: "changed" }] }));
+    expect(o.verdict).toBe("bust");
+    expect(o.component).toBe("tools");
+  });
+
+  it("re-baselines after a bust, so one change is not reported twice", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(body());
+    const changed = body({ tools: [{ name: "changed" }] });
+    expect(observer.observe(changed).verdict).toBe("bust");
+    expect(observer.observe(changed).verdict).toBe("append");
+  });
+
+  it("tracks conversations independently", () => {
+    const observer = new CachePrefixObserver();
+    const convoA = body();
+    const convoB = body({ messages: [{ role: "user", content: "a different opening" }] });
+    expect(observer.observe(convoA).verdict).toBe("first");
+    expect(observer.observe(convoB).verdict).toBe("first");
+    expect(observer.observe(convoA).verdict).toBe("append");
+    expect(observer.size()).toBe(2);
+  });
+
+  it("bounds memory by evicting the oldest conversation", () => {
+    const observer = new CachePrefixObserver(2);
+    observer.observe(body({ messages: [{ role: "user", content: "one" }] }));
+    observer.observe(body({ messages: [{ role: "user", content: "two" }] }));
+    observer.observe(body({ messages: [{ role: "user", content: "three" }] }));
+    expect(observer.size()).toBe(2);
+    // "one" was evicted, so it looks like a new conversation again.
+    expect(observer.observe(body({ messages: [{ role: "user", content: "one" }] })).verdict).toBe(
+      "first",
+    );
+  });
+
+  it("never throws on a malformed body", () => {
+    const observer = new CachePrefixObserver();
+    expect(() => observer.observe({})).not.toThrow();
+    expect(() => observer.observe({ messages: "not-an-array" })).not.toThrow();
+    expect(() => observer.observe({ messages: [null] })).not.toThrow();
+  });
+});

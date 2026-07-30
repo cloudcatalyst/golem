@@ -200,6 +200,28 @@ class HeadroomWorkerProcess {
   }
 
   /**
+   * The parsed `/health` body (not just a boolean), for callers that need the
+   * worker's self-report — notably `supported_config`, the field names the
+   * installed Headroom accepts (Decision 53's version gate). Resolves `null` on
+   * any unavailability; never throws, and never starts the worker.
+   */
+  async healthJson(): Promise<unknown | null> {
+    if (!this.isRunning() || this.#port === null) return null;
+    try {
+      const res = await request(`http://${this.#host}:${this.#port}/health`, {
+        method: "GET",
+        headersTimeout: 5_000,
+        bodyTimeout: 5_000,
+      });
+      const text = await res.body.text();
+      if (res.statusCode !== 200) return null;
+      return JSON.parse(text) as unknown;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * POST `body` as JSON to `path` (lazily starting the worker if needed) and
    * parse the JSON response. Resolves `null` — never throws — on any
    * unavailability, non-200 status, or malformed response; callers layer
@@ -265,6 +287,17 @@ export interface HeadroomSidecarOptions {
   readonly requestTimeoutMs?: number;
   /** Model id passed to Headroom for token counting (default sonnet). */
   readonly model?: string;
+  /**
+   * Opaque `CompressConfig` overrides forwarded to the worker (Decision 53).
+   *
+   * Deliberately **untyped**: enumerating Headroom's config here is what made
+   * every new upstream option unreachable until this file was edited, and the pin
+   * is not the coupling point. Keys the installed Headroom does not accept are
+   * reported back and skipped, never passed. Layered UNDER Golem's per-mode
+   * presets in the worker, so a caller can override one key without replacing the
+   * slider's behaviour wholesale.
+   */
+  readonly config?: Readonly<Record<string, unknown>>;
   /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
   readonly log?: (message: string) => void;
 }
@@ -287,6 +320,10 @@ function defaultLaunchArgs(): string[] {
 export class HeadroomSidecar implements SemanticCompressor {
   readonly #proc: HeadroomWorkerProcess;
   readonly #model: string;
+  readonly #config: Readonly<Record<string, unknown>> | undefined;
+  readonly #log: (message: string) => void;
+  /** Ignored-key sets already reported, so a bad setting warns once, not per request. */
+  readonly #warnedIgnored = new Set<string>();
 
   constructor(options: HeadroomSidecarOptions = {}) {
     const log = options.log ?? ((m: string) => process.stderr.write(`golem headroom: ${m}\n`));
@@ -300,6 +337,11 @@ export class HeadroomSidecar implements SemanticCompressor {
       log,
     });
     this.#model = options.model ?? DEFAULT_MODEL;
+    this.#config =
+      options.config !== undefined && Object.keys(options.config).length > 0
+        ? options.config
+        : undefined;
+    this.#log = log;
   }
 
   /** True once the worker is listening and health-checked. */
@@ -321,13 +363,16 @@ export class HeadroomSidecar implements SemanticCompressor {
       messages,
       model: this.#model,
       mode,
+      ...(this.#config !== undefined && { config: this.#config }),
     })) as {
       messages?: unknown;
       tokens_before?: unknown;
       tokens_after?: unknown;
       transforms_applied?: unknown;
+      config_ignored?: unknown;
     } | null;
     if (parsed === null || !Array.isArray(parsed.messages)) return null;
+    this.#reportIgnoredConfig(parsed.config_ignored);
     return {
       messages: parsed.messages as ReadonlyArray<Readonly<Record<string, unknown>>>,
       tokensBefore: typeof parsed.tokens_before === "number" ? parsed.tokens_before : 0,
@@ -336,6 +381,42 @@ export class HeadroomSidecar implements SemanticCompressor {
         ? (parsed.transforms_applied as string[])
         : [],
     };
+  }
+
+  /**
+   * Warn once per distinct ignored-key set that a configured override did not
+   * reach Headroom.
+   *
+   * A silently-dropped setting is the failure mode this passthrough exists to
+   * avoid: a user sets `compression.headroom_config`, nothing changes, and there
+   * is no way to tell whether the key was wrong or the effect was nil.
+   * Deliberately a log line rather than a new `SemanticResult` field — the result
+   * contract is consumed by the pipeline and should not grow for a diagnostic.
+   */
+  #reportIgnoredConfig(ignored: unknown): void {
+    if (!Array.isArray(ignored) || ignored.length === 0) return;
+    const keys = ignored.filter((k): k is string => typeof k === "string");
+    if (keys.length === 0) return;
+    const signature = keys.join(",");
+    if (this.#warnedIgnored.has(signature)) return;
+    this.#warnedIgnored.add(signature);
+    this.#log(
+      `compression.headroom_config: this Headroom (pin ${HEADROOM_SIDECAR_PYPI_PIN}) ignored ` +
+        `${keys.join(", ")} — check the key against the installed version's CompressConfig`,
+    );
+  }
+
+  /**
+   * Worker health, including `supported_config` — the config field names the
+   * installed Headroom actually accepts. `null` when the worker is not running.
+   * This is the version gate: capability read from the running package rather
+   * than inferred from a pin number.
+   */
+  async health(): Promise<Readonly<Record<string, unknown>> | null> {
+    const parsed = await this.#proc.healthJson();
+    return parsed !== null && typeof parsed === "object"
+      ? (parsed as Readonly<Record<string, unknown>>)
+      : null;
   }
 
   /** Stop the worker (best-effort). */

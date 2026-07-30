@@ -294,6 +294,19 @@ export const SETTING_META = {
       "slider, where turning redaction off is surfaced loudly.",
     restart: "proxy",
   },
+  "compression.headroom_config": {
+    label: "Headroom config passthrough",
+    summary: "Advanced: opaque CompressConfig overrides forwarded to the sidecar",
+    detail:
+      "Decision 53. Deliberately not enumerated: the worker introspects the installed " +
+      "Headroom and forwards whatever its CompressConfig accepts, so a new upstream option " +
+      "works without a Golem release. Keys this Headroom does not accept are logged and " +
+      "skipped, never forwarded. Layered over Golem's per-mode presets, and inert unless " +
+      "the sidecar is on and the semantic stage actually runs.",
+    kind: "opaque",
+    advanced: true,
+    restart: "proxy",
+  },
 
   // --- brevity --------------------------------------------------------------
   "brevity.level": {

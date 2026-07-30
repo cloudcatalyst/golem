@@ -3667,3 +3667,445 @@ decision rather than a deferred one.** Class 1 (whitespace) is worth zero; class
 (native `defer_loading`) is Anthropic's to run and Golem's job is only to relay it
 faithfully, which is now tested. If this is revisited, the target is the input
 schemas (~2900 tokens) and the harness is already the gate.
+
+## §90 — RTK: an Apache-2.0 Bash-output compactor, complementary not competing (2026-07-30)
+
+Checked before recommending an integration shape, per verify-don't-assume.
+Source: `github.com/rtk-ai/rtk` README (repo page, fetched 2026-07-30, cached in
+the webcache). Apache-2.0, Rust, single binary, "100+ supported commands,
+<10ms overhead", version string in the README's own verify step is `rtk 0.28.2`
+with a native-Windows hook noted from v0.37.2.
+
+**What it is.** A `PreToolUse` hook that **rewrites Bash commands** to filtered
+equivalents (`git status` → `rtk git status`) plus a large filter library: test
+runners (jest/vitest/pytest/go/cargo/rspec/sbt), linters (eslint/biome/tsc/ruff/
+clippy/golangci/rubocop), git/gh, docker/kubectl/oc, aws, pulumi, and file
+primitives (`rtk read -l aggressive` = signatures only). Also `rtk gain` savings
+analytics and `rtk discover` for missed opportunities. 15 agent integrations,
+Claude Code's being the native-binary `PreToolUse` hook.
+
+**It is honest about its own numbers, which is worth noting.** The README states
+plainly that "cuts up to 90% of the bash output your agent reads… is not the same
+as cutting your bill by 90%", and that token counts are **estimated as
+`bytes / 4`** because it ships no tokenizer. So the percentages are directional
+and the absolute token figures are approximate — the opposite of a claim Golem
+would have to correct, and a fair basis for comparison against Golem's real
+billed-`usage` telemetry (R1.1).
+
+**Its documented blind spot is exactly Golem's surface.** Quoted: "the hook only
+runs on Bash tool calls. Claude Code built-in tools like Read, Grep, and Glob do
+not pass through the Bash hook, so they are not auto-rewritten." Golem's
+`POST_TOOL_USE_MATCHER` is already `Bash|Read|Grep|Glob|WebFetch`
+(`src/hooks/settings-writer.ts:26`) and the proxy sees the whole `messages` array.
+So the two are complements: RTK compacts shell output, Golem compacts
+built-in-tool output, deduplicates across the session, and prices the bill.
+
+**Consequence for Golem (Decision 53).** Tier-3a peer: detect and coordinate,
+never vendor. Vendoring would break invariant 4 (ship no third-party bytes),
+inherit a `bytes/4` savings estimate into a project whose differentiator is real
+`usage`, and add an opt-in telemetry path (device hash, command names, estimated
+USD) to a local-first tool. R8.3 is descoped accordingly — do **not** rebuild 100+
+Bash filters; build only the surfaces a command wrapper cannot reach.
+
+**Open, deliberately not run:** a formal A/B was judged unnecessary by the user.
+The cheap version stands — install it, and record what Golem's real usage
+telemetry shows against RTK's estimates.
+
+## §91 — Claude Code hook precedence between a rewriting hook and a denying hook is UNDOCUMENTED (2026-07-30)
+
+Checked because Golem and RTK would both own `PreToolUse` on the same Bash call.
+Source: `code.claude.com/docs/en/hooks` (301 from
+`docs.claude.com/en/docs/claude-code/hooks`), fetched 2026-07-30.
+
+**Verified.**
+- `permissionDecision` takes `allow` / `deny` / `ask` / **`defer`**, under
+  `hookSpecificOutput`. Exit 0 with no output is *not* approval — the call
+  continues through the normal permission flow.
+- **`updatedInput` sits directly under `hookSpecificOutput` on `PreToolUse` and
+  "replaces a tool's arguments before it runs"** — distinct from
+  `PermissionRequest`, where `updatedInput` nests inside a `decision` object.
+  This is the mechanism RTK uses.
+- All matching hooks for an event run **in parallel**; entries **merge** across
+  settings levels (user/project/local/managed/plugin) rather than replacing each
+  other; identical handlers are deduplicated by command string + `args`.
+- `continue: false` outranks every event-specific decision field.
+- Two-stage narrowing exists: `matcher` on `tool_name`, then a per-handler `if`
+  using permission-rule syntax — but `if` is **best-effort and fails open**, so
+  the docs explicitly say to use the permission system, not a hook, for a hard
+  allow/deny.
+
+**NOT documented, and it matters.** The precedence when parallel hooks return
+*conflicting* `permissionDecision` values — specifically a hook returning
+`updatedInput` (RTK's rewrite) racing a hook returning `deny` (Golem's snooze /
+coder-first / autonomy gates). The `#pretooluse-decision-control` section was
+truncated in the fetched page; `hooks-reference#pretooluse-decision-control` is
+the place to look next.
+
+**Why this is live rather than theoretical.** Golem's `PreToolUse` hook is
+registered with **no matcher** (`src/cli/init.ts:704`), so it fires on every tool
+call including Bash. Any user who installs both is exercising this interaction.
+**Action (R8.12):** assert it in an integration test rather than trusting it —
+Golem's `deny` paths must still win. Until that test exists, treat coexistence as
+unverified.
+
+## §92 — Dependency-tier audit: two documented-as-optional things that were not (2026-07-30)
+
+Found while writing Decision 53's ladder, by checking each claim rather than
+reading the comments.
+
+- **`unpdf` was mandatory.** `src/knowledge/extractors.ts` called it "the
+  optional `unpdf` package" and the R3.2 debrief agreed, but it was a **static**
+  `import` listed in `dependencies` — installed for every `golem-run` user, and a
+  module-load crash on an install without it. Pure JS, so no hard rule was
+  broken; the *contract* was wrong. Fixed: cached dynamic `import()` +
+  `optionalDependencies` + a typed `PdfExtractionUnavailableError` that the two
+  existing call sites already handle (`planIngest` → `filesSkipped`;
+  `fetchRawPage` → falls open).
+- **No `LICENSE` file.** `package.json` declared `Apache-2.0`; the tree had no
+  licence text. Added verbatim (Apache-2.0, copyright Golem / golem.run) ahead of
+  the R7.5 first publish.
+
+**Verified-correct by contrast** (no action needed): `web-tree-sitter` was already
+a genuine tier-2 — dynamic `import()` with a `null` degrade, grammars as
+devDependencies only. That file is the pattern the `unpdf` fix follows.
+
+**Live-machine state recorded, because it is the fact that prompted all of this:**
+in this repo `compression.headroom_sidecar = true` and `uv` is present, yet **no
+Headroom process has ever run** — the lossy semantic stage is its only caller and
+that stage is gated off on caching upstreams (Decision 31) unless
+`force_semantic_on_caching` is set. Caveman is **not installed** at all. One idle
+spawn target and one absent program: exactly what tiers 2 and 3 are supposed to
+look like, and the reason `golem ext` reports a `gate` note instead of claiming
+"running".
+
+## §93 — This project's real prompt-cache hit rate is 98.4%, which redirects R8 (2026-07-30)
+
+Measured with R8.1's own rollup (`golem stats --cache`) against this repo's
+durable telemetry the moment it shipped — 7,874 recorded responses, all-time:
+
+| bucket | tokens | rate |
+|---|--:|---|
+| cache **read** | 2,042,812,070 | ~0.1× |
+| cache **write** (prefill) | 32,750,061 | ~1.25× |
+| **uncached** input | 1,215,854 | 1× |
+| hit rate | **98.4%** | |
+
+**What this says.** The prompt cache on this project's traffic is already working
+close to optimally. Uncached input is **0.06%** of billed input. So the failure
+mode R8.1's bust detector exists to catch — a broken prefix forcing a re-prefill —
+is **not** where this project's money goes.
+
+**Where it actually goes.** Weighting by rate, cache reads are ~204M full-rate
+equivalents against ~41M for prefill and ~1.2M uncached: **~83% of input cost is
+re-reading an already-cached context**, turn after turn. Cheap per token, on an
+enormous base.
+
+**Consequence — an honest demotion of work I had just argued for.** The R8 memo
+ranked cache-bust detection first on the theory that busts were an invisible,
+recoverable cost. On this evidence that theory is wrong *here*: there is almost
+nothing to recover. The instrument was still worth building (it is what produced
+this table, and it is the only way to know a bust rate rather than assume one),
+but its *bust* half should be treated as a guard rail, not a savings lever.
+
+The levers this table actually supports, in order:
+
+1. **R8.2 suffix-only tool-result dedup** — smaller context ⇒ fewer cache-read
+   tokens on *every* subsequent turn. Directly attacks the 83%.
+2. **R8.5 repo map + oversized-`Read` swap** — same mechanism, upstream of it:
+   never put the 20k-token file in the context to begin with.
+3. **R8.4 context ledger** — tells a human *which* content is being re-read, so
+   the pruning is aimed rather than guessed.
+
+**Caveat on the number.** This is all-time telemetry for one project (this repo,
+dogfooded daily at slider 3 with brevity pinned to `full`), on Anthropic with
+Claude Code as the client — a client that is unusually good at cache discipline.
+A project with a churning `tools` block, an injected timestamp, or frequent
+compaction would look nothing like this. Do not generalise 98.4% into a claim
+about Golem's users; it is a measurement of *this* setup, and the whole point of
+shipping the rollup is that anyone can now measure their own.
+
+**Coverage note.** At the moment of measurement the *verdict* half read "none
+recorded" over 14,776 pipeline events, correctly — the running proxy predated the
+build. That is the disclosure working as designed rather than a bug: an
+unobserved request is reported as unobserved, never as a hit.
+
+## §94 — R8.2 was already built in 2026 (A2 / Decision 18); the memo proposed existing work (2026-07-30)
+
+Checked the code before building R8.2 ("suffix-only tool-result dedup"), which the
+R8 memo had described as novel and ranked as its highest-confidence lever. It is
+not novel. `src/compression/native-lossless.ts` has shipped it since task A2:
+
+> "exact repeats of large content within one conversation are replaced by CCR
+> reference markers; **the first occurrence is always kept in place**"
+
+and it achieves the cache-safety property the memo claimed as the new idea — not
+by special-casing the suffix, but by **purity**: the transform of `messages[i]`
+depends only on the original bytes of `messages[0..i]`, the dedup seen-set is
+rebuilt from the input on every call, and the marker text is a pure function of
+(refId, tokenEstimate). Extending a conversation therefore *cannot* change the
+compressed form of earlier messages, from any process. That is a stronger
+guarantee than "only rewrite the newest block", and it was designed for exactly
+the reason the memo re-derived (§14 prefix byte-stability).
+
+**Measured on this repo's real traffic** (`golem stats --window all`, 14,791
+requests):
+
+| stage | before | after | saved |
+|---|--:|--:|--:|
+| dedup | 4,763,725 | 314,022 | **4,449,703** |
+
+A 93% reduction on the content it touches, with 4,878 CCR refs stored and **2**
+retrieved — i.e. the elision marker is almost never insufficient, which is the
+same signal R2.1 recorded (0 misses in 1,051 swaps) and further evidence the
+technique is safe.
+
+**Correction to the memo.** R8.2 is struck as a build task. The lesson is the
+repo's own standing rule, which the memo skipped: check the KB and the code before
+proposing. Writing the proposal from the *shape* of the external projects (Aider,
+RTK) rather than from this codebase produced a confident recommendation to build
+something that already existed and was already measured.
+
+**What is genuinely NOT covered**, for anyone tempted to reopen this:
+
+- **Near-identical** content (the same file re-read with one line changed) is not
+  deduped — only byte-exact repeats above `DEFAULT_MIN_DEDUP_CHARS` (256). A
+  fuzzy matcher would be lossy and would break the purity guarantee above, so it
+  is not a small change.
+- **Large content that appears only once** is untouched by definition. Given §93
+  (~83% of input cost is re-reading an already-cached context), *this* is the real
+  remaining target — which is R8.5's repo map and oversized-`Read` swap, not dedup.
+- `DEFAULT_MIN_DEDUP_CHARS = 256` looks right rather than tuned: the marker itself
+  is ~150 chars, so below ~256 the swap stops paying. Changing it invalidates live
+  cache prefixes (the file says so), so it needs a measurement, not a guess.
+
+## §95 — First real context ledger: tool definitions are 18.8k tokens, and Bash output is the biggest tool (2026-07-30)
+
+R8.4's first capture, taken from the live proxy during the session that built it
+(550 messages, ~312k tokens in the request). Every number below is re-sent and
+re-read on **every subsequent turn** of that conversation, which is what §93
+established as ~83% of input cost.
+
+| bucket | tokens | share |
+|---|--:|--:|
+| assistant text + tool calls | 102,868 | 33.5% |
+| tool results | 95,463 | 31.1% |
+| thinking blocks | 54,074 | 17.6% |
+| user text | 32,199 | 10.5% |
+| **tool definitions** | **18,827** | 6.1% |
+| system prompt | 3,365 | 1.1% |
+
+Tool results by producing tool:
+
+| tool | tokens | results |
+|---|--:|--:|
+| **Bash** | **36,968** | 132 |
+| Read | 27,056 | 18 |
+| WebFetch | 17,015 | 10 |
+| `mcp__golem__expand` | 6,356 | **1** |
+| Edit | 4,836 | 68 |
+| Write | 1,615 | 26 |
+| others (search/TodoWrite/ToolSearch/snooze) | <1,700 | 12 |
+
+**Three findings that change priorities.**
+
+1. **The `tools` block is ~5× bigger than §88 measured — 18,827 tokens, and the
+   single largest individual block in the request.** §88 measured *Golem's own 11
+   MCP tool descriptions* at ~902 tokens (~3,847 with schemas); a real session adds
+   Claude Code's built-ins plus every other MCP server, and the total is 18.8k
+   re-read every turn. That materially strengthens **R8.S1 (tool-schema
+   shrinking)**, which §89 had already identified as the remaining headroom, and it
+   raises the ceiling from "~3.8k" to "~18.8k". It does *not* revive the rejected
+   prose shrinker — the accuracy verdict there stands (§89) — but it justifies
+   re-running `golem bench tools` against schemas specifically.
+
+2. **Bash output is the biggest single tool consumer: 36,968 tokens across 132
+   results.** This is precisely what RTK compacts (§90), and it is the first
+   quantified case for the tier-3a recommendation: ~37k tokens of shell output,
+   re-read every turn, on one session. It also confirms **R8.3's descoping was
+   right** — do not rebuild Bash filters, install the tool that has 100+ of them.
+
+3. **One `expand` call cost 6,356 tokens** — the fourth-largest tool consumer, from
+   a single result. The `golem-ccr-refs` guidance rule already warns that expanding
+   "costs the tokens the swap saved"; this is the measured version, and it argues
+   for the rule being stated as strongly as it is.
+
+**Also notable, not yet actionable:** thinking blocks are 54,074 tokens (17.6%) —
+a bucket nothing in Golem currently touches, and one that cannot be touched at
+levels ≤1 (proxy fidelity: thinking blocks pass through byte-faithful). Worth
+knowing before anyone proposes a "just drop old thinking" transform: it would be a
+fidelity-rule change, not a tuning knob.
+
+**Caveats.** One capture, one conversation, this repo, an unusually tool-heavy
+session (it installed MCP servers and ran a 1,800-test suite repeatedly). The
+buckets are estimates from `estimateTokens`, not a tokenizer. The ledger is
+latest-only by design, so this is a snapshot rather than a distribution — anyone
+wanting a distribution should sample `golem stats --context --json` over time.
+
+## §96 — Installing RTK silently degraded Golem's autonomy gate (found and fixed) (2026-07-30)
+
+R8.12's real finding, and not the one §91 predicted. §91 flagged the *undocumented*
+question — precedence between a rewriting hook and a denying one — which remains
+open because it is Claude Code's behaviour, not Golem's. Looking for what Golem's
+half could get wrong turned up something concrete and testable instead.
+
+**The asymmetry.** `src/autonomy/classify.ts` anchors its two danger lists on word
+boundaries (`/\bgit\s+push\b/i`, `/\brm\s+-[a-z]*[rf]/i`) but anchors its
+safe-list on the **start of the string** (`/^(npx\s+)?(tsc|vitest|biome)(\s|$)/`).
+RTK rewrites `vitest` into `rtk vitest`. So:
+
+| command | before | after |
+|---|---|---|
+| `rtk git push` | `outward` ✅ | `outward` ✅ |
+| `rtk rm -rf build` | `destructive` ✅ | `destructive` ✅ |
+| `rtk vitest` | **`unknown`** → prompt | `read` → auto-approvable |
+
+**Nothing was unsafe** — the gate is fail-closed, so the failure mode was a prompt,
+not an approval. But it means a user who installs RTK finds previously
+auto-approved commands suddenly asking, with no indication why, and the natural
+response to that is to loosen the autonomy level. A safety mechanism that gets
+disabled out of irritation is a safety problem.
+
+**Fix.** `stripOutputWrapper` retries **only the safe-list** against the command
+with a known wrapper token removed. The danger checks still run first, on the
+original string, so unwrapping cannot downgrade a classification — it can only
+turn `unknown` into `read` for a command that would already be safe unwrapped.
+Deliberately shallow: one level, exact `rtk ` prefix (so `rtkfoo` is untouched),
+and RTK's own command-taking subcommands (`rtk proxy <cmd>`, `rtk err <cmd>`,
+`rtk test <cmd>`, `rtk summary <cmd>`) are left to fall through to `unknown`
+because unwrapping them yields a meaningless bare subcommand name. 13 tests,
+including the composition cases (`rtk vitest; rm -rf /` → `destructive`,
+`rtk vitest | tee out` → `unknown`).
+
+**Second fix in the same pass — don't destroy another compactor's escape hatch.**
+RTK tees full unfiltered output to a file and points at it inline
+(`[full output: ~/.local/share/rtk/tee/….log]`). Golem's PostToolUse swap replaces
+oversized output with a head/tail excerpt, which can drop that pointer into the
+elided middle — a compaction *of a compaction* losing the other tool's only route
+back. `buildDigest` now carries the pointer through in its own section when it
+would otherwise be lost, matched loosely (`[full output: …]`) because the wording
+belongs to another project. 4 tests.
+
+**Still open (unchanged):** §91's precedence question. Golem never emits
+`updatedInput`, so it cannot itself conflict; what happens when RTK's rewrite races
+Golem's `deny` is Claude Code's to define, and the docs do not. Anyone running both
+should treat it as unverified until `hooks-reference#pretooluse-decision-control`
+is read.
+
+**Generalisation worth keeping:** the bug class is "a peer rewrites the input your
+classifier reads". Any future tier-3a peer that mutates tool arguments needs the
+same audit — check whether every pattern that matters is anchored in a way that
+survives the rewrite. Start-anchored allow-lists are the fragile ones; the
+word-boundary deny-lists survived by luck, not design.
+
+## §97 — R8.3 rescoped again by its own evidence: Grep/Glob distillation has no measured demand (2026-07-30)
+
+R8.3 was already descoped once (§90: do not rebuild RTK's 100+ Bash filters; build
+only the surfaces a command wrapper cannot reach). Checking §95's ledger before
+building the remainder showed the *rest* of the plan was also speculative.
+
+**The plan said** structure-aware distillers for `Read` / `Grep` / `Glob` / MCP
+results. **The ledger says** where the tokens actually are:
+
+| tool | tokens | results |
+|---|--:|--:|
+| Bash | 36,968 | 132 |
+| **Read** | **27,056** | 18 |
+| WebFetch | 17,015 | 10 |
+| `expand` | 6,356 | 1 |
+| Edit | 4,836 | 68 |
+| Write | 1,615 | 26 |
+| **Grep / Glob** | **absent** | 0 |
+
+Grep and Glob do not appear at all — in this session the equivalent work went
+through `Bash` (`grep`/`ls` via the shell), which is RTK's territory. Building
+Grep/Glob distillers would have been polish on a surface with no measured traffic,
+which is exactly what §94 caught the memo doing for R8.2.
+
+**What shipped instead** is the evidence-supported piece: `Read` is the second
+biggest consumer *and* the one an external Bash compactor cannot touch, and one
+`expand` cost 6,356 tokens. So the digest became **line-aware** — it names the line
+ranges it shows, names the elided range, and recommends a narrow re-read *before*
+offering `expand`:
+
+```
+--- head: lines 1-42 of 1200 ---
+--- tail: lines 1181-1200 of 1200 ---
+--- 1138 line(s) elided (lines 43-1180). PREFER a narrower re-read of just what you
+    need (e.g. Read with offset/limit, or grep the file) — expanding re-enters the
+    FULL original and costs back the tokens this swap saved. ---
+```
+
+Same token budget, strictly more useful: the previous char-window excerpt was
+positionless, so `expand` was the *only* way to see more. This makes the digest
+support `.claude/rules/golem-ccr-refs.md`'s advice instead of quietly working
+against it.
+
+**A bug the existing tests caught.** The first draft aligned to lines without
+keeping a char cap, so a single enormous line (a minified bundle, a JSON blob — one
+line, 30k chars) was classified "complete" and passed through **whole**, defeating
+the swap entirely. Two pre-existing tests failed immediately. The fix requires
+*both* line coverage and no char-level truncation before declaring an output
+complete, and marks a char-clamped range `partial`. Recorded because the failure
+mode was silent bloat, not an error.
+
+**Also removed:** `headExcerpt`/`tailExcerpt` are gone rather than left beside their
+replacements — biome's unused-variable rule flagged them, which is the intended
+outcome for superseded code.
+
+**Still not built, deliberately:** MCP-result distillers. Golem's own tool results
+are 1,018 (`search`) + 40 (`snooze`) + 366 (`TodoWrite`) + 193 (`ToolSearch`)
+tokens in §95's capture — under 0.6% of context. Nothing to win yet; revisit if a
+ledger sample ever shows otherwise.
+
+## §98 — `min-release-age` IS implemented in npm 11: it resolves to a rolling `before` (2026-07-30)
+
+Checked before shipping R8.10's `.npmrc`, because Pi's README cites
+`min-release-age=2` and the key is not in npm's public config documentation I could
+find. Verified locally against **npm 11.12.1** rather than assumed.
+
+**What the probes showed.**
+
+1. `npm config ls -l` lists `min-release-age = null` — so the key is *recognised*,
+   not silently discarded.
+2. `npm config get min-release-age` returns `null` even with
+   `min-release-age=2` in the project `.npmrc` — which initially looked like the key
+   being inert, and would have been the wrong conclusion.
+3. `npm config list` reveals what actually happens: the project config renders as
+
+   ```
+   ; "project" config from D:\…\golem\.npmrc
+   before = "2026-07-28T05:52:22.076Z"
+   ```
+
+   i.e. npm **translates `min-release-age=<days>` into a rolling `before`
+   timestamp** at config-read time. It is an alias, which is why `get` on the alias
+   reports null while the effect is real.
+
+**Consequence — it works, and it is worth setting.** `min-release-age=2` refuses to
+resolve anything published in the last two days, which is the window in which a
+compromised release is usually caught and yanked.
+
+**Two caveats to know before relying on it.**
+
+- It has **no effect on `npm ci`**, which installs from the lockfile. Its value is
+  at `npm install <pkg>` time, i.e. when a human adds or bumps a dependency.
+- Because it becomes `before`, it silently changes *all* resolution — a
+  just-published version simply appears not to exist. Expect a confusing "no
+  matching version" when deliberately installing something released today; the fix
+  is `npm install --before ""` or a temporary override, not removing the setting.
+
+**Also settled in the same pass:** npm **ignores `package-lock.json` inside a
+published tarball**, so a consumer of `golem-run` would have resolved transitive
+dependencies fresh and inherited none of this repo's pinning.
+`npm-shrinkwrap.json` is the lockfile npm honours when published, so
+`scripts/make-shrinkwrap.mjs` generates it at release time from the lockfile. It is
+**gitignored on purpose** — `package-lock.json` stays the single ground truth, and
+committing both would guarantee drift. Documented in RELEASING.md.
+
+**Enforcement, because a posture in a dotfile is not a guarantee.** `save-exact`
+governs only *future* installs and cannot stop a hand-edit reintroducing a range,
+so `scripts/verify-deps.mjs` (wired into `npm run check`) asserts: exact pins on
+every direct dependency incl. optional, the `.npmrc` posture still present, pins
+agreeing with what the lockfile resolved, and the runtime dependency count still
+≤ 5. 12 tests drive it against synthetic trees — a gate that silently passes would
+be worse than none.
