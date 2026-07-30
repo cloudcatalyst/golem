@@ -33,15 +33,19 @@
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run lint && npm run typecheck && npm run test"
+    "verify:deps": "node scripts/verify-deps.mjs",
+    "deps:shrinkwrap": "node scripts/make-shrinkwrap.mjs",
+    "check": "npm run verify:deps && npm run lint && npm run typecheck && npm run test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "commander": "^14.0.0",
-    "env-paths": "^3.0.0",
-    "undici": "^7.28.0",
-    "unpdf": "^1.6.2",
-    "zod": "^3.25.0"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "commander": "14.0.3",
+    "env-paths": "3.0.0",
+    "undici": "7.28.0",
+    "zod": "3.25.76"
+  },
+  "optionalDependencies": {
+    "unpdf": "1.6.2"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",

@@ -42,6 +42,7 @@ import type { UpstreamTranslator } from "../proxy/index.js";
 import {
   GolemProxy,
   parseLimitPrediction,
+  writeContextLedger,
   writeLimitState,
   writeServedModel,
 } from "../proxy/index.js";
@@ -121,7 +122,11 @@ export function buildProxyFromSettings(
 ): ProxyBuild {
   // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
-  const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
+  // Decision 53: the opaque `headroom_config` bag rides through to the worker, so
+  // Headroom options Golem has never heard of are reachable from settings alone.
+  const semantic = settings.compression.headroom_sidecar
+    ? new HeadroomSidecar({ config: settings.compression.headroom_config })
+    : undefined;
   // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
   // writes to, shared by both the R2.4 Headroom backfill and R2.2 context
   // substitution below, so `expand` recovers either kind of marker uniformly.
@@ -220,6 +225,12 @@ export function buildProxyFromSettings(
     onEvent: (event) => {
       const nowIso = new Date().toISOString();
       void recordPipelineEvent(telemetry, event, nowIso).catch(() => {});
+      // R8.4 — latest-only context ledger. Best-effort and fire-and-forget, the
+      // same contract as the limit-prediction state write: an observability file
+      // must never be able to affect a request.
+      if (event.contextLedger !== undefined) {
+        void writeContextLedger(dir, event.contextLedger, nowIso).catch(() => {});
+      }
       if (event.avoidedUpstreamInputTokens > 0 || event.avoidedUpstreamOutputTokens > 0) {
         void recordAvoidedUpstream(
           telemetry,

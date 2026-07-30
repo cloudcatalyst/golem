@@ -114,6 +114,7 @@ import {
 } from "./config.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
+import { collectExt, renderExt } from "./ext.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
   collectLocalModel,
@@ -1143,6 +1144,8 @@ program
   .option("--project <id>", "limit stats to this project id")
   .option("--window <window>", "savings window: 24h | 7d | all", "24h")
   .option("--brevity", "report billed output tokens by brevity level (Decision 52)", false)
+  .option("--cache", "report prompt-cache hit rate and what broke the prefix (R8.1)", false)
+  .option("--context", "report what the last request's context window is made of (R8.4)", false)
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
@@ -1150,6 +1153,8 @@ program
       project?: string;
       window: string;
       brevity: boolean;
+      cache: boolean;
+      context: boolean;
       json: boolean;
     }) => {
       try {
@@ -1171,6 +1176,40 @@ program
             return;
           }
           process.stdout.write(renderBrevityReport(rows));
+          return;
+        }
+        // R8.4 — the context ledger: a snapshot of the LAST request, not a
+        // window, so it is neither a savings figure nor aggregatable. Its own
+        // report for the same reason as the two above.
+        if (opts.context) {
+          const [{ readContextLedger }, { renderContextLedger }] = await Promise.all([
+            import("../proxy/index.js"),
+            import("./context.js"),
+          ]);
+          const ledger = await readContextLedger(opts.dir);
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(ledger, null, 2)}\n` : renderContextLedger(ledger),
+          );
+          return;
+        }
+        // R8.1 — the cache rollup, likewise its own report: it mixes an
+        // authoritative billed measurement with an explanatory prediction, and
+        // folding either into the input-side savings headline would repeat the
+        // mixed-scope error §25/§30 warns about.
+        if (opts.cache) {
+          const { aggregateCacheStats, renderCacheReport } = await import(
+            "../telemetry/cache-report.js"
+          );
+          let cacheEvents: readonly TelemetryEvent[] = [];
+          try {
+            cacheEvents = await readTelemetryEvents(opts.dir);
+          } catch {
+            cacheEvents = [];
+          }
+          const cacheStats = aggregateCacheStats(cacheEvents, opts.project);
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(cacheStats, null, 2)}\n` : renderCacheReport(cacheStats),
+          );
           return;
         }
         const window: BenchWindow = opts.window;
@@ -1344,6 +1383,32 @@ benchCmd
       }
     },
   );
+
+const extCmd = program
+  .command("ext")
+  .description(
+    "External tools Golem can use — spawned or detected, never shipped (spec Decision 53)",
+  );
+
+extCmd
+  .command("list", { isDefault: true })
+  .alias("status")
+  .description(
+    "Show every managed tool: tier, whether it is installed, whether it is on, and what breaks without it",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .option("--verbose", "also show purpose, install instructions, upstream and adapter", false)
+  .action(async (opts: { dir: string; json: boolean; verbose: boolean }) => {
+    try {
+      const report = await collectExt(opts.dir);
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
 
 const accountCmd = program
   .command("account")

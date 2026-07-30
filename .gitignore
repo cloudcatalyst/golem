@@ -35,3 +35,7 @@ coverage/
 Thumbs.db
 CLAUDE.local.md
 .claude/rules/golem-*.local.md
+
+# R8.10: generated from package-lock.json at release time (scripts/make-shrinkwrap.mjs).
+# package-lock.json stays the single ground truth; committing both would guarantee drift.
+npm-shrinkwrap.json
