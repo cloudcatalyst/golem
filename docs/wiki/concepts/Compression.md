@@ -20,13 +20,27 @@ upstream, not on the slider setting.
   at levels 2–3. This is where real token savings come from — but **only on
   non-caching upstreams.**
 
-## Why savings are ~0% on Anthropic today
+## Why the lossy stage is NET-NEGATIVE on Anthropic — measured, not assumed
 
 Anthropic's prompt caching already amortizes a stable prefix across turns, so
-rewriting that prefix (what semantic compression does) mostly *breaks the cache*
-rather than saving money — the net honest savings on Anthropic's cached traffic is
-near zero. Golem measures this rather than asserting it (the net-of-cache A/B
-infra, R1/R2). The stages that pay are gated to engage only on non-caching
+rewriting that prefix (what semantic compression does) *breaks the cache* instead of
+saving money. This was long described here as "~0% savings". **It is worse than
+that**, and as of 2026-07-31 it is measured rather than asserted
+(verification-notes §103, `scripts/measure_headroom_cache.py`):
+
+- The lossy stage's **gross** reduction is real — **7.08%** on a 1,404-message
+  session, **21.69%** on a 4,631-message one, growing with session length.
+- But it first diverges from the original history at **message 6 of 4,631**, leaving
+  **0.01%** of the history cache-readable. Headroom's `read_lifecycle` earns its
+  savings by dropping the *earliest superseded* copy of a re-read file, so its value
+  and its cache damage are the same act — not a tuning problem.
+- Priced against this project's **98.4%** billed hit rate: **8.7×–11.3× more
+  expensive** than not compressing. On a non-caching upstream the same runs save
+  **9.06% / 30.09%**.
+
+The takeaway for any future compressor: the number that decides it is
+**first-divergence index**, not gross tokens. Something that rewrites only the
+*tail* of history could pass where this fails. The stages that pay are gated to engage only on non-caching
 upstreams, and the same pipeline is designed to extend to those gateways (Foundry,
 OpenRouter — on hold per Decision 36). This is why the project positions itself as
 a universal pre-LLM processor (Decision 32) with compression as *one* situational
