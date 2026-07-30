@@ -12,6 +12,47 @@ Golem is a universal pre-LLM processing layer (spec Decision 22, positioning con
 2. **`docs/plan/tasks/`** — one committed **task document** per unit of open work (spec Decision 55). These are Golem tasks: the same `Task` shape and the same `golem task` CLI as a parked session, differing only in scope (**plan** = committed, `docs/plan/tasks/*.md`; **local** = machine state, `.golem/tasks/*.json`). Start here: `golem task index --summary` shows what is ready and what is blocked; `golem task show <id>` prints a brief self-contained enough to hand to a fresh agent or a separate conversation. `docs/plan/ROADMAP.md` is a **generated index** over these — regenerate it with `golem task index --write` and never hand-edit the table. Also: `docs/plan/SHIPPED.md` (one line per landed release/task), `docs/plan/IMPLEMENTATION_PLAN.md` (workstreams + frozen interfaces), `docs/plan/BACKLOG.md` (ideas inbox, pre-task). Planning docs live under `docs/plan/`; completed batch briefs are retired to git history.
 3. `docs/plan/verification-notes.md` — dated live-doc findings (T0.1). Check it before building on any external-tool fact.
 
+## Golem tasks — how work is tracked here (spec Decision 55)
+
+This project tracks its own work in **Golem tasks**, and dogfoods them: the same `Task`
+shape and the same `golem task` CLI that parks a session at a usage limit. Two scopes,
+one concept — the difference is lifetime, not mechanism:
+
+| scope | location | committed? | encoding | holds |
+|---|---|---|---|---|
+| **plan** | `docs/plan/tasks/<id>.md` | **yes** | Markdown + frontmatter | roadmap work |
+| **local** | `.golem/tasks/<uuid>.json` | no | JSON | parked sessions, snooze holds, capacity-gated resumes |
+
+```
+golem task index --summary     # START HERE: what's ready, what's blocked
+golem task show R8.5           # the full brief for one item
+golem task list                # both scopes; --plan / --local to narrow
+golem task done <id> --note …  # close it (then regenerate the index)
+golem task index --write       # regenerate the ROADMAP.md index
+```
+
+**Working the roadmap:**
+- **Start from `golem task index --summary`**, not from `ROADMAP.md`. The roadmap's table
+  is *generated* between `<!-- golem:task-index -->` markers — **never hand-edit it**;
+  edit the task document and regenerate.
+- **A task document is the unit of dispatch.** It carries the goal, the design source,
+  the files it touches, the gate, and an out-of-scope list, so it can be handed whole to
+  a fresh agent or a separate conversation with no other context. When you spawn an agent
+  or open a new conversation for a task, point it at the file.
+- **`owner: user` means an agent must not do it** — an outward or credentialed act
+  (publishing, DNS, real keys), hardware you don't have, or a decision that isn't an
+  implementation. Those tasks state why.
+- **`blocked` is metadata, not a state.** A blocked task stays `queued` so it stays
+  visible; it is work that exists and will be done.
+- **New work → a new task document.** Follow `docs/plan/tasks/README.md` for the
+  frontmatter and the house style. Every open task must name a **gate** (what decides
+  done) or a **blocker** — `tests/integration/plan-tasks-roadmap.test.ts` enforces that,
+  plus no dangling `depends_on`, no cycles, and a non-stale index. An idea that isn't yet
+  work goes in `BACKLOG.md` as one line instead.
+- **Park with a task, not with a message.** At a usage limit, `golem task add` a durable
+  local task before calling `snooze` (see `.claude/rules/golem-snooze-hold.md`) — a chat
+  message is lost if the session ends, a task file is not.
+
 ## Hard rules
 - **Interfaces in `src/interfaces/` are frozen contracts.** Changing one requires updating its contract tests and flagging all dependent workstreams in the PR description.
 - **Cross-platform always:** native Windows, macOS, Linux. Use `node:path`, `env-paths`, `node:os`; never hardcode `/tmp`, POSIX signals, or shell-specific syntax; spawn processes with argument arrays, not shell strings. CI matrix must pass on all three.
