@@ -4056,3 +4056,56 @@ outcome for superseded code.
 are 1,018 (`search`) + 40 (`snooze`) + 366 (`TodoWrite`) + 193 (`ToolSearch`)
 tokens in §95's capture — under 0.6% of context. Nothing to win yet; revisit if a
 ledger sample ever shows otherwise.
+
+## §98 — `min-release-age` IS implemented in npm 11: it resolves to a rolling `before` (2026-07-30)
+
+Checked before shipping R8.10's `.npmrc`, because Pi's README cites
+`min-release-age=2` and the key is not in npm's public config documentation I could
+find. Verified locally against **npm 11.12.1** rather than assumed.
+
+**What the probes showed.**
+
+1. `npm config ls -l` lists `min-release-age = null` — so the key is *recognised*,
+   not silently discarded.
+2. `npm config get min-release-age` returns `null` even with
+   `min-release-age=2` in the project `.npmrc` — which initially looked like the key
+   being inert, and would have been the wrong conclusion.
+3. `npm config list` reveals what actually happens: the project config renders as
+
+   ```
+   ; "project" config from D:\…\golem\.npmrc
+   before = "2026-07-28T05:52:22.076Z"
+   ```
+
+   i.e. npm **translates `min-release-age=<days>` into a rolling `before`
+   timestamp** at config-read time. It is an alias, which is why `get` on the alias
+   reports null while the effect is real.
+
+**Consequence — it works, and it is worth setting.** `min-release-age=2` refuses to
+resolve anything published in the last two days, which is the window in which a
+compromised release is usually caught and yanked.
+
+**Two caveats to know before relying on it.**
+
+- It has **no effect on `npm ci`**, which installs from the lockfile. Its value is
+  at `npm install <pkg>` time, i.e. when a human adds or bumps a dependency.
+- Because it becomes `before`, it silently changes *all* resolution — a
+  just-published version simply appears not to exist. Expect a confusing "no
+  matching version" when deliberately installing something released today; the fix
+  is `npm install --before ""` or a temporary override, not removing the setting.
+
+**Also settled in the same pass:** npm **ignores `package-lock.json` inside a
+published tarball**, so a consumer of `golem-run` would have resolved transitive
+dependencies fresh and inherited none of this repo's pinning.
+`npm-shrinkwrap.json` is the lockfile npm honours when published, so
+`scripts/make-shrinkwrap.mjs` generates it at release time from the lockfile. It is
+**gitignored on purpose** — `package-lock.json` stays the single ground truth, and
+committing both would guarantee drift. Documented in RELEASING.md.
+
+**Enforcement, because a posture in a dotfile is not a guarantee.** `save-exact`
+governs only *future* installs and cannot stop a hand-edit reintroducing a range,
+so `scripts/verify-deps.mjs` (wired into `npm run check`) asserts: exact pins on
+every direct dependency incl. optional, the `.npmrc` posture still present, pins
+agreeing with what the lockfile resolved, and the runtime dependency count still
+≤ 5. 12 tests drive it against synthetic trees — a gate that silently passes would
+be worse than none.

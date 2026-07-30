@@ -112,6 +112,17 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.10 — supply-chain hardening** (2026-07-30, §98): `.npmrc` sets
+  `save-exact=true` + `min-release-age=2` (**verified working** on npm 11.12.1 —
+  npm translates it into a rolling `before` timestamp, which is why
+  `npm config get` on the alias reports null while the effect is real); all 6
+  direct dependencies pinned **exactly**; `scripts/make-shrinkwrap.mjs` generates
+  the `npm-shrinkwrap.json` that published tarballs need (npm ignores
+  `package-lock.json` inside a tarball, so consumers previously inherited none of
+  our pinning) — generated, gitignored, documented in RELEASING.md;
+  `scripts/verify-deps.mjs` wired into `npm run check` enforces pins, the `.npmrc`
+  posture, pin↔lockfile agreement, and a ≤5 runtime-dependency ceiling. +12 tests.
+  Overdue before the R7.5 first publish.
 - **R8.3 — line-aware digests** (2026-07-30, §97): rescoped a second time by its own
   evidence. §95's ledger shows Grep/Glob contributing **nothing** (that work went
   through `Bash`, RTK's territory), while `Read` is the second-biggest consumer
