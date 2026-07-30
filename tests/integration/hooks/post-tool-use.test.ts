@@ -26,6 +26,7 @@ import {
   type RedactFn,
   runPostToolUseHook,
 } from "../../../src/hooks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 
@@ -34,7 +35,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 /** A HookIo backed by a fixed input string and capture buffers. */

@@ -18,13 +18,14 @@ import {
   EmbedderMismatchError,
   FileVectorDriver,
 } from "../../../src/knowledge/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let base: string;
 beforeEach(async () => {
   base = await mkdtemp(path.join(tmpdir(), "golem-fvd-"));
 });
 afterEach(async () => {
-  await rm(base, { recursive: true, force: true });
+  await rm(base, rmTemp);
 });
 
 function chunk(id: string, text: string): Chunk {

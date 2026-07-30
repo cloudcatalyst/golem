@@ -13,6 +13,7 @@ import {
 } from "../../../src/cli/session-report.js";
 import type { GolemState } from "../../../src/cli/statusline.js";
 import { markBlocked } from "../../../src/hooks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const fakeState: GolemState = {
   sliderLevel: 1,
@@ -27,7 +28,7 @@ describe("collectSessionStateReport", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-report-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("assembles a report that satisfies the zod contract", async () => {

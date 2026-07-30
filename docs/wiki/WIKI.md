@@ -4,7 +4,7 @@ type: schema
 tags: [meta]
 sources: []
 created: 2026-07-10
-updated: 2026-07-25
+updated: 2026-07-30
 ---
 
 # Golem project wiki — schema (Zone 0)
@@ -69,6 +69,7 @@ updated: YYYY-MM-DD
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
 - [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
+- [[Tool Search]] — Anthropic's on-demand tool loading (GA): defer_loading sends full defs but keeps them out of the cached prefix; why Golem relays it rather than shrinking the tools block itself
 - [[Web Cache]] — WebFetch fetch-cache-serve flow (Decision 42 raw mode), freshness/revalidation, oversized → CCR ref
 - [[Knowledge Base]] — RAG ingest + graph-first-then-vector search, scopes/federation, FileVectorDriver (vs spec's Qdrant)
 - [[Distillation Pipeline]] — capture -> distill -> promote data flow (capture + distill built, T4/T3)

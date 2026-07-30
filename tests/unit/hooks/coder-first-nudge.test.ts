@@ -16,6 +16,7 @@ import {
   readCoderFirstNudgeState,
   writeCoderFirstNudgeState,
 } from "../../../src/hooks/coder-first-nudge.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const big = (n: number) => "x".repeat(n);
 const OVER = MIN_CODE_DRAFT_CHARS + 60;
@@ -25,7 +26,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-coderfirst-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("isCodeDraftTarget", () => {

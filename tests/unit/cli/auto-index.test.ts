@@ -18,13 +18,14 @@ import { HardwareTier } from "../../../src/interfaces/inference.js";
 import type { Chunk, IngestReport, KnowledgeBase } from "../../../src/interfaces/knowledge.js";
 import { collectionDir, knowledgeDir } from "../../../src/knowledge/index.js";
 import type { IncrementalIngest } from "../../../src/knowledge/knowledge-base.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-autoidx-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 class SpyKB implements KnowledgeBase {

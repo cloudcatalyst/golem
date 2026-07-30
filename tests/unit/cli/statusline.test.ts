@@ -20,6 +20,7 @@ import { writeSetting } from "../../../src/config/index.js";
 import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
 import { writeServedModel } from "../../../src/proxy/index.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("parseSessionInput", () => {
   it("extracts the fields we use from the real stdin shape", () => {
@@ -267,7 +268,7 @@ describe("collectGolemState", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-statusline-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns sane defaults for a bare project dir with no Golem state", async () => {

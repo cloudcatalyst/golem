@@ -13,13 +13,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ensureProjectIndexed } from "../../src/cli/auto-index.js";
 import { openKnowledgeBase } from "../../src/knowledge/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 let projectDir: string;
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-inc-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 const write = (rel: string, body: string) => writeFile(path.join(projectDir, rel), body, "utf8");

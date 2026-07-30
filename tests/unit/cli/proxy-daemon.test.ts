@@ -28,6 +28,7 @@ import {
   waitForPortFree,
   writeProxyPid,
 } from "../../../src/cli/proxy-daemon.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 /** Grab a currently-free loopback port by letting the OS assign one, then releasing it. */
 async function getFreePort(): Promise<number> {
@@ -52,7 +53,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-daemon-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 describe("pid file", () => {

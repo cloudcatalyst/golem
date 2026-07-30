@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const okProbe: InitProbe = {
   claudeCodeInstalled: () => Promise.resolve(true),
@@ -23,7 +24,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 async function readJson(rel: string): Promise<Record<string, unknown>> {
@@ -378,8 +379,8 @@ describe("golem init — VS Code extension install", () => {
     await writeFile(path.join(sourceDir, "extension.js"), "// ext", "utf8");
   });
   afterEach(async () => {
-    await rm(extDir, { recursive: true, force: true });
-    await rm(sourceDir, { recursive: true, force: true });
+    await rm(extDir, rmTemp);
+    await rm(sourceDir, rmTemp);
   });
 
   it("installs the extension by copying into the VS Code dir, idempotently", async () => {
@@ -395,7 +396,7 @@ describe("golem init — VS Code extension install", () => {
       vscodeSourceDir: sourceDir,
     });
     expect(r2.actions.some((a) => a.kind === "skip" && a.path.includes(id))).toBe(true);
-    await rm(projectDir2, { recursive: true, force: true });
+    await rm(projectDir2, rmTemp);
   });
 
   it("uninit removes the installed extension", async () => {

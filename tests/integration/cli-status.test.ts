@@ -23,6 +23,7 @@ import {
 } from "../../src/cli/status.js";
 import { writeSetting } from "../../src/config/index.js";
 import type { LimitPrediction } from "../../src/proxy/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const VERSION = "0.1.0-test";
 
@@ -45,7 +46,7 @@ describe("collectStatus", () => {
   });
 
   afterEach(async () => {
-    await rm(join(projectDir, ".."), { recursive: true, force: true });
+    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("reports an uninitialized project with default-layer config", async () => {
@@ -365,7 +366,7 @@ describe("renderStatus", () => {
       expect(output).toContain("slider.level = 1 — default");
       expect(output).not.toContain("Warnings:");
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, rmTemp);
     }
   });
 });
@@ -395,7 +396,7 @@ describe("status — usage-limit prediction freshness", () => {
     await mkdir(userDir, { recursive: true });
   });
   afterEach(async () => {
-    await rm(join(projectDir, ".."), { recursive: true, force: true });
+    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("omits limits entirely when the proxy has never seen the headers", async () => {

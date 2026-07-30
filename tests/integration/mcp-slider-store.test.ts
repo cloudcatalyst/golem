@@ -16,6 +16,7 @@ import {
   JsonFileSliderStore,
   LEGACY_SLIDER_LEVEL_KEY,
 } from "../../src/mcp/slider-store.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 describe("JsonFileSliderStore", () => {
   let dir: string;
@@ -27,7 +28,7 @@ describe("JsonFileSliderStore", () => {
   });
 
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns the default level when no settings file exists", async () => {

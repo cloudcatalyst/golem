@@ -36,6 +36,7 @@ import {
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 import { JsonlTelemetryStore, recordToolCall } from "../../src/telemetry/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 // Unconditionally-registered tools (need no injected service): the P0 trio +
 // `devices` + `snooze` (park-until-reset, proposal golem-snooze.md).
@@ -885,7 +886,7 @@ describe("coder tool", () => {
 describe("tool telemetry (R4.3 — §59 gap)", () => {
   let dir: string;
   afterEach(async () => {
-    if (dir !== undefined) await rm(dir, { recursive: true, force: true });
+    if (dir !== undefined) await rm(dir, rmTemp);
   });
 
   class OneHitKnowledgeBase implements KnowledgeBase {

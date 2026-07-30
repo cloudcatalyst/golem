@@ -3561,3 +3561,109 @@ error to warn you.
 **Conclusion.** Next step is a tool-selection-accuracy harness, not a transform.
 Until it exists, the honest position is that the tools block is a known ~900-token
 target with no safe edit available.
+
+---
+
+## §89 — Tool search verified GA; the shrinker measured and REJECTED (2026-07-30)
+
+Closes the §88 blocker. Two separate findings: what Anthropic's native mechanism
+actually does (live-doc check), and what the now-built harness says about
+rewriting descriptions ourselves (measurement).
+
+### (a) Native tool search — live-doc check
+
+Source: https://docs.claude.com/en/docs/agents-and-tools/tool-use/tool-search-tool
+(fetched 2026-07-30 — served by Golem's own raw-page cache, Decision 42).
+**Generally available**, not beta; no beta header. Two variants:
+`tool_search_tool_regex_20251119` (Claude writes Python `re.search` patterns, ≤200
+chars) and `tool_search_tool_bm25_20251119` (natural language, ≤500 chars).
+Supported on Opus 5 / Opus 4.6–4.8 / Sonnet 4.5–4.6 / Haiku 4.5; Opus 4.1 and
+earlier do not support it.
+
+The facts that matter for a proxy, and that corrected our assumptions:
+
+1. **`defer_loading` does not shrink the request.** "You still send every tool's
+   full definition in the `tools` array on every request, including the deferred
+   ones" — the API needs them server-side to run the search and expand
+   references. It controls what enters the *context window*, not what the client
+   transmits. So this is not a bytes-on-the-wire saving Golem could measure by
+   diffing request sizes; the saving is in billed input tokens.
+2. **Prompt caching is preserved by design.** The API excludes deferred tools
+   from the system-prompt prefix and appends discovered ones as `tool_reference`
+   blocks *inline in the conversation*, leaving the prefix untouched. This is the
+   opposite of the §88 worry that lazy loading must bust the cache — Anthropic's
+   implementation sidesteps it, ours could not have.
+3. **A deferred tool may not carry `cache_control`** (400). The breakpoint has to
+   ride a non-deferred tool. At least one tool must stay non-deferred (all-deferred
+   is also a 400), and it should never be the search tool that is deferred.
+4. Limits: ≤10,000 deferred tools; ≤5 matches returned per search; not metered as
+   a separate server tool — discovered definitions just bill as input tokens.
+5. **Anthropic's own "when to use" thresholds:** worth it at ≥10 tools or >10k
+   tokens of definitions; standard calling is the better fit under 10 tools or
+   <100 tokens total. Golem alone sits right on the boundary (11 tools, ~902
+   description tokens / ~3847 full definitions) — the aggregate with Claude Code's
+   built-ins and other MCP servers is what actually crosses it.
+6. MCP-connector tools set `defer_loading` once on the `mcp_toolset`
+   `default_config`, not per definition.
+
+**Consequence — the real Workstream B risk was never the shrinker.** `golem init`
+already writes `ENABLE_TOOL_SEARCH=true`, and behind a non-first-party base URL
+Claude Code re-enables tool search *only if the proxy relays these blocks
+correctly* (§12). Nothing asserted that. `tests/integration/proxy-tool-search.test.ts`
+now does: byte-faithful forwarding of a tool-search request at levels 0/1,
+preservation of `defer_loading` / the search-tool `type` / `tools` order /
+`cache_control` placement at every level, and unchanged relay of a
+`server_tool_use` + `tool_search_tool_result` + `tool_reference` response.
+**Result: fidelity already held** — no bug found, but the invariant is now guarded
+instead of assumed.
+
+### (b) The shrinker, measured — REGRESSED, not shipped
+
+`golem bench tools` (new, `src/tools/`) lists the catalog from the live MCP server
+and A/Bs a candidate transform against 27 hand-labelled selection cases.
+Chooser: `qwen2.5-coder:7b` at temperature 0 (see the caveat below).
+
+| transform | tokens | accuracy | false positives | abstentions | verdict |
+|---|---|---|---|---|---|
+| `whitespace` (control) | 902 → 902 (**0 saved**) | 88.9% → 88.9% (0.0%) | 2 → 2 | 2 → 2 | NO-MATERIAL-CHANGE |
+| `first-sentence` | 902 → 397 (**505 saved, 56%**) | 88.9% → **81.5%** (−7.4pp) | 2 → **6** | 2 → 0 | **REGRESSED** |
+
+(false positives/abstentions are counts at 2 repeats; the 4-repeat run reproduces
+the accuracy figures exactly and scales the counts linearly — 4 → 12 false
+positives — because temperature 0 makes the chooser deterministic.)
+
+**The control is the important row.** Whitespace normalisation saves *exactly
+zero* tokens — not "almost nothing" as §88 estimated, but nothing at all, because
+these descriptions are built from concatenated string literals with single spaces
+and contain no redundant whitespace to collapse. That kills transform class 1
+outright.
+
+**The aggressive row shows the predicted failure mode, and it is the dangerous
+one:** trimming to the first sentence triples false positives (2 → 6) while
+driving abstentions to zero. The model does not get confused about *which* tool —
+it starts calling a tool when none applies, because the trimmed text loses the
+"use it when…" qualifiers that tell it when to stay out. A shrinker judged only on
+"did it still pick the right tool from the right prompt" would have missed this
+entirely.
+
+**New census fact §88 did not have:** full definitions are **~3847 tokens**, 4.3×
+the ~902 of descriptions alone. The input schemas, not the prose, are most of the
+tools block — so prose-shortening was attacking the smaller half all along.
+
+**Caveats, stated because the harness exists to prevent self-deception.** The
+chooser is a *local* model, not the one that reads these descriptions in
+production, and the 27 expected answers are hand-labelled by us, not observed
+traffic. That makes a REGRESSED verdict credible (a small model tripping over
+vagueness is evidence the text got worse) and a clean verdict weak (it would not
+prove Claude behaves the same). Also: **the tier-2 `classifier` model
+(`qwen2.5:7b`) is not pulled on this machine** — only `qwen2.5-coder:7b` is — so
+the run used `--role drafter`. That is the same class of gap as the 2026-07-17
+judge bug (BACKLOG): `golem devices` lists the tier's *catalog*, which is not the
+same as what Ollama has actually downloaded.
+
+**Conclusion. The tools-block shrinker is not shipped, and now that is a measured
+decision rather than a deferred one.** Class 1 (whitespace) is worth zero; class 2
+(prose rewriting) costs selection precision at the one saving worth having; class 3
+(native `defer_loading`) is Anthropic's to run and Golem's job is only to relay it
+faithfully, which is now tested. If this is revisited, the target is the input
+schemas (~2900 tokens) and the harness is already the gate.

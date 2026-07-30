@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildTaskGrounding } from "../../../src/cli/task-grounding.js";
 import type { InferenceService } from "../../../src/interfaces/inference.js";
 import type { KnowledgeBase } from "../../../src/interfaces/knowledge.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const fakeInference = {
   chat: () => Promise.reject(new Error("unused in these tests")),
@@ -38,7 +39,7 @@ describe("buildTaskGrounding (LE3)", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-ground-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns undefined when knowledge is disabled (opt-out → service ungrounded)", async () => {

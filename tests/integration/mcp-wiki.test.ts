@@ -19,6 +19,7 @@ import {
   type GolemMcpServerDeps,
 } from "../../src/mcp/index.js";
 import { FileWikiStore } from "../../src/wiki/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const WIKI_TOOLS = ["wiki_read", "wiki_upsert"] as const;
 
@@ -45,7 +46,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 function depsWithWiki(): GolemMcpServerDeps {

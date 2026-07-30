@@ -15,6 +15,7 @@ import {
   servedModelPath,
   writeServedModel,
 } from "../../../src/proxy/served-model.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("served-model state", () => {
   let dir: string;
@@ -23,7 +24,7 @@ describe("served-model state", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-served-model-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("round-trips a written model", async () => {
@@ -92,7 +93,7 @@ describe("servedModelFor", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-served-for-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns the snapshot when it was served on the active account", async () => {

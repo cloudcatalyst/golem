@@ -26,6 +26,7 @@ import {
 import { loadConfig, writeSetting } from "../../../src/config/index.js";
 import { createCredentialStore } from "../../../src/credentials/index.js";
 import { readServedModel, writeServedModel } from "../../../src/proxy/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 let credDir: string;
@@ -57,8 +58,8 @@ beforeEach(async () => {
   );
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
-  await rm(credDir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
+  await rm(credDir, rmTemp);
 });
 
 describe("collectAccounts", () => {

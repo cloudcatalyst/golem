@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { LocalDirBlobStore } from "../../../src/compression/index.js";
 import { BlobNotFoundError } from "../../../src/interfaces/storage.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let root: string;
 let store: LocalDirBlobStore;
@@ -24,7 +25,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  await rm(root, rmTemp);
 });
 
 const INVALID_KEYS: ReadonlyArray<[label: string, key: string]> = [

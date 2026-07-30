@@ -16,13 +16,14 @@ import {
   runUserPromptSubmitHook,
   sessionStatePath,
 } from "../../../src/hooks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-state-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 function io(input: string) {

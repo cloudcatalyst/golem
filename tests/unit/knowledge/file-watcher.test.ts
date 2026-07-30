@@ -12,6 +12,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { FileChangeBatch, FileWatcher } from "../../../src/knowledge/file-watcher.js";
 import { watchPath } from "../../../src/knowledge/file-watcher.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 let watcher: FileWatcher | undefined;
@@ -23,7 +24,7 @@ beforeEach(async () => {
 afterEach(async () => {
   watcher?.close();
   watcher = undefined;
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 /** Polls the collected-batches array until one arrives, merging none. */

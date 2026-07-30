@@ -4,7 +4,7 @@ type: concept
 tags: [dogfooding, proxy, dev-workflow, headroom]
 sources: ["docs/DEVELOPMENT.md (relocated here by Decision 36, 2026-07-16)"]
 created: 2026-07-16
-updated: 2026-07-16
+updated: 2026-07-30
 ---
 
 # Developing Golem while using Golem
@@ -15,6 +15,48 @@ live session, run **two proxies**: a frozen **stable** one you actually use, and
 a throwaway **dev** one you test against. (The stable proxy runs the full
 pipeline including the [[Redaction Stage]]; see also [[Wiki-First Knowledge]]
 for how sessions find project knowledge.)
+
+## The split at a glance
+
+Two proxies, two ports, and exactly one deliberate moment where the live one
+changes. Everything in **STABLE** is frozen; everything in **DEV** churns with
+every `npm run build`.
+
+```mermaid
+flowchart TB
+  subgraph Session["Your live Claude Code session"]
+    CC["Claude Code<br/>ANTHROPIC_BASE_URL → :4653"]
+  end
+
+  subgraph Stable["STABLE — frozen, yours"]
+    GBIN["Global install<br/>npm i -g golem-run-*.tgz"]
+    SP["golem proxy start --detach<br/>:4653 · pid file in .golem/proxy.pid"]
+    DASH["golem dashboard<br/>:4654"]
+    GBIN --> SP
+    SP --- DASH
+  end
+
+  subgraph Dev["DEV — transient, the agent's"]
+    TREE["Working tree → dist/<br/>(npm run build)"]
+    DP["node dist/cli/main.js proxy<br/>start --port 4655 --dir (a temp dir)"]
+    TESTS["npx vitest run<br/>(touches neither proxy — prefer this)"]
+    TREE --> DP
+    TREE --> TESTS
+  end
+
+  CC --> SP
+  SP --> UP["Upstream (Anthropic / gateway)"]
+  DP --> UP
+  SIDE["Headroom sidecar (opt-in, slider ≥3)<br/>uv run --with headroom-ai==pin · fails open"]
+  SP -.->|"compression.headroom_sidecar"| SIDE
+  DP -.-> SIDE
+
+  TREE ==>|"PROMOTE — the only moment stable changes:<br/>npm pack → npm i -g → restart stable"| GBIN
+```
+
+Why it holds: stable is a *real copy*, not a symlink into the repo, so a broken
+`dist/` or a crashed dev proxy cannot reach `:4653`. Promotion is an explicit
+three-command act, never a side effect of a build.
 
 ## The split
 
