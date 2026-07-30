@@ -6,8 +6,49 @@
  */
 
 import { spawn } from "node:child_process";
-import type { Task } from "../tasks/index.js";
-import { formatResumeCommand } from "../tasks/index.js";
+import type { Task, TaskStore } from "../tasks/index.js";
+import { FileTaskStore, formatResumeCommand, PlanTaskStore } from "../tasks/index.js";
+
+/**
+ * Which home a task lives in.
+ *
+ * `local` — `.golem/tasks/*.json`, uncommitted machine state (parked sessions,
+ * snooze holds, capacity-gated resumes). `plan` — `docs/plan/tasks/*.md`, committed
+ * roadmap work. One concept, two lifetimes; see `src/tasks/plan-task.ts`.
+ */
+export type TaskScope = "local" | "plan";
+
+export interface ScopedTask {
+  readonly task: Task;
+  readonly scope: TaskScope;
+}
+
+/** The store a scope reads and writes. */
+export function storeForScope(scope: TaskScope, projectDir: string): TaskStore {
+  return scope === "plan" ? new PlanTaskStore(projectDir) : new FileTaskStore(projectDir);
+}
+
+/**
+ * List both scopes.
+ *
+ * Plan tasks come first so `golem task list` opens on the roadmap rather than on
+ * whatever this machine happens to have parked — the committed set is the shared
+ * picture, the local set is this session's.
+ */
+export async function listScopedTasks(projectDir: string, only?: TaskScope): Promise<ScopedTask[]> {
+  const out: ScopedTask[] = [];
+  if (only !== "local") {
+    for (const task of await new PlanTaskStore(projectDir).list()) {
+      out.push({ task, scope: "plan" });
+    }
+  }
+  if (only !== "plan") {
+    for (const task of await new FileTaskStore(projectDir).list()) {
+      out.push({ task, scope: "local" });
+    }
+  }
+  return out;
+}
 
 /**
  * Resolve a task by full id or a unique id prefix (the short id `task list`
@@ -18,6 +59,28 @@ export function findTask(tasks: readonly Task[], idOrPrefix: string): Task | "no
   if (exact !== undefined) return exact;
   const matches = tasks.filter((t) => t.id.startsWith(idOrPrefix));
   if (matches.length === 1) return matches[0] as Task;
+  return matches.length === 0 ? "none" : "ambiguous";
+}
+
+/**
+ * Resolve across both scopes, keeping the scope so a mutation writes back to the
+ * store the task actually came from.
+ *
+ * Exact-id match wins outright — plan ids are short and human (`R8.5`, `21e`), so a
+ * prefix search alone would make `R8` ambiguous against `R8.5`/`R8.6` and refuse a
+ * perfectly unambiguous id. Case-insensitive on the exact pass, because nobody types
+ * `r8.5` meaning something else.
+ */
+export function findScopedTask(
+  entries: readonly ScopedTask[],
+  idOrPrefix: string,
+): ScopedTask | "none" | "ambiguous" {
+  const wanted = idOrPrefix.toLowerCase();
+  const exact = entries.filter((e) => e.task.id.toLowerCase() === wanted);
+  if (exact.length === 1) return exact[0] as ScopedTask;
+  if (exact.length > 1) return "ambiguous";
+  const matches = entries.filter((e) => e.task.id.toLowerCase().startsWith(wanted));
+  if (matches.length === 1) return matches[0] as ScopedTask;
   return matches.length === 0 ? "none" : "ambiguous";
 }
 
@@ -40,12 +103,65 @@ export function renderTaskList(tasks: readonly Task[]): string {
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Both scopes in one table, plan tasks first.
+ *
+ * The scope column is not decoration: it says whether closing the task means editing
+ * a committed document (reviewable, shared) or dropping a local JSON file (this
+ * machine only). Plan ids print in full — they are short and meaningful, and
+ * truncating `R8.5` to 8 chars would be worse than useless.
+ */
+export function renderScopedTaskList(entries: readonly ScopedTask[]): string {
+  if (entries.length === 0) {
+    return "no tasks (roadmap work: `golem task index`; a local park: `golem task add`)\n";
+  }
+  const plan = entries.filter((e) => e.scope === "plan");
+  const local = entries
+    .filter((e) => e.scope === "local")
+    .sort((a, b) => b.task.updatedAt.localeCompare(a.task.updatedAt));
+  const lines: string[] = [];
+
+  if (plan.length > 0) {
+    lines.push(`plan (committed, docs/plan/tasks/) — ${plan.length}:`);
+    for (const { task } of [...plan].sort((a, b) => a.task.id.localeCompare(b.task.id, "en"))) {
+      const meta = task.plan;
+      const blocked = meta?.blocked !== undefined ? `  [blocked: ${meta.blocked}]` : "";
+      lines.push(
+        `  ${task.id.padEnd(10)} ${task.state.padEnd(9)} ${(meta?.owner ?? "agent").padEnd(5)} ` +
+          `${(meta?.size ?? "M").padEnd(2)} ${taskTitle(task)}${blocked}`,
+      );
+    }
+  }
+
+  if (local.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push(`local (this machine, .golem/tasks/) — ${local.length}:`);
+    for (const { task } of local) {
+      const gate = task.notBefore !== undefined ? ` (not before ${task.notBefore})` : "";
+      lines.push(`  ${task.id.slice(0, 8)}  ${task.state.padEnd(9)} ${taskTitle(task)}${gate}`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 /** Detailed view for `golem task show <id>`. */
 export function renderTask(task: Task): string {
   const lines: string[] = [];
   lines.push(`task ${task.id}`);
   lines.push(`  state:      ${task.state}`);
   lines.push(`  title:      ${taskTitle(task)}`);
+  if (task.plan !== undefined) {
+    const plan = task.plan;
+    lines.push(`  scope:      plan (committed document)`);
+    lines.push(`  owner:      ${plan.owner}`);
+    lines.push(`  size:       ${plan.size}`);
+    if (plan.design !== undefined) lines.push(`  design:     ${plan.design}`);
+    if (plan.gate !== undefined) lines.push(`  gate:       ${plan.gate}`);
+    if (plan.blocked !== undefined) lines.push(`  BLOCKED:    ${plan.blocked}`);
+    if (plan.dependsOn.length > 0) lines.push(`  depends on: ${plan.dependsOn.join(", ")}`);
+    if (plan.touches.length > 0) lines.push(`  touches:    ${plan.touches.join(", ")}`);
+  }
   lines.push(`  created:    ${task.createdAt}`);
   lines.push(`  updated:    ${task.updatedAt}`);
   lines.push(`  attempts:   ${task.attempts}`);
@@ -67,7 +183,7 @@ export function renderTask(task: Task): string {
       lines.push(`    [${c.status}] ${c.label}${c.note !== undefined ? ` — ${c.note}` : ""}`);
     }
   }
-  lines.push("  prompt:");
+  lines.push(task.plan !== undefined ? "  brief:" : "  prompt:");
   for (const line of task.prompt.split("\n")) lines.push(`    ${line}`);
   return `${lines.join("\n")}\n`;
 }

@@ -35,6 +35,42 @@ export const TERMINAL_TASK_STATES: ReadonlySet<TaskState> = new Set<TaskState>([
   "cancelled",
 ]);
 
+/**
+ * Plan-task metadata (see `plan-task.ts` for the document format).
+ *
+ * Lives here rather than beside the store because `taskSchema` embeds it, and the
+ * other direction would be a cycle. Deliberately small: every field answers a
+ * question an agent asks in its first minute — who owns this, how big is it, where is
+ * the design, what gate decides it, what is it waiting on — and none duplicates the
+ * body.
+ */
+export const PLAN_TASK_OWNERS = ["agent", "user"] as const;
+export type PlanTaskOwner = (typeof PLAN_TASK_OWNERS)[number];
+
+export const PLAN_TASK_SIZES = ["S", "M", "L"] as const;
+export type PlanTaskSize = (typeof PLAN_TASK_SIZES)[number];
+
+export const planMetaSchema = z.object({
+  /** `user` = an outward or credentialed act an agent must not take on its own. */
+  owner: z.enum(PLAN_TASK_OWNERS).default("agent"),
+  size: z.enum(PLAN_TASK_SIZES).default("M"),
+  /** Where the design lives (memo, spec Decision, verification-notes §). */
+  design: z.string().optional(),
+  /** Task ids that must land first. */
+  dependsOn: z.array(z.string()).default([]),
+  /** Directories the work is expected to touch — a starting map, not a contract. */
+  touches: z.array(z.string()).default([]),
+  /**
+   * Why this cannot start, when that is a fact about the world rather than a
+   * dependency (no hardware, no credentials, needs a human decision). A task with
+   * this set is visible-not-lost rather than actionable.
+   */
+  blocked: z.string().optional(),
+  /** One-line definition of done / the gate that decides it. */
+  gate: z.string().optional(),
+});
+export type PlanMeta = z.infer<typeof planMetaSchema>;
+
 const checkpointSchema = z.object({
   /** Plan step label. */
   label: z.string(),
@@ -92,6 +128,16 @@ export const taskSchema = z.object({
   result: z.string().optional(),
   /** R5.3 — explicitly handed to the Claude tier (21a); prompt carries local grounding. */
   escalated: z.boolean().default(false),
+  /**
+   * Roadmap metadata, present only on a **plan-scoped** task — one persisted as a
+   * committed document under `docs/plan/tasks/` rather than as local machine state
+   * under `.golem/tasks/` (see `plan-task.ts`).
+   *
+   * Optional rather than a separate type on purpose: a parked session and a roadmap
+   * item are the same concept with different lifetimes, so they share one schema and
+   * one CLI. Its presence is also what tells a renderer which scope a task came from.
+   */
+  plan: planMetaSchema.optional(),
 });
 export type Task = z.infer<typeof taskSchema>;
 
