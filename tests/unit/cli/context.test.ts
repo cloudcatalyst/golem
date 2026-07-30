@@ -83,6 +83,52 @@ describe("renderContextLedger", () => {
     expect(out).toContain("no prompt content is stored");
   });
 
+  it("attributes the tools block by owner, and says which rows Golem may touch", () => {
+    const out = renderContextLedger(
+      ledger({
+        tools: [
+          { name: "mcp__golem__search", description: "d".repeat(200), input_schema: {} },
+          { name: "Read", description: "r".repeat(900), input_schema: {} },
+          { name: "mcp__context7__query-docs", description: "q", input_schema: {} },
+        ],
+        messages: [],
+      }),
+    );
+    expect(out).toContain("Tool definitions");
+    expect(out).toContain("Golem MCP tools");
+    expect(out).toContain("other MCP servers");
+    expect(out).toContain("client built-ins");
+    // The honesty line: an 18.8k ceiling is not an 18.8k lever (§95).
+    expect(out).toContain("Only the Golem rows");
+    // The split that says which half a shrinker should attack (§89).
+    expect(out).toContain("input schemas");
+    expect(out).toContain("mcp__golem__search");
+  });
+
+  it("flags deferred definitions only when some are deferred", () => {
+    const deferred = renderContextLedger(
+      ledger({
+        tools: [
+          { name: "a", description: "x", input_schema: {}, defer_loading: true },
+          { name: "b", description: "y", input_schema: {} },
+        ],
+        messages: [],
+      }),
+    );
+    expect(deferred).toContain("defer_loading");
+    expect(deferred).toContain("[deferred]");
+
+    const plain = renderContextLedger(
+      ledger({ tools: [{ name: "b", description: "y", input_schema: {} }], messages: [] }),
+    );
+    expect(plain).not.toContain("defer_loading");
+  });
+
+  it("omits the tools section entirely when the request carried no tools", () => {
+    const out = renderContextLedger(ledger({ messages: [{ role: "user", content: LONG }] }));
+    expect(out).not.toContain("Tool definitions —");
+  });
+
   it("renders a header with the capture time and message count", () => {
     const out = renderContextLedger(
       ledger({

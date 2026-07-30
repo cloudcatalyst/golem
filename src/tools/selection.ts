@@ -29,6 +29,7 @@
  */
 
 import type { InferenceService, Role } from "../interfaces/index.js";
+import { type ArgumentCase, type ArgumentOutcome, scoreArguments } from "./arguments.js";
 import type { SelectionCase } from "./cases.js";
 import type { CatalogTool } from "./catalog.js";
 
@@ -77,8 +78,26 @@ const SYSTEM =
   "appropriate — the request needs no tool, or needs a capability none of them " +
   "describe — reply with an empty string. Never invent a tool name.";
 
-function renderCatalog(tools: readonly CatalogTool[]): string {
-  return tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+/**
+ * How much of each definition the chooser is shown.
+ *
+ * `description` is what §89 used and is right for a prose transform. `full` also
+ * renders the input schema, and exists because a schema transform scored against a
+ * description-only prompt would show a zero delta **by construction** — the harness
+ * would be blind, not the transform safe. Whichever is used lands in the report.
+ */
+export type CatalogRender = "description" | "full";
+
+function renderCatalog(
+  tools: readonly CatalogTool[],
+  render: CatalogRender = "description",
+): string {
+  if (render === "description") {
+    return tools.map((t) => `- ${t.name}: ${t.description}`).join("\n");
+  }
+  return tools
+    .map((t) => `- ${t.name}: ${t.description}\n  parameters: ${JSON.stringify(t.schema)}`)
+    .join("\n");
 }
 
 /**
@@ -186,13 +205,15 @@ export interface RunOptions {
    * a caveat on the result, never a hidden one.
    */
   readonly role?: Role;
+  /** How much of each definition to show the chooser. Default `description`. */
+  readonly render?: CatalogRender;
 }
 
 /** Score one catalog against the case set. */
 export async function runSelectionHarness(opts: RunOptions): Promise<SelectionRun> {
   const repeats = Math.max(1, opts.repeats ?? 1);
   const role = opts.role ?? "classifier";
-  const catalogText = renderCatalog(opts.tools);
+  const catalogText = renderCatalog(opts.tools, opts.render ?? "description");
   const validNames = new Set(opts.tools.map((t) => t.name));
   const outcomes: CaseOutcome[] = [];
   let model: string | null = null;
@@ -236,7 +257,157 @@ export async function runSelectionHarness(opts: RunOptions): Promise<SelectionRu
   };
 }
 
+const ARG_SYSTEM =
+  "You are calling a tool. You are given the tool's name, its description, and its " +
+  "JSON Schema of parameters, plus one request. Reply with ONLY a JSON object of the " +
+  "arguments to pass. Include every required parameter. Include an optional " +
+  "parameter only when the request calls for it. Obey the schema exactly: respect " +
+  "types, allowed values, and any stated limits. Do not invent parameters that the " +
+  "schema does not declare, and do not wrap the object in any other key.";
+
+/** Parse the model's reply into an arguments object, or undefined if unusable. */
+export function parseArguments(text: string): Record<string, unknown> | undefined {
+  const trimmed = text
+    .trim()
+    .replace(/^```[a-zA-Z]*\s*/, "")
+    .replace(/```$/, "")
+    .trim();
+  // A small model sometimes prefixes prose; take the first balanced-looking object.
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start < 0 || end <= start) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface ArgumentRun {
+  readonly model: string | null;
+  readonly repeats: number;
+  readonly scored: number;
+  readonly errors: number;
+  /** Cases whose arguments validated against the ORIGINAL schema. */
+  readonly valid: number;
+  /** Cases that validated AND matched every asserted field. */
+  readonly correct: number;
+  /** valid / scored, or null when nothing could be scored. */
+  readonly validity: number | null;
+  /** correct / scored, or null when nothing could be scored. */
+  readonly fieldAccuracy: number | null;
+  readonly outcomes: readonly ArgumentOutcome[];
+}
+
+export interface ArgumentRunOptions {
+  readonly inference: InferenceService;
+  /** The catalog as the model will see it — shrunk, when scoring a candidate. */
+  readonly tools: readonly CatalogTool[];
+  /**
+   * The catalog to grade against. Always the untransformed one: the question is
+   * whether the shrunk schema still elicits arguments the real tool accepts, and
+   * grading against the transform's own relaxed rules would let it lower its own bar.
+   */
+  readonly reference: readonly CatalogTool[];
+  readonly cases: readonly ArgumentCase[];
+  readonly repeats?: number;
+  readonly role?: Role;
+}
+
+/**
+ * Score argument construction for one catalog.
+ *
+ * A case naming a tool absent from the catalog is skipped rather than failed — that
+ * is a case-set/catalog mismatch (a renamed tool), not a model error, and scoring it
+ * as wrong would quietly punish both catalogs equally and hide the rename.
+ */
+export async function runArgumentHarness(opts: ArgumentRunOptions): Promise<ArgumentRun> {
+  const repeats = Math.max(1, opts.repeats ?? 1);
+  const role = opts.role ?? "classifier";
+  const shown = new Map(opts.tools.map((t) => [t.name, t]));
+  const reference = new Map(opts.reference.map((t) => [t.name, t]));
+  const outcomes: ArgumentOutcome[] = [];
+  let model: string | null = null;
+
+  for (let pass = 0; pass < repeats; pass++) {
+    for (const testCase of opts.cases) {
+      const tool = shown.get(testCase.tool);
+      const ref = reference.get(testCase.tool);
+      if (tool === undefined || ref === undefined) continue;
+      try {
+        const result = await opts.inference.chat(
+          role,
+          [
+            { role: "system", content: ARG_SYSTEM },
+            {
+              role: "user",
+              content:
+                `Tool: ${tool.name}\nDescription: ${tool.description}\n` +
+                `Parameters (JSON Schema): ${JSON.stringify(tool.schema)}\n\n` +
+                `Request: ${testCase.prompt}`,
+            },
+          ],
+          { temperature: 0 },
+        );
+        if (result.model !== null) model = result.model;
+        const args = parseArguments(result.text);
+        if (args === undefined) {
+          outcomes.push({
+            id: testCase.id,
+            tool: testCase.tool,
+            valid: false,
+            fieldsCorrect: false,
+            violations: [],
+            wrongFields: [],
+            error: `unparseable arguments: ${result.text.slice(0, 80)}`,
+          });
+          continue;
+        }
+        outcomes.push(scoreArguments(testCase, ref.schema, args));
+      } catch (err) {
+        outcomes.push({
+          id: testCase.id,
+          tool: testCase.tool,
+          valid: false,
+          fieldsCorrect: false,
+          violations: [],
+          wrongFields: [],
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  const scoredOutcomes = outcomes.filter((o) => o.error === undefined);
+  const valid = scoredOutcomes.filter((o) => o.valid).length;
+  const correct = scoredOutcomes.filter((o) => o.valid && o.fieldsCorrect).length;
+  return {
+    model,
+    repeats,
+    scored: scoredOutcomes.length,
+    errors: outcomes.length - scoredOutcomes.length,
+    valid,
+    correct,
+    validity: scoredOutcomes.length === 0 ? null : valid / scoredOutcomes.length,
+    fieldAccuracy: scoredOutcomes.length === 0 ? null : correct / scoredOutcomes.length,
+    outcomes,
+  };
+}
+
 export type CompareVerdict = "improved" | "no-material-change" | "regressed" | "inconclusive";
+
+/** The argument half of a comparison, present only when argument cases were run. */
+export interface ArgumentComparison {
+  readonly baseline: ArgumentRun;
+  readonly candidate: ArgumentRun;
+  readonly cases: number;
+  /** candidate − baseline validity against the original schemas. */
+  readonly validityDelta: number | null;
+  /** candidate − baseline field accuracy. */
+  readonly fieldAccuracyDelta: number | null;
+}
 
 export interface CatalogComparison {
   readonly baseline: SelectionRun;
@@ -250,6 +421,12 @@ export interface CatalogComparison {
   readonly resolution: number;
   readonly verdict: CompareVerdict;
   readonly notes: readonly string[];
+  /** How much of each definition the chooser saw. */
+  readonly render: CatalogRender;
+  /** Which half of the definition the token figures measure. */
+  readonly measuring: "descriptions" | "schemas";
+  /** R8.S1 — argument construction, the failure mode selection cannot see. */
+  readonly arguments?: ArgumentComparison;
 }
 
 /**
@@ -266,11 +443,30 @@ export async function compareCatalogs(opts: {
   readonly cases: readonly SelectionCase[];
   readonly repeats?: number;
   readonly role?: Role;
+  /**
+   * How much of each definition the chooser sees. A schema transform must be scored
+   * at `full`, or the delta is zero because the prompt never contained the schema.
+   */
+  readonly render?: CatalogRender;
+  /**
+   * Which half the token figures measure. `schemas` for a schema transform, so the
+   * report cannot claim a saving in the half the transform never touched.
+   */
+  readonly measuring?: "descriptions" | "schemas";
+  /**
+   * Argument cases. Supply these for a schema transform: they are the only gate
+   * that can see a schema which still selects correctly but no longer says what a
+   * parameter means.
+   */
+  readonly argumentCases?: readonly ArgumentCase[];
 }): Promise<CatalogComparison> {
+  const render = opts.render ?? "description";
+  const measuring = opts.measuring ?? "descriptions";
   const baseline = await runSelectionHarness({
     inference: opts.inference,
     tools: opts.baseline,
     cases: opts.cases,
+    render,
     ...(opts.repeats === undefined ? {} : { repeats: opts.repeats }),
     ...(opts.role === undefined ? {} : { role: opts.role }),
   });
@@ -278,12 +474,49 @@ export async function compareCatalogs(opts: {
     inference: opts.inference,
     tools: opts.candidate,
     cases: opts.cases,
+    render,
     ...(opts.repeats === undefined ? {} : { repeats: opts.repeats }),
     ...(opts.role === undefined ? {} : { role: opts.role }),
   });
 
-  const baselineTokens = opts.baseline.reduce((n, t) => n + t.descriptionTokens, 0);
-  const candidateTokens = opts.candidate.reduce((n, t) => n + t.descriptionTokens, 0);
+  let argumentComparison: ArgumentComparison | undefined;
+  if (opts.argumentCases !== undefined && opts.argumentCases.length > 0) {
+    const argBaseline = await runArgumentHarness({
+      inference: opts.inference,
+      tools: opts.baseline,
+      reference: opts.baseline,
+      cases: opts.argumentCases,
+      ...(opts.repeats === undefined ? {} : { repeats: opts.repeats }),
+      ...(opts.role === undefined ? {} : { role: opts.role }),
+    });
+    const argCandidate = await runArgumentHarness({
+      inference: opts.inference,
+      tools: opts.candidate,
+      // Graded against the ORIGINAL schemas — see `arguments.ts`.
+      reference: opts.baseline,
+      cases: opts.argumentCases,
+      ...(opts.repeats === undefined ? {} : { repeats: opts.repeats }),
+      ...(opts.role === undefined ? {} : { role: opts.role }),
+    });
+    argumentComparison = {
+      baseline: argBaseline,
+      candidate: argCandidate,
+      cases: opts.argumentCases.length,
+      validityDelta:
+        argBaseline.validity === null || argCandidate.validity === null
+          ? null
+          : argCandidate.validity - argBaseline.validity,
+      fieldAccuracyDelta:
+        argBaseline.fieldAccuracy === null || argCandidate.fieldAccuracy === null
+          ? null
+          : argCandidate.fieldAccuracy - argBaseline.fieldAccuracy,
+    };
+  }
+
+  const half = (t: CatalogTool): number =>
+    measuring === "schemas" ? t.schemaTokens : t.descriptionTokens;
+  const baselineTokens = opts.baseline.reduce((n, t) => n + half(t), 0);
+  const candidateTokens = opts.candidate.reduce((n, t) => n + half(t), 0);
   const notes: string[] = [];
   const resolution = opts.cases.length === 0 ? 1 : 1 / opts.cases.length;
 
@@ -319,6 +552,49 @@ export async function compareCatalogs(opts: {
     notes.push("the candidate catalog is not smaller — there is nothing to trade accuracy for");
   }
 
+  // The argument half can veto. A schema transform that keeps selection perfect and
+  // then stops the model supplying a valid `ref_id` has regressed, and a verdict
+  // computed from selection alone would have called that a clean pass — the exact
+  // blindness §89's harness would have had if it were reused unchanged for R8.S1.
+  if (argumentComparison !== undefined) {
+    const argResolution =
+      argumentComparison.cases === 0 ? 1 : 1 / (argumentComparison.cases * candidate.repeats);
+    const worst = Math.min(
+      argumentComparison.validityDelta ?? 0,
+      argumentComparison.fieldAccuracyDelta ?? 0,
+    );
+    if (
+      argumentComparison.validityDelta === null ||
+      argumentComparison.fieldAccuracyDelta === null
+    ) {
+      verdict = "inconclusive";
+      notes.push("the argument harness scored nothing — is the local model reachable?");
+    } else if (argumentComparison.baseline.errors > 0 || argumentComparison.candidate.errors > 0) {
+      notes.push(
+        `${argumentComparison.baseline.errors + argumentComparison.candidate.errors} ` +
+          "argument-harness error(s) excluded from scoring",
+      );
+    }
+    if (worst <= -argResolution && verdict !== "inconclusive") {
+      verdict = "regressed";
+      notes.push(
+        "argument construction got worse even though selection did not — this is the " +
+          "failure mode a selection-only gate cannot see",
+      );
+    }
+  } else if (measuring === "schemas") {
+    notes.push(
+      "no argument cases were run, so this scored a schema transform against a gate " +
+        "that cannot see schemas — treat the delta as meaningless",
+    );
+  }
+  if (measuring === "schemas" && render === "description") {
+    notes.push(
+      "the chooser was shown descriptions only, so a schema transform could not " +
+        "affect selection at all — re-run with the full render",
+    );
+  }
+
   return {
     baseline,
     candidate,
@@ -329,5 +605,8 @@ export async function compareCatalogs(opts: {
     resolution,
     verdict,
     notes,
+    render,
+    measuring,
+    ...(argumentComparison !== undefined && { arguments: argumentComparison }),
   };
 }

@@ -6,7 +6,12 @@
  * is what the `/golem/context-hygiene` skill needs in order to stop guessing.
  */
 
-import type { ContextBucket, ContextLedger } from "../proxy/index.js";
+import type {
+  ContextBucket,
+  ContextLedger,
+  ContextToolsBlock,
+  ToolOrigin,
+} from "../proxy/index.js";
 
 const BUCKET_LABELS: Readonly<Record<ContextBucket, string>> = {
   tools: "tool definitions",
@@ -32,6 +37,75 @@ function describeBlock(block: ContextLedger["largest"][number]): string {
   const where = block.messageIndex < 0 ? "request-level" : `message ${num(block.messageIndex)}`;
   const what = block.tool !== undefined ? `${block.tool} result` : BUCKET_LABELS[block.bucket];
   return `${what} (${where})`;
+}
+
+const ORIGIN_LABELS: Readonly<Record<ToolOrigin, string>> = {
+  golem: "Golem MCP tools",
+  mcp: "other MCP servers",
+  builtin: "client built-ins",
+};
+
+/** How many individual tool definitions to list. Enough to see the offenders. */
+const TOOLS_KEEP = 12;
+
+/**
+ * The `tools` block, decomposed.
+ *
+ * §95 promoted tool-schema shrinking on the strength of an 18.8k total, which is a
+ * ceiling and not a lever: most of it belongs to the client's built-ins and to
+ * other MCP servers, and Golem rewriting either from the proxy would be a fidelity
+ * change. So this section leads with **who owns the tokens**, then with the
+ * description/schema split that says which half is worth attacking.
+ */
+function renderToolsBlock(block: ContextToolsBlock): string[] {
+  const out: string[] = [
+    "",
+    `Tool definitions — ~${num(block.tokens)} tokens across ${num(block.count)} tool(s):`,
+  ];
+
+  for (const row of block.byOrigin) {
+    const share = block.tokens === 0 ? 0 : row.tokens / block.tokens;
+    out.push(
+      `  ${ORIGIN_LABELS[row.origin].padEnd(20)} ${num(row.tokens).padStart(9)}  ` +
+        `${bar(share)} ${(share * 100).toFixed(1)}%  (${num(row.count)} tool(s))`,
+    );
+  }
+
+  out.push("");
+  out.push(
+    `  descriptions ~${num(block.descriptionTokens)} · input schemas ~${num(block.schemaTokens)} · ` +
+      `other keys ~${num(block.otherTokens)}`,
+  );
+  if (block.deferred > 0) {
+    out.push(
+      `  ${num(block.deferred)} definition(s) set defer_loading — those are excluded from the`,
+    );
+    out.push("  cached prefix by the API and billed only when discovered (notes §89).");
+  }
+
+  const shown = block.tools.slice(0, TOOLS_KEEP);
+  if (shown.length > 0) {
+    out.push("");
+    out.push("  biggest definitions:");
+    for (const tool of shown) {
+      out.push(
+        `    ${tool.name.slice(0, 32).padEnd(32)} ~${num(tool.tokens).padStart(6)}` +
+          `  (desc ~${num(tool.descriptionTokens)}, schema ~${num(tool.schemaTokens)}` +
+          `${tool.otherTokens > 0 ? `, other ~${num(tool.otherTokens)}` : ""})` +
+          `${tool.deferred ? " [deferred]" : ""}`,
+      );
+    }
+    if (block.tools.length > shown.length) {
+      out.push(`    … and ${num(block.tools.length - shown.length)} more`);
+    }
+  }
+
+  out.push("");
+  out.push("  This block renders FIRST in the cached prefix: after the first turn it bills at");
+  out.push("  ~0.1x, and any change to it re-prefills the whole prefix. Only the Golem rows");
+  out.push("  are Golem's to shrink — the rest are the client's, and rewriting them from the");
+  out.push("  proxy would be a fidelity change, not a dial.");
+  return out;
 }
 
 /**
@@ -70,6 +144,10 @@ export function renderContextLedger(ledger: ContextLedger | null): string {
           `${bar(share)} ${(share * 100).toFixed(1)}%`,
       );
     }
+  }
+
+  if (ledger.toolsBlock !== undefined) {
+    out.push(...renderToolsBlock(ledger.toolsBlock));
   }
 
   if (ledger.perTool.length > 0) {

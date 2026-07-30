@@ -37,12 +37,22 @@ export interface CatalogTool {
   readonly descriptionTokens: number;
   /** ≈tokens for the whole serialized definition (description + schema). */
   readonly definitionTokens: number;
+  /**
+   * The input schema, kept so R8.S1 can transform it.
+   *
+   * §89's closing finding was that the schemas are ~2900 of the ~3847 definition
+   * tokens — the prose shrinker was attacking the smaller half. A schema transform
+   * cannot be scored without the schema itself, so the catalog now carries it.
+   */
+  readonly schema: unknown;
+  readonly schemaTokens: number;
 }
 
 export interface ToolCensus {
   readonly tools: readonly CatalogTool[];
   readonly descriptionTokens: number;
   readonly definitionTokens: number;
+  readonly schemaTokens: number;
 }
 
 const REJECT = (): never => {
@@ -91,11 +101,14 @@ export async function golemToolCensus(): Promise<ToolCensus> {
     const tools = listed.tools
       .map((t): CatalogTool => {
         const description = t.description ?? "";
+        const schema = t.inputSchema;
         return {
           name: t.name,
           description,
           descriptionTokens: estimateTokens(description),
           definitionTokens: estimateTokens(JSON.stringify(t)),
+          schema,
+          schemaTokens: estimateTokens(JSON.stringify(schema)),
         };
       })
       .sort((a, b) => b.descriptionTokens - a.descriptionTokens || a.name.localeCompare(b.name));
@@ -103,6 +116,7 @@ export async function golemToolCensus(): Promise<ToolCensus> {
       tools,
       descriptionTokens: tools.reduce((n, t) => n + t.descriptionTokens, 0),
       definitionTokens: tools.reduce((n, t) => n + t.definitionTokens, 0),
+      schemaTokens: tools.reduce((n, t) => n + t.schemaTokens, 0),
     };
   } finally {
     await client.close().catch(() => {});

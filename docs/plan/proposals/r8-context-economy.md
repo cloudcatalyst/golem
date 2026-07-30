@@ -13,6 +13,15 @@
 > release. **Still open in Workstream P:** the `golem ext install/upgrade` path and
 > P3a/P3b (the two Caveman components worth adopting).
 >
+> **R8.S1 REJECTED (§100), and with it the tools-block line of work.** The memo's
+> highest-confidence spike is dead, on a finding neither §89 nor §95 could see:
+> **93.9% of the 18.8k `tools` block is Claude Code's own built-ins**, Golem's share
+> is **1,130 tokens (0.8% of the request)**, and §89's "~2900 tokens of input
+> schemas" was an artifact of measuring `listTools` rather than the wire. A ceiling
+> is not a lever. The rule this adds to the memo's own discipline: **attribute before
+> you optimise.** See the R8.S1 row below and
+> `docs/wiki/debriefs/2026-07-30-r8.s1-tool-schema-shrinking.md`.
+>
 > **R8.1 SHIPPED, and its first measurement re-ranks this memo (§93).** Against
 > this repo's own telemetry: **98.4% cache hit rate** over 7,874 responses, with
 > uncached input at **0.06%** of billed input. So cache-*bust* prevention is a
@@ -249,7 +258,7 @@ tools.** Measure the delta with `golem bench tools` before wiring.
 
 | # | Spike | Expectation |
 |---|---|---|
-| **R8.S1** | **Tool-schema shrinking** — §89's own finding: ~2900 of ~3847 tokens are `input_schema`, not prose. Continue Workstream B with `golem bench tools` already built. | Best odds of the three. Schemas are machine-read, so the accuracy risk is lower than prose trimming. |
+| **R8.S1** | ~~**Tool-schema shrinking** — §89's own finding: ~2900 of ~3847 tokens are `input_schema`, not prose. Continue Workstream B with `golem bench tools` already built.~~ — **REJECTED 2026-07-30 (§100).** Two premises failed. (1) §89's ~2900 was an artifact of subtracting descriptions from the `listTools` total; Golem's input schemas are **~1,128**, the remainder being `outputSchema` + MCP metadata that **Claude Code never forwards**. (2) §95's 18.8k ceiling is **93.9% client built-ins** — Golem's whole share is **1,130 tokens, 0.8% of a 139k request**, and one built-in (`Workflow`, 5,264) is 4.7× it. Three transforms were built and gated anyway (schema-aware render + a new **argument-construction** harness that can veto); their flat results are an instrument limit, not a pass. Even the provably-invisible `schema-meta` is worth **~72 tokens** on the wire — 0.05%, for mutating a cached prefix. What shipped is the ledger's per-definition decomposition, so this is not promoted a fourth time on an aggregate. Debrief `2026-07-30-r8.s1-tool-schema-shrinking.md`. | ~~Best odds of the three.~~ Wrong: the accuracy risk was never the binding constraint — **ownership** was. |
 | **R8.S2** | **System-prompt slimming** — Pi attributes token efficiency to a minimal system prompt; Golem *can* rewrite `system` (Decision 52 already appends to it). | **Low odds, expect no.** Removing prefix bytes saves cache-*read* (0.1×) but costs one re-prefill; net positive only over long sessions, and behaviour risk is high. Measure, then almost certainly decline. |
 | **R8.S3** | **Session tree / branch-and-relaunch** — Pi's `/tree`. Golem sees every request, so it can record the conversation as a tree. | Half-feasible. Decision 37's actuation limit stands: a proxy cannot drive the interactive TUI. Ship the *recording* + a `golem session tree` view; leave relaunch to `claude -p --resume`. |
 
