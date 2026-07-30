@@ -31,10 +31,17 @@ multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
 
 ## Where we are (validated 2026-07-30)
 
-- **Baseline green:** `tsc --noEmit`, `biome check`, and `vitest run`
-  (1668 tests) all pass locally, and `golem wiki check` reports 0 issues over 95
-  pages. **CI is billing-blocked** (GitHub Actions refuses to start jobs) — recent
-  PRs merged on green *local* runs; unblocking it is a USER account step.
+- **Baseline green:** `tsc --noEmit`, `biome check`, `npm run verify:deps`, and
+  `vitest run` (**1837 tests**) all pass locally, and `golem wiki check` reports 0
+  issues over **100 pages**. **CI is billing-blocked** (GitHub Actions refuses to
+  start jobs) — recent PRs merged on green *local* runs; unblocking it is a USER
+  account step.
+- **R8a (context economy) is shipped** and, unusually, its own instruments
+  redirected it twice: §93 (98.4% cache hit rate → bust prevention is a guard rail,
+  not a lever), §94 (R8.2 already existed), §95 (the `tools` block is 18.8k tokens;
+  Bash is the biggest tool consumer), §97 (Grep/Glob have no measured traffic).
+  **Next by evidence:** R8.S1 tool-*schema* shrinking (ceiling now 18.8k, harness
+  already built), then R8.5 repo map + oversized-`Read` swap.
 - **The Windows suite flake is gone** (BACKLOG 2026-07-29): all 85 temp-tree
   deletes share a retry-hardened `rmTemp`; three consecutive full-suite runs green.
 - **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
