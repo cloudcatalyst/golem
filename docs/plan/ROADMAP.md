@@ -112,6 +112,19 @@ them, Decision 36).
   precedence — **open**), §92 (the audit); debrief
   `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
 
+- **R8.1 — cache-hit observability + prefix-bust detection** (2026-07-30):
+  `golem stats --cache` reports the billed hit rate (authoritative, from the R1.1
+  usage sniffer) beside a per-request prefix verdict (`first`/`append`/`bust` with
+  the component and turn named) — two signals deliberately **never merged**, since
+  one is ground truth and the other a prediction from the forwarded bytes. New
+  `src/proxy/cache-prefix.ts` (hash-only fingerprints, bounded observer) +
+  `src/telemetry/cache-report.ts`; verdicts ride on the pipeline event.
+  **Its first measurement re-ranked R8** (§93): 98.4% hit rate on this repo,
+  uncached input 0.06% of billed input, so **~83% of input cost is re-reading an
+  already-cached context** — bust prevention is a guard rail, and the levers are
+  R8.2 (dedup) and R8.5 (repo map). +44 tests. Debrief
+  `2026-07-30-r8.1-cache-observability.md`; concept page [[Cache Observability]].
+
 ## Carried-over loose ends (visible, not lost)
 
 **All cleared by the PRE-R6 batch (2026-07-17)** (batch brief retired to git

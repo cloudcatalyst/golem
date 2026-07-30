@@ -13,6 +13,16 @@
 > release. **Still open in Workstream P:** the `golem ext install/upgrade` path and
 > P3a/P3b (the two Caveman components worth adopting).
 >
+> **R8.1 SHIPPED, and its first measurement re-ranks this memo (§93).** Against
+> this repo's own telemetry: **98.4% cache hit rate** over 7,874 responses, with
+> uncached input at **0.06%** of billed input. So cache-*bust* prevention is a
+> guard rail here, not a savings lever — there is almost nothing to recover.
+> Weighted by rate, **~83% of input cost is re-reading an already-cached
+> context**. The ranking below is therefore revised: **R8.2 (dedup) and R8.5
+> (repo map) are the real levers**, R8.4 (ledger) aims them, and R8.1's bust half
+> stays as instrumentation. Recorded rather than silently re-sequenced — the
+> instrument arguing against its author's priority is the point of building it.
+>
 > _Original proposal below._
 >
 > **Status: PROPOSED (2026-07-30), USER-REQUESTED.** Design-first: no code, no

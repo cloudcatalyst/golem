@@ -34,6 +34,11 @@ import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
 import type { BrevityLevel, SliderPolicy } from "../interfaces/policy.js";
+import {
+  type CacheBustComponent,
+  CachePrefixObserver,
+  type CachePrefixVerdict,
+} from "../proxy/cache-prefix.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
 import { applyBrevity } from "./brevity.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
@@ -106,6 +111,20 @@ export interface PipelineEvent {
    * workloads (verification-notes §87). 0 when nothing was injected.
    */
   readonly brevityDirectiveTokens: number;
+  /**
+   * R8.1: how this request's cacheable prefix relates to the previous request of
+   * the same conversation — `first`, `append` (cache should hit), or `bust` (an
+   * earlier byte changed, so the prefix was re-prefilled at full input rates).
+   *
+   * A **prediction from the bytes Golem forwarded**, deliberately kept separate
+   * from the billed `cache_read_input_tokens` / `cache_creation_input_tokens` the
+   * usage sniffer records. This field explains *why*; those numbers say *whether*.
+   * Absent on the local-answer short-circuit (nothing goes upstream) and on events
+   * written before this field existed.
+   */
+  readonly cachePrefix?: CachePrefixVerdict;
+  /** R8.1: which component broke the prefix. Set only when `cachePrefix === "bust"`. */
+  readonly cacheBustComponent?: CacheBustComponent;
 }
 
 export interface GolemPipelineOptions {
@@ -227,6 +246,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function createGolemPipeline(options: GolemPipelineOptions): RequestPipeline {
   const emit = options.onEvent ?? ((): void => {});
+  // R8.1 — one observer per pipeline instance (i.e. per proxy process), because
+  // cache-bust detection is inherently a comparison against the previous request
+  // of the same conversation. Bounded internally.
+  const cacheObserver = new CachePrefixObserver();
 
   return {
     name: "golem",
@@ -423,6 +446,18 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
+      // R8.1 — classify the cacheable prefix of the bytes we are about to forward.
+      //
+      // Done BEFORE the `!changed` early return so the per-conversation chain stays
+      // complete: skipping a request would leave a stale baseline and mis-time the
+      // next verdict. On the unchanged path the observation is computed and
+      // discarded (no event is emitted there), which costs three hashes and keeps
+      // the chain warm. A bust that lands on an unchanged request is therefore
+      // reported one request late rather than lost.
+      //
+      // Never allowed to affect the request: pure, and the observer cannot throw.
+      const cacheObservation = cacheObserver.observe(body);
+
       if (!changed) {
         // Nothing to do — preserve original bytes exactly.
         return request;
@@ -449,6 +484,10 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         avoidedUpstreamOutputTokens: 0,
         brevity: brevityDirectiveTokens > 0 ? policy.brevity : "off",
         brevityDirectiveTokens,
+        cachePrefix: cacheObservation.verdict,
+        ...(cacheObservation.component !== undefined && {
+          cacheBustComponent: cacheObservation.component,
+        }),
       });
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },

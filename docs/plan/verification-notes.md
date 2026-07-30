@@ -3777,3 +3777,54 @@ that stage is gated off on caching upstreams (Decision 31) unless
 spawn target and one absent program: exactly what tiers 2 and 3 are supposed to
 look like, and the reason `golem ext` reports a `gate` note instead of claiming
 "running".
+
+## §93 — This project's real prompt-cache hit rate is 98.4%, which redirects R8 (2026-07-30)
+
+Measured with R8.1's own rollup (`golem stats --cache`) against this repo's
+durable telemetry the moment it shipped — 7,874 recorded responses, all-time:
+
+| bucket | tokens | rate |
+|---|--:|---|
+| cache **read** | 2,042,812,070 | ~0.1× |
+| cache **write** (prefill) | 32,750,061 | ~1.25× |
+| **uncached** input | 1,215,854 | 1× |
+| hit rate | **98.4%** | |
+
+**What this says.** The prompt cache on this project's traffic is already working
+close to optimally. Uncached input is **0.06%** of billed input. So the failure
+mode R8.1's bust detector exists to catch — a broken prefix forcing a re-prefill —
+is **not** where this project's money goes.
+
+**Where it actually goes.** Weighting by rate, cache reads are ~204M full-rate
+equivalents against ~41M for prefill and ~1.2M uncached: **~83% of input cost is
+re-reading an already-cached context**, turn after turn. Cheap per token, on an
+enormous base.
+
+**Consequence — an honest demotion of work I had just argued for.** The R8 memo
+ranked cache-bust detection first on the theory that busts were an invisible,
+recoverable cost. On this evidence that theory is wrong *here*: there is almost
+nothing to recover. The instrument was still worth building (it is what produced
+this table, and it is the only way to know a bust rate rather than assume one),
+but its *bust* half should be treated as a guard rail, not a savings lever.
+
+The levers this table actually supports, in order:
+
+1. **R8.2 suffix-only tool-result dedup** — smaller context ⇒ fewer cache-read
+   tokens on *every* subsequent turn. Directly attacks the 83%.
+2. **R8.5 repo map + oversized-`Read` swap** — same mechanism, upstream of it:
+   never put the 20k-token file in the context to begin with.
+3. **R8.4 context ledger** — tells a human *which* content is being re-read, so
+   the pruning is aimed rather than guessed.
+
+**Caveat on the number.** This is all-time telemetry for one project (this repo,
+dogfooded daily at slider 3 with brevity pinned to `full`), on Anthropic with
+Claude Code as the client — a client that is unusually good at cache discipline.
+A project with a churning `tools` block, an injected timestamp, or frequent
+compaction would look nothing like this. Do not generalise 98.4% into a claim
+about Golem's users; it is a measurement of *this* setup, and the whole point of
+shipping the rollup is that anyone can now measure their own.
+
+**Coverage note.** At the moment of measurement the *verdict* half read "none
+recorded" over 14,776 pipeline events, correctly — the running proxy predated the
+build. That is the disclosure working as designed rather than a bug: an
+unobserved request is reported as unobserved, never as a hit.

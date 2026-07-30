@@ -1144,6 +1144,7 @@ program
   .option("--project <id>", "limit stats to this project id")
   .option("--window <window>", "savings window: 24h | 7d | all", "24h")
   .option("--brevity", "report billed output tokens by brevity level (Decision 52)", false)
+  .option("--cache", "report prompt-cache hit rate and what broke the prefix (R8.1)", false)
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
@@ -1151,6 +1152,7 @@ program
       project?: string;
       window: string;
       brevity: boolean;
+      cache: boolean;
       json: boolean;
     }) => {
       try {
@@ -1172,6 +1174,26 @@ program
             return;
           }
           process.stdout.write(renderBrevityReport(rows));
+          return;
+        }
+        // R8.1 — the cache rollup, likewise its own report: it mixes an
+        // authoritative billed measurement with an explanatory prediction, and
+        // folding either into the input-side savings headline would repeat the
+        // mixed-scope error §25/§30 warns about.
+        if (opts.cache) {
+          const { aggregateCacheStats, renderCacheReport } = await import(
+            "../telemetry/cache-report.js"
+          );
+          let cacheEvents: readonly TelemetryEvent[] = [];
+          try {
+            cacheEvents = await readTelemetryEvents(opts.dir);
+          } catch {
+            cacheEvents = [];
+          }
+          const cacheStats = aggregateCacheStats(cacheEvents, opts.project);
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(cacheStats, null, 2)}\n` : renderCacheReport(cacheStats),
+          );
           return;
         }
         const window: BenchWindow = opts.window;

@@ -179,6 +179,18 @@ export interface TelemetryEvent {
   /** R4.3: for `coder`, the local model that produced the draft. kind: "tool" only. */
   readonly toolModel?: string;
   /**
+   * R8.1: cacheable-prefix verdict for this request — `"first"`, `"append"`, or
+   * `"bust"`. Set on pipeline events only; absent on other kinds and on events
+   * written before this field existed (parse absent as "unknown", NOT as a hit —
+   * an unobserved request is not evidence of anything).
+   */
+  readonly cachePrefix?: string;
+  /**
+   * R8.1: which cacheable component broke the prefix (`tools` | `system` |
+   * `messages`). Set only alongside `cachePrefix: "bust"`.
+   */
+  readonly cacheBustComponent?: string;
+  /**
    * R4.3: for `coder`, the character length of the locally-drafted text — the
    * "drafted-locally" bucket (output the paid model did not have to generate).
    * kind: "tool" only.
