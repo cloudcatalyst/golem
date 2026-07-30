@@ -42,6 +42,31 @@ reader needs.
 A shrinking history (a compaction or a rewind) is a bust too — the prefix no
 longer matches.
 
+## The verdict half is currently UNRELIABLE (§99)
+
+Within minutes of going live the proxy produced **142 `bust` / 3 `first` /
+0 `append`** — ~98% busts — against a **billed 98.4% hit rate** over the same
+period. Both cannot be true, and the billed number is the measured one.
+
+Cause: the conversation key. Requests are grouped by a hash of `messages[0]`, and a
+real client multiplexes many short conversations through one proxy (subagent runs,
+title generation, WebFetch summarisation, quota probes), a large share of which open
+with an identical first message. They collide onto one key and read as each other's
+busts. The original caveat — "costs at most one misattributed verdict" — understated
+this badly: collisions are the dominant case.
+
+`golem stats --cache` now **warns when the two signals disagree** and names the
+verdict as the one to distrust. Until a better identity lands, read the billed
+section as the answer.
+
+Candidate fixes, none applied yet: prefix-chain identity (drop the conversation key
+and ask "was any prefix of this seen before?"), require message-count growth before
+calling a bust, or key on a client-supplied id if one turns out to exist.
+
+**This is what the two-signal design bought.** A blended "cache health score" would
+have averaged a correct measurement with a 98%-wrong prediction and looked
+plausible; keeping them apart made the contradiction visible on day one.
+
 ## Stated limits
 
 - **Conversation identity is a heuristic.** The Messages API carries no session id,
