@@ -63,6 +63,19 @@ function levelLabel(model) {
 }
 
 /**
+ * Decision 52 — one line describing both dials, saying explicitly which of them
+ * the slider is driving. A pinned dial must never look like a preset, so
+ * "pinned" is always spelled out.
+ */
+function dialsSummary(model) {
+  const brevity = `brevity ${model.brevity || "off"}${model.brevityPinned ? " (pinned)" : " (auto)"}`;
+  const compression = model.compressionLevel
+    ? `compression ${model.compressionLevel}${model.compressionPinned ? " (pinned)" : " (auto)"}`
+    : "compression auto";
+  return `${brevity} · ${compression}`;
+}
+
+/**
  * Build the view model from `golem stats --json`, `golem status --json`, and
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
@@ -142,6 +155,14 @@ function buildModel(stats, status, update, accounts, surface) {
     perStage,
     slider: st.slider && typeof st.slider.level === "number" ? st.slider.level : 1,
     sliderName: (st.slider && st.slider.name) || "",
+    // Decision 52: the slider is a preset over two dials. `brevity` changes how
+    // the MODEL talks, so it is surfaced in the status bar too — an unexplained
+    // terse assistant should trace back to a visible dial, not look like a
+    // model regression. Older CLIs have no `dials` block; default to off.
+    brevity: (st.dials && st.dials.brevity && st.dials.brevity.effective) || "off",
+    brevityPinned: Boolean(st.dials && st.dials.brevity && st.dials.brevity.pinned),
+    compressionLevel: (st.dials && st.dials.compression && st.dials.compression.effective) || "",
+    compressionPinned: Boolean(st.dials && st.dials.compression && st.dials.compression.pinned),
     upstream,
     upstreamLabel: label,
     upstreamDisplay,
@@ -224,7 +245,11 @@ function statusBarText(model) {
   // The update nudge shows regardless of proxy state — it's about the install,
   // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
   const badge = model.updateAvailable ? " $(arrow-up)" : "";
-  return `${glyph} Golem · ${levelLabel(model)} → ${destinationLabel(model)}${badge}`;
+  // Decision 52: brevity is visible in the status bar whenever it is on, for the
+  // same reason the CLI status line shows it — it changes the model's own output
+  // style, and that must always be traceable to a dial the user can see.
+  const brevity = model.brevity && model.brevity !== "off" ? ` · ✂ ${model.brevity}` : "";
+  return `${glyph} Golem · ${levelLabel(model)} → ${destinationLabel(model)}${brevity}${badge}`;
 }
 
 /**
@@ -446,6 +471,13 @@ function renderHtml(model, nonce) {
 
   <h2>Slider (level ${model.slider}${model.sliderName ? ` · ${esc(model.sliderName)}` : ""})</h2>
   <div>${sliderButtons}</div>
+  <div class="row"><span>Dials</span><span class="sub">${esc(dialsSummary(model))}</span></div>${
+    model.brevity !== "off"
+      ? `\n  <div class="row"><span class="warn">Brevity active</span><span class="sub">replies are shortened (${esc(
+          model.brevity,
+        )}) — output tokens only; code and errors stay verbatim</span></div>`
+      : ""
+  }
 
   <h2>Per-stage savings</h2>
   <table><tr><th>stage</th><th>before</th><th>after</th><th>saved</th></tr>${
@@ -522,4 +554,5 @@ module.exports = {
   settingsHtml,
   controlRowHtml,
   controlValueText,
+  dialsSummary,
 };

@@ -12,6 +12,7 @@ const {
   renderHtml,
   settingsHtml,
   controlValueText,
+  dialsSummary,
 } = require("./render.js");
 
 test("fmtTokens", () => {
@@ -599,4 +600,72 @@ test("buildModel tolerates a missing control surface", () => {
     assert.equal(model.surface, null);
     assert.doesNotThrow(() => renderHtml(model, "n9"));
   }
+});
+
+// --- Decision 52: the two dials ------------------------------------------
+
+test("buildModel reads the dials block, defaulting to off on an older CLI", () => {
+  const withDials = buildModel(
+    {},
+    {
+      slider: { level: 2, name: "balanced" },
+      dials: {
+        brevity: { setting: "ultra", effective: "ultra", pinned: true, layer: "local" },
+        compression: { setting: "auto", effective: "2", pinned: false, layer: "default" },
+      },
+    },
+    null,
+    [],
+    null,
+  );
+  assert.equal(withDials.brevity, "ultra");
+  assert.equal(withDials.brevityPinned, true);
+  assert.equal(withDials.compressionLevel, "2");
+  assert.equal(withDials.compressionPinned, false);
+
+  // A CLI that predates Decision 52 emits no `dials` block at all.
+  const legacy = buildModel({}, { slider: { level: 2, name: "balanced" } }, null, [], null);
+  assert.equal(legacy.brevity, "off");
+  assert.equal(legacy.brevityPinned, false);
+});
+
+test("statusBarText shows brevity only while it is on", () => {
+  const base = {
+    proxyReachable: true,
+    slider: 2,
+    sliderName: "balanced",
+    upstreamLabel: "anthropic",
+  };
+  assert.ok(!statusBarText({ ...base, brevity: "off" }).includes("✂"));
+  assert.ok(statusBarText({ ...base, brevity: "full" }).includes("✂ full"));
+});
+
+test("dialsSummary always spells out pinned vs auto", () => {
+  assert.equal(
+    dialsSummary({ brevity: "ultra", brevityPinned: true, compressionLevel: "1", compressionPinned: true }),
+    "brevity ultra (pinned) · compression 1 (pinned)",
+  );
+  assert.equal(
+    dialsSummary({ brevity: "off", brevityPinned: false, compressionLevel: "3", compressionPinned: false }),
+    "brevity off (auto) · compression 3 (auto)",
+  );
+});
+
+test("renderHtml warns in the panel when brevity is active", () => {
+  const model = buildModel(
+    {},
+    {
+      slider: { level: 3, name: "aggressive" },
+      dials: {
+        brevity: { setting: "full", effective: "full", pinned: true, layer: "local" },
+        compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+      },
+    },
+    null,
+    [],
+    null,
+  );
+  const html = renderHtml(model, "nonce");
+  assert.ok(html.includes("Brevity active"));
+  assert.ok(html.includes("brevity full (pinned)"));
 });

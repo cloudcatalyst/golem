@@ -22,6 +22,7 @@ import type {
   TelemetryStore,
   ToolUsagePerTool,
   ToolUsageStats,
+  UsageByBrevity,
   UsageByLevel,
   UsageBySemanticForced,
   UsageTotals,
@@ -113,6 +114,12 @@ function parseEvent(line: string): TelemetryEvent | null {
     ccrRefsRetrieved: typeof parsed.ccrRefsRetrieved === "number" ? parsed.ccrRefsRetrieved : 0,
     ...(isUsageTotals(parsed.usage) ? { usage: parsed.usage } : {}),
     semanticForced: parsed.semanticForced === true,
+    // Decision 52. Absent on every line written before the dial existed, which
+    // must read as "off" — brevity could not have been on then.
+    ...(typeof parsed.brevity === "string" ? { brevity: parsed.brevity } : {}),
+    ...(typeof parsed.brevityDirectiveTokens === "number"
+      ? { brevityDirectiveTokens: parsed.brevityDirectiveTokens }
+      : {}),
     ...(typeof parsed.avoidedUpstreamInputTokens === "number"
       ? { avoidedUpstreamInputTokens: parsed.avoidedUpstreamInputTokens }
       : {}),
@@ -312,6 +319,80 @@ export class JsonlTelemetryStore implements TelemetryStore {
       else notForced = next;
     }
     return { projectId: projectId ?? null, forced, notForced };
+  }
+
+  /**
+   * Decision 52 — brevity rollup. Reads BOTH event kinds in one pass because the
+   * two halves of the honest number live in different places: billed output
+   * tokens on `usage` samples, and the directive's input cost on pipeline
+   * events. Events written before the dial existed carry no `brevity` field and
+   * are attributed to "off", which is correct — brevity could not have been on.
+   */
+  async aggregateUsageByBrevity(projectId?: string): Promise<UsageByBrevity> {
+    let raw: string;
+    try {
+      raw = await readFile(this.#file, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return { projectId: projectId ?? null, byBrevity: {} };
+      }
+      throw err;
+    }
+
+    // Mutable accumulator (UsageTotals' fields are readonly); widened back to the
+    // readonly shape by the return type.
+    interface BrevityAcc {
+      requests: number;
+      inputTokens: number;
+      cacheCreationInputTokens: number;
+      cacheReadInputTokens: number;
+      outputTokens: number;
+      directiveTokens: number;
+      injections: number;
+    }
+    const byBrevity: Record<string, BrevityAcc> = {};
+    const bucket = (key: string) => {
+      const existing = byBrevity[key];
+      if (existing !== undefined) return existing;
+      const fresh = {
+        requests: 0,
+        inputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        outputTokens: 0,
+        directiveTokens: 0,
+        injections: 0,
+      };
+      byBrevity[key] = fresh;
+      return fresh;
+    };
+
+    for (const line of raw.split("\n")) {
+      const ev = parseEvent(line);
+      if (ev === null) continue;
+      if (projectId !== undefined && ev.projectId !== projectId) continue;
+      const key = ev.brevity ?? "off";
+
+      if (ev.kind === "usage" && ev.usage !== undefined) {
+        const acc = bucket(key);
+        acc.requests += 1;
+        acc.inputTokens += ev.usage.inputTokens;
+        acc.cacheCreationInputTokens += ev.usage.cacheCreationInputTokens;
+        acc.cacheReadInputTokens += ev.usage.cacheReadInputTokens;
+        acc.outputTokens += ev.usage.outputTokens;
+        continue;
+      }
+      // Pipeline events (kind absent === "request") carry the directive's cost.
+      if (ev.kind === undefined || ev.kind === "request") {
+        const cost = ev.brevityDirectiveTokens ?? 0;
+        if (cost > 0) {
+          const acc = bucket(key);
+          acc.directiveTokens += cost;
+          acc.injections += 1;
+        }
+      }
+    }
+    return { projectId: projectId ?? null, byBrevity };
   }
 
   async aggregateAvoidedUpstream(projectId?: string): Promise<AvoidedUpstreamStats> {

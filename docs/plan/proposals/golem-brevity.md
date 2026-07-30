@@ -1,5 +1,27 @@
 # Proposal: Golem brevity — decouple the slider into independent dials, add an output-side brevity dial
 
+> **Status: SHIPPED (2026-07-30) for increments B1–B4; Workstream B deliberately
+> NOT shipped.** Accepted by the user the same day it was proposed; spec entry is
+> Decision 52 (ACCEPTED). Kept as the verified design record — the authoritative
+> entry is Decision 52 in `docs/golem-spec.md`.
+>
+> - **B1–B4 landed:** the `brevity` dial on the frozen `SliderPolicy` (with the
+>   redaction safety clamp), the marker-fenced injection stage, settings +
+>   `SETTING_META` + `golem brevity` / `golem compression` + provenance on every
+>   display, and the `UsageByBrevity` rollup behind `golem stats --brevity`.
+> - **The dial ships OFF**, as this document required: `brevity.level` defaults to
+>   a pinned `"off"` and `sliderPolicyForLevel` defaults the dial to `off` rather
+>   than `auto`, so no pre-existing caller acquired a new output-mutating stage.
+> - **Workstream B (tool-description shrinking) is scoped but unbuilt** —
+>   measured at ~900 tokens of headroom, blocked on a tool-selection-accuracy
+>   harness. Full reasoning in `verification-notes.md` §88; tracked in
+>   `BACKLOG.md` (row 2026-07-24, now `discussed`).
+>
+> Companion external findings: `verification-notes.md` §87 (Caveman) and §88
+> (the tools-block census).
+>
+> _Original proposal below._
+>
 > **Status: PROPOSED (2026-07-30), USER-REQUESTED.** Design-first: nothing frozen
 > changes until this is signed off. Spec entry: Decision 52 (PROPOSED).
 > Companion external findings: `verification-notes.md` §"Caveman (2026-07-30)".

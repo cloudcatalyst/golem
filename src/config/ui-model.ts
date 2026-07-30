@@ -161,8 +161,9 @@ export const SETTING_META = {
     label: "Savings level",
     summary: "0 passthrough · 1 lossless · 2 balanced · 3 aggressive",
     detail:
-      "The compression dial (Decision 30/31). Level 0 is a FULL bypass — nothing runs, " +
-      "redaction included. It never auto-engages the local model.",
+      "Since Decision 52 this is a PRESET over two dials — compression (input) and " +
+      "brevity (output). Pin either one to stop the slider driving it. Level 0 is a " +
+      "FULL bypass — nothing runs, redaction included. It never auto-engages the local model.",
     danger:
       "Level 0 (passthrough) disables redaction: secrets and PII reach the upstream " +
       "unredacted. Level 1 keeps redaction on with real savings.",
@@ -283,6 +284,29 @@ export const SETTING_META = {
       "No effect unless the Headroom sidecar is on and the slider is ≥2. Risks the " +
       "cached-prefix cost cliff; only for A/B measurement.",
     advanced: true,
+  },
+  "compression.level": {
+    label: "Compression level",
+    summary: "auto (follow the slider) · 1 lossless · 2 balanced · 3 aggressive",
+    detail:
+      "Decision 52: the input-side dial. Pinning it stops the slider driving compression " +
+      "until you set it back to auto. 0 is not offerable — passthrough belongs to the " +
+      "slider, where turning redaction off is surfaced loudly.",
+    restart: "proxy",
+  },
+
+  // --- brevity --------------------------------------------------------------
+  "brevity.level": {
+    label: "Brevity level",
+    summary: "auto (follow the slider) · off · lite · full · ultra",
+    detail:
+      "Decision 52: the output-side dial. Appends a fixed brevity directive to the system " +
+      "prompt so the model answers more tersely — it shortens replies, it does not " +
+      "compress the request. Saves output tokens (never cached, ~5× input) and costs a " +
+      "little input. Ships off: measure with `golem stats --brevity` before trusting it, " +
+      "since it can go net-negative on already-terse work. Code, commands and errors are " +
+      "always exempted.",
+    restart: "proxy",
   },
 
   // --- knowledge ------------------------------------------------------------
@@ -433,8 +457,13 @@ export const SECTION_META = {
   inference: { title: "Local model", summary: "The Ollama endpoint and the coder tool", order: 20 },
   compression: {
     title: "Compression",
-    summary: "Optional semantic-compression sidecar",
+    summary: "The input-side dial and the optional semantic-compression sidecar",
     order: 30,
+  },
+  brevity: {
+    title: "Brevity",
+    summary: "The output-side dial — how tersely the model replies",
+    order: 35,
   },
   proxy: { title: "Proxy & upstream", summary: "Port, upstream, and timeouts", order: 40 },
   telemetry: { title: "Telemetry", summary: "Local savings attribution and dashboard", order: 50 },

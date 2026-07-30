@@ -20,9 +20,23 @@ import { resolveUpstreamDisplay } from "../providers/index.js";
 import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
 import { servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
+import { type DialInfo, getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
 import { getSliderInfo, type SliderInfo } from "./slider.js";
+
+/** Decision 52 — one dial's state in the JSON report. */
+export interface DialStatus {
+  /** The configured value: `"auto"` or a pinned value. */
+  readonly setting: string;
+  /** The value in force once the slider preset is applied. */
+  readonly effective: string;
+  /** True when the slider is NOT driving this dial. */
+  readonly pinned: boolean;
+  readonly layer: string;
+  readonly source?: string;
+}
+
 // Pure display helpers live in ./upstream-display.js so the `golem` control panel can
 // render an upstream label without loading this module (see that file).
 import { renderUpstream } from "./upstream-display.js";
@@ -79,6 +93,15 @@ export interface StatusReport {
     readonly name: string;
     readonly layer: string;
     readonly source?: string;
+  };
+  /**
+   * Decision 52 — the two dials the slider is a preset over. `pinned` is the
+   * field that matters: when true the slider is NOT driving that dial, and every
+   * surface must say so rather than implying the slider is in charge.
+   */
+  readonly dials: {
+    readonly brevity: DialStatus;
+    readonly compression: DialStatus;
   };
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
@@ -195,15 +218,20 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const upstream = resolveUpstreamDisplay(settings.proxy);
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
-  const [init, reachable, slider, localInfo, servedModel] = await Promise.all([
-    golemInitStatus(projectDir, settings.proxy.port),
-    probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
-    getSliderInfo(sliderOpts),
-    localProbe(projectDir, settings.inference.ollama_base_url).catch(
-      (): LocalModelInfo => ({ reachable: false }),
-    ),
-    servedModelFor(projectDir, upstream.accountId).catch(() => null),
-  ]);
+  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
+    await Promise.all([
+      golemInitStatus(projectDir, settings.proxy.port),
+      probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
+      getSliderInfo(sliderOpts),
+      // Decision 52: the slider is a preset over two dials, so status must report
+      // BOTH and say which of them the slider is actually driving.
+      getDialInfo("brevity", sliderOpts),
+      getDialInfo("compression", sliderOpts),
+      localProbe(projectDir, settings.inference.ollama_base_url).catch(
+        (): LocalModelInfo => ({ reachable: false }),
+      ),
+      servedModelFor(projectDir, upstream.accountId).catch(() => null),
+    ]);
 
   // Update status from the cached check only (no network — never hang status).
   // Recompute "available" against the version we're actually running.
@@ -253,6 +281,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         : {}),
     },
     slider: sliderJson(slider),
+    dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
     config,
     local_model: {
       reachable: localInfo.reachable,
@@ -321,6 +350,16 @@ function updateWarnings(latest: string, sliderLevel: number): string[] {
   return w;
 }
 
+/**
+ * One dial, rendered for the human `golem status`. Mirrors `describeDial` in
+ * dials.ts but works off the JSON report (which is what the VS Code panel and
+ * any script read), so the two surfaces cannot disagree.
+ */
+function renderDial(kind: string, dial: DialStatus, sliderLevel: number): string {
+  if (!dial.pinned) return `${kind} ${dial.effective} (auto — follows slider ${sliderLevel})`;
+  return `${kind} ${dial.effective} (${dial.layer === "default" ? "default" : "pinned"})`;
+}
+
 /** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
 export const REDACTION_OFF_WARNING =
   "Slider level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII " +
@@ -336,6 +375,16 @@ export function renderLimits(limits: NonNullable<StatusReport["limits"]>): strin
   }
   const reset = limits.reset_at !== null ? ` (resets ${limits.reset_at})` : "";
   return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago · park ${park}`;
+}
+
+function dialJson(dial: DialInfo): DialStatus {
+  return {
+    setting: dial.setting,
+    effective: dial.effective,
+    pinned: dial.pinned,
+    layer: dial.layer,
+    ...(dial.source !== undefined && { source: dial.source }),
+  };
 }
 
 function sliderJson(slider: SliderInfo): StatusReport["slider"] {
@@ -374,6 +423,17 @@ export function renderStatus(report: StatusReport): string {
     `Slider: level ${slider.level} (${slider.name}) — set by ${slider.layer}` +
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
+  // Decision 52: the slider is a preset, so name both dials and whether the
+  // slider is driving them. A pinned dial must never look like a preset.
+  lines.push(
+    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial("compression", report.dials.compression, slider.level)}`,
+  );
+  if (report.dials.brevity.effective !== "off") {
+    lines.push(
+      `  ⚠ brevity ${report.dials.brevity.effective} is active: replies are shortened ` +
+        `(output tokens only; code/commands/errors stay verbatim). Check it pays: golem stats --brevity`,
+    );
+  }
   // Inference topology: a reachable local model makes Golem local+upstream —
   // available via the `coder` MCP tool at any level (Decision 30/31). Name the
   // concrete coder model when known. If the coder tool is disabled, show only

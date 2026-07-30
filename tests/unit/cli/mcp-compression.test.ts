@@ -57,6 +57,8 @@ describe("mcpCompressionService", () => {
         ccrRefsStored: 1,
         avoidedUpstreamInputTokens: 0,
         avoidedUpstreamOutputTokens: 0,
+        brevity: "off",
+        brevityDirectiveTokens: 0,
       },
       "2026-07-09T00:00:00.000Z",
     );
@@ -85,6 +87,8 @@ describe("mcpCompressionService", () => {
         ccrRefsStored: 0,
         avoidedUpstreamInputTokens: 0,
         avoidedUpstreamOutputTokens: 0,
+        brevity: "off",
+        brevityDirectiveTokens: 0,
       },
       "2026-07-09T00:00:00.000Z",
     );

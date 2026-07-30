@@ -33,8 +33,9 @@ import {
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
-import type { SliderPolicy } from "../interfaces/policy.js";
+import type { BrevityLevel, SliderPolicy } from "../interfaces/policy.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
+import { applyBrevity } from "./brevity.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
 import { redactRequestBody } from "./redaction.js";
 
@@ -92,6 +93,19 @@ export interface PipelineEvent {
    * that didn't happen.
    */
   readonly avoidedUpstreamOutputTokens: number;
+  /**
+   * Decision 52: the brevity level in force for this request, so usage samples
+   * can be bucketed by it (`aggregateUsageByBrevity`). "off" when the dial is
+   * off — which is the shipped default until the rollup proves the dial pays.
+   */
+  readonly brevity: BrevityLevel;
+  /**
+   * Decision 52: estimated input tokens the brevity directive ADDED to this
+   * request. Recorded so the saving can never be reported without its cost —
+   * the vendor's own README warns brevity can go net-negative on terse
+   * workloads (verification-notes §87). 0 when nothing was injected.
+   */
+  readonly brevityDirectiveTokens: number;
 }
 
 export interface GolemPipelineOptions {
@@ -239,6 +253,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       let changed = false;
       let ccrRefsStored = 0;
       let avoidedUpstreamInputTokens = 0;
+      let brevityDirectiveTokens = 0;
 
       // Stage 1 — redaction (always first; runs at every level per the table).
       if (stages.redaction) {
@@ -278,6 +293,12 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
                 ccrRefsStored: 0,
                 avoidedUpstreamInputTokens: estimateTokens(originalJson),
                 avoidedUpstreamOutputTokens: estimateTokens(result.text),
+                // The request never went upstream, so no directive was injected
+                // and there is no output for brevity to have shortened. Record
+                // "off" rather than the resolved level, so brevity rollups are
+                // not polluted by requests brevity could not have affected.
+                brevity: "off",
+                brevityDirectiveTokens: 0,
               });
               return { ...request, respondDirectly };
             }
@@ -386,6 +407,22 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
+      // Stage 5 — brevity (Decision 52). Output-side: appends a fixed directive
+      // to `system` so the model answers more tersely. Deliberately NOT gated on
+      // the caching-upstream rule that governs stages 3–4: this stage does not
+      // rewrite history, it appends a byte-stable constant, so the cached prefix
+      // survives (it is invalidated once when the LEVEL changes, then stable).
+      // `policy.brevity` is already resolved — "off" at slider 0 and, by
+      // default, at every level until the operator opts in (see policy.ts).
+      if (policy.brevity !== "off") {
+        const brevity = applyBrevity(body, policy.brevity);
+        if (brevity.injected) {
+          body = brevity.body;
+          brevityDirectiveTokens = brevity.directiveTokens;
+          changed = true;
+        }
+      }
+
       if (!changed) {
         // Nothing to do — preserve original bytes exactly.
         return request;
@@ -410,6 +447,8 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         ccrRefsStored,
         avoidedUpstreamInputTokens,
         avoidedUpstreamOutputTokens: 0,
+        brevity: brevityDirectiveTokens > 0 ? policy.brevity : "off",
+        brevityDirectiveTokens,
       });
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },

@@ -68,6 +68,11 @@ export function recordPipelineEvent(
     requestTokens: event.requestTokens,
     stageSavings: event.stageSavings,
     ccrRefsStored: event.ccrRefsStored,
+    // Decision 52: written only when a directive was actually injected, so
+    // pipeline-event bytes are unchanged for the default (dial off) case.
+    ...(event.brevityDirectiveTokens > 0
+      ? { brevity: event.brevity, brevityDirectiveTokens: event.brevityDirectiveTokens }
+      : {}),
   };
   return store.record(telemetryEvent);
 }
@@ -120,6 +125,13 @@ export function recordUsageEvent(
      * {@link TelemetryEvent.semanticForced}. Defaults to `false`.
      */
     readonly semanticForced?: boolean;
+    /**
+     * Decision 52: the brevity level in force for the request this response
+     * answered. Defaults to `"off"`. Tagged here rather than on the pipeline
+     * event because the whole point of the dial is the OUTPUT token count,
+     * which only the upstream `usage` block knows.
+     */
+    readonly brevity?: string;
   },
   nowIso: string,
 ): Promise<void> {
@@ -138,6 +150,7 @@ export function recordUsageEvent(
     ccrRefsStored: 0,
     usage,
     semanticForced: event.semanticForced ?? false,
+    brevity: event.brevity ?? "off",
   };
   return store.record(telemetryEvent);
 }

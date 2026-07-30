@@ -167,6 +167,36 @@ export const SETTINGS_LEAVES = {
      * `aggregateUsageBySemanticForced` comparison.
      */
     force_semantic_on_caching: z.boolean(),
+    /**
+     * Decision 52: the INPUT-side dial, decoupled from the slider. `"auto"`
+     * (default) means "follow the slider level", which is the pre-Decision-52
+     * behaviour; a numeric value PINS the compression level, and the slider
+     * stops driving it until it is set back to `"auto"`.
+     *
+     * **0 is deliberately not offerable.** Level 0 is the Decision-30
+     * passthrough — the one row where redaction is off — and that bypass belongs
+     * to the slider, where it is surfaced loudly. Allowing it here would make
+     * redaction-off reachable from a config key that says nothing about
+     * redaction. `resolveCompressionLevel` also clamps a 0 defensively, so both
+     * layers refuse it.
+     */
+    level: z.enum(["auto", "1", "2", "3"]),
+  },
+  brevity: {
+    /**
+     * Decision 52: the OUTPUT-side dial. Appends a fixed, marker-fenced brevity
+     * directive to the request's `system` block so the model answers more
+     * tersely — it saves *output* tokens (never cached, ~5× input) and costs a
+     * small number of *input* tokens that land inside the cached prefix.
+     *
+     * `"auto"` follows the slider preset (off at 0–1, lite at 2, full at 3);
+     * `off|lite|full|ultra` pins it. **Ships as a pinned `"off"`**, not `"auto"`:
+     * Decision 52 requires a real telemetry rollup (`golem stats --brevity`)
+     * before the dial is trusted, because the technique can go net-negative on
+     * already-terse workloads (verification-notes §87). `ultra` is never a
+     * preset — it is reachable only by pinning it here.
+     */
+    level: z.enum(["auto", "off", "lite", "full", "ultra"]),
   },
   knowledge: {
     /** Master toggle for the vector knowledge base. */
@@ -349,6 +379,12 @@ export interface InferenceSettings {
 export interface CompressionSettings {
   readonly headroom_sidecar: boolean;
   readonly force_semantic_on_caching: boolean;
+  readonly level: "auto" | "1" | "2" | "3";
+}
+
+/** Decision 52 — the output-side brevity dial. */
+export interface BrevitySettings {
+  readonly level: "auto" | "off" | "lite" | "full" | "ultra";
 }
 
 export interface KnowledgeSettings {
@@ -387,6 +423,7 @@ export interface GolemSettings {
   readonly proxy: ProxySettings;
   readonly inference: InferenceSettings;
   readonly compression: CompressionSettings;
+  readonly brevity: BrevitySettings;
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
   readonly ui: UiSettings;
@@ -421,6 +458,12 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   compression: {
     headroom_sidecar: false,
     force_semantic_on_caching: false,
+    level: "auto",
+  },
+  // Decision 52: ships OFF, not "auto" — the preset table is opt-in until the
+  // brevity rollup shows a real net saving on this project's own traffic.
+  brevity: {
+    level: "off",
   },
   knowledge: {
     enabled: true,
