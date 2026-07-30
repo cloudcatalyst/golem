@@ -66,6 +66,7 @@ updated: YYYY-MM-DD
 - [[Wiki-First Knowledge]] — the pattern this wiki implements
 - [[Guidance Rules]] — how Golem's working practices are stored as Claude Code `.claude/rules/golem-*.md` (seeded by init, toggled by `golem guidance`)
 - [[Configuration Surfaces]] — one control surface (settings + guidance + runtime) behind the `golem` panel, `golem config`, and the VS Code webview; compile-enforced setting metadata, the pet, env-locked rows
+- [[Managed Tools]] — spec Decision 53: external tools are **spawned or detected, never shipped**; the tier ladder (1/2/3a/3b), the three integration shapes, the admission bar, and `golem ext` (which refuses to claim "running" and says why instead)
 - [[Redaction Stage]] — rule table, entropy heuristic, known false-positive classes
 - [[Slider Levels]] — the 0–3 compression dial; level 0 = passthrough (redaction OFF, Decision 30); slider never engages the local model (Decision 31)
 - [[Compression]] — situational savings (Decision 23): lossless/CCR always pays, lossy semantic only on non-caching upstreams (~0% on Anthropic cached)
@@ -88,6 +89,7 @@ updated: YYYY-MM-DD
 - debriefs/2026-07-11-T3.md — distillation engine + lazy webcache distill (`golem wiki distill`)
 - debriefs/2026-07-11-golem-init-guidance.md — baked wiki-promotion + local-model-first practices into the `golem init` guidance template
 - debriefs/2026-07-30-control-panel-and-config-surfaces.md — the `golem` control panel + the one control surface behind CLI/TUI/VS Code; why the config layering needed no refactor, only metadata
+- debriefs/2026-07-30-decision-53-managed-tools.md — spec Decision 53 (Workstream P of the R8 memo): the dependency-tier ladder written down + `src/ext/` registry + `golem ext`; the real invariant is "ship no third-party bytes", not "no binaries"; two audit fixes (`unpdf` was documented optional but mandatory; no `LICENSE` file); a pin is not a passthrough
 - debriefs/2026-07-30-brevity-dial.md — spec Decision 52: the slider becomes a preset over two pinnable dials, `compression.level` (input) and the new `brevity.level` (output); Caveman is a prompt that shortens *replies*, not a compression library, which inverts Decision 23's economics because output tokens are never cached; ships OFF behind `golem stats --brevity`; five design errors caught by the repo's own guards (the redaction safety clamp being the important one); Workstream B (`tools`-block shrinking, ~900 tokens of measured headroom) scoped but blocked on a tool-selection-accuracy harness
 - **ADRs live at `../decisions/`** (outside this wiki, spec Decision 44): `ADR-0001-file-watcher.md` (accepted: `node:fs.watch` behind a swappable `FileWatcher`), `ADR-0002-autonomy-approval-gates.md` (accepted: R5.4 autonomy threat model — PreToolUse allow/ask gate, fail-closed classifier), `ADR-0003-credential-storage-and-account-routing.md` (PROPOSED: R6.2 multi-account credential threat model + ToS scope)
 - debriefs/2026-07-11-T6.md — implemented ADR-0001: `golem index --watch` / `ingest` tool `watch:true` now actually watch and incrementally reindex

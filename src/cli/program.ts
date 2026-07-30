@@ -114,6 +114,7 @@ import {
 } from "./config.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
+import { collectExt, renderExt } from "./ext.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
   collectLocalModel,
@@ -1344,6 +1345,32 @@ benchCmd
       }
     },
   );
+
+const extCmd = program
+  .command("ext")
+  .description(
+    "External tools Golem can use — spawned or detected, never shipped (spec Decision 53)",
+  );
+
+extCmd
+  .command("list", { isDefault: true })
+  .alias("status")
+  .description(
+    "Show every managed tool: tier, whether it is installed, whether it is on, and what breaks without it",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .option("--verbose", "also show purpose, install instructions, upstream and adapter", false)
+  .action(async (opts: { dir: string; json: boolean; verbose: boolean }) => {
+    try {
+      const report = await collectExt(opts.dir);
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
 
 const accountCmd = program
   .command("account")

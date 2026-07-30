@@ -96,6 +96,22 @@ them, Decision 36).
   (~2900 of the ~3847 total), not the prose. Debrief
   `2026-07-30-workstream-b-tool-selection.md`; concept page [[Tool Search]].
 
+- **Managed tools: the dependency-tier ladder + `golem ext`** (Decision 53,
+  2026-07-30): Workstream P of the new R8 memo
+  (`docs/plan/proposals/r8-context-economy.md`), shipped first at the user's
+  direction. Writes down the policy Headroom, Ollama and Caveman had already
+  converged on — **external tools are spawned or detected, never shipped** — as a
+  tier ladder (1/2/3a/3b), three integration shapes (only *callable* can be
+  wrapped), and a four-criterion admission bar the Caveman speech skill
+  deliberately fails. New `src/ext/` + `golem ext [--json] [--verbose]`, with
+  spawn-free `PATHEXT`-aware detection that **refuses to report "running"** and
+  carries a `gate` note instead — which immediately answered the question that
+  prompted the work (Headroom is enabled here and has never run). Two audit
+  findings fixed: `unpdf` was documented optional while being a mandatory static
+  import, and there was no `LICENSE` file. +45 tests. Notes §90 (RTK), §91 (hook
+  precedence — **open**), §92 (the audit); debrief
+  `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
+
 ## Carried-over loose ends (visible, not lost)
 
 **All cleared by the PRE-R6 batch (2026-07-17)** (batch brief retired to git

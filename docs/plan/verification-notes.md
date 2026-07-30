@@ -3667,3 +3667,113 @@ decision rather than a deferred one.** Class 1 (whitespace) is worth zero; class
 (native `defer_loading`) is Anthropic's to run and Golem's job is only to relay it
 faithfully, which is now tested. If this is revisited, the target is the input
 schemas (~2900 tokens) and the harness is already the gate.
+
+## §90 — RTK: an Apache-2.0 Bash-output compactor, complementary not competing (2026-07-30)
+
+Checked before recommending an integration shape, per verify-don't-assume.
+Source: `github.com/rtk-ai/rtk` README (repo page, fetched 2026-07-30, cached in
+the webcache). Apache-2.0, Rust, single binary, "100+ supported commands,
+<10ms overhead", version string in the README's own verify step is `rtk 0.28.2`
+with a native-Windows hook noted from v0.37.2.
+
+**What it is.** A `PreToolUse` hook that **rewrites Bash commands** to filtered
+equivalents (`git status` → `rtk git status`) plus a large filter library: test
+runners (jest/vitest/pytest/go/cargo/rspec/sbt), linters (eslint/biome/tsc/ruff/
+clippy/golangci/rubocop), git/gh, docker/kubectl/oc, aws, pulumi, and file
+primitives (`rtk read -l aggressive` = signatures only). Also `rtk gain` savings
+analytics and `rtk discover` for missed opportunities. 15 agent integrations,
+Claude Code's being the native-binary `PreToolUse` hook.
+
+**It is honest about its own numbers, which is worth noting.** The README states
+plainly that "cuts up to 90% of the bash output your agent reads… is not the same
+as cutting your bill by 90%", and that token counts are **estimated as
+`bytes / 4`** because it ships no tokenizer. So the percentages are directional
+and the absolute token figures are approximate — the opposite of a claim Golem
+would have to correct, and a fair basis for comparison against Golem's real
+billed-`usage` telemetry (R1.1).
+
+**Its documented blind spot is exactly Golem's surface.** Quoted: "the hook only
+runs on Bash tool calls. Claude Code built-in tools like Read, Grep, and Glob do
+not pass through the Bash hook, so they are not auto-rewritten." Golem's
+`POST_TOOL_USE_MATCHER` is already `Bash|Read|Grep|Glob|WebFetch`
+(`src/hooks/settings-writer.ts:26`) and the proxy sees the whole `messages` array.
+So the two are complements: RTK compacts shell output, Golem compacts
+built-in-tool output, deduplicates across the session, and prices the bill.
+
+**Consequence for Golem (Decision 53).** Tier-3a peer: detect and coordinate,
+never vendor. Vendoring would break invariant 4 (ship no third-party bytes),
+inherit a `bytes/4` savings estimate into a project whose differentiator is real
+`usage`, and add an opt-in telemetry path (device hash, command names, estimated
+USD) to a local-first tool. R8.3 is descoped accordingly — do **not** rebuild 100+
+Bash filters; build only the surfaces a command wrapper cannot reach.
+
+**Open, deliberately not run:** a formal A/B was judged unnecessary by the user.
+The cheap version stands — install it, and record what Golem's real usage
+telemetry shows against RTK's estimates.
+
+## §91 — Claude Code hook precedence between a rewriting hook and a denying hook is UNDOCUMENTED (2026-07-30)
+
+Checked because Golem and RTK would both own `PreToolUse` on the same Bash call.
+Source: `code.claude.com/docs/en/hooks` (301 from
+`docs.claude.com/en/docs/claude-code/hooks`), fetched 2026-07-30.
+
+**Verified.**
+- `permissionDecision` takes `allow` / `deny` / `ask` / **`defer`**, under
+  `hookSpecificOutput`. Exit 0 with no output is *not* approval — the call
+  continues through the normal permission flow.
+- **`updatedInput` sits directly under `hookSpecificOutput` on `PreToolUse` and
+  "replaces a tool's arguments before it runs"** — distinct from
+  `PermissionRequest`, where `updatedInput` nests inside a `decision` object.
+  This is the mechanism RTK uses.
+- All matching hooks for an event run **in parallel**; entries **merge** across
+  settings levels (user/project/local/managed/plugin) rather than replacing each
+  other; identical handlers are deduplicated by command string + `args`.
+- `continue: false` outranks every event-specific decision field.
+- Two-stage narrowing exists: `matcher` on `tool_name`, then a per-handler `if`
+  using permission-rule syntax — but `if` is **best-effort and fails open**, so
+  the docs explicitly say to use the permission system, not a hook, for a hard
+  allow/deny.
+
+**NOT documented, and it matters.** The precedence when parallel hooks return
+*conflicting* `permissionDecision` values — specifically a hook returning
+`updatedInput` (RTK's rewrite) racing a hook returning `deny` (Golem's snooze /
+coder-first / autonomy gates). The `#pretooluse-decision-control` section was
+truncated in the fetched page; `hooks-reference#pretooluse-decision-control` is
+the place to look next.
+
+**Why this is live rather than theoretical.** Golem's `PreToolUse` hook is
+registered with **no matcher** (`src/cli/init.ts:704`), so it fires on every tool
+call including Bash. Any user who installs both is exercising this interaction.
+**Action (R8.12):** assert it in an integration test rather than trusting it —
+Golem's `deny` paths must still win. Until that test exists, treat coexistence as
+unverified.
+
+## §92 — Dependency-tier audit: two documented-as-optional things that were not (2026-07-30)
+
+Found while writing Decision 53's ladder, by checking each claim rather than
+reading the comments.
+
+- **`unpdf` was mandatory.** `src/knowledge/extractors.ts` called it "the
+  optional `unpdf` package" and the R3.2 debrief agreed, but it was a **static**
+  `import` listed in `dependencies` — installed for every `golem-run` user, and a
+  module-load crash on an install without it. Pure JS, so no hard rule was
+  broken; the *contract* was wrong. Fixed: cached dynamic `import()` +
+  `optionalDependencies` + a typed `PdfExtractionUnavailableError` that the two
+  existing call sites already handle (`planIngest` → `filesSkipped`;
+  `fetchRawPage` → falls open).
+- **No `LICENSE` file.** `package.json` declared `Apache-2.0`; the tree had no
+  licence text. Added verbatim (Apache-2.0, copyright Golem / golem.run) ahead of
+  the R7.5 first publish.
+
+**Verified-correct by contrast** (no action needed): `web-tree-sitter` was already
+a genuine tier-2 — dynamic `import()` with a `null` degrade, grammars as
+devDependencies only. That file is the pattern the `unpdf` fix follows.
+
+**Live-machine state recorded, because it is the fact that prompted all of this:**
+in this repo `compression.headroom_sidecar = true` and `uv` is present, yet **no
+Headroom process has ever run** — the lossy semantic stage is its only caller and
+that stage is gated off on caching upstreams (Decision 31) unless
+`force_semantic_on_caching` is set. Caveman is **not installed** at all. One idle
+spawn target and one absent program: exactly what tiers 2 and 3 are supposed to
+look like, and the reason `golem ext` reports a `gate` note instead of claiming
+"running".
