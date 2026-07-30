@@ -12,6 +12,7 @@ import {
   PROXY_PORT_SPAN,
 } from "../../../src/cli/proxy-daemon.js";
 import { readProxyDesired, writeProxyDesired } from "../../../src/cli/proxy-state.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("defaultProjectPort", () => {
   it("is deterministic and inside the range", () => {
@@ -31,7 +32,7 @@ describe("proxy desired-run-state", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-pstate-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("is null before anything is written", async () => {

@@ -20,6 +20,7 @@ import type {
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
 import { WebCache, webCacheDir } from "../../../src/knowledge/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 class FakeInferenceService implements InferenceService {
   constructor(private readonly draft: Record<string, unknown>) {}
@@ -61,7 +62,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-distill-cli-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 describe("distillOne", () => {

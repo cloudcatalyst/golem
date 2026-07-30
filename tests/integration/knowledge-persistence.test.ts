@@ -12,13 +12,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EmbedFn } from "../../src/knowledge/index.js";
 import { openKnowledgeBase } from "../../src/knowledge/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 let projectDir: string;
 beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-kb-persist-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 /**

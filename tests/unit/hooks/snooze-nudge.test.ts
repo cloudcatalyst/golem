@@ -18,6 +18,7 @@ import {
   writeSnoozeNudgeState,
 } from "../../../src/hooks/snooze-nudge.js";
 import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const NOW_MS = Date.parse("2026-07-18T00:00:00.000Z");
 const FUTURE = "2026-07-18T02:00:00.000Z";
@@ -176,7 +177,7 @@ describe("snooze nudge state round-trip", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-nudge-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("writes then reads back both one-shot markers", async () => {

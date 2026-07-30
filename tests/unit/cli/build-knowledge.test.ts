@@ -21,6 +21,7 @@ import {
   detectCapability,
   embedModelFor,
 } from "../../../src/inference/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 type Handler = (req: IncomingMessage, res: ServerResponse) => void;
 
@@ -97,7 +98,7 @@ afterEach(async () => {
     await new Promise<void>((r) => server?.close(() => r()));
     server = undefined;
   }
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 // The tier (and therefore the text-embed model name the real code probes for)

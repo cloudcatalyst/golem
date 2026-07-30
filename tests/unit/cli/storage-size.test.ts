@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { dirSizeBytes, golemStorageSizes } from "../../../src/cli/storage-size.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("dirSizeBytes", () => {
   let dir: string;
@@ -14,7 +15,7 @@ describe("dirSizeBytes", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-storage-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns 0 for a missing directory (never throws)", async () => {
@@ -35,7 +36,7 @@ describe("golemStorageSizes", () => {
     proj = await mkdtemp(path.join(tmpdir(), "golem-proj-"));
   });
   afterEach(async () => {
-    await rm(proj, { recursive: true, force: true });
+    await rm(proj, rmTemp);
   });
 
   it("measures the four .golem stores, 0 for absent ones", async () => {

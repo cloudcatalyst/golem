@@ -21,6 +21,7 @@ import { NativeLosslessCompression, STAGE_DEDUP } from "../../src/compression/in
 import type { Message } from "../../src/interfaces/compression.js";
 import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
 import type { TelemetryEvent } from "../../src/telemetry/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const LEVEL_1 = sliderPolicyForLevel(1);
 const PROJECT = "stats-test-project";
@@ -40,7 +41,7 @@ describe("golem stats", () => {
   });
 
   afterEach(async () => {
-    await rm(projectDir, { recursive: true, force: true });
+    await rm(projectDir, rmTemp);
   });
 
   it("reports genuine savings and CCR activity from a seeded store", async () => {

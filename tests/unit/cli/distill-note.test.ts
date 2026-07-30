@@ -20,6 +20,7 @@ import type {
   Vector,
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 class FakeInferenceService implements InferenceService {
   constructor(private readonly draft: Record<string, unknown>) {}
@@ -62,7 +63,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-distill-note-cli-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 describe("distillNoteCapture", () => {

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTask, FileTaskStore, tasksDir } from "../../../src/tasks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 describe("FileTaskStore", () => {
   let dir: string;
@@ -14,7 +15,7 @@ describe("FileTaskStore", () => {
     dir = await mkdtemp(path.join(tmpdir(), "golem-tasks-"));
   });
   afterEach(async () => {
-    await rm(dir, { recursive: true, force: true });
+    await rm(dir, rmTemp);
   });
 
   it("returns [] when no tasks dir exists yet", async () => {

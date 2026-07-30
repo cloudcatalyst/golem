@@ -18,6 +18,7 @@ import {
   telemetryFilePath,
   telemetryStatsSource,
 } from "../../../src/telemetry/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let dir: string;
 
@@ -25,7 +26,7 @@ beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-tel-"));
 });
 afterEach(async () => {
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 function ev(over: Partial<TelemetryEvent> = {}): TelemetryEvent {

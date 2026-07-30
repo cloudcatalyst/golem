@@ -13,6 +13,7 @@ import {
   POST_TOOL_USE_COMMAND,
   removePostToolUseHook,
 } from "../../../src/hooks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 
@@ -21,7 +22,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 const SETTINGS_REL = ".claude/settings.json";

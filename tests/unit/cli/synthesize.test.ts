@@ -22,6 +22,7 @@ import type {
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
 import { FileWikiStore } from "../../../src/wiki/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 class FakeInferenceService implements InferenceService {
   lastMessages: readonly ChatMessage[] | undefined;
@@ -66,7 +67,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-synthesize-cli-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 async function writeDebrief(created: string, title: string, body: string): Promise<void> {

@@ -22,6 +22,7 @@ import {
   type OllamaBootstrapDeps,
 } from "../../src/inference/ollama-bootstrap.js";
 import { OllamaNativeClient } from "../../src/inference/ollama-native.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 function fakeRunner(table: Record<string, ProbeResult>): ProbeRunner {
   return (cmd: ProbeCommand) => {
@@ -50,7 +51,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(join(projectDir, ".."), { recursive: true, force: true });
+  await rm(join(projectDir, ".."), rmTemp);
 });
 
 describe("collectOllamaStatus", () => {

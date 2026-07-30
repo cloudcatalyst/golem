@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkWiki, golemWikiInit, resolveWikiDir } from "../../../src/cli/wiki.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 // ADRs are NOT a wiki zone (spec Decision 44) — decisions live at docs/decisions/.
 const ZONE_DIRS = [
@@ -34,7 +35,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-wiki-init-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 describe("resolveWikiDir", () => {
@@ -110,7 +111,7 @@ describe("golemWikiInit", () => {
       // Reported paths fall back to the relative-walk-up form outside projectDir.
       expect(report.actions[0]?.path.endsWith("WIKI.md")).toBe(true);
     } finally {
-      await rm(wikiDir, { recursive: true, force: true });
+      await rm(wikiDir, rmTemp);
     }
   });
 });

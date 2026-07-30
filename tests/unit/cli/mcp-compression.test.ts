@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mcpCompressionService, statsSourceForCli } from "../../../src/cli/mcp-compression.js";
 import { sliderPolicyForLevel } from "../../../src/interfaces/index.js";
 import { JsonlTelemetryStore, recordPipelineEvent } from "../../../src/telemetry/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 const LEVEL_1 = sliderPolicyForLevel(1);
 
@@ -37,7 +38,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 describe("mcpCompressionService", () => {

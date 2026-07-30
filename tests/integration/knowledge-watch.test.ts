@@ -16,6 +16,7 @@ import {
   hashingEmbedFn,
   InMemoryVectorDriver,
 } from "../../src/knowledge/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 let dir: string;
 let kb: GolemKnowledgeBase;
@@ -27,7 +28,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   kb.closeWatchers();
-  await rm(dir, { recursive: true, force: true });
+  await rm(dir, rmTemp);
 });
 
 async function searchFor(query: string): Promise<string[]> {

@@ -31,6 +31,7 @@ import { golemInit, type InitProbe } from "../../src/cli/init.js";
 import { buildProxyFromSettings } from "../../src/cli/proxy-runtime.js";
 import { loadConfig } from "../../src/config/index.js";
 import { openTelemetryStore } from "../../src/telemetry/index.js";
+import { rmTemp } from "../helpers/tmp.js";
 import { NON_STREAMING_TOOL_USE_RESPONSE } from "../integration/helpers/anthropic-fixtures.js";
 import {
   type FakeUpstream,
@@ -68,8 +69,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
-  await rm(path.dirname(fakeUserDir), { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
+  await rm(path.dirname(fakeUserDir), rmTemp);
 });
 
 describe("golem init -> Claude Code smoke (T-C2)", () => {

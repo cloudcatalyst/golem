@@ -29,12 +29,14 @@ Decisions 38–40, 2026-07-22), and **R7 — Distribution, versioning & self-upd
 (Decision 41, shipped 2026-07-22/23; first publish R7.5 left to the user). The
 multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
 
-## Where we are (validated 2026-07-23)
+## Where we are (validated 2026-07-30)
 
 - **Baseline green:** `tsc --noEmit`, `biome check`, and `vitest run`
-  (1159 tests) all pass locally. **CI is billing-blocked** (GitHub Actions refuses
-  to start jobs) — recent PRs merged on green *local* runs; unblocking it is a
-  USER account step.
+  (1668 tests) all pass locally, and `golem wiki check` reports 0 issues over 95
+  pages. **CI is billing-blocked** (GitHub Actions refuses to start jobs) — recent
+  PRs merged on green *local* runs; unblocking it is a USER account step.
+- **The Windows suite flake is gone** (BACKLOG 2026-07-29): all 85 temp-tree
+  deletes share a retry-hardened `rmTemp`; three consecutive full-suite runs green.
 - **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
   dogfooded daily; compression is honestly scoped as situational (Decision 23);
   positioning is the universal pre-LLM processor (Decision 32).
@@ -77,10 +79,22 @@ them, Decision 36).
   attacks *output* tokens, which are never cached and cost ~5× input (so
   Decision 23's "~0% on cached traffic" does not apply). **Ships OFF** behind a
   `golem stats --brevity` rollup that reports the saving and its cost together.
-  Workstream B (in-flight `tools`-block shrinking) is scoped but unbuilt —
-  ~900 tokens of measured headroom, blocked on a tool-selection-accuracy
-  harness (verification-notes §88). Design record:
-  `docs/plan/proposals/golem-brevity.md`; debrief `2026-07-30-brevity-dial.md`.
+  Design record: `docs/plan/proposals/golem-brevity.md`; debrief
+  `2026-07-30-brevity-dial.md`.
+- **Workstream B — the tools block: gate built, shrinker REJECTED** (2026-07-30,
+  verification-notes §89): built the tool-selection-accuracy harness §88 required
+  (`src/tools/` + `golem bench tools`, 27 labelled cases, A/B a candidate
+  transform reporting token saving and accuracy delta together), then let it
+  decide. Whitespace normalisation saves **exactly 0** tokens; first-sentence
+  trimming saves 56% but **triples false positives** — over-triggering, not
+  mis-selection → REGRESSED, **not wired**. Native `defer_loading`/tool-search
+  verified **GA** and found to be Anthropic's to run, not ours to imitate: it
+  neither shrinks the request nor busts the cached prefix. The urgent finding was
+  elsewhere — `golem init` sets `ENABLE_TOOL_SEARCH=true`, so that path was live
+  and **unasserted**; `tests/integration/proxy-tool-search.test.ts` now guards it
+  (fidelity already held, no bug). Remaining headroom is the **input schemas**
+  (~2900 of the ~3847 total), not the prose. Debrief
+  `2026-07-30-workstream-b-tool-selection.md`; concept page [[Tool Search]].
 
 ## Carried-over loose ends (visible, not lost)
 

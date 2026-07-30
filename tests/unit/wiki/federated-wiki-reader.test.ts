@@ -9,6 +9,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { UnknownWikiPageError } from "../../../src/interfaces/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../../../src/wiki/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 let userDir: string;
@@ -25,8 +26,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
-  await rm(userDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
+  await rm(userDir, rmTemp);
 });
 
 describe("FederatedWikiReader", () => {

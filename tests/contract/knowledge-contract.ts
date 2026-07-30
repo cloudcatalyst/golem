@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { KnowledgeBase } from "../../src/interfaces/knowledge.js";
 import { UnknownChunkError } from "../../src/interfaces/knowledge.js";
+import { rmTemp } from "../helpers/tmp.js";
 
 const PROJECT = "contract-test-project";
 const KNOWLEDGE_ONLY: ReadonlySet<"knowledge"> = new Set(["knowledge"] as const);
@@ -37,7 +38,7 @@ export function describeKnowledgeBaseContract(
     const corpora: string[] = [];
 
     afterEach(async () => {
-      await Promise.all(corpora.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+      await Promise.all(corpora.splice(0).map((dir) => rm(dir, rmTemp)));
     });
 
     async function corpus(): Promise<string> {

@@ -17,6 +17,7 @@ import {
   fileBackend,
 } from "../../../src/credentials/backends.js";
 import { createCredentialStore } from "../../../src/credentials/store.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let userDir: string;
 
@@ -25,7 +26,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(userDir, { recursive: true, force: true });
+  await rm(userDir, rmTemp);
 });
 
 /**

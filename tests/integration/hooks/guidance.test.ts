@@ -19,6 +19,7 @@ import {
   seedDefaultGuidance,
   writeGuidanceRule,
 } from "../../../src/hooks/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 
@@ -26,7 +27,7 @@ beforeEach(async () => {
   projectDir = await mkdtemp(path.join(tmpdir(), "golem-guidance-"));
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 const read = (p: string) => readFile(p, "utf8");

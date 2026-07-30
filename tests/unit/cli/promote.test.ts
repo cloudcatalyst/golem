@@ -18,6 +18,7 @@ import {
 import type { NoteDraft } from "../../../src/knowledge/distill.js";
 import { readDraftFile, writeNoteDraftFile } from "../../../src/knowledge/distill-store.js";
 import { FileWikiStore } from "../../../src/wiki/index.js";
+import { rmTemp } from "../../helpers/tmp.js";
 
 let projectDir: string;
 let wikiDir: string;
@@ -28,7 +29,7 @@ beforeEach(async () => {
   wikiDir = path.join(projectDir, "docs", "wiki");
 });
 afterEach(async () => {
-  await rm(projectDir, { recursive: true, force: true });
+  await rm(projectDir, rmTemp);
 });
 
 const questionDraft: NoteDraft = {
