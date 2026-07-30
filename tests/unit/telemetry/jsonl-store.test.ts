@@ -126,6 +126,8 @@ describe("recordPipelineEvent + telemetryStatsSource", () => {
         ccrRefsStored: 3,
         avoidedUpstreamInputTokens: 0,
         avoidedUpstreamOutputTokens: 0,
+        brevity: "off",
+        brevityDirectiveTokens: 0,
       },
       "2026-07-04T12:00:00.000Z",
     );
@@ -165,6 +167,8 @@ describe("recordRetrieval (T1, §25)", () => {
         ccrRefsStored: 1,
         avoidedUpstreamInputTokens: 0,
         avoidedUpstreamOutputTokens: 0,
+        brevity: "off",
+        brevityDirectiveTokens: 0,
       },
       "2026-07-10T00:00:00.000Z",
     );
@@ -478,6 +482,8 @@ describe("recordAvoidedUpstream + aggregateAvoidedUpstream (R2.2, §62)", () => 
         ccrRefsStored: 0,
         avoidedUpstreamInputTokens: 0,
         avoidedUpstreamOutputTokens: 0,
+        brevity: "off",
+        brevityDirectiveTokens: 0,
       },
       "2026-07-11T00:00:00.000Z",
     );

@@ -15,7 +15,13 @@
  * loader.ts; the key set and defaults in schema.ts.
  */
 
-import { type SliderPolicy, sliderPolicyForLevel } from "../interfaces/policy.js";
+import {
+  type BrevityDial,
+  type CompressionDial,
+  type SliderLevel,
+  type SliderPolicy,
+  sliderPolicyForLevel,
+} from "../interfaces/policy.js";
 import type { GolemSettings } from "./schema.js";
 
 // `./control-surface.js` is deliberately NOT re-exported from this barrel.
@@ -78,9 +84,30 @@ export type { SettingsScope, WriteSettingOptions } from "./write-setting.js";
 export { writeSetting } from "./write-setting.js";
 
 /**
+ * Decision 52 — the two dial pins, read out of settings in the shape
+ * {@link sliderPolicyForLevel} wants.
+ *
+ * `brevity.level` is already exactly `BrevityDial`. `compression.level` is a
+ * string enum in settings (so the panel renders a picker and env overrides are
+ * plain strings) and is narrowed to a `SliderLevel` here. The enum excludes 0
+ * deliberately — see the schema comment — so this cannot produce a
+ * redaction-disabling pin.
+ */
+export function dialsFromSettings(settings: GolemSettings): {
+  readonly brevity: BrevityDial;
+  readonly compression: CompressionDial;
+} {
+  const compression = settings.compression.level;
+  return {
+    brevity: settings.brevity.level,
+    compression: compression === "auto" ? "auto" : (Number(compression) as SliderLevel),
+  };
+}
+
+/**
  * Typed accessor for the slider policy implied by the effective settings
  * (interfaces/policy.ts is the frozen contract; this just feeds it).
  */
 export function policyFromSettings(settings: GolemSettings): SliderPolicy {
-  return sliderPolicyForLevel(settings.slider.level);
+  return sliderPolicyForLevel(settings.slider.level, dialsFromSettings(settings));
 }

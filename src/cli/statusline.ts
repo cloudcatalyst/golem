@@ -24,7 +24,7 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
-import type { SliderLevel } from "../interfaces/policy.js";
+import { resolveBrevity, type SliderLevel } from "../interfaces/policy.js";
 import { resolveUpstreamDisplay, type UpstreamProvider } from "../providers/index.js";
 // `../proxy/served-model.js`, not the `../proxy/index.js` barrel: the barrel reaches
 // server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
@@ -56,6 +56,12 @@ export interface SessionInput {
 /** Golem-side state for the line. */
 export interface GolemState {
   readonly sliderLevel: number;
+  /**
+   * Decision 52 — the effective brevity level ("off" when the dial is off).
+   * Surfaced because brevity changes the model's own output style: an unexplained
+   * terse assistant should always trace back to a visible dial.
+   */
+  readonly brevity?: string;
   readonly upstreamLabel: string;
   /** Resolved upstream provider (`openai`/`anthropic`/…) — shown when it adds info beyond the label. */
   readonly upstreamProvider?: string;
@@ -244,6 +250,13 @@ export function renderStatusLine(
   parts.push(brand);
   parts.push(`${cyan(label)} ${dim("→")} ${cyan(destinationLabel(golem))}`);
 
+  // Decision 52: brevity changes how the MODEL talks, so it must be visible
+  // wherever Golem's state is — otherwise a terse assistant looks like a model
+  // regression rather than a dial someone set. Shown only when active, so the
+  // default (off) costs no width.
+  if (golem.brevity !== undefined && golem.brevity !== "off") {
+    parts.push(yellow(`✂ ${golem.brevity}`));
+  }
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
@@ -256,6 +269,7 @@ export async function collectGolemState(
   opts: { localReachable?: (dir: string, baseUrl: string) => Promise<LocalModelInfo> } = {},
 ): Promise<GolemState> {
   let sliderLevel = 1;
+  let brevity = "off";
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
   let coderEnabled = true;
@@ -265,6 +279,12 @@ export async function collectGolemState(
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
+    // Resolved here rather than imported from dials.ts: the status line runs on
+    // every prompt, and this is a two-field lookup on settings we already have.
+    brevity =
+      settings.brevity.level === "auto"
+        ? resolveBrevity(settings.slider.level, "auto")
+        : settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
     coderEnabled = settings.inference.local_coder_enabled;
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
@@ -279,6 +299,7 @@ export async function collectGolemState(
   }
   let state: GolemState = {
     sliderLevel,
+    brevity,
     upstreamLabel: label,
     localCoderEnabled: coderEnabled,
     ...(provider !== undefined ? { upstreamProvider: provider } : {}),

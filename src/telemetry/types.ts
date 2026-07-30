@@ -48,6 +48,42 @@ export interface UsageBySemanticForced {
 }
 
 /**
+ * Decision 52 rollup: BILLED usage split by the brevity level in force, plus
+ * the input cost the directive added. This is the measurement the dial ships
+ * gated behind — Caveman's own README warns the technique can go net-negative
+ * on terse workloads (verification-notes §87), so the honest report is
+ * per-level observed output tokens *and* the cost of asking for them.
+ *
+ * It is an OBSERVATIONAL comparison across samples, not a per-request A/B: the
+ * same request cannot be run both ways. Consumers must label it as such.
+ */
+export interface UsageByBrevity {
+  readonly projectId: string | null;
+  /**
+   * Keyed by brevity level ("off" | "lite" | "full" | "ultra"). Absent keys mean
+   * no samples were seen at that level.
+   */
+  readonly byBrevity: Readonly<
+    Record<
+      string,
+      UsageTotals & {
+        readonly requests: number;
+        /**
+         * Estimated input tokens the directive added across these requests.
+         * Accumulated from pipeline events, which is a DIFFERENT event kind from
+         * the usage samples above — so `requests` here counts usage samples and
+         * this counts injections; they are not guaranteed equal (a request can
+         * be recorded without its response, or vice versa).
+         */
+        readonly directiveTokens: number;
+        /** How many pipeline events contributed `directiveTokens`. */
+        readonly injections: number;
+      }
+    >
+  >;
+}
+
+/**
  * One durably-recorded event: a pipeline run (redaction → compression, the
  * historical/default shape), a CCR retrieval (an `expand` call,
  * verification-notes §25), an upstream `usage` sample (R1.1), or an
@@ -100,6 +136,20 @@ export interface TelemetryEvent {
    * this field existed.
    */
   readonly semanticForced?: boolean;
+  /**
+   * Decision 52: the brevity level in force for this sample. Set on `kind:
+   * "usage"` events (where the billed output-token count lives) and on pipeline
+   * events (where the directive's input cost lives). Absent on events written
+   * before this field existed — parse absent as `"off"`, since brevity did not
+   * exist then and so cannot have been on.
+   */
+  readonly brevity?: string;
+  /**
+   * Decision 52: input tokens the brevity directive ADDED to this request. Set
+   * on pipeline events only. Recorded so a brevity saving can never be reported
+   * without its cost (verification-notes §87).
+   */
+  readonly brevityDirectiveTokens?: number;
   /**
    * R2.2 (spec Decision 24 sub-mode 1, verification-notes §62): input tokens
    * avoided by proxy-side context substitution for this sample. Only set
@@ -181,6 +231,13 @@ export interface TelemetryStore {
    * to one project; omit for the global view.
    */
   aggregateUsageBySemanticForced(projectId?: string): Promise<UsageBySemanticForced>;
+  /**
+   * Decision 52: roll up `usage` events by the brevity level in force, plus the
+   * directive's own input cost from pipeline events. The gate on trusting the
+   * brevity dial — it ships off until this reports a real net saving on the
+   * project's own traffic. `projectId` scopes to one project; omit for global.
+   */
+  aggregateUsageByBrevity(projectId?: string): Promise<UsageByBrevity>;
   /**
    * Roll up recorded `avoidedUpstream` (kind: "avoidedUpstream") events (R2.2,
    * verification-notes §59/§62) — the direct KB-substitution signal R2.1

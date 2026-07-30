@@ -3501,3 +3501,63 @@ input**, and output is never cached. So Decision 23's "compression pays ~0% on
 cached traffic" is an input-side finding that does **not** transfer to an
 output-side dial. That is the whole argument for the proposal, and it is a
 hypothesis to measure, not a claim to ship on.
+
+## §88 — The tools block is ~900 tokens of Golem's own descriptions; why the shrinker is not shipped (2026-07-30)
+
+Measured while scoping Workstream B of Decision 52 (in-flight compression of the
+`tools` array — the `caveman-shrink` equivalent; BACKLOG row 2026-07-24).
+
+**Census.** Golem's own MCP tool descriptions, as sent on every request that
+carries the server's tool list (chars → ≈tokens at 4 chars/token):
+
+| tool | ≈tokens | | tool | ≈tokens |
+|---|--:|---|---|--:|
+| `level` | 114 | | `wiki_read` | 53 |
+| `coder` | 159 | | `stats` | 49 |
+| `wiki_upsert` | 141 | | `ingest` | 48 |
+| `snooze` | 134 | | `devices` | 42 |
+| `expand` | 73 | | `fetch` | 30 |
+| `search` | 64 | | **total** | **~902** |
+
+So the headroom is real — ~900 tokens before any *other* MCP server or Claude
+Code's own built-ins are counted, on every request, forever. It sits in the
+cached prefix, so it bills at ~0.1× after the first turn; the saving is smaller
+than the raw count suggests, which is exactly why it needs measuring rather than
+assuming.
+
+**Self-inflicted finding, recorded because it is the whole point.** Adding the
+Decision-52 dial explanation to the `level` description took it from ~78 → 191
+tokens. Trimmed back to 114: still +36 versus baseline, spent on two facts worth
+having (the stale "level 3 adds local drafts" text was wrong post-Decision 31,
+and the dials needed naming). A workstream about shrinking the tools block began
+by growing it — worth remembering that every description edit is a token
+decision.
+
+**Why no shrinker shipped in this batch.** Every candidate transform is one of:
+
+1. **Whitespace / punctuation normalisation** — genuinely lossless, and worth
+   almost nothing (these strings are already prose, not formatted text).
+2. **Rewriting the prose shorter** — real gains, but a tool description is
+   *instructions the model reads to decide whether to call the tool*. Shortening
+   it can change tool-selection behaviour. That is a **correctness** question,
+   not a token question, and there is no harness here that measures
+   tool-selection accuracy. Shipping it on the assumption that "shorter means
+   the same" is precisely the move this project's honest-observability rule
+   exists to prevent.
+3. **Native `defer_loading` + tool-search passthrough** — lossless in the sense
+   that no description is rewritten, but it changes *when* tools are visible to
+   the model, which is a behavioural change of a different kind, and it needs the
+   tool-search tool declared upstream. Also newer than these notes: verify
+   against live docs before building (the BACKLOG row already flags this).
+
+**Cache interactions that must be settled before any of the three.** `tools`
+renders FIRST in the prefix (`tools` → `system` → `messages`), so an unstable
+transform invalidates the entire cached prefix on every request — strictly worse
+than doing nothing. And shrinking can push a prompt *below* the minimum cacheable
+prefix (512 tokens on Opus 5, 1024 on Opus 4.8, 2048–4096 on older models —
+checked 2026-07-30), converting a token saving into a total cache loss with no
+error to warn you.
+
+**Conclusion.** Next step is a tool-selection-accuracy harness, not a transform.
+Until it exists, the honest position is that the tools block is a known ~900-token
+target with no safe edit available.

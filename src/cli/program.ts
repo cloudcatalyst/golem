@@ -152,7 +152,7 @@ import { buildProxyFromSettings } from "./proxy-runtime.js";
 import { readProxyDesired, writeProxyDesired } from "./proxy-state.js";
 import { collectSessionStateReport } from "./session-report.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, setSliderLevel } from "./slider.js";
-import { collectStats, collectWindowedStats, renderStats } from "./stats.js";
+import { collectStats, collectWindowedStats, renderBrevityReport, renderStats } from "./stats.js";
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
@@ -1013,6 +1013,79 @@ program
     }
   });
 
+// Decision 52 — the two dials the slider is a preset over. Both are ordinary
+// settings keys, so `golem config set` works too; these verbs exist because a
+// dial you flip while measuring deserves a first-class surface that explains
+// what it will do and where the value came from.
+for (const kind of ["brevity", "compression"] as const) {
+  program
+    .command(kind)
+    .description(
+      kind === "brevity"
+        ? "Show or set the output-side brevity dial (auto|off|lite|full|ultra)"
+        : "Show or set the input-side compression dial (auto|1|2|3)",
+    )
+    .argument("[value]", "new value; omit to show the current one")
+    .option("--dir <path>", "project directory", DEFAULT_DIR)
+    .option("--project", "write the committed project scope instead of local", false)
+    .option("--json", "machine-readable output", false)
+    .action(
+      async (value: string | undefined, opts: { dir: string; project: boolean; json: boolean }) => {
+        const { brevityEffectNote, describeDial, DIAL_VALUES, DialError, getDialInfo, setDial } =
+          await import("./dials.js");
+        try {
+          if (value === undefined) {
+            const info = await getDialInfo(kind, { projectDir: opts.dir });
+            if (opts.json) {
+              process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+              return;
+            }
+            process.stdout.write(
+              `${describeDial(info)} — set by ${info.layer}` +
+                `${info.source !== undefined ? ` (${info.source})` : ""}\n`,
+            );
+            if (kind === "brevity") {
+              process.stdout.write(
+                `${brevityEffectNote(info.effective as never, info.sliderLevel)}\n`,
+              );
+            }
+            process.stdout.write(`values: ${DIAL_VALUES[kind].join(" | ")}\n`);
+            return;
+          }
+          const result = await setDial(kind, value, {
+            projectDir: opts.dir,
+            project: opts.project,
+          });
+          if (opts.json) {
+            process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+            return;
+          }
+          process.stdout.write(`${kind} set to ${result.value} in ${result.file}\n`);
+          process.stdout.write(`${describeDial(result.info)}\n`);
+          if (kind === "brevity") {
+            process.stdout.write(
+              `${brevityEffectNote(result.info.effective as never, result.info.sliderLevel)}\n`,
+            );
+          }
+          if (result.overriddenBy !== undefined) {
+            process.stdout.write(
+              `⚠ a higher layer wins — the effective value comes from ${result.overriddenBy.layer}` +
+                `${result.overriddenBy.source !== undefined ? ` (${result.overriddenBy.source})` : ""}\n`,
+            );
+          }
+          process.stdout.write("restart the proxy for this to take effect: golem proxy restart\n");
+        } catch (err) {
+          if (err instanceof DialError) {
+            process.stderr.write(`golem: ${err.message}\n`);
+            process.exitCode = 2;
+            return;
+          }
+          throw err;
+        }
+      },
+    );
+}
+
 program
   .command("slider")
   .description("Show the Golem savings slider, or set it (0 passthrough … 3 aggressive)")
@@ -1069,47 +1142,73 @@ program
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--project <id>", "limit stats to this project id")
   .option("--window <window>", "savings window: 24h | 7d | all", "24h")
+  .option("--brevity", "report billed output tokens by brevity level (Decision 52)", false)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { dir: string; project?: string; window: string; json: boolean }) => {
-    try {
-      if (opts.window !== "24h" && opts.window !== "7d" && opts.window !== "all") {
-        throw new InitError(`invalid --window "${opts.window}" (expected 24h | 7d | all)`);
-      }
-      const window: BenchWindow = opts.window;
-      // R4.3 — fold durable per-tool usage into the report (best-effort: a
-      // telemetry read failure just omits the section, never fails `stats`).
-      let toolUsage: ToolUsageStats | undefined;
+  .action(
+    async (opts: {
+      dir: string;
+      project?: string;
+      window: string;
+      brevity: boolean;
+      json: boolean;
+    }) => {
       try {
-        toolUsage = await openTelemetryStore(opts.dir).aggregateToolUsage(opts.project);
-      } catch {
-        toolUsage = undefined;
+        if (opts.window !== "24h" && opts.window !== "7d" && opts.window !== "all") {
+          throw new InitError(`invalid --window "${opts.window}" (expected 24h | 7d | all)`);
+        }
+        // Decision 52 — the brevity rollup. Its own report rather than a section
+        // of the savings headline: that headline is INPUT-side gross tokens, and
+        // mixing an output-side measurement into it is exactly the mixed-scope
+        // error verification-notes §25/§30 warns about.
+        if (opts.brevity) {
+          const { brevityReportRows } = await import("../telemetry/usage-report.js");
+          const byBrevity = await openTelemetryStore(opts.dir).aggregateUsageByBrevity(
+            opts.project,
+          );
+          const rows = brevityReportRows(byBrevity);
+          if (opts.json) {
+            process.stdout.write(`${JSON.stringify({ ...byBrevity, rows }, null, 2)}\n`);
+            return;
+          }
+          process.stdout.write(renderBrevityReport(rows));
+          return;
+        }
+        const window: BenchWindow = opts.window;
+        // R4.3 — fold durable per-tool usage into the report (best-effort: a
+        // telemetry read failure just omits the section, never fails `stats`).
+        let toolUsage: ToolUsageStats | undefined;
+        try {
+          toolUsage = await openTelemetryStore(opts.dir).aggregateToolUsage(opts.project);
+        } catch {
+          toolUsage = undefined;
+        }
+        // Prefer durable telemetry, windowed to the rolling savings window
+        // (Decision 23). Fall back to the live in-process counters only when the
+        // store holds no pipeline runs at all (a fresh project) — those counters
+        // have no timestamps to window, so they report all-time for this process.
+        let events: readonly TelemetryEvent[] = [];
+        try {
+          events = await readTelemetryEvents(opts.dir);
+        } catch {
+          events = [];
+        }
+        const hasRequests = events.some((e) => (e.kind ?? "request") === "request");
+        const report = hasRequests
+          ? collectWindowedStats(events, {
+              window,
+              nowMs: Date.now(),
+              ...(opts.project !== undefined ? { projectId: opts.project } : {}),
+              ...(toolUsage !== undefined ? { toolUsage } : {}),
+            })
+          : await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
+        );
+      } catch (err) {
+        fail(err);
       }
-      // Prefer durable telemetry, windowed to the rolling savings window
-      // (Decision 23). Fall back to the live in-process counters only when the
-      // store holds no pipeline runs at all (a fresh project) — those counters
-      // have no timestamps to window, so they report all-time for this process.
-      let events: readonly TelemetryEvent[] = [];
-      try {
-        events = await readTelemetryEvents(opts.dir);
-      } catch {
-        events = [];
-      }
-      const hasRequests = events.some((e) => (e.kind ?? "request") === "request");
-      const report = hasRequests
-        ? collectWindowedStats(events, {
-            window,
-            nowMs: Date.now(),
-            ...(opts.project !== undefined ? { projectId: opts.project } : {}),
-            ...(toolUsage !== undefined ? { toolUsage } : {}),
-          })
-        : await collectStats(await statsSourceForCli(opts.dir), opts.project, toolUsage);
-      process.stdout.write(
-        opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderStats(report),
-      );
-    } catch (err) {
-      fail(err);
-    }
-  });
+    },
+  );
 
 const benchCmd = program.command("bench").description("Golem benchmarks (spec Decision 21f)");
 

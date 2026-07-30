@@ -21,6 +21,7 @@ import {
   type ToolUsageStats,
   windowedStatsWithFallback,
 } from "../telemetry/index.js";
+import type { BrevityReportRow } from "../telemetry/usage-report.js";
 
 /** Pluggable savings-stats provider (A4 telemetry implements this later). */
 export interface StatsSource {
@@ -228,5 +229,60 @@ export function renderStats(report: StatsReport): string {
   }
   lines.push("");
   lines.push(`note: ${report.note}`);
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * Decision 52 — render the brevity rollup (`golem stats --brevity`).
+ *
+ * Three rules this output obeys, all of them the point of the report:
+ *  1. Never print a headline percentage. The vendor's "65%" describes their
+ *     workload, not this one (verification-notes §87).
+ *  2. Never show a saving without its cost — the directive's own input tokens
+ *     are on the same row.
+ *  3. Say plainly that it is observational. The same request cannot be run both
+ *     ways, so this compares periods, not variants.
+ */
+export function renderBrevityReport(rows: readonly BrevityReportRow[]): string {
+  const lines: string[] = ["Brevity (Decision 52) — billed output tokens by level", ""];
+  const withTraffic = rows.filter((r) => r.requests > 0);
+  if (withTraffic.length === 0) {
+    lines.push("  no usage samples recorded yet.");
+    lines.push("");
+    lines.push("  The dial ships OFF. Turn it on (`golem brevity lite`), let real traffic");
+    lines.push("  flow, then come back — until an `off` baseline and an on-period both");
+    lines.push("  exist here, there is nothing to compare and no claim to make.");
+    return `${lines.join("\n")}\n`;
+  }
+
+  const pad = (s: string, n: number) => s.padEnd(n);
+  const num = (n: number) => (Number.isFinite(n) ? n.toFixed(0) : "-");
+  lines.push(
+    `  ${pad("level", 8)}${pad("requests", 10)}${pad("out/req", 10)}${pad("cost/req", 10)}net/req`,
+  );
+  for (const row of withTraffic) {
+    const net =
+      row.netOutputEquivSavedPerRequest === undefined
+        ? row.brevity === "off"
+          ? "(baseline)"
+          : "(no baseline)"
+        : `${row.netOutputEquivSavedPerRequest >= 0 ? "+" : ""}${num(row.netOutputEquivSavedPerRequest)}`;
+    lines.push(
+      `  ${pad(row.brevity, 8)}${pad(String(row.requests), 10)}${pad(
+        num(row.outputTokensPerRequest),
+        10,
+      )}${pad(num(row.directiveCostOutputEquivPerRequest), 10)}${net}`,
+    );
+  }
+  lines.push("");
+  lines.push("  out/req  = billed output tokens per request (the thing brevity shortens)");
+  lines.push("  cost/req = the directive's input tokens, in output-token equivalents,");
+  lines.push("             priced as if NEVER cached — a deliberate over-estimate");
+  lines.push("  net/req  = out/req saved vs the `off` baseline, minus cost/req");
+  lines.push("");
+  lines.push("  ESTIMATE, observational: this compares periods, not variants — the same");
+  lines.push("  request cannot be run both ways, so a change in what you were asking");
+  lines.push("  about is a confound these numbers cannot remove. A negative net/req");
+  lines.push("  means brevity is costing more than it saves on this traffic.");
   return `${lines.join("\n")}\n`;
 }

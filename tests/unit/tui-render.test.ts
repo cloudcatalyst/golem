@@ -39,6 +39,10 @@ const REPORT: StatusReport = {
     default_model: null,
   },
   slider: { level: 1, name: "lossless", layer: "default" },
+  dials: {
+    brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
+    compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
+  },
   config: {},
   local_model: {
     reachable: true,
