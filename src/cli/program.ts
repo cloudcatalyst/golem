@@ -9,7 +9,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Command, InvalidArgumentError } from "commander";
 import {
@@ -71,6 +71,7 @@ import {
   escalateTask,
   FileTaskStore,
   isResumable,
+  PlanTaskStore,
   runQueueLocally,
 } from "../tasks/index.js";
 import {
@@ -157,7 +158,15 @@ import { collectStats, collectWindowedStats, renderBrevityReport, renderStats } 
 import { collectStatus, renderStatus } from "./status.js";
 import { collectGolemState, parseSessionInput, renderStatusLine } from "./statusline.js";
 import { synthesizeWeeklyReport } from "./synthesize.js";
-import { findTask, renderTask, renderTaskList, spawnResume } from "./task.js";
+import {
+  findScopedTask,
+  findTask,
+  listScopedTasks,
+  renderScopedTaskList,
+  renderTask,
+  spawnResume,
+  storeForScope,
+} from "./task.js";
 import { buildTaskGrounding } from "./task-grounding.js";
 import { runWatch } from "./watch.js";
 import {
@@ -1846,14 +1855,28 @@ taskCmd
 
 taskCmd
   .command("list")
-  .description("List durable tasks (newest-updated first)")
+  .description(
+    "List tasks — committed roadmap tasks (docs/plan/tasks/) and this machine's parked ones",
+  )
   .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--plan", "only committed roadmap tasks", false)
+  .option("--local", "only this machine's parked tasks", false)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { dir: string; json: boolean }) => {
+  .action(async (opts: { dir: string; plan: boolean; local: boolean; json: boolean }) => {
     try {
-      const tasks = await new FileTaskStore(opts.dir).list();
+      if (opts.plan && opts.local) {
+        throw new InitError("--plan and --local are mutually exclusive (omit both for all tasks)");
+      }
+      const only = opts.plan ? "plan" : opts.local ? "local" : undefined;
+      const entries = await listScopedTasks(opts.dir, only);
       process.stdout.write(
-        opts.json ? `${JSON.stringify(tasks, null, 2)}\n` : renderTaskList(tasks),
+        opts.json
+          ? `${JSON.stringify(
+              entries.map((e) => ({ scope: e.scope, ...e.task })),
+              null,
+              2,
+            )}\n`
+          : renderScopedTaskList(entries),
       );
     } catch (err) {
       fail(err);
@@ -1862,20 +1885,85 @@ taskCmd
 
 taskCmd
   .command("show")
-  .description("Show one task in detail (by id or unique id prefix)")
+  .description("Show one task in detail (roadmap id like R8.5, or a local id prefix)")
   .argument("<id>", "task id or unique prefix")
   .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
   .action(async (id: string, opts: { dir: string; json: boolean }) => {
     try {
-      const task = findTask(await new FileTaskStore(opts.dir).list(), id);
-      if (task === "none") throw new InitError(`no task matching "${id}"`);
-      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
-      process.stdout.write(opts.json ? `${JSON.stringify(task, null, 2)}\n` : renderTask(task));
+      const found = findScopedTask(await listScopedTasks(opts.dir), id);
+      if (found === "none") throw new InitError(`no task matching "${id}"`);
+      if (found === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      process.stdout.write(
+        opts.json
+          ? `${JSON.stringify({ scope: found.scope, ...found.task }, null, 2)}\n`
+          : renderTask(found.task),
+      );
     } catch (err) {
       fail(err);
     }
   });
+
+// The roadmap's open-work table, generated from the task documents so it cannot
+// drift from them (USER-requested 2026-07-30). Detail lives in one document per
+// task; ROADMAP.md keeps only a live index of links.
+taskCmd
+  .command("index")
+  .description(
+    "Render the roadmap open-work index from docs/plan/tasks/ (and optionally splice it)",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--summary", "one-screen terminal summary instead of Markdown", false)
+  .option(
+    "--write [file]",
+    "splice the Markdown between the golem:task-index markers in this file (default docs/plan/ROADMAP.md)",
+  )
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: { dir: string; summary: boolean; write?: string | boolean; json: boolean }) => {
+      try {
+        const { renderPlanIndex, renderPlanSummary, splicePlanIndex, groupPlanTasks } =
+          await import("./plan-index.js");
+        const tasks = await new PlanTaskStore(opts.dir).list();
+        if (opts.json) {
+          const { ready, blocked, done } = groupPlanTasks(tasks);
+          process.stdout.write(`${JSON.stringify({ ready, blocked, done }, null, 2)}\n`);
+          return;
+        }
+        if (opts.summary) {
+          process.stdout.write(renderPlanSummary(tasks));
+          return;
+        }
+        const rendered = renderPlanIndex(tasks);
+        if (opts.write === undefined || opts.write === false) {
+          process.stdout.write(`${rendered}\n`);
+          return;
+        }
+        const target =
+          typeof opts.write === "string"
+            ? opts.write
+            : path.join(opts.dir, "docs", "plan", "ROADMAP.md");
+        const before = await readFile(target, "utf8");
+        const { text, spliced } = splicePlanIndex(before, rendered);
+        if (!spliced) {
+          // Appending a second index to a file meant to hold one is worse than
+          // refusing — say what is missing and where to put it.
+          throw new InitError(
+            `${target} has no golem:task-index markers — add these two lines where the ` +
+              "index belongs:\n  <!-- golem:task-index:begin -->\n  <!-- golem:task-index:end -->",
+          );
+        }
+        if (text === before) {
+          process.stdout.write(`${target} already up to date\n`);
+          return;
+        }
+        await writeFile(target, text, "utf8");
+        process.stdout.write(`updated the task index in ${target}\n`);
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 taskCmd
   .command("resume")
@@ -1934,17 +2022,53 @@ taskCmd
   .option("--delete", "remove the task record entirely instead of marking it cancelled", false)
   .action(async (id: string, opts: { dir: string; delete: boolean }) => {
     try {
-      const store = new FileTaskStore(opts.dir);
-      const task = findTask(await store.list(), id);
-      if (task === "none") throw new InitError(`no task matching "${id}"`);
-      if (task === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      // Scope-aware: cancelling a roadmap task edits its committed document, while
+      // cancelling a parked one drops a local JSON file. Writing back to the wrong
+      // store would either lose the task or invent an untracked file.
+      const found = findScopedTask(await listScopedTasks(opts.dir), id);
+      if (found === "none") throw new InitError(`no task matching "${id}"`);
+      if (found === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      const { task, scope } = found;
+      const store = storeForScope(scope, opts.dir);
       if (opts.delete) {
         await store.delete(task.id);
-        process.stdout.write(`deleted task ${task.id}\n`);
+        process.stdout.write(
+          scope === "plan"
+            ? `deleted plan task ${task.id} — its document is gone, commit the removal\n`
+            : `deleted task ${task.id}\n`,
+        );
         return;
       }
       await store.put({ ...task, state: "cancelled" });
-      process.stdout.write(`cancelled task ${task.id}\n`);
+      process.stdout.write(`cancelled ${scope} task ${task.id}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+// Closing a task is the other half of `cancel`, and the one a batch close-out needs:
+// mark it done in place so the generated index moves it to "Closed" on the next
+// `golem task index --write`, instead of someone hand-editing the roadmap.
+taskCmd
+  .command("done")
+  .description("Mark a task done (roadmap id like R8.5, or a local id prefix)")
+  .argument("<id>", "task id or unique prefix")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--note <text>", "short outcome note appended to the task body")
+  .action(async (id: string, opts: { dir: string; note?: string }) => {
+    try {
+      const found = findScopedTask(await listScopedTasks(opts.dir), id);
+      if (found === "none") throw new InitError(`no task matching "${id}"`);
+      if (found === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
+      const { task, scope } = found;
+      const prompt =
+        opts.note === undefined ? task.prompt : `${task.prompt}\n\n## Outcome\n\n${opts.note}`;
+      await storeForScope(scope, opts.dir).put({ ...task, state: "done", prompt });
+      process.stdout.write(
+        scope === "plan"
+          ? `marked plan task ${task.id} done — run "golem task index --write" to refresh the roadmap\n`
+          : `marked task ${task.id} done\n`,
+      );
     } catch (err) {
       fail(err);
     }
