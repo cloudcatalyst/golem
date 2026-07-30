@@ -3,7 +3,9 @@
 Companion to `docs/golem-spec.md`. Originally structured for multi-agent P0/P1
 development (parallel workstreams, frozen contracts); **P0/P1 shipped**, so this
 document now serves as the workstream/interface reference. The forward-looking
-view is `ROADMAP.md`; completed batch briefs are retired to git history.
+view is `ROADMAP.md` — a generated index over the committed task documents in
+`plan/tasks/` (spec Decision 55); shipped history is `SHIPPED.md`, and completed
+batch briefs are retired to git history.
 
 > **Status (2026-07-16, Decision 36):** P0, P1, and releases R1–R3 are shipped;
 > the test baseline is green (886 tests). The per-agent workstream briefs and
@@ -35,8 +37,10 @@ golem/
 │   ├── golem-spec.md            # the spec (source of truth #1)
 │   ├── plan/                    # planning docs
 │   │   ├── IMPLEMENTATION_PLAN.md   # this file
-│   │   ├── ROADMAP.md               # multi-release view
-│   │   ├── BACKLOG.md               # ideas inbox
+│   │   ├── ROADMAP.md               # generated index over tasks/ (Decision 55)
+│   │   ├── tasks/                   # one committed task document per open item
+│   │   ├── SHIPPED.md               # one line per landed release/task
+│   │   ├── BACKLOG.md               # ideas inbox (pre-task)
 │   │   ├── verification-notes.md    # dated live-doc findings (source of truth #3)
 │   │   └── proposals/               # active design proposals (created per feature; retired when shipped/dropped)
 │   └── wiki/                    # the project's own wiki (Decision 28; see WIKI.md)
@@ -162,12 +166,13 @@ redaction verified against the secrets corpus; CI matrix green.
 
 ## 6. Future workstreams (spec Decision 20) — WS-F ↔ ROADMAP index
 
-> **Not a remaining-work queue.** Every WS-F workstream is scheduled as a
-> numbered ROADMAP task (renumbered by Decision 36: autonomy = R5, ON HOLD;
-> multi-provider/remote = R6, ON HOLD). Build status, ordering, and gates live
-> on the ROADMAP task — this table is only the WS-F→ROADMAP crosswalk and
-> spec-ref map. Each item still needs its design memo + explicit ask before
-> build; none touch frozen interfaces or shipped scope.
+> **Not a remaining-work queue.** Every WS-F workstream maps to a numbered task
+> id (renumbered by Decision 36: autonomy = R5, multi-provider/remote = R6).
+> Build status, ordering, and gates live on the **task document** in
+> `plan/tasks/<id>.md` (spec Decision 55) — run `golem task index --summary` for
+> what is open. This table is only the WS-F→task-id crosswalk and spec-ref map.
+> Each item still needs its design memo + explicit ask before build; none touch
+> frozen interfaces or shipped scope.
 
 | ID | Feature (spec ref) | → ROADMAP | Depends on |
 |---|---|---|---|

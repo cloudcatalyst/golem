@@ -1,353 +1,137 @@
 # Golem Roadmap
 
-> **Rewritten 2026-07-16 (spec Decision 36).** This is the durable, multi-release
-> view that sits above `IMPLEMENTATION_PLAN.md` (workstreams, frozen interfaces)
-> and whatever the current actionable batch file is. When a release's work is
-> picked up, spin its tasks into a batch brief in the style the repo already
-> uses; when it lands, mark it here and **retire the batch brief to git history**
-> (completed briefs are not kept in the tree — R1–R5 + PRE-R6 were retired).
+> **Restructured 2026-07-30 (spec Decision 55, USER-requested).** This file is now
+> **an index, not a container**. Every open item is a **committed Golem task** under
+> [`tasks/`](tasks/) — one document per unit of work, self-contained enough to hand to
+> a fresh agent or a separate conversation. Shipped history moved to
+> [`SHIPPED.md`](SHIPPED.md). The table below is **generated** by
+> `golem task index --write`; edit the task documents, never the table.
+
+## How to work this roadmap
+
+```
+golem task index --summary     # one screen: what's ready, what's blocked
+golem task show R8.5           # the full brief for one item
+golem task list                # plan tasks + this machine's parked ones
+golem task done R8.5 --note …  # close it, then re-run `task index --write`
+```
+
+Plan tasks are the same `Task` concept — and the same `golem task` CLI — that parks a
+session at a usage limit (R5.1, Decision 38). They differ only in scope: **local**
+tasks live in `.golem/tasks/*.json` (uncommitted machine state), **plan** tasks live in
+`docs/plan/tasks/*.md` (committed, reviewable, shared). See
+[`tasks/README.md`](tasks/README.md) for the frontmatter and the house style for a
+brief.
+
+**To hand an item to an agent or a new conversation:** point it at the task file. It
+carries the goal, the design source, the files, the gate, and the out-of-scope list —
+no roadmap reading required.
 
 ## The organising intent (Decision 36)
 
-Everything below is sorted by one criterion: does it serve the working pattern
-that inspired the wiki-first pivot (spec Decision 28 — the "LLM Wiki /
-developer's second brain" article)?
+Everything is sorted by one criterion: does it serve the working pattern that inspired
+the wiki-first pivot (Decision 28 — the "LLM Wiki / developer's second brain" article)?
 
 1. **Plan together.** A place where the user and Claude collaborate on planning:
    reading captured notes and ideas, and turning them into tasks.
-2. **Distill everything.** The project and its research distilled into the
-   committed wiki; the knowledge base collects raw articles; web fetches are
-   cached and served offline.
-3. **A local co-developer.** A robust, token-friendly local coder that drafts so
-   the paid model can judge.
+2. **Distill everything.** The project and its research distilled into the committed
+   wiki; the knowledge base collects raw articles; web fetches are cached and served
+   offline.
+3. **A local co-developer.** A robust, token-friendly local coder that drafts so the
+   paid model can judge.
 
-Goal 2 is largely shipped (WS-W W1–W4). Goals 1 and 3 landed in **R4** (all
-seven tasks done, 2026-07-16). **R5 — Autonomy & orchestration** then shipped,
-followed by the PRE-R6 loose-ends closeout (2026-07-17), a run of standalone
-UX/reliability decisions (snooze, coder-first enforcement, autonomy-gate toggle —
-Decisions 38–40, 2026-07-22), and **R7 — Distribution, versioning & self-update**
-(Decision 41, shipped 2026-07-22/23; first publish R7.5 left to the user). The
-multi-provider / remote cluster (R6, incl. the companion app) stays **on hold**.
+Goal 2 is largely shipped (WS-W W1–W4); goals 1 and 3 landed in R4; R5 followed. See
+[`SHIPPED.md`](SHIPPED.md).
 
 ## Where we are (validated 2026-07-30)
 
-- **Baseline green:** `tsc --noEmit`, `biome check`, `npm run verify:deps`, and
-  `vitest run` (**1837 tests**) all pass locally, and `golem wiki check` reports 0
-  issues over **100 pages**. **CI is billing-blocked** (GitHub Actions refuses to
-  start jobs) — recent PRs merged on green *local* runs; unblocking it is a USER
-  account step.
-- **R8a (context economy) is shipped** and, unusually, its own instruments
-  redirected it *four* times: §93 (98.4% cache hit rate → bust prevention is a guard
-  rail, not a lever), §94 (R8.2 already existed), §95 (the `tools` block is 18.8k
-  tokens; Bash is the biggest tool consumer), §97 (Grep/Glob have no measured
-  traffic), and now **§100 — R8.S1 REJECTED**: of that 18.8k, **93.9% is Claude
-  Code's own built-ins** and Golem's entire share is **1,130 tokens (0.8% of the
-  request)**, so the ceiling was never a lever. §89's "the schemas are the headroom
-  (~2900)" was also an artifact — Golem's input schemas are ~1,128, and the rest was
-  `outputSchema` + MCP metadata that Claude Code never forwards.
-  **Next by evidence:** R8.5 repo map + oversized-`Read` swap — `Read` is the
-  second-biggest tool consumer and the one a Bash compactor cannot reach.
-- **The Windows suite flake is gone** (BACKLOG 2026-07-29): all 85 temp-tree
-  deletes share a retry-hardened `rmTemp`; three consecutive full-suite runs green.
-- **R1–R5 + R7 shipped** (see below). P0/P1 + the wiki knowledge loop are live and
-  dogfooded daily; compression is honestly scoped as situational (Decision 23);
-  positioning is the universal pre-LLM processor (Decision 32).
-
-## Shipped
-
-Details live in the wiki (`docs/wiki/debriefs/`, `docs/wiki/syntheses/`) and the
-spec Decisions Log; the batch briefs themselves were retired (git history has
-them, Decision 36).
-
-- **R1 — Honest baseline** (2026-07-11): net-of-cache A/B infra (§54),
-  positioning Decision 32, redaction false-positive + provider-rule fixes,
-  cross-OS e2e smoke. Open remainder: R1.6 (macOS/Linux Ollama manual
-  verification — blocked on hardware, see
-  `wiki/questions/r1.6-ollama-verification-blocked.md`).
-- **R2 — Real savings, evidence-gated** (2026-07-11): cache-safe bypass A/B
-  infra (R2.6, live A/B deferred), `avoidedUpstream` telemetry + context
-  substitution (R2.2), local-answer contract (R2.3 / Decision 33 — still
-  PROPOSED pending human review of a real served answer), expand↔Headroom-CCR
-  backfill (R2.4).
-- **R3 — Knowledge depth** (2026-07-12 → 2026-07-15): chat-judge rerank
-  (Decision 34), HTML/PDF extractors, tree-sitter chunker (opt-in), user-scope
-  wiki federation + weekly synthesis (W4), note→distill shaping, MEMORY-scope
-  federation via the Headroom memory sidecar (C4), LanceDB no-go spike (R3.7 —
-  recommended the `#flush()` stream-write fix, scheduled as R4.6).
-- **R4 / R5** (2026-07-16): co-developer core and autonomy/orchestration — see
-  their sections below.
-- **Post-R5 standalone decisions** (2026-07-18 → 07-23): Golem snooze
-  (Decision 38), coder-first enforcement (Decision 39), autonomy-gate toggle
-  (Decision 40), and **WebFetch raw-page caching** (Decision 42 — the pre-hook
-  fetches the raw page itself and serves it, so the cache holds pages not
-  prompt-specific answers; debrief `2026-07-23-webfetch-raw-cache.md`).
-- **R7 — Distribution, versioning & self-update** (Decision 41, 2026-07-22/23):
-  see the R7 section below; first publish (R7.5) deferred to the user.
-- **Brevity dial — the slider becomes a preset over two dials** (Decision 52,
-  2026-07-30): decoupled `compression.level` (input) from the new
-  `brevity.level` (output), with `slider` demoted to a preset over both and a
-  pin that wins and sticks. Brevity appends a marker-fenced, byte-stable
-  directive to `system` so the model answers more tersely — the first dial that
-  attacks *output* tokens, which are never cached and cost ~5× input (so
-  Decision 23's "~0% on cached traffic" does not apply). **Ships OFF** behind a
-  `golem stats --brevity` rollup that reports the saving and its cost together.
-  Design record: `docs/plan/proposals/golem-brevity.md`; debrief
-  `2026-07-30-brevity-dial.md`.
-- **Workstream B — the tools block: gate built, shrinker REJECTED** (2026-07-30,
-  verification-notes §89): built the tool-selection-accuracy harness §88 required
-  (`src/tools/` + `golem bench tools`, 27 labelled cases, A/B a candidate
-  transform reporting token saving and accuracy delta together), then let it
-  decide. Whitespace normalisation saves **exactly 0** tokens; first-sentence
-  trimming saves 56% but **triples false positives** — over-triggering, not
-  mis-selection → REGRESSED, **not wired**. Native `defer_loading`/tool-search
-  verified **GA** and found to be Anthropic's to run, not ours to imitate: it
-  neither shrinks the request nor busts the cached prefix. The urgent finding was
-  elsewhere — `golem init` sets `ENABLE_TOOL_SEARCH=true`, so that path was live
-  and **unasserted**; `tests/integration/proxy-tool-search.test.ts` now guards it
-  (fidelity already held, no bug). Remaining headroom is the **input schemas**
-  (~2900 of the ~3847 total), not the prose. Debrief
-  `2026-07-30-workstream-b-tool-selection.md`; concept page [[Tool Search]].
-
-- **Managed tools: the dependency-tier ladder + `golem ext`** (Decision 53,
-  2026-07-30): Workstream P of the new R8 memo
-  (`docs/plan/proposals/r8-context-economy.md`), shipped first at the user's
-  direction. Writes down the policy Headroom, Ollama and Caveman had already
-  converged on — **external tools are spawned or detected, never shipped** — as a
-  tier ladder (1/2/3a/3b), three integration shapes (only *callable* can be
-  wrapped), and a four-criterion admission bar the Caveman speech skill
-  deliberately fails. New `src/ext/` + `golem ext [--json] [--verbose]`, with
-  spawn-free `PATHEXT`-aware detection that **refuses to report "running"** and
-  carries a `gate` note instead — which immediately answered the question that
-  prompted the work (Headroom is enabled here and has never run). Two audit
-  findings fixed: `unpdf` was documented optional while being a mandatory static
-  import, and there was no `LICENSE` file. +45 tests. Notes §90 (RTK), §91 (hook
-  precedence — **open**), §92 (the audit); debrief
-  `2026-07-30-decision-53-managed-tools.md`; concept page [[Managed Tools]].
-
-- **R8.S1 — tool-schema shrinking: REJECTED, and the tools-block line closed**
-  (2026-07-30, §100). Promoted twice on figures that were each right about their own
-  subject and wrong about the conclusion. The ledger now decomposes the `tools` block
-  per definition — owner, description/schema/other split, `defer_loading` — and the
-  first capture ended the workstream: **93.9% of the block is client built-ins**
-  (`Workflow` alone is 5,264 tokens, **4.7× Golem's entire contribution**), Golem's
-  share is **1,130 tokens = 0.8% of a 139k request**, and on the wire prose outweighs
-  schemas **2:1**. §89's "~2900 tokens of input schemas" was an artifact of
-  subtracting descriptions from the `listTools` total: the real figure is ~1,128, the
-  remainder being `outputSchema` (~1,522) + `title`/`annotations`/`_meta`, **none of
-  which Claude Code forwards** (`other keys` averages ~21 tokens/tool). Also observed
-  and recorded as undocumented: Claude Code's MCP deferral is client-side and *does*
-  shrink the wire — a `DeferredToolPlaceholder` (51 tokens) plus only the tools
-  already discovered, so an unused Golem tool costs ~nothing. Three schema transforms
-  were built and measured anyway (`schema-meta` / `-validation` / `-descriptions`,
-  saving up to 68% of Golem's schema tokens) behind two **new** gates — `--render full`
-  so the chooser actually sees the schema, and an **argument-construction** harness
-  graded against the *original* schemas, which can veto. Their flat results are
-  reported as an **instrument limit, not a pass** (a 7B chooser ignores a `maximum: 50`
-  that is right in front of it). Rejected on arithmetic instead: even the provably
-  invisible `schema-meta` is worth **~72 tokens on the wire**, 0.05%, in exchange for
-  mutating a cached prefix. +66 tests (1837 → 1903). Debrief
-  `2026-07-30-r8.s1-tool-schema-shrinking.md`; concept pages [[Context Ledger]] (new)
-  + [[Tool Search]] (corrected).
-- **`golem init` stops gating `wiki_upsert`** (Decision 54, 2026-07-30, USER):
-  Decision 44 de-gated wiki authorship in every living *document* but `init` kept
-  writing a `permissions.ask` rule for `mcp__golem__wiki_upsert`, and an `ask` rule
-  prompts even when a matching `allow` rule exists — so the gate outlived the decision
-  in the mechanism. `init` now writes only the blanket allow rule, **removes** a legacy
-  ask entry (so re-running migrates an existing project), and no longer creates an
-  empty `permissions.ask: []`. ADRs at `docs/decisions/` keep the stricter rule.
-- **R8.10 — supply-chain hardening** (2026-07-30, §98): `.npmrc` sets
-  `save-exact=true` + `min-release-age=2` (**verified working** on npm 11.12.1 —
-  npm translates it into a rolling `before` timestamp, which is why
-  `npm config get` on the alias reports null while the effect is real); all 6
-  direct dependencies pinned **exactly**; `scripts/make-shrinkwrap.mjs` generates
-  the `npm-shrinkwrap.json` that published tarballs need (npm ignores
-  `package-lock.json` inside a tarball, so consumers previously inherited none of
-  our pinning) — generated, gitignored, documented in RELEASING.md;
-  `scripts/verify-deps.mjs` wired into `npm run check` enforces pins, the `.npmrc`
-  posture, pin↔lockfile agreement, and a ≤5 runtime-dependency ceiling. +12 tests.
-  Overdue before the R7.5 first publish.
-- **R8.3 — line-aware digests** (2026-07-30, §97): rescoped a second time by its own
-  evidence. §95's ledger shows Grep/Glob contributing **nothing** (that work went
-  through `Bash`, RTK's territory), while `Read` is the second-biggest consumer
-  (27,056 tokens) *and* the surface a Bash compactor cannot reach, and one `expand`
-  cost 6,356. So instead of Grep/Glob distillers, the oversized-output digest became
-  **line-aware**: it names the ranges it shows, names the elided range, and
-  recommends a narrow re-read *before* offering `expand` — same token budget,
-  strictly more useful, and now aligned with `golem-ccr-refs.md`'s own advice. A
-  first draft that aligned to lines *without* keeping a char cap let a single 30k
-  minified line through whole; two pre-existing tests caught it, and "complete" now
-  requires line coverage **and** no char truncation. +9 tests.
-- **R8.12 — coexistence with an output-compacting peer (RTK)** (2026-07-30, §96):
-  the finding was not §91's predicted one. Golem's autonomy deny-lists are
-  word-boundary anchored so they saw through `rtk git push` (safe by luck), but the
-  **allow**-list was start-anchored, so `rtk vitest` fell through to `unknown` → a
-  prompt. Fail-closed, never unsafe — but a user whose auto-approvals start asking
-  loosens the autonomy level, and a safety mechanism disabled out of irritation is a
-  safety problem. Fixed by retrying **only the allow-list** against the unwrapped
-  command (danger checks run first, on the original, so unwrapping can never
-  downgrade). Second fix: `buildDigest` now preserves an external compactor's
-  `[full output: …]` recovery pointer instead of eliding it — a compaction of a
-  compaction must not destroy the other tool's way back. +17 tests. **§91 stays
-  open**: precedence between a rewriting hook and a denying one is Claude Code's to
-  define and the docs do not.
-- **R8.4 — the context ledger** (2026-07-30): `golem stats --context` attributes
-  every token in the outgoing request to a bucket and resolves each `tool_result`
-  back to the tool that produced it (`tool_use_id` → name), so context pruning is
-  aimed instead of guessed. Latest-only state file (`writeLimitState`'s
-  fail-open contract); the pipeline stays clock-free (`ContextLedgerCore` + the CLI
-  stamps `capturedAt`); no prompt content is stored, tool names are. **First
-  capture (§95) moved three things:** the `tools` block measured **18,827 tokens**
-  — ~5× §88's figure and the largest single block, promoting R8.S1 schema
-  shrinking; **Bash** is the biggest tool consumer (36,968 tokens / 132 results),
-  quantifying the RTK case and confirming R8.3's descoping; and one `expand` cost
-  6,356. +24 tests. Debrief `2026-07-30-r8.4-context-ledger.md`.
-- **R8.2 — STRUCK, not built** (2026-07-30, §94): the memo proposed
-  suffix-only tool-result dedup as novel; `src/compression/native-lossless.ts` has
-  shipped it since task A2 (Decision 18), and achieves the cache-safety property by
-  *purity* (the transform of `messages[i]` depends only on the original bytes of
-  `messages[0..i]`) rather than by special-casing the suffix. Measured on real
-  traffic: **4,449,703 tokens saved**, 4,878 refs stored, **2** retrieved. The
-  lesson is the repo's own rule the memo skipped — check the code before proposing.
-- **R8.1 — cache-hit observability + prefix-bust detection** (2026-07-30):
-  `golem stats --cache` reports the billed hit rate (authoritative, from the R1.1
-  usage sniffer) beside a per-request prefix verdict (`first`/`append`/`bust` with
-  the component and turn named) — two signals deliberately **never merged**, since
-  one is ground truth and the other a prediction from the forwarded bytes. New
-  `src/proxy/cache-prefix.ts` (hash-only fingerprints, bounded observer) +
-  `src/telemetry/cache-report.ts`; verdicts ride on the pipeline event.
-  **Its first measurement re-ranked R8** (§93): 98.4% hit rate on this repo,
-  uncached input 0.06% of billed input, so **~83% of input cost is re-reading an
-  already-cached context** — bust prevention is a guard rail, and the levers are
-  R8.2 (dedup) and R8.5 (repo map). +44 tests. Debrief
-  `2026-07-30-r8.1-cache-observability.md`; concept page [[Cache Observability]].
-
-## Carried-over loose ends (visible, not lost)
-
-**All cleared by the PRE-R6 batch (2026-07-17)** (batch brief retired to git
-history). It closed LE1–LE5; the two remaining items are blocked-not-broken and
-re-scoped (not open work).
-
-| Item | Status | Where tracked |
-|---|---|---|
-| ~~Decision 33 local-answer: flip PROPOSED→ACCEPTED~~ | **✅ DONE — ACCEPTED 2026-07-17 (USER DECISION).** 3 embed-path fixes (§69), durable-prose restriction (§69c), [[Slider Levels]] + [[Compression]] pages; post-fix sample zero wrong. Opt-in/OFF-by-default. | spec Decision 33; verification-notes §64/§69b/§69c; PRE_R6 LE1 |
-| ~~LE2 fair grounded/refined coder quality on the semantic index~~ | **✅ DONE 2026-07-17.** n=5 grounded+refine; grounding improves *revise-quality* on project-integrated drafts (verdict count flat); `refine` fired 0/5 rounds (follow-up in BACKLOG). | [[LE2 — grounded-refined coder quality]] |
-| ~~LE3 grounding injection into `golem task run`~~ | **✅ DONE 2026-07-17** (feat(cli), shared `gatherGrounding`). | PRE_R6 LE3 |
-| ~~LE4 ledger tidy + CI-green check~~ | **✅ DONE 2026-07-17** — CI green on `deccfc5`; R2.6/R1.6/R5.5 re-scoped below. | PRE_R6 LE4 |
-| ~~LE5 semantic embed path robustness (incl. LE5c reindex clear)~~ | **✅ DONE** (`deccfc5`). | PRE_R6 LE5 |
-| ~~`FileVectorDriver.#flush()` crash past ~30k chunks~~ | **✅ DONE** — R4.6. | R4.6 |
-| R2.6 live semantic-forced A/B on real traffic | **re-scoped: unblocks-with-R6.1** (only meaningful on a non-caching upstream, which needs the provider adapters). Infra already built + tested. | verification-notes §60 |
-| R1.6 macOS/Linux Ollama setup checklist | blocked on non-Windows hardware (unchanged). | wiki questions page |
-
-**New since this batch (not loose ends — tracked features):**
-- **Auto-resume on limit — REMOVED 2026-07-18 (Decision 37).** Phase 1 (detect + capture) was reverted and Phase 2 (auto-spawn) abandoned unbuilt: a proxy can't drive Claude Code's interactive TUI, and dedicated tmux-wrapper tools already cover unattended resume. The R5.1 durable task queue is unaffected.
-- **R5.5 prompt-translation scoring loop** stays **deferred** (demand-gated per its debrief) — not unfinished work.
+- **Baseline green:** `tsc --noEmit`, `biome check`, `npm run verify:deps` and
+  `vitest run` all pass locally, and `golem wiki check` reports 0 issues. **CI is
+  billing-blocked** (GitHub Actions refuses to start jobs) — recent PRs merged on green
+  *local* runs; unblocking it is a USER account step.
+- **R8a (context economy) is shipped, and its own instruments redirected it four
+  times** — §93 (98.4% cache hit rate → bust prevention is a guard rail, not a lever),
+  §94 (R8.2 already existed), §95 (the `tools` block is 18.8k; Bash is the biggest tool
+  consumer), §97 (Grep/Glob have no measured traffic), §100 (**93.9% of the tools block
+  is not Golem's** → R8.S1 rejected, the tools-block line closed).
+- **Next by evidence: [R8.5](tasks/R8.5.md)** — repo map + the oversized-`Read` swap.
+  `Read` is the second-biggest tool consumer *and* the surface a Bash-output compactor
+  structurally cannot reach.
+- **The largest open risk is not a token feature.** [R8.13](tasks/R8.13.md): the
+  cache-prefix verdict shipped and is wrong ~98% of the time (§99). It never affects a
+  bill, but it is a bad metric in a project whose thesis is honest observability.
+- **P0/P1 + the wiki knowledge loop** are live and dogfooded daily; compression is
+  honestly scoped as situational (Decision 23); positioning is the universal pre-LLM
+  processor (Decision 32).
 
 ---
 
-## Releases
+## Open work
 
-Legend: 🔬 research/spike · 🧭 decision · 🔒 security/ToS gate · 🛠️ build
+<!-- golem:task-index:begin -->
 
-### R4 — Co-developer core — ✅ SHIPPED (2026-07-16)
-Made goals 1 and 3 real: a planning-collaboration surface, a grounded,
-measured, iterating local coder, and the last robustness gaps in the
-distill/KB loop. (Batch brief retired to git history.)
+_Generated by `golem task index` from `docs/plan/tasks/` — 14 ready, 10 blocked, 0 done. Edit the task documents, not this table._
 
-| # | Task | Type | Source |
-|---|---|---|---|
-| R4.1 | ~~**Planning-collaboration surface:** `docs/plan/BACKLOG.md` ideas inbox + `/golem/plan` skill — reads `golem note` captures, wiki `questions/`, pending distill drafts, and this ROADMAP, then co-drafts task proposals with the user (plan-gated writes; approved tasks graduate into the ROADMAP/batch).~~ — **DONE** 2026-07-16: shipped `docs/plan/BACKLOG.md` (Date/Idea/Source/Status inbox, human-editable + plan-gated agent appends) and the `/golem/plan` skill (`src/cli/skills.ts`, installed by `golem init`): read-only gather of notes/`questions/`/distill drafts/BACKLOG/ROADMAP → grouped candidates → plan-gated proposals → cite-sources/flag-inference/admit-gaps contract. +4 unit tests, 890 green. See debriefs/2026-07-16-R4.1.md. | ✅ | Dec 36, Dec 20f |
-| R4.2 | ~~**Coder grounding:** retrieval-augmented drafting — `coder` auto-injects relevant KB/wiki hits (size-capped, opt-out param) so local drafts stop being context-blind.~~ — **DONE** 2026-07-16: extracted a shared `assembleHits` (graph→vector→boost→rerank, reused by `search` and coder), added `gatherGrounding` (≤4 hits/≤4000 chars, `ground` opt-out + `project_id` inputs, `grounding:{sources,injected_chars}` in output, degrades to ungrounded on any failure). No frozen interface touched. +5 tests, 895 green. See debriefs/2026-07-16-R4.2.md. | ✅ | Dec 36 |
-| R4.3 | ~~**Honest tool telemetry:** instrument `search`/`fetch`/`ingest`/`wiki_read`/`coder` with per-call events + a drafted-locally token bucket — closes the §59 gap so "token-friendly" is measured, not asserted.~~ — **DONE** 2026-07-16: new `kind:"tool"` telemetry event + `recordToolCall`/`aggregateToolUsage`; the 5 tools record duration/result-bytes (coder also model + drafted-locally chars) fire-and-forget; surfaced in the `stats` MCP tool (`tool_usage`) and `golem stats` ("local tools" section). No frozen interface touched. +6 tests, 901 green. See debriefs/2026-07-16-R4.3.md. | ✅ | §59, Dec 24 |
-| R4.4 | ~~**Coder iteration loop:** optional draft → local-judge critique → revise pass (existing `drafter`/`judge` roles, no interface change); harden the `/golem/develop` skill around it.~~ — **DONE** 2026-07-16: `src/mcp/coder-refine.ts` `refineDraft` (judge critiques via forced-JSON verdict, drafter revises once on high/medium issues, best-effort fallback); `coder` gains `refine` (default off) + `refinement` output; `/golem/develop` hardened (grounding auto, refine for non-trivial, skip coder for tiny edits). No interface change. +9 tests, 912 green. See debriefs/2026-07-16-R4.4.md. | ✅ | Dec 35 |
-| R4.5 | ~~**Distill-draft promotion UX + wiki-lint cleanup:** review/apply flow for `.golem/distill/` drafts (`golem wiki promote`-style), closing capture → distill → promote; plus fix the 18 pre-existing `golem wiki check` issues in dated pages (broken/missing wikilinks) and consider wiring the check into CI.~~ — **DONE** 2026-07-16: `golem wiki promote [id\|--list\|--yes]` (`src/cli/promote.ts`, append-and-refine upsert + draft consume, Decision 26 non-TTY refuse); checker now ignores code-fenced/inline wikilinks; all 18 lint issues fixed (17 link repairs + code-strip); `wiki check` wired into CI. `golem wiki check` → 0 issues. +9 tests, 921 green. See debriefs/2026-07-16-R4.5.md. | ✅ | WS-W W3 follow-up, Dec 36 debrief |
-| R4.6 | ~~**`FileVectorDriver.#flush()` stream-write fix** so the raw-article KB can grow past ~30k chunks without crashing.~~ — **DONE** 2026-07-16: `#flush()` streams JSON lines via `createWriteStream` (backpressure-aware, atomic temp+rename kept) instead of one `Array.join` string; benchmark confirms 50k/60k no longer hit the `RangeError` wall (was 30k–50k), search latency unchanged. +1 test, 922 green. See debriefs/2026-07-16-R4.6.md. | ✅ | R3.7 spike |
-| R4.7 | ~~**Drafter quality/catalog re-verification:** re-verify current best small coder models (advisory per Decision 6), measure coder draft accept-rate; carry R1.6's manual checklist where hardware allows.~~ — **DONE** 2026-07-16: re-verified catalog (no change — `qwen3-coder` ships only 30b/480b, no small tags; qwen2.5-coder still best for single-function drafts); measured ungrounded baseline 2 accept / 3 revise / 0 reject (accept for self-contained, revise for project-integrated); R1.6 still hardware-blocked. See verification-notes §63, syntheses/r4.7-drafter-quality-baseline.md. | ✅ | Dec 6, R1.6 |
+### Ready to pick up
 
-### R5 — Autonomy & orchestration — ✅ SHIPPED (2026-07-16)
-Formerly R4. Hold lifted 2026-07-16 by explicit user call; all five tasks landed
-the same day (suite 922 → 1018 green). Retrospective:
-`docs/wiki/syntheses/r5-autonomy-orchestration-batch.md` (the batch brief + design
-memos were retired to git history). R5.4's threat model is ADR-0002.
+| task | goal | owner | size | depends on | gate / blocker |
+|---|---|---|---|---|---|
+| [hook-precedence](tasks/hook-precedence.md) | Assert PreToolUse precedence between a rewriting hook and a denying hook (§91, still open) | agent | S | — | A test that proves Golem's `deny` still wins when another hook returns `updatedInput` on the same Bash call. Do not trust the docs — they do not say. |
+| [local-models](tasks/local-models.md) | golem devices reports the tier CATALOG, not what Ollama has actually pulled | agent | S | — | A missing model is reported as missing BEFORE a harness or a tool silently falls back to another role. |
+| [P3a](tasks/P3a.md) | CLAUDE.md compaction actuator — the write half of R6.4's leanness check | agent | M | — | Report the saving AND its cost together (Decision 52's rule). Code, URLs and paths byte-preserved; the human reviews the rewrite before it lands. |
+| [P3b](tasks/P3b.md) | Point golem bench tools at caveman-shrink rather than rebuilding it | agent | S | — | The existing harness decides. Either it clears the bar and becomes a managed ext they maintain, or Golem publishes a reproducible negative. |
+| [R8.11](tasks/R8.11.md) | Plugin surface — third-party pipeline stages, MCP tools and redaction rules without forking | agent | L | — | A plugin resolves from the USER's own install (npm package or local path) — never vendored, never auto-downloaded — each behind its own quarantine adapter, failing to a no-op. |
+| [R8.13](tasks/R8.13.md) | Fix the cache-prefix verdict — it is wrong ~98% of the time (§99 problem 2) | agent | M | — | The verdict distribution must become explicable against the billed hit rate. Today 142 bust / 3 first / 0 append against a billed 98.4% hit rate — both cannot be true. |
+| [R8.14](tasks/R8.14.md) | golem ext install/upgrade — the write half of the managed-tool registry | agent | M | — | Golem ships none of the tool's bytes — install invokes the upstream's own installer at a pinned version, with consent. Absence still degrades to a no-op. |
+| [R8.5](tasks/R8.5.md) | Repo map — tree-sitter symbols → graph rank → budgeted skeleton, and the oversized-Read swap | agent | L | — | Retrieval-accuracy harness in the shape of `golem bench tools` — does the map let the model find the right file WITHOUT the read? Report token saving and accuracy delta together. |
+| [R8.7](tasks/R8.7.md) | Local editor model — validated search/replace diff edits (harness-gated, may be rejected) | agent | L | — | HARNESS BEFORE CODE, non-negotiable. Labelled edit tasks; measure apply-success and semantic correctness vs hand-written edits, and measure the edit-format variable (search/replace vs udiff vs whole) the way Aider does. Below the bar → advisory-only or rejected. |
+| [R8.8](tasks/R8.8.md) | Model catalog — price and context limits as Golem's own cached data | agent | M | — | Model ids still print VERBATIM (Decision 49). The catalog adds price/context, never a prettified name. |
+| [R8.9](tasks/R8.9.md) | Change ledger — opt-in checkpoint / revert via shadow git refs | agent | M | — | Opt-in; never touches the user's branch, index, or working tree without an explicit act. |
+| [R8.S2](tasks/R8.S2.md) | Spike — system-prompt slimming (expect NO; measure, then decline) | agent | S | — | Measure the net over a realistic session length, then almost certainly decline. A saving that needs a re-prefill to collect is not a saving on this repo's traffic. |
+| [R8.S3](tasks/R8.S3.md) | Spike — session tree: record the conversation as a tree, view it, do not actuate | agent | M | — | Recording + `golem session tree` only. Relaunch stays with `claude -p --resume` — Decision 37's actuation limit stands. |
+| [snooze-taskadd](tasks/snooze-taskadd.md) | Snooze enforcement denies the `golem task add` its own guidance rule asks for first | agent | S | — | Either the documented step 1 succeeds under enforcement, or the rule stops asking for it. Observed live 2026-07-30 — do not close on reasoning alone; reproduce. |
 
-| # | Task | Type | Source |
-|---|---|---|---|
-| R5.1 | ~~Durable task queue & auto-resume (persist prompt+agent+worktree, relaunch on capacity).~~ — **DONE** 2026-07-16: non-frozen `TaskStore` seam + file impl (`src/tasks/`, one zod JSON per task under `.golem/tasks/`), `golem task add/list/show/resume/cancel`. Resume mechanism verified as headless `claude -p --resume <session-id>` — no PTY (verification-notes §65). Capacity gate via `notBefore`; resume prints by default, `--spawn` opt-in (no shell). +25 tests, 977 green. See debriefs/2026-07-16-R5.1.md. | ✅ | 20a / WS-F1 |
-| R5.2 | ~~Dashboard-as-sidecar completion (statusline + VS Code panel exist; add the shared session-state JSON API + `golem watch` TUI).~~ — **DONE** 2026-07-16: consolidated `SessionStateReport` + zod contract (`src/cli/session-report.ts`), `golem watch` full-screen TUI (hand-rolled ANSI, no deps, `src/cli/watch.ts`), `.golem/` storage sizing (`src/cli/storage-size.ts`), dashboard `/api/state` endpoint. No frozen interface touched. +14 tests, 952 green. See debriefs/2026-07-16-R5.2.md. | ✅ | 21c / WS-F10 |
-| R5.3 | ~~Task/question queue + local conversation multiplexing.~~ — **DONE** 2026-07-16: `src/tasks/multiplex.ts` — `serviceTaskLocally` (fail-open), `runQueueLocally` (bounded concurrency, stops early if Ollama down), explicit `escalateTask` (folds local result → Claude tier, 21a, never silent). `golem task run` / `task escalate`. +8 tests, 1012 green. Grounding-injection into `run` is a follow-up. See debriefs/2026-07-16-R5.3.md. | ✅ | 20b/21a |
-| R5.4 | ~~Cruise-control autonomy modes with approval gates.~~ — **DONE** 2026-07-16: threat model written first (ADR-0002); `src/autonomy/` (levels manual/assisted/outcome, conservative classifier, gate) + `PreToolUse` hook (`golem hook pre-tool-use`) + `golem autonomy show/set/wire/unwire/log`. Default-deny/fail-closed proven — never auto-approves destructive/outward, errors → native prompt. Opt-in (not auto-wired by init); surfaced in the R5.2 report. +27 tests, 1004 green. See debriefs/2026-07-16-R5.4.md. | ✅ | 20d / WS-F4 |
-| R5.5 | ~~Writing-style adaptation & prompt translation (local-LLM, fully inspectable).~~ — **DONE (spike)** 2026-07-16: `src/prompt/` — `translatePrompt` (local rewrite, always shown/never sent/off proxy path, few-shot on accepted examples), `golem prompt translate/accept`. Scoring loop deliberately NOT built — demand-gated (see debrief). +6 tests, 1018 green. See debriefs/2026-07-16-R5.5.md. | ✅ | 20g |
+### Blocked or waiting (visible, not lost)
 
-### R6 — Multi-provider & remote — ✅ CORE SHIPPED (2026-07-23); R6.3 deferred, 21e future
-Formerly R5; hold lifted 2026-07-23 by explicit user call. **R6.1 (a+b), R6.2
-(account switching), and R6.4 shipped** in one session (PRs #31–#40, suite
-1159→1237, no frozen-interface change, Anthropic path untouched). Retrospective:
-`docs/wiki/syntheses/r6-multi-provider-batch.md`. **Still open:** R6.3 companion
-app (user-deferred; highest-severity, needs its own threat-model ADR), 21e
-per-request routing + route-on-exhaustion (future decision; quota-evasion is
-ToS-OUT per ADR-0003), and live cloud end-to-end checks (need real keys).
+| task | goal | owner | size | depends on | gate / blocker |
+|---|---|---|---|---|---|
+| [21e](tasks/21e.md) | Per-request capability/availability routing (and route-on-exhaustion) — needs a decision first | user | L | — | needs a product/ToS decision, not an implementation |
+| [R1.6](tasks/R1.6.md) | macOS / Linux Ollama setup checklist — manual verification | user | S | — | needs non-Windows hardware (unchanged since 2026-07-11) |
+| [R2.6](tasks/R2.6.md) | Live semantic-forced A/B on real traffic | agent | M | — | only meaningful on a non-caching upstream — needs real provider credentials (R6.1 case (a)/(b) is built but live-unverified) |
+| [R5.5-scoring](tasks/R5.5-scoring.md) | Prompt-translation scoring loop — demand-gated, deliberately unbuilt | user | M | — | demand-gated by its own debrief — not unfinished work |
+| [R6.1-live](tasks/R6.1-live.md) | Live-verify the cloud provider adapters (Anthropic-native gateways and Gemini) | user | S | — | needs real provider credentials |
+| [R6.3](tasks/R6.3.md) | Remote steering / companion app — threat-model ADR first, then decide | user | L | — | user-deferred; highest-severity item on the roadmap and it needs its own ADR, not just a memo |
+| [R7.3](tasks/R7.3.md) | Smoke-test the Bun standalone binaries on each OS | user | S | — | needs Bun plus macOS and Linux hardware; CI is billing-blocked so it cannot run there either |
+| [R7.5](tasks/R7.5.md) | First npm publish + VS Code Marketplace publish + tag | user | M | R7.3 | outward, credentialed act — only the user can publish |
+| [R7.6-infra](tasks/R7.6-infra.md) | Stand up the golem.run host and confirm the UA-sniffing install map | user | S | — | outward infra act — DNS, TLS and a server the user controls |
+| [R8.6](tasks/R8.6.md) | LSP bridge — diagnostics / definition / references / hover as a tier-2 spawn target | agent | L | R8.5 | Cross-OS spawn/lifecycle tests; server absent → no-op, never an error path. |
 
-**Design memos written (2026-07-23, PROPOSED — no code):**
-`docs/plan/proposals/r6-multi-provider-remote-memos.md` covers R6.1/R6.2/R6.4
-(R6.3 excluded per the user's deferral). Each stays PROPOSED until its
-`verification-notes.md` pass + 🔒 gates clear + a separate explicit build ask.
-Recommended order: R6.4 (no gate) → R6.1 case (a) → R6.1 case (b) → R6.2 (after
-R6.1 + ToS review + a credential threat-model ADR). **R6.4 shipped 2026-07-23**
-(`golem bench cost`); R6.1/R6.2 remain PROPOSED.
-
-| # | Task | Type | Source |
-|---|---|---|---|
-| R6.1 | Provider-agnostic adapters (front Foundry/OpenRouter; Anthropic byte-faithful path untouched). Positioning-unblocked by Decision 32. **Case (a) — Anthropic-native gateways: DONE 2026-07-23** (`upstream_provider`/`upstream_auth_scheme` config + `src/providers/` auth-header mapping + `mapUpstreamHeaders` proxy seam + `assumeCachingUpstream` fix for Claude-via-Azure; verification-notes §73; live-unverified — no real gateway creds in-session). **Case (b) — OpenAI/Gemini/Ollama-LAN translation + response-transform seam: b1 DONE 2026-07-23** (non-streaming Anthropic↔OpenAI translation + `translateUpstream` proxy seam; providers `openai`/`ollama` + `proxy.upstream_model`; **live-verified against local Ollama** `qwen2.5-coder:7b`, verification-notes §74). **b2 (SSE streaming) DONE 2026-07-23** (`OpenAIChatSSETranslator` OpenAI-deltas→Anthropic-events; proxy streams it live; request honors `stream:true`; **live-verified vs Ollama**, verification-notes §75). **b3 (tool-use) DONE 2026-07-23** (`tools`/`tool_choice` + `tool_use`↔`tool_calls` + `tool_result`↔`role:tool`; non-streaming + streaming `input_json_delta`; unit-verified — a local model that emits native tool_calls needed for live, verification-notes §76). **OpenAI functional 2026-07-23** (no new code — the b1–b3 translator + the `openai` provider: set `upstream_base_url`/`upstream_model` + `GOLEM_UPSTREAM_API_KEY`; also live-verifies b3's tool path since OpenAI emits native `tool_calls`). **Kimi K3 (Moonshot) works via `openai` provider — no new code (2026-07-24, §79); OpenAI translator gained reasoning (`reasoning_content`↔thinking, `reasoning_effort`) + vision passthrough.** **b4-gemini DONE 2026-07-23** (Gemini `generateContent` translator — request/response/streaming/tools + `geminiPath`; seam extended with a per-request path override for query-param `?key=` auth + `alt=sse`; provider `gemini` wired; unit- + proxy-integration-verified; **not live-tested** — no Gemini key in-session, §77). **Case (b) complete: OpenAI, Ollama (LAN), Gemini.** | 🧭🛠️ | Dec 22/32 |
-| R6.2 | ~~Account switching~~ + multi-LLM/quota routing. **Account switching (21d) DONE 2026-07-23** (ADR-0003 ACCEPTED, USER ToS scope = legitimate switching only): `proxy.accounts` registry + `active_account`, per-account env secrets (never a setting), `resolveActiveUpstream` (fail-closed, no silent cross-account fallback), `golem account list/use` + audit log, wired into the proxy; **live-verified** routing to an Ollama account (§78). **Credential mechanism superseded twice since:** Decision 46 (2026-07-26) added the OS-store chain + `account login/logout`, and **Decision 47 (2026-07-29) removed the env-var backend entirely** — `golem account login` is now the only way to set a key, `account remove` logs out first, and the var name survives only as the internal CLI→daemon handoff. **Quota-evasion OUT (ToS).** Per-request capability/availability routing (21e) + route-on-exhaustion remain future/out. | 🔒 | 21d/21e |
-| R6.3 | Remote steering / permission-granting — companion app + locally-hosted web (self-hosted relay, mTLS, default-deny on link loss). | 🔒🔬 | 20c/21b |
-| R6.4 | ~~Cost-governance benchmarks vs Claude's cost doc (continuous once picked up).~~ — **DONE (first cut)** 2026-07-23: `golem bench cost [--window 24h\|7d\|all] [--project] [--json]` composes existing telemetry (R1.1 net-of-cache `usage`, R2.2/R2.3 `avoidedUpstream`, CCR activity, R4.3 per-tool events) into a report framed against the re-verified cost-doc baselines (verification-notes §72) — honestly scoped (Golem's own contribution, not a `/usage` replacement; baselines are reference, not a claimed delta) + a CLAUDE.md-leanness check. Pure `buildCostBenchmark` + `readTelemetryEvents` reader; no frozen-interface change, no proxy-path change. +11 tests, 1170 green. See debriefs/2026-07-23-R6.4.md. | ✅ | 21f |
-
-### R7 — Distribution, versioning & self-update — ✅ SHIPPED (2026-07-22 → 07-23); R7.5 USER-gated
-The golem.run onboarding one-liner + how installs stay current (spec Decision 41,
-verification-notes §70). npm-first, Bun standalone as the no-Node fallback.
-R7.1–R7.4 landed across PRs #21 (install one-liner + version SoT + self-update)
-and #22 (tag-triggered Release workflow), with follow-up status-surface hardening
-in #20/#25/#26/#27/#28. Retrospective: `docs/wiki/debriefs/2026-07-22-decision-41-distribution.md`
-+ `2026-07-23-statusline-golem-dir-gating.md`. **R7.5 (first publish) stays
-deferred to the user** — machinery is in place; the `v0.1.1` tag exists but
-`golem-run` is still unpublished (npm 404).
-
-| # | Task | Type | Source |
-|---|---|---|---|
-| R7.1 | ~~Version single source of truth — `sync-version.mjs` → `src/version.ts` from `package.json`; `release.mjs` bumps both package.jsons in lockstep.~~ — **DONE** (#21, Dec 41a): `sync-version.mjs` wired into `npm run build`; `release.mjs` bumps root + `vscode-extension/package.json` in lockstep; `RELEASING.md` shipped. | ✅ | Dec 41a |
-| R7.2 | ~~Tiered install scripts (`install/install.sh` + `.ps1`, npm→binary→Node bootstrap) + nginx UA-sniffing config (`deploy/nginx/golem-run.conf`).~~ — **DONE** (#21, Dec 41b/41c): both installers run the npm→binary→(opt-in) Node-bootstrap ladder and degrade gracefully while unpublished; `golem-run.conf` maps PowerShell/curl/browser UAs (PS matched before the generic Mozilla rule). Standing up the nginx host + confirming the UA map is a USER infra step. | ✅ | Dec 41b/41c |
-| R7.3 | ~~Standalone binary via `bun build --compile` (`scripts/build-binary.mjs`) + CI release workflow.~~ — **DONE (build-wired)** (#22, Dec 41d): cross-compile script + tag-triggered Release workflow shipped. **Binaries still unverified per-OS** (no Bun/mac/linux in-session; and CI itself is billing-blocked) — the 🔬 smoke-test remains, verification-notes §70. | 🔬 | Dec 41d |
-| R7.4 | ~~Self-update: `golem update [--check --json]` (install-method aware) + `updateAvailable` in status/statusline + extension status-bar badge & `golem.update`.~~ — **DONE** (#21, Dec 41e; hardened in #20/#25/#26/#27/#28): install-method-aware `golem update`, cached/offline-tolerant check surfaced in status/statusline + VS Code badge; follow-ups fixed the `.golem/` footprint leaks in non-Golem projects and the Passthrough off-state label. | ✅ | Dec 41e |
-| R7.5 | First `npm publish` + Marketplace publish + tag `v0.1.0` (USER-triggered; machinery + `RELEASING.md` shipped, publish deferred to the user). **Still pending — `v0.1.1` tagged locally, npm 404 (unpublished).** | 🚀 | Dec 41 |
-| R7.6 | ~~Interactive control panel + one config surface: `src/config/ui-model.ts` (compile-exhaustive setting metadata, zod-derived widget kinds) + `src/config/control-surface.ts` (settings + guidance + runtime as one `Control` list, env-locked rows, danger confirms) behind `golem ui` / bare `golem`, `golem config schema [--json]`, and a Settings section in the VS Code webview.~~ — **DONE** (Dec 50): the config loader was untouched; only presentation was missing. | ✅ | Dec 50 |
-| R7.7 | ~~CLI startup latency: `main.ts` as a dependency-free router, `fast-path.ts` for the per-tool-call hooks + status line, read/write module splits (`slider-read.ts`, `upstream-display.ts`), barrel-import narrowing (`undici` off the hot paths), **ink/React removed** (`src/tui/` renders itself via `render/screen/keys/ansi/width`), and the panel reduced to ONE entry point (`golem ui`/`golem settings` deleted, their flags moved onto bare `golem`).~~ — **DONE** (Dec 51): panel first frame ~2.5–3s → **~170ms**; `hook post-tool-use` ~765ms → **126ms**; `statusline` ~985ms → **275ms**; runtime deps back to **6**. The proxy was measured at **+4.4ms p50** per request and needed no work; `golem status` was considered for removal and deliberately kept (live machine surface). Notes §86/§86b/§86c/§86d. | ✅ | Dec 51 |
+<!-- golem:task-index:end -->
 
 ---
-
-## Concentrated decision/research backlog
-
-Most earlier gates have cleared: **R4.7 drafter quality** shipped (baseline
-measured, 2026-07-16), **Decision 33 local-answer** flipped to ACCEPTED
-(2026-07-17), and **R5.4 autonomy** shipped (2026-07-16, refined by Decision 40).
-What remains:
-
-1. **🔒 All of R6** (multi-provider adapters, account/quota routing, remote
-   steering + companion app, cost benchmarks) — on hold. Design memos for
-   R6.1/R6.2/R6.4 are now written (`proposals/r6-multi-provider-remote-memos.md`,
-   PROPOSED); each still needs its verification pass, 🔒 gates, and a separate
-   explicit build ask before code. R6.3 remains deferred (needs its own
-   threat-model ADR, not just a memo).
-2. **🔬 R7.3 standalone-binary verification** — the Bun `--compile` binaries are
-   build-wired but never run per-OS (no Bun/mac/linux in-session; CI itself is
-   billing-blocked). Smoke-test each before relying on the binary channel.
-   (Previously this also carried a `golem ui` risk — ink's `yoga-layout` WASM. With
-   ink removed in Decision 51, `src/tui/` is plain TypeScript with no assets, so the
-   panel should bundle cleanly; still worth including in the smoke-test.)
-3. **🚀 R7.5 first publish** (USER) + the golem.run nginx host stand-up (USER) —
-   machinery shipped; the outward, credentialed acts are the user's.
 
 ## Deferred / not scheduled
 
-The **hosted workspace/org knowledge tier** (WS-F5's upper tiers — P4+,
-candidate paid) remains the only work off the roadmap entirely. The WS-F↔
-ROADMAP crosswalk lives in `IMPLEMENTATION_PLAN.md` §6; the full spec rationale
-is the Decisions Log (`docs/golem-spec.md`, Decisions 20–36).
+The **hosted workspace/org knowledge tier** (WS-F5's upper tiers — P4+, candidate paid)
+remains the only work off the roadmap entirely. It has no task file on purpose.
+
+Also deliberately out of scope for R8 and beyond (memo `proposals/r8-context-economy.md`):
+TUI / desktop / IDE agent clients · sub-agent orchestration · plan mode · session
+sharing and gists · themes and keybinds · a competing edit-apply harness · a curated
+model marketplace · **rebuilding RTK's Bash filters**. Golem's scope discipline is its
+differentiator — all four projects reviewed in that memo compete to *be* the harness,
+and Golem is the only one that sits under one and can see the actual bytes.
+
+## Where the rest of the planning context lives
+
+| document | what it holds |
+|---|---|
+| [`tasks/`](tasks/) | one committed task document per open item — the actionable layer |
+| [`SHIPPED.md`](SHIPPED.md) | one line per landed release/task, linking its debrief |
+| [`IMPLEMENTATION_PLAN.md`](IMPLEMENTATION_PLAN.md) | workstreams, frozen interfaces, the WS-F ↔ ROADMAP crosswalk (§6) |
+| [`BACKLOG.md`](BACKLOG.md) | ideas inbox — pre-task, one line per idea |
+| [`proposals/`](proposals/) | design memos (R6 multi-provider, R8 context economy, brevity, snooze, webfetch cache) |
+| [`verification-notes.md`](verification-notes.md) | dated live-doc findings and measurements, §1–§100 |
+| `../golem-spec.md` | architecture + the authoritative Decisions Log |
+| `../decisions/` | ADRs (threat models), stricter human-driven rule |
+| `../wiki/debriefs/` | dated per-batch retrospectives |
