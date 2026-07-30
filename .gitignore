@@ -39,3 +39,8 @@ CLAUDE.local.md
 # R8.10: generated from package-lock.json at release time (scripts/make-shrinkwrap.mjs).
 # package-lock.json stays the single ground truth; committing both would guarantee drift.
 npm-shrinkwrap.json
+
+# Python bytecode from running the Headroom worker scripts locally (e.g. the
+# tests/fixtures/headroom-worker-selftest.py run). Never an artifact we ship.
+__pycache__/
+*.pyc
