@@ -191,6 +191,20 @@ export interface TelemetryEvent {
    */
   readonly cacheBustComponent?: string;
   /**
+   * R8.13: 0-based index of the first message whose bytes differed, when
+   * `cacheBustComponent === "messages"`. The discriminator §99 was missing: a
+   * change at index 2 of 180 invalidates the whole history, while a change at
+   * index 179 of 180 costs the tail only. Without it every bust reads equally
+   * catastrophic and the verdict cannot be reconciled with the billed split.
+   */
+  readonly cacheBustMessageIndex?: number;
+  /**
+   * R8.13: how many messages the classified request carried. Only meaningful
+   * beside {@link cacheBustMessageIndex} — the index is a position, and a
+   * position without a length says nothing about how much prefix was lost.
+   */
+  readonly cacheMessageCount?: number;
+  /**
    * R4.3: for `coder`, the character length of the locally-drafted text — the
    * "drafted-locally" bucket (output the paid model did not have to generate).
    * kind: "tool" only.

@@ -76,6 +76,48 @@ describe("cache verdicts survive a store round-trip", () => {
     expect(stats.prefix.append).toBe(0);
   });
 
+  // R8.13 — the same standing rule, applied to the two fields added for §104. An
+  // index without a store line reads back as `undefined`, and `worstMessageBust`
+  // would silently stay null while the proxy wrote depths to disk every turn.
+  it("carries the bust depth (index + message count) through write -> read -> aggregate", async () => {
+    const store = new JsonlTelemetryStore(projectDir);
+    await store.record(
+      pipelineEvent({
+        cachePrefix: "bust",
+        cacheBustComponent: "messages",
+        cacheBustMessageIndex: 178,
+        cacheMessageCount: 180,
+      }),
+    );
+    await store.record(
+      pipelineEvent({
+        cachePrefix: "bust",
+        cacheBustComponent: "messages",
+        cacheBustMessageIndex: 12,
+        cacheMessageCount: 190,
+      }),
+    );
+
+    const events = await readTelemetryEvents(projectDir);
+    expect(events.map((e) => e.cacheBustMessageIndex)).toEqual([178, 12]);
+    expect(events.map((e) => e.cacheMessageCount)).toEqual([180, 190]);
+
+    // The SHALLOWEST index wins — it is the one that re-prefilled the most history.
+    const stats = aggregateCacheStats(events);
+    expect(stats.worstMessageBust).toEqual({ index: 12, messageCount: 190 });
+  });
+
+  it("counts a lookback bust apart from the content components", async () => {
+    const store = new JsonlTelemetryStore(projectDir);
+    await store.record(pipelineEvent({ cachePrefix: "bust", cacheBustComponent: "lookback" }));
+
+    const stats = aggregateCacheStats(await readTelemetryEvents(projectDir));
+    expect(stats.busts.lookback).toBe(1);
+    expect(stats.busts.messages).toBe(0);
+    expect(stats.busts.unattributed).toBe(0);
+    expect(stats.worstMessageBust).toBeNull();
+  });
+
   it("keeps billed usage and verdicts independent across the round-trip", async () => {
     const store = new JsonlTelemetryStore(projectDir);
     await store.record(pipelineEvent({ cachePrefix: "append" }));

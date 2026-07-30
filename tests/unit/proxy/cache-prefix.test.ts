@@ -227,3 +227,161 @@ describe("CachePrefixObserver", () => {
     expect(() => observer.observe({ messages: [null] })).not.toThrow();
   });
 });
+
+/**
+ * R8.13 / notes §104 — the regression suite for the bug §99 recorded.
+ *
+ * Claude Code moves its `cache_control` breakpoint to the newest block every turn,
+ * so the previously-final message loses a key it used to carry. Hashing the message
+ * as sent made that a `bust` at index `prevLen - 1` on EVERY turn — 142 busts, 3
+ * firsts, 0 appends, against a billed 98.4% hit rate.
+ *
+ * Anthropic's docs are explicit that this still hits: "blocks that were previously
+ * marked with a `cache_control` block are later not marked with this, but they will
+ * still be considered a cache hit". A marker is not content.
+ */
+describe("cache_control is a marker, not content (§104)", () => {
+  /** The exact live shape: the breakpoint rides the last block of the last message. */
+  function turn(texts: readonly string[]): Record<string, unknown> {
+    const messages = texts.map((text, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: [
+        i === texts.length - 1
+          ? { type: "text", text, cache_control: { type: "ephemeral" } }
+          : { type: "text", text },
+      ],
+    }));
+    return { model: "claude-opus-5", tools: TOOLS, system: "You are helpful.", messages };
+  }
+
+  it("fingerprints a message identically whether or not it carries a breakpoint", () => {
+    const marked = { role: "user", content: [{ type: "text", text: "hi" }] };
+    const a = cachePrefixFingerprint({ messages: [marked] });
+    const b = cachePrefixFingerprint({
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "hi", cache_control: { type: "ephemeral" } }],
+        },
+      ],
+    });
+    expect(b.messages).toEqual(a.messages);
+    expect(b.conversationKey).toBe(a.conversationKey);
+    // The marker is excluded from the hash but still counted.
+    expect(b.breakpoints).toBe(1);
+    expect(a.breakpoints).toBe(0);
+  });
+
+  it("ignores a top-level (non-content-block) cache_control too", () => {
+    const plain = cachePrefixFingerprint({ messages: [{ role: "user", content: "hi" }] });
+    const marked = cachePrefixFingerprint({
+      messages: [{ role: "user", content: "hi", cache_control: { type: "ephemeral" } }],
+    });
+    expect(marked.messages).toEqual(plain.messages);
+  });
+
+  it("excludes it from `system` and `tools` as well", () => {
+    const plain = cachePrefixFingerprint({
+      system: [{ type: "text", text: "S" }],
+      tools: [{ name: "search", input_schema: { type: "object" } }],
+    });
+    const marked = cachePrefixFingerprint({
+      system: [{ type: "text", text: "S", cache_control: { type: "ephemeral" } }],
+      tools: [
+        {
+          name: "search",
+          input_schema: { type: "object" },
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+    expect(marked.system).toBe(plain.system);
+    expect(marked.tools).toBe(plain.tools);
+    expect(marked.breakpoints).toBe(2);
+  });
+
+  it("REGRESSION: a moving breakpoint over three turns is append, append — not bust", () => {
+    const observer = new CachePrefixObserver();
+    expect(observer.observe(turn(["a", "b", "c"])).verdict).toBe("first");
+    // Turn 2 appends two messages; the breakpoint leaves "c" and lands on "e".
+    expect(observer.observe(turn(["a", "b", "c", "d", "e"])).verdict).toBe("append");
+    expect(observer.observe(turn(["a", "b", "c", "d", "e", "f", "g"])).verdict).toBe("append");
+  });
+
+  it("still catches a REAL edit to already-sent history", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(turn(["a", "b", "c"]));
+    const edited = observer.observe(turn(["a", "CHANGED", "c", "d"]));
+    expect(edited.verdict).toBe("bust");
+    expect(edited.component).toBe("messages");
+    expect(edited.firstChangedMessage).toBe(1);
+    expect(edited.messageCount).toBe(4);
+  });
+});
+
+/**
+ * R8.13 / §104 — the second documented miss: a valid prefix the read cannot find.
+ * A read walks back at most 20 block positions from the breakpoint, so appending
+ * that many blocks in one turn steps over the previous write.
+ */
+describe("the 20-block lookback window", () => {
+  /**
+   * `perMessage` gives the block count per message. Breakpoints are attached to the
+   * LAST block of an existing message rather than added as extra messages — an extra
+   * message would shift indices and read as a content edit, not a lookback.
+   */
+  function blocks(perMessage: readonly number[], breakpoints = 1): Record<string, unknown> {
+    const messages = perMessage.map((count, i) => ({
+      role: i % 2 === 0 ? "user" : "assistant",
+      content: Array.from({ length: count }, (_, b) => ({ type: "text", text: `m${i}b${b}` })),
+    }));
+    const mark = (index: number): void => {
+      const message = messages[index];
+      if (message === undefined) return;
+      const last = message.content[message.content.length - 1];
+      if (last !== undefined) Object.assign(last, { cache_control: { type: "ephemeral" } });
+    };
+    if (breakpoints >= 1) mark(messages.length - 1);
+    if (breakpoints >= 2) mark(0);
+    return { messages };
+  }
+
+  it("counts content blocks per message, and 1 for a string content", () => {
+    const fp = cachePrefixFingerprint({
+      messages: [
+        { role: "user", content: "plain string" },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "a" },
+            { type: "text", text: "b" },
+          ],
+        },
+      ],
+    });
+    expect(fp.blockCounts).toEqual([1, 2]);
+  });
+
+  it("reports a lookback bust when a single turn appends 20+ blocks", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(blocks([1, 1]));
+    const jump = observer.observe(blocks([1, 1, 20]));
+    expect(jump.verdict).toBe("bust");
+    expect(jump.component).toBe("lookback");
+    // Nothing changed — the detail must not read like an edit.
+    expect(jump.detail).toContain("lookback window");
+    expect(jump.firstChangedMessage).toBeUndefined();
+  });
+
+  it("stays an append just under the window", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(blocks([1, 1]));
+    expect(observer.observe(blocks([1, 1, 18])).verdict).toBe("append");
+  });
+
+  it("does not predict a lookback miss when a second breakpoint opens a second window", () => {
+    const observer = new CachePrefixObserver();
+    observer.observe(blocks([1, 1], 2));
+    expect(observer.observe(blocks([1, 1, 30], 2)).verdict).toBe("append");
+  });
+});

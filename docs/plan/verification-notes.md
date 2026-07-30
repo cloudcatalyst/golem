@@ -4510,3 +4510,96 @@ non-caching providers; it must never engage on Anthropic.
   workload with a different re-read profile would show a different gross number; the
   net argument depends only on divergence being early, which follows from the
   transform's design rather than from this workload.
+
+---
+
+## §104 — R8.13 closed: §99's 98%-wrong verdict was a `cache_control` marker counted as content, not a colliding conversation key (2026-07-31)
+
+Source: https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md (re-read
+2026-07-31), plus a live trace on this repo's own traffic through the running proxy.
+
+§99 recorded 142 `bust` / 3 `first` / **0 `append`** against a billed 98.4% hit rate and
+named three candidate causes, leading with a colliding conversation key. **The leading
+candidate was wrong.** The fix was one line of hashing.
+
+### The diagnosis, measured not reasoned
+
+`cacheBustMessageIndex` and `cacheMessageCount` were added to the pipeline event first,
+because the discriminator §99 needed had never been recorded: a bust said *that* an
+earlier byte changed, never *how far back*. One proxy restart and three turns settled it:
+
+| request | verdict | component | bust index | messages | billed read | billed write |
+|---|---|---|--:|--:|--:|--:|
+| n | `first` | — | — | 41 | 77,240 | 313 |
+| n+1 | `bust` | messages | **40** | 43 | 77,553 | 483 |
+| n+2 | `bust` | messages | **42** | 45 | 78,036 | 235 |
+
+The bust index is always `prevCount - 1` — **the previous request's final message**,
+every single turn, while the bill shows a ~99% cache read. That rules the conversation
+key out (one `first`, a coherent chain, no interleaving) and points at the last message.
+
+**The cause: Claude Code moves its `cache_control` breakpoint to the newest block each
+turn.** The previously-final block therefore *loses* a key it used to carry, its JSON
+hash changes, and `classifyPrefixChange` called it an edit to already-sent history.
+
+### What the docs say (the part that decides it)
+
+- **`cache_control` is a breakpoint marker, not cached content.** The cache key is "a
+  hash of the prefix ending at that block" — of *content*. Breakpoint placement is not
+  on the documented invalidation list (that list is tool definitions, web-search and
+  citations toggles, speed setting, `tool_choice`, images, thinking parameters, effort,
+  non-tool results with thinking).
+- Verbatim on exactly our case: *"blocks that were previously marked with a
+  `cache_control` block are later not marked with this, but they will still be considered
+  a cache hit (and also a cache refresh!) if they are hit within 5 minutes."*
+- **Reads walk backward.** "If none exists, it walks backward one block at a time" —
+  which is why a moved breakpoint still finds the earlier write.
+- **The lookback window is 20 blocks**, the breakpoint counting as the first. A turn that
+  appends 20+ blocks past the last write misses a prefix that is still byte-identical and
+  still live. A second breakpoint opens a second window that recovers it.
+
+### The fix
+
+- Hashes exclude `cache_control` at any depth, via a `JSON.stringify` replacer rather
+  than a deep clone (no copy allocated on the request path).
+- `blockCounts` and `breakpoints` added to the fingerprint, and a fourth bust component
+  **`lookback`** models the 20-block window — a bust where *nothing changed* and the fix
+  is an extra breakpoint, not fewer edits. Suppressed when the request carries ≥2
+  breakpoints, since a second window would find the write.
+- `cache_report` gained a `lookback` bucket and a **deepest history bust** line
+  (`message 40 of 43 — 3 message(s) (7.0% of history) re-prefilled`).
+
+### The gate: the distribution is now explicable
+
+Live, post-deploy, same repo and workload:
+
+| | before (§99) | after |
+|---|--:|--:|
+| append | 0 | **8** |
+| bust (all `messages`, all tail) | 142 | 3 |
+| append share | **0%** | **73%** |
+| billed hit rate | 98.4% | 99.0% |
+
+And the surviving busts are **real**, not residue — they predict a billed difference,
+which is the whole point of a predictor:
+
+- mean billed cache **write on bust turns: 2,951 tokens** (n=3)
+- mean billed cache **write on append turns: 892 tokens** (n=11)
+
+**3.3×.** Before the fix the verdict predicted nothing at all, because every turn was a
+bust. The remaining busts are genuine tail rewrites (an already-sent last message whose
+content really did change between turns — ephemeral `<system-reminder>` blocks are the
+obvious candidate; not chased, because the verdict is now correct either way).
+
+### Two lessons worth keeping
+
+1. **§99's own leading hypothesis cost nothing to disprove and would have cost a
+   redesign to implement.** Candidate A (prefix-chain identity) would have removed the
+   conversation key — machinery, in exchange for nothing, since the key was never the
+   problem. What settled it was recording *one more number* (the bust index) and reading
+   three requests. Instrument before redesigning.
+2. **"A bust" was never one thing.** A change at index 2 of 180 re-prefills everything;
+   one at index 179 of 180 costs the tail. Reporting them under one counter is what let a
+   98%-bust report coexist with a 98.4% hit rate for a day. Even across the *whole*
+   pre-fix history the deepest bust re-prefilled only 7.0% of the history — visible at a
+   glance now, invisible before.

@@ -143,6 +143,13 @@ function parseEvent(line: string): TelemetryEvent | null {
     ...(typeof parsed.cacheBustComponent === "string"
       ? { cacheBustComponent: parsed.cacheBustComponent }
       : {}),
+    // R8.13 — and the same allow-list rule applies to these two.
+    ...(typeof parsed.cacheBustMessageIndex === "number"
+      ? { cacheBustMessageIndex: parsed.cacheBustMessageIndex }
+      : {}),
+    ...(typeof parsed.cacheMessageCount === "number"
+      ? { cacheMessageCount: parsed.cacheMessageCount }
+      : {}),
   };
 }
 

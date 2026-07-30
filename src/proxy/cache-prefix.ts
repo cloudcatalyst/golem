@@ -28,6 +28,29 @@
  *    make by eye. A brand-new conversation that happens to open with an identical
  *    first message is indistinguishable, which costs at most one misattributed
  *    verdict and never a wrong bill.
+ *
+ * ## R8.13 — what §99's 98%-wrong verdict actually was
+ *
+ * The first cut of this module hashed each message **as sent**, including its
+ * `cache_control` marker. Claude Code moves that marker to the newest block every
+ * turn, so the previously-final message lost a key it used to carry, its hash
+ * changed, and every single turn was reported as a `bust` at index `prevLen - 1`
+ * while the bill showed a ~99% cache read. §99 guessed the conversation key was
+ * colliding; the live trace disproved that (one `first`, a coherent chain, the bust
+ * always on the previous request's last message) and named the real cause.
+ *
+ * `cache_control` is a **breakpoint marker, not cached content**. Anthropic's
+ * prompt-caching docs are explicit about exactly this case: "blocks that were
+ * previously marked with a `cache_control` block are later not marked with this,
+ * but they will still be considered a cache hit". The cache key is a cumulative
+ * hash of prefix *content*; breakpoint placement is not on the documented
+ * invalidation list. So the fingerprint excludes it — see {@link hash}.
+ *
+ * The same source documents a second, real miss this module now models: the
+ * **20-block lookback window** ({@link LOOKBACK_WINDOW_BLOCKS}). A read walks
+ * backward at most 20 block positions from a breakpoint looking for a prior write,
+ * so a turn that appends 20+ blocks past the last write misses even though no byte
+ * of the prefix changed. Verified 2026-07-31, notes §104.
  */
 
 import { createHash } from "node:crypto";
@@ -42,7 +65,24 @@ export type CachePrefixVerdict =
   | "bust";
 
 /** Which cacheable component changed, when the verdict is `bust`. */
-export type CacheBustComponent = "tools" | "system" | "messages";
+export type CacheBustComponent =
+  | "tools"
+  | "system"
+  | "messages"
+  /**
+   * R8.13: nothing changed — the prefix simply moved out of reach. A cache read
+   * walks back at most {@link LOOKBACK_WINDOW_BLOCKS} block positions from the
+   * breakpoint looking for a prior write, so a turn that appends that many blocks
+   * at once misses a prefix that is still byte-identical and still live.
+   */
+  | "lookback";
+
+/**
+ * How many block positions a cache read walks backward from a breakpoint, the
+ * breakpoint itself counting as the first (Anthropic prompt-caching docs, verified
+ * 2026-07-31 — notes §104). A write further back than this is not found.
+ */
+export const LOOKBACK_WINDOW_BLOCKS = 20;
 
 export interface CachePrefixFingerprint {
   /** Hash of the `tools` array as sent (renders first, so a change busts everything). */
@@ -51,6 +91,19 @@ export interface CachePrefixFingerprint {
   readonly system: string;
   /** Per-message hashes, in order — enough to tell an append from an edit. */
   readonly messages: readonly string[];
+  /**
+   * R8.13: content blocks per message, in order. Anthropic's lookback window is
+   * counted in **blocks**, not messages, so predicting a lookback miss needs this
+   * rather than the message count. A string `content` counts as one block.
+   */
+  readonly blockCounts: readonly number[];
+  /**
+   * R8.13: how many `cache_control` breakpoints the request carries. Excluded from
+   * every hash (a marker is not content) but retained as a number, because a second
+   * breakpoint opens a second lookback window and so suppresses the lookback
+   * prediction below.
+   */
+  readonly breakpoints: number;
   /** Conversation grouping key (hash of the first message). Empty when no messages. */
   readonly conversationKey: string;
 }
@@ -64,15 +117,74 @@ export interface CachePrefixObservation {
    * `messages`. Lets a report say *which turn* broke the cache.
    */
   readonly firstChangedMessage?: number;
+  /**
+   * R8.13: how many messages this request carried. Paired with
+   * {@link firstChangedMessage} it says how much of the prefix a bust actually
+   * cost — the difference between "index 2 of 180" (everything re-prefilled) and
+   * "index 179 of 180" (the tail only), which §99's flat bust count could not tell
+   * apart.
+   */
+  readonly messageCount: number;
   /** Human-readable one-liner naming the cause. Always present. */
   readonly detail: string;
 }
 
+/**
+ * `JSON.stringify` replacer that drops every `cache_control` key at any depth.
+ *
+ * A replacer rather than a deep clone on purpose: this runs on the request path for
+ * every message of every request, and stringifying is work we already do — filtering
+ * during serialization costs nothing extra and allocates no copy of the body.
+ *
+ * Array indices arrive as the string keys `"0"`, `"1"`, … so they are never mistaken
+ * for the marker.
+ */
+function omitCacheControl(key: string, value: unknown): unknown {
+  return key === "cache_control" ? undefined : value;
+}
+
+/**
+ * Hash the **cache-relevant content** of a value.
+ *
+ * `cache_control` is excluded: it marks where a breakpoint sits, and Anthropic's
+ * cache key is a cumulative hash of prefix content, so a block that is marked on one
+ * turn and unmarked on the next still hits. Including it made every turn a false
+ * `bust` (§99 → §104).
+ */
 function hash(value: unknown): string {
   // `undefined` and a missing key must fingerprint the same, since neither is
   // serialized into the request body.
-  const json = value === undefined ? "" : JSON.stringify(value);
-  return createHash("sha256").update(json).digest("hex").slice(0, 16);
+  const json = value === undefined ? "" : JSON.stringify(value, omitCacheControl);
+  return createHash("sha256")
+    .update(json ?? "")
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Content blocks in one message: the `content` array's length, or 1 for a string. */
+function blockCount(message: unknown): number {
+  if (typeof message !== "object" || message === null) return 1;
+  const content = (message as { content?: unknown }).content;
+  return Array.isArray(content) ? content.length : 1;
+}
+
+/** Count `cache_control` markers anywhere in a value, without allocating a copy. */
+function countBreakpoints(value: unknown): number {
+  if (Array.isArray(value)) {
+    let total = 0;
+    for (const item of value) total += countBreakpoints(item);
+    return total;
+  }
+  if (typeof value !== "object" || value === null) return 0;
+  let total = 0;
+  for (const [key, child] of Object.entries(value)) {
+    if (key === "cache_control") {
+      total += 1;
+      continue;
+    }
+    total += countBreakpoints(child);
+  }
+  return total;
 }
 
 /**
@@ -91,6 +203,11 @@ export function cachePrefixFingerprint(
     tools: hash(body.tools),
     system: hash(body.system),
     messages,
+    blockCounts: rawMessages.map((m) => blockCount(m)),
+    breakpoints:
+      countBreakpoints(body.messages) +
+      countBreakpoints(body.system) +
+      countBreakpoints(body.tools),
     conversationKey: messages.length > 0 ? (messages[0] as string) : "",
   };
 }
@@ -106,6 +223,13 @@ export function classifyPrefixChange(
   prev: CachePrefixFingerprint | undefined,
   next: CachePrefixFingerprint,
 ): CachePrefixObservation {
+  return { ...classifyCore(prev, next), messageCount: next.messages.length };
+}
+
+function classifyCore(
+  prev: CachePrefixFingerprint | undefined,
+  next: CachePrefixFingerprint,
+): Omit<CachePrefixObservation, "messageCount"> {
   if (prev === undefined) {
     return { verdict: "first", detail: "first request of this conversation — nothing cached yet" };
   }
@@ -152,6 +276,28 @@ export function classifyPrefixChange(
       detail:
         `history shrank from ${prev.messages.length} to ${next.messages.length} messages ` +
         "(a compaction or a rewind) — the cached prefix no longer matches",
+    };
+  }
+
+  // R8.13 — every byte of the previous prefix survived, but survival is not enough:
+  // the read has to still be able to FIND the previous write. It walks back at most
+  // LOOKBACK_WINDOW_BLOCKS block positions from this request's breakpoint, so a turn
+  // that appends that many blocks at once steps over the write and re-prefills from
+  // scratch. A second breakpoint opens a second window that would find it, so this is
+  // only predicted for a single-breakpoint request (Anthropic docs, notes §104).
+  let appendedBlocks = 0;
+  for (let i = prev.messages.length; i < next.blockCounts.length; i += 1) {
+    appendedBlocks += next.blockCounts[i] ?? 0;
+  }
+  if (appendedBlocks >= LOOKBACK_WINDOW_BLOCKS && next.breakpoints <= 1) {
+    return {
+      verdict: "bust",
+      component: "lookback",
+      detail:
+        `${appendedBlocks} blocks were appended in one turn, past the ` +
+        `${LOOKBACK_WINDOW_BLOCKS}-block lookback window — the previous write is still ` +
+        "valid but can no longer be found, so the prefix is re-prefilled. Nothing changed; " +
+        "an extra `cache_control` breakpoint nearer the last write would recover it",
     };
   }
 

@@ -80,6 +80,12 @@ export function recordPipelineEvent(
     ...(event.cacheBustComponent !== undefined
       ? { cacheBustComponent: event.cacheBustComponent }
       : {}),
+    ...(event.cacheBustMessageIndex !== undefined
+      ? { cacheBustMessageIndex: event.cacheBustMessageIndex }
+      : {}),
+    ...(event.cacheMessageCount !== undefined
+      ? { cacheMessageCount: event.cacheMessageCount }
+      : {}),
   };
   return store.record(telemetryEvent);
 }

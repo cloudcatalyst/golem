@@ -125,6 +125,14 @@ export interface PipelineEvent {
   /** R8.1: which component broke the prefix. Set only when `cachePrefix === "bust"`. */
   readonly cacheBustComponent?: CacheBustComponent;
   /**
+   * R8.13: where in `messages` the bust landed, and out of how many. The pair is
+   * what makes a bust interpretable — §99 recorded 142 busts against a billed
+   * 98.4% hit rate precisely because "an earlier byte changed" was recorded
+   * without ever saying *how much earlier*.
+   */
+  readonly cacheBustMessageIndex?: number;
+  readonly cacheMessageCount?: number;
+  /**
    * R8.4: token attribution for the outgoing request — which buckets, which
    * biggest blocks, which tools produced the `tool_result` bulk. Carried on the
    * event so the CLI layer owns the (latest-only) file write, keeping file I/O out
@@ -501,6 +509,10 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         ...(cacheObservation.component !== undefined && {
           cacheBustComponent: cacheObservation.component,
         }),
+        ...(cacheObservation.firstChangedMessage !== undefined && {
+          cacheBustMessageIndex: cacheObservation.firstChangedMessage,
+        }),
+        cacheMessageCount: cacheObservation.messageCount,
       });
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },
