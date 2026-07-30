@@ -477,6 +477,9 @@ describe("collectGolemState", () => {
       collectGolemState(dir, { localReachable: async () => ({ reachable: false }) }),
     ).resolves.toStrictEqual({
       sliderLevel: 1,
+      // Decision 52: the shipped default is a pinned "off", so the status line
+      // shows no brevity badge until someone turns the dial on.
+      brevity: "off",
       upstreamLabel: "anthropic",
       upstreamProvider: "anthropic",
       proxyRunning: false,

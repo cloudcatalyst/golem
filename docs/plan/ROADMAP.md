@@ -69,6 +69,18 @@ them, Decision 36).
   prompt-specific answers; debrief `2026-07-23-webfetch-raw-cache.md`).
 - **R7 — Distribution, versioning & self-update** (Decision 41, 2026-07-22/23):
   see the R7 section below; first publish (R7.5) deferred to the user.
+- **Brevity dial — the slider becomes a preset over two dials** (Decision 52,
+  2026-07-30): decoupled `compression.level` (input) from the new
+  `brevity.level` (output), with `slider` demoted to a preset over both and a
+  pin that wins and sticks. Brevity appends a marker-fenced, byte-stable
+  directive to `system` so the model answers more tersely — the first dial that
+  attacks *output* tokens, which are never cached and cost ~5× input (so
+  Decision 23's "~0% on cached traffic" does not apply). **Ships OFF** behind a
+  `golem stats --brevity` rollup that reports the saving and its cost together.
+  Workstream B (in-flight `tools`-block shrinking) is scoped but unbuilt —
+  ~900 tokens of measured headroom, blocked on a tool-selection-accuracy
+  harness (verification-notes §88). Design record:
+  `docs/plan/proposals/golem-brevity.md`; debrief `2026-07-30-brevity-dial.md`.
 
 ## Carried-over loose ends (visible, not lost)
 

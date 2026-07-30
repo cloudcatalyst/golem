@@ -38,14 +38,23 @@ export type {
 export { DEFAULT_SCOPES, UnknownChunkError } from "./knowledge.js";
 
 export type {
+  BrevityDial,
+  CompressionDial,
+  Pinned,
   SemanticCache,
   SemanticCompression,
   SliderPolicy,
   StageConfig,
 } from "./policy.js";
 export {
+  BREVITY_LEVELS,
+  BrevityLevel,
+  brevityPresetForLevel,
   MAX_SLIDER_LEVEL,
+  MIN_ACTIVE_COMPRESSION_LEVEL,
   migrateSliderLevel,
+  resolveBrevity,
+  resolveCompressionLevel,
   SliderLevel,
   sliderPolicyForLevel,
 } from "./policy.js";

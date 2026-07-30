@@ -178,6 +178,10 @@ describe("renderStatus", () => {
       default_model: "kimi-k3",
     },
     slider: { level: 1, name: "lossless", layer: "project", source: ".golem/settings.json" },
+    dials: {
+      brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
+      compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
+    },
     config: {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
@@ -204,6 +208,10 @@ describe("renderStatus", () => {
       default_model: null,
     },
     slider: { level: 3, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+    dials: {
+      brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
+      compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+    },
     config: {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },

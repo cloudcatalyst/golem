@@ -372,8 +372,9 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
         "Set Golem's global quality/savings slider (0–3). 0 = passthrough (FULL " +
         "BYPASS — NO redaction; secrets reach the upstream raw), 1 = lossless (redaction " +
         "+ byte-faithful compression), 2 = balanced (adds lossy semantic stages), " +
-        "3 = aggressive (adds local drafts + local-first answers). The level " +
-        "persists across sessions.",
+        "3 = aggressive (adds max semantic compression). Never engages the local model " +
+        "(that is `coder` only). Persists across sessions. The level is a preset over two " +
+        "pinnable dials, compression and brevity, both set via the CLI, not here.",
       inputSchema: { level: sliderLevelInput },
       outputSchema: {
         slider_level: z.number().int().min(0).max(3),

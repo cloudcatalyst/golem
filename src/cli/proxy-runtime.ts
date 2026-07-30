@@ -11,7 +11,7 @@
 import { join } from "node:path";
 import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
-import { type GolemSettings, policyFromSettings } from "../config/index.js";
+import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
@@ -166,7 +166,10 @@ export function buildProxyFromSettings(
   const resolvePolicy = async () => {
     if (sliderStore === undefined) return policyFromSettings(settings);
     const level = await sliderStore.get();
-    return sliderPolicyForLevel(level);
+    // Decision 52: the runtime slider store owns the LEVEL only; the two dial
+    // pins still come from settings, so a pinned brevity/compression level
+    // survives a `golem slider` change (a pin wins and sticks).
+    return sliderPolicyForLevel(level, dialsFromSettings(settings));
   };
   // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
   // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.
@@ -351,10 +354,23 @@ export function buildProxyFromSettings(
       if (usage === null) return;
       const nowIso = new Date().toISOString();
       void (async () => {
-        const level = (await resolvePolicy()).level;
+        // Decision 52: tag the sample with the brevity level in force, so
+        // `aggregateUsageByBrevity` can compare BILLED output tokens per level.
+        // This is the only honest place to measure it — the saving is in the
+        // response, not the request. Same documented race as `level`: a dial
+        // changed between request and response tags the sample with the new
+        // value, which is acceptable for an alternating A/B.
+        const policy = await resolvePolicy();
+        const level = policy.level;
         await recordUsageEvent(
           telemetry,
-          { projectId: dir, level, usage, semanticForced: forceSemanticOnCaching },
+          {
+            projectId: dir,
+            level,
+            usage,
+            semanticForced: forceSemanticOnCaching,
+            brevity: policy.brevity,
+          },
           nowIso,
         );
       })().catch(() => {});

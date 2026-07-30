@@ -58,6 +58,101 @@ export function migrateSliderLevel(value: number): SliderLevel {
   return n as SliderLevel; // 1 or 2, unchanged
 }
 
+/**
+ * Output-side brevity level (Decision 52). Distinct in kind from every other
+ * field here: the compression stages transform the request payload, whereas
+ * brevity appends a fixed directive to the `system` block and the MODEL complies
+ * at generation time. It therefore saves **output** tokens and costs a small
+ * number of input tokens — the inverse of Decision 23's economics, which is the
+ * whole reason it exists (verification-notes §87).
+ *
+ * `wenyan` (Caveman's classical-Chinese level) is deliberately absent: it
+ * changes the response language, which breaks readability and any downstream
+ * parsing. Do not add it without a new Decisions Log entry.
+ */
+export type BrevityLevel = "off" | "lite" | "full" | "ultra";
+
+export const BrevityLevel = {
+  Off: "off",
+  Lite: "lite",
+  Full: "full",
+  Ultra: "ultra",
+} as const satisfies Record<string, BrevityLevel>;
+
+/** Every brevity level, weakest first — the display/CLI ordering. */
+export const BREVITY_LEVELS: readonly BrevityLevel[] = Object.freeze([
+  "off",
+  "lite",
+  "full",
+  "ultra",
+] as const);
+
+/**
+ * A dial that either follows the slider preset (`"auto"`) or is pinned to an
+ * explicit value (Decision 52, USER DECISION: **a pin wins and sticks** — the
+ * slider stops driving a dial once it is pinned, until it is set back to
+ * `"auto"`). Surfaces must render which of the two is in force; a pinned dial
+ * that silently looked like a preset would be worse than no pin at all.
+ */
+export type Pinned<T> = "auto" | T;
+export type BrevityDial = Pinned<BrevityLevel>;
+export type CompressionDial = Pinned<SliderLevel>;
+
+/**
+ * Slider level → default brevity, the "sensible defaults" half of Decision 52.
+ *
+ * Brevity is **off at levels 0 and 1**, and that is a USER DECISION with a
+ * reason worth keeping: level 1 is sold as *semantics-preserving*. Compression
+ * at level 1 changes bytes without changing meaning; a brevity directive changes
+ * what the model *says*, which every user notices immediately. The default
+ * install must never start answering in fragments. `ultra` is never a preset —
+ * it is reachable only by an explicit pin.
+ */
+const BREVITY_PRESET: Readonly<Record<SliderLevel, BrevityLevel>> = Object.freeze({
+  0: "off", // passthrough: nothing runs at all (Decision 30)
+  1: "off", // lossless: semantics-preserving, so output style is untouched
+  2: "lite",
+  3: "full",
+});
+
+export function brevityPresetForLevel(level: SliderLevel): BrevityLevel {
+  return BREVITY_PRESET[level];
+}
+
+/**
+ * Lowest compression level the dial may select while the slider is active.
+ *
+ * This is a **safety clamp, not a preference**: `LEVEL_TABLE[0]` is the
+ * Decision-30 passthrough, the one place where `redaction` is false. If a pinned
+ * `compression.level` of 0 were honoured at slider ≥1 it would silently disable
+ * redaction — a CLAUDE.md hard-rule violation reachable from a config file. So a
+ * pinned 0 clamps to 1, and redaction-off remains reachable **only** by moving
+ * the slider itself to 0, where it is surfaced loudly.
+ */
+export const MIN_ACTIVE_COMPRESSION_LEVEL: SliderLevel = 1;
+
+/**
+ * Effective compression level: which {@link StageConfig} row actually runs.
+ *
+ * Passthrough is absolute — at slider 0 no pin can re-enable a stage, because
+ * level 0 means "Golem does nothing" (Decision 30) and a dial that could
+ * partially undo that would make the bypass a lie.
+ */
+export function resolveCompressionLevel(
+  sliderLevel: SliderLevel,
+  pin: CompressionDial = "auto",
+): SliderLevel {
+  if (sliderLevel === SliderLevel.Passthrough) return SliderLevel.Passthrough;
+  if (pin === "auto") return sliderLevel;
+  return pin < MIN_ACTIVE_COMPRESSION_LEVEL ? MIN_ACTIVE_COMPRESSION_LEVEL : pin;
+}
+
+/** Effective brevity level. Passthrough forces `off` for the same reason. */
+export function resolveBrevity(sliderLevel: SliderLevel, pin: BrevityDial = "auto"): BrevityLevel {
+  if (sliderLevel === SliderLevel.Passthrough) return BrevityLevel.Off;
+  return pin === "auto" ? brevityPresetForLevel(sliderLevel) : pin;
+}
+
 /** How aggressively local models summarize context (slider >= 3). */
 export type SemanticCompression = "off" | "stale_turns" | "low_relevance" | "aggressive";
 
@@ -120,27 +215,56 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
 });
 
 /**
- * A resolved policy for one request: level + stages + per-capability overrides.
+ * A resolved policy for one request: level + stages + brevity + per-capability
+ * overrides.
+ *
+ * Since Decision 52 the slider is a **preset over two independent dials**, so
+ * three level-ish fields coexist and mean different things:
+ *
+ * - {@link level} — the *slider* level. The request's identity for telemetry
+ *   bucketing and for every display, unchanged from before.
+ * - {@link compressionLevel} — the *effective* compression level, which selects
+ *   {@link stages}. Equals `level` unless `compression.level` is pinned.
+ * - {@link brevity} — the effective output-side brevity level.
  *
  * `overrides` carries per-capability overrides from settings (snake_case keys,
  * e.g. `{"semantic_cache": "off"}`); interpretation belongs to the consuming
- * stage, not this contract.
+ * stage, not this contract. The two dials are deliberately NOT overrides: they
+ * are first-class, typed, and every stage/display must see them.
  */
 export interface SliderPolicy {
   readonly level: SliderLevel;
+  readonly compressionLevel: SliderLevel;
+  readonly brevity: BrevityLevel;
   readonly stages: StageConfig;
   readonly overrides: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * Resolve a policy from the slider level plus optional per-dial pins.
+ *
+ * **`brevity` defaults to `"off"`, NOT `"auto"`.** Two reasons, both deliberate:
+ * a caller that predates Decision 52 must not silently acquire a new
+ * output-mutating behaviour just by omitting an argument; and Decision 52 ships
+ * the dial off until the telemetry rollup proves it pays. `"auto"` is the value
+ * that opts into the preset table, and the settings layer passes it through
+ * explicitly. `compression` defaults to `"auto"` because tracking the slider IS
+ * its pre-Decision-52 behaviour.
+ */
 export function sliderPolicyForLevel(
   level: SliderLevel,
   opts: {
     readonly overrides?: Readonly<Record<string, unknown>>;
+    readonly brevity?: BrevityDial;
+    readonly compression?: CompressionDial;
   } = {},
 ): SliderPolicy {
+  const compressionLevel = resolveCompressionLevel(level, opts.compression ?? "auto");
   return Object.freeze({
     level,
-    stages: LEVEL_TABLE[level],
+    compressionLevel,
+    brevity: resolveBrevity(level, opts.brevity ?? BrevityLevel.Off),
+    stages: LEVEL_TABLE[compressionLevel],
     overrides: Object.freeze({ ...(opts.overrides ?? {}) }),
   });
 }
