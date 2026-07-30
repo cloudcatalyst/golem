@@ -121,7 +121,11 @@ export function buildProxyFromSettings(
 ): ProxyBuild {
   // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
-  const semantic = settings.compression.headroom_sidecar ? new HeadroomSidecar() : undefined;
+  // Decision 53: the opaque `headroom_config` bag rides through to the worker, so
+  // Headroom options Golem has never heard of are reachable from settings alone.
+  const semantic = settings.compression.headroom_sidecar
+    ? new HeadroomSidecar({ config: settings.compression.headroom_config })
+    : undefined;
   // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
   // writes to, shared by both the R2.4 Headroom backfill and R2.2 context
   // substitution below, so `expand` recovers either kind of marker uniformly.

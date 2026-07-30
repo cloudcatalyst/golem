@@ -181,6 +181,28 @@ export const SETTINGS_LEAVES = {
      * layers refuse it.
      */
     level: z.enum(["auto", "1", "2", "3"]),
+    /**
+     * Decision 53: **opaque passthrough** to Headroom's `CompressConfig`.
+     *
+     * Deliberately not enumerated. Golem's worker script — not the version pin —
+     * used to be the coupling point: it hand-listed two config fields, so every
+     * other option Headroom supports (and every option a future release adds) was
+     * unreachable without editing `headroom-worker.py`. The worker now introspects
+     * the installed `CompressConfig` and forwards whatever it accepts, layering
+     * these keys OVER Golem's per-slider-mode presets, so one knob can be
+     * overridden without replacing the mode's behaviour.
+     *
+     * Keys the installed Headroom does not accept are **reported and skipped**,
+     * never forwarded (forwarding would raise and cost the whole request); the
+     * adapter logs the ignored set once per distinct set, so a typo is visible
+     * instead of silently doing nothing. `golem ext --verbose` shows the pin;
+     * `HeadroomSidecar.health()` reports `supported_config` from the running
+     * package.
+     *
+     * Has no effect unless `headroom_sidecar` is on AND the semantic stage
+     * actually runs (see `force_semantic_on_caching` and Decision 31).
+     */
+    headroom_config: z.record(z.unknown()),
   },
   brevity: {
     /**
@@ -380,6 +402,8 @@ export interface CompressionSettings {
   readonly headroom_sidecar: boolean;
   readonly force_semantic_on_caching: boolean;
   readonly level: "auto" | "1" | "2" | "3";
+  /** Decision 53 — opaque `CompressConfig` passthrough; see the schema comment. */
+  readonly headroom_config: Readonly<Record<string, unknown>>;
 }
 
 /** Decision 52 — the output-side brevity dial. */
@@ -459,6 +483,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     headroom_sidecar: false,
     force_semantic_on_caching: false,
     level: "auto",
+    // Empty by default: Golem's mode presets are the whole behaviour until a
+    // user deliberately reaches past them (Decision 53).
+    headroom_config: {},
   },
   // Decision 52: ships OFF, not "auto" — the preset table is opt-in until the
   // brevity rollup shows a real net saving on this project's own traffic.

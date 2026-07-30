@@ -52,12 +52,32 @@ carries that instead, and the enabled-but-gated Headroom row is now the clearest
 output on the surface. Same instinct as Decision 49 (verbatim model ids): a
 display that simplifies past the truth is worse than a verbose one.
 
-**3. A pin is not a passthrough.** The user's stated goal was to "benefit from
-the native features they continue to roll out". Bumping
-`HEADROOM_SIDECAR_PYPI_PIN` does **not** do that: `headroom-worker.py` is Golem's
-own script, so it defines the reachable API surface, and new upstream features
-need the worker edited. Naming the real coupling point changed the follow-up task
-from "watch for releases" to "make the worker forward an opaque options bag".
+**3. A pin is not a passthrough — so P3 was pulled into the same batch.** The
+user's stated goal was to "benefit from the native features they continue to roll
+out". Bumping `HEADROOM_SIDECAR_PYPI_PIN` does **not** do that:
+`headroom-worker.py` is Golem's own script, and it hand-enumerated exactly two
+`CompressConfig` fields, so every other Headroom option was unreachable without
+editing it. Naming the real coupling point turned the task from "watch for
+releases" into "stop enumerating", which was small enough to finish here:
+
+- the worker **introspects** `CompressConfig` (dataclass fields → `__init__`
+  signature → empty set, never a crash) and forwards an opaque `config` bag,
+  layered *over* Golem's mode presets so one key can be overridden alone;
+- new settings key `compression.headroom_config`, deliberately **not** enumerated
+  in the schema (`z.record(z.unknown())`, `kind: "opaque"`, `advanced`);
+- unsupported keys are **reported, not forwarded** (forwarding raises inside
+  `CompressConfig` and costs the whole request); a supported *name* with an
+  unusable *value* degrades to the preset, so a bad override costs the override
+  rather than the stage; `/health` now returns `supported_config`, i.e. capability
+  read from the running package rather than inferred from a pin.
+
+Two restraint calls worth recording: `SemanticResult` was **not** extended — a
+diagnostic does not justify growing a contract the pipeline consumes, so the
+adapter logs instead, once per distinct ignored-key set rather than per request.
+And the Python logic is tested by running the *real* worker against a **stub
+`headroom`** with a validating config, skipped when no `python` is on PATH (via
+the new `commandOnPath`, dogfooding the registry's own detector) — the Node fake
+worker still keeps CI Python-free.
 
 ## Corrections to earlier claims in this session
 
@@ -76,8 +96,9 @@ from "watch for releases" to "make the worker forward an opaque options bag".
 
 | Item | Where |
 |---|---|
-| `headroom-worker.py` → thin passthrough | R8 memo, Workstream P3 |
+| ~~`headroom-worker.py` → thin passthrough~~ | **DONE** — same batch, Decision 53(h) |
 | `golem ext install/upgrade` (Tier 2 install path, with consent) | Decision 53(e) leaves it out on purpose |
+| Surface `supported_config` in `golem ext --verbose` (needs a running worker) | unscheduled |
 | `/caveman-compress` as an ext (input-side `CLAUDE.md` rewrite) | P3a |
 | Point `golem bench tools` at `caveman-shrink` instead of rebuilding | P3b, §89 |
 | Assert Golem's `deny` wins against RTK's `updatedInput` rewrite | **R8.12 — §91, undocumented upstream** |

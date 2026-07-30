@@ -95,13 +95,36 @@ gated off on caching upstreams (Decision 31, see [[Slider Levels]]) unless
 `compression.force_semantic_on_caching` is set. A surface that printed "enabled"
 and stopped would have been the dishonest kind.
 
-## Gotcha: a pin is not a passthrough
+## A pin is not a passthrough (and how Headroom was fixed)
 
 `headroom-worker.py` is authored by Golem, so **it** — not the version pin —
-defines which upstream APIs are reachable. Bumping the pin does not bring new
-Headroom features; the worker has to be edited. Any tier-2 adapter that wants
-upstream features to arrive for free must forward an opaque options bag and
-version-gate, rather than hand-enumerate an API surface.
+defines which upstream APIs are reachable. It used to hand-enumerate exactly two
+`CompressConfig` fields, which made every other Headroom option unreachable
+without editing that file. Bumping the pin would not have helped.
+
+The worker now **introspects** the installed `CompressConfig` and forwards an
+opaque bag from `compression.headroom_config`, layered *over* Golem's per-mode
+presets:
+
+```jsonc
+// .golem/settings.json — any key the installed Headroom accepts
+{ "compression": { "headroom_sidecar": true, "headroom_config": { "kompress_model": "…" } } }
+```
+
+Three honesty properties, because a passthrough that hides its failures is worse
+than an enumeration:
+
+- **Unsupported keys are reported, not forwarded** (`config_ignored`) — forwarding
+  would raise inside `CompressConfig` and cost the whole request.
+- **A supported name with an unusable value degrades to the mode preset**, so a
+  bad override costs the override, not the stage.
+- **`/health` returns `supported_config`** — capability read from the running
+  package, not inferred from a pin. The adapter warns once per distinct
+  ignored-key set, so a typo is visible instead of silently doing nothing.
+
+**The general rule for any tier-2 adapter:** forward an opaque options bag and
+version-gate on what the installed package reports. Do not hand-enumerate an API
+surface you do not own.
 
 ## Related
 

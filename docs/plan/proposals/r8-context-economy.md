@@ -7,8 +7,10 @@
 > (`src/ext/` + `src/cli/ext.ts`, read-only), and both P-audit fixes (`unpdf`
 > genuinely optional; `LICENSE` added) landed together with 48 tests. Debrief:
 > `docs/wiki/debriefs/2026-07-30-decision-53-managed-tools.md`; concept page
-> [[Managed Tools]]; findings §90–§92. **Still open in Workstream P:** the
-> `golem ext install/upgrade` path, P3's `headroom-worker.py` passthrough, and
+> [[Managed Tools]]; findings §90–§92. **P3 also shipped** (Decision 53(h)): the
+> Headroom worker now introspects `CompressConfig` and forwards an opaque
+> `compression.headroom_config` bag, so upstream options arrive without a Golem
+> release. **Still open in Workstream P:** the `golem ext install/upgrade` path and
 > P3a/P3b (the two Caveman components worth adopting).
 >
 > _Original proposal below._
