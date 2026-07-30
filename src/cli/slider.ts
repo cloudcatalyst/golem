@@ -10,8 +10,13 @@
  * `golem slider`, and `loadConfig()` all see one value (verification-notes §20).
  */
 
+import {
+  type EffectiveCompression,
+  resolveEffectiveCompression,
+} from "../compression/effective-level.js";
 import { loadConfig, writeSetting } from "../config/index.js";
 import type { SliderLevel } from "../interfaces/policy.js";
+import { resolveUpstreamDisplay, upstreamAssumesCaching } from "../providers/index.js";
 import { golemInit, golemInitStatus, type InitProbe } from "./init.js";
 import { getSliderInfo, type SliderInfo } from "./slider-read.js";
 
@@ -56,6 +61,19 @@ export interface SetSliderResult {
    * or wires MCP/skills until a level is first chosen.
    */
   readonly justInitialized?: true;
+  /**
+   * §103: what the level just chosen will ACTUALLY do on the upstream this project
+   * is pointed at. Levels 2–3 collapse to level 1 on a prompt-caching upstream
+   * (Decision 31), so `golem slider 3` against Anthropic previously reported
+   * success at "aggressive" while changing nothing about the pipeline's behaviour.
+   *
+   * This is deliberately a WARNING rather than a rejection. The same project is
+   * used against non-caching accounts (`golem account use …`) where levels 2–3 are
+   * exactly right, so the level is a valid thing to have set — it is only inert
+   * *right now*. Refusing the write would make a correct future configuration
+   * unreachable and would have to be undone on every account switch.
+   */
+  readonly effectiveCompression: EffectiveCompression;
 }
 
 /**
@@ -90,9 +108,24 @@ export async function setSliderLevel(
   const file = await writeSetting("local", "slider.level", level, loadOpts(options));
   const effective = await getSliderInfo(options);
   const overridden = effective.layer !== "local" || effective.level !== level;
+
+  // Re-read config AFTER the write: an unwired project was just initialized above,
+  // so the pre-write snapshot can predict against defaults that no longer hold.
+  const { settings: after } = await loadConfig(loadOpts(options));
+  const upstream = resolveUpstreamDisplay(after.proxy);
+  const assumeCaching = upstreamAssumesCaching(upstream.provider);
+  const effectiveCompression = resolveEffectiveCompression({
+    level: effective.level,
+    upstreamBaseUrl: upstream.baseUrl,
+    ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
+    headroomSidecar: after.compression.headroom_sidecar,
+    forceSemanticOnCaching: after.compression.force_semantic_on_caching,
+  });
+
   return {
     file,
     effective,
+    effectiveCompression,
     ...(overridden && { overriddenBy: effective }),
     ...(!status.initialized && { justInitialized: true }),
   };

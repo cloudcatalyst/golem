@@ -1145,6 +1145,18 @@ program
             `${o.source !== undefined ? ` (${o.source})` : ""}\n`,
         );
       }
+      // §103: say so immediately when the level just chosen is inert on this
+      // upstream, rather than reporting success and letting the name mislead.
+      const ec = result.effectiveCompression;
+      if (ec.degraded) {
+        process.stdout.write(
+          `⚠ on this upstream that behaves as level ${ec.effective} ` +
+            `(${SLIDER_LEVEL_NAMES[ec.effective]}), not ${ec.nominal} ` +
+            `(${SLIDER_LEVEL_NAMES[ec.nominal]}): ${ec.reason ?? ""}\n` +
+            `  The setting is kept — it applies as chosen on a non-caching account ` +
+            `(golem account use <id>).\n`,
+        );
+      }
     } catch (err) {
       fail(err);
     }

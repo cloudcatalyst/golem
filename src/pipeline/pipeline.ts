@@ -25,6 +25,7 @@
 
 import type { CcrStore } from "../compression/ccr-store.js";
 import type { KnownContentLookup } from "../compression/context-substitution.js";
+import { isCachingUpstream } from "../compression/effective-level.js";
 import {
   backfillHeadroomCcrRefs,
   estimateTokens,
@@ -50,18 +51,15 @@ import { redactRequestBody } from "./redaction.js";
  * identical-prefix). Semantic compression rewrites/drops mid-history content,
  * which changes the cached prefix and turns a 0.1× cache read into a 1.0× miss
  * on the whole suffix — net-negative on such upstreams (verification-notes
- * §14/§32/§34). So the lossy semantic stage is gated OFF on caching upstreams
- * (Decision 31); it engages only on non-caching gateways (e.g. some Foundry /
- * OpenRouter deployments) where resent history is re-billed at full price.
+ * §14/§32/§34, and §103 for the measured 8.7×–11.3× penalty). So the lossy
+ * semantic stage is gated OFF on caching upstreams (Decision 31); it engages
+ * only on non-caching gateways (e.g. some Foundry / OpenRouter deployments)
+ * where resent history is re-billed at full price.
+ *
+ * The definition now lives in `compression/effective-level.ts` so `golem status`
+ * can predict this gate rather than reporting a level the pipeline will not
+ * apply. This file is still the ENFORCEMENT point — see that module's header.
  */
-function isCachingUpstream(upstreamBaseUrl: string | undefined): boolean {
-  if (upstreamBaseUrl === undefined) return true; // default upstream is Anthropic — assume caching
-  try {
-    return new URL(upstreamBaseUrl).host.toLowerCase().includes("anthropic.com");
-  } catch {
-    return true; // unparseable → be conservative (assume caching, skip lossy compression)
-  }
-}
 
 /**
  * Effective caching decision for the lossy-stage gate: an explicit

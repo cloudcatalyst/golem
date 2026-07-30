@@ -183,6 +183,13 @@ describe("renderStatus", () => {
       brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
       compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
     },
+    effective_compression: {
+      nominal: 1,
+      nominal_name: "lossless",
+      effective: 1,
+      effective_name: "lossless",
+      degraded: false,
+    },
     config: {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
@@ -212,6 +219,17 @@ describe("renderStatus", () => {
     dials: {
       brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
       compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+    },
+    // Level 3 against Anthropic: the §103 degraded case, so renderStatus must say
+    // the effective level is 1 rather than letting "aggressive" stand alone.
+    effective_compression: {
+      nominal: 3,
+      nominal_name: "aggressive",
+      effective: 1,
+      effective_name: "lossless",
+      degraded: true,
+      reason:
+        "the lossy semantic and context-substitution stages are off on a prompt-caching upstream",
     },
     config: {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
