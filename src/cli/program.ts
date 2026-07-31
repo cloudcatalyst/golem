@@ -873,6 +873,33 @@ mcp
         );
       }
       const { JsonFileSliderStore, serveStdio } = await import("../mcp/index.js");
+      // R8.6: the LSP modes of the `code` tool. Opt-in, and only alongside the
+      // map — they are modes of that one tool, never tools of their own. The
+      // bridge spawns nothing until a mode is actually called.
+      const lspBridge =
+        settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
+          ? await (async () => {
+              const { LspBridge } = await import("../ext/index.js");
+              const bridge = new LspBridge({
+                root: opts.dir,
+                requestTimeoutMs: settings.knowledge.lsp_timeout_ms,
+                ...(settings.knowledge.lsp_servers !== undefined
+                  ? {
+                      servers: settings.knowledge.lsp_servers.map((row) => ({
+                        id: row.id,
+                        command: row.command,
+                        args: row.args,
+                        languageId: row.language_id,
+                        extensions: row.extensions,
+                      })),
+                    }
+                  : {}),
+              });
+              // A parent that dies must not orphan a language server.
+              process.once("exit", () => bridge.killAll());
+              return bridge;
+            })()
+          : undefined;
       await serveStdio({
         compression: mcpCompressionService(opts.dir, telemetry),
         telemetry,
@@ -916,6 +943,7 @@ mcp
         // independent of the knowledge base — but it is a permanent per-request
         // definition cost, so it is registered only when opted in.
         ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),
+        ...(lspBridge !== undefined ? { lsp: lspBridge } : {}),
         // R3.1 (spec Decision 34): opt-in chat-judge rerank, decoupled from the
         // slider (Decision 31) via its own settings leaf.
         ...(inference !== undefined && settings.knowledge.rerank_enabled
@@ -1516,6 +1544,11 @@ benchCmd
       "substitute when the tier's classifier model is not pulled",
     "classifier",
   )
+  .option(
+    "--lsp",
+    "count the R8.6 LSP modes of the `code` tool (knowledge.lsp_enabled, default off)",
+    false,
+  )
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
@@ -1524,6 +1557,7 @@ benchCmd
       shrinkPath?: string;
       repeats: string;
       role: string;
+      lsp: boolean;
       json: boolean;
     }) => {
       try {
@@ -1539,7 +1573,7 @@ benchCmd
           SELECTION_CASES,
           ARGUMENT_CASES,
         } = await import("../tools/index.js");
-        const census = await golemToolCensus();
+        const census = await golemToolCensus({ lsp: opts.lsp });
         if (opts.shrink === undefined) {
           const report = { census };
           process.stdout.write(

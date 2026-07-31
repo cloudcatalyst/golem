@@ -212,6 +212,30 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
       "(`knowledge.syntax_aware_chunking`, default off). Either can be on without the other.",
   },
   {
+    id: "typescript-language-server",
+    title: "typescript-language-server",
+    what:
+      "Answers the R8.6 `code` tool's LSP modes — diagnostics / definition / references / hover — " +
+      "so an agent stops grepping to find out what refers to what.",
+    tier: "tier-2",
+    shape: "callable",
+    upstream: "https://github.com/typescript-language-server/typescript-language-server",
+    licence: "Apache-2.0",
+    detect: { kind: "command", command: "typescript-language-server" },
+    install:
+      "npm i -g typescript-language-server typescript — Golem spawns it, never installs it. " +
+      "Any other server (gopls, rust-analyzer, pyright) is a `knowledge.lsp_servers` row, not a release.",
+    enabledBy: "knowledge.lsp_enabled",
+    adapter: "src/ext/lsp/",
+    degrade:
+      "The `code` tool's LSP modes report `available: false` with the reason and the session " +
+      "continues; `map` mode is unaffected.",
+    gate:
+      "Enabled does NOT mean running. The server is spawned lazily on the first LSP-mode call, " +
+      "pooled, and evicted after an idle period — so `golem ext status` can say [on] while no " +
+      "process exists. It is also per-file-type: a row only answers for the extensions it claims.",
+  },
+  {
     id: "rtk",
     title: "RTK",
     what: "Rewrites Bash commands to filtered equivalents, cutting shell output before it reaches the model.",

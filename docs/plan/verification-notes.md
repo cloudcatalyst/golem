@@ -4830,3 +4830,58 @@ sanctioned mutation, Decision 52's byte-stable marker-fenced append. Reopen only
 a *provably inert* region and a byte-stability proof, and even then measure against
 this table first. Fourth consecutive input-side idea to die on the same two questions:
 **whose bytes are they, and how big is the prize actually** (§100, §103, §107, §108).
+
+## §109 — R8.6 shipped: four LSP questions as `code` modes cost +333 definition tokens *when enabled*, and 0 when not (2026-07-31)
+
+R8.6's gate was cross-OS spawn/lifecycle plus "server absent → no-op, never an error
+path". Both are met. The number the R8b discipline demands is the definition cost, and
+it has an unusual shape here: **it is zero in the shipped default.**
+
+**Measured** (`golem bench tools`, this repo, 12 tools):
+
+| | `code` desc | `code` schema | `code` full | block full |
+|---|--:|--:|--:|--:|
+| before R8.6 | ~101 | ~161 | ~437 | ~4,562 |
+| after, LSP **off** (default) | ~101 | ~161 | ~437 | **~4,540** |
+| after, LSP **on** (`--lsp`) | ~159 | ~301 | ~770 | ~4,895 |
+
+Two readings:
+
+1. **Off costs nothing — it costs 22 tokens less.** The LSP mode enum, the `file` /
+   `line` / `character` / `symbol` parameters and the extra prose are only added to the
+   schema when a bridge is injected (`knowledge.lsp_enabled`, default **false**). The
+   −22 is incidental: making the map-only output fields `.optional()` — an LSP mode
+   answers a position, not a tree, and reporting `files_scanned: 0` for it would be a
+   claim about a scan that never happened — shortened the serialised `required` list.
+2. **On costs +333 full-definition tokens, and modes are ~3× cheaper than tools.**
+   Every tool pays a fixed envelope: `devices`, with a 9-token schema, still costs ~318
+   full. Four separate `diagnostics`/`definition`/`references`/`hover` tools would each
+   pay that envelope — ≈1,000–1,300 tokens on the same census — against the +333
+   measured for one tool with four extra modes. §100's "a tool definition is a permanent
+   per-request bill" is what made this the design, and the census now shows the size of
+   the avoided bill rather than asserting it.
+
+`--lsp` is a new flag on `golem bench tools` precisely so the on-state is measurable
+rather than assumed; the default census keeps reporting the state users actually ship,
+which is the §99/§104 lesson about metrics that describe a configuration nobody is in.
+
+**What is verified, and what is not.** 17 integration tests spawn a real child process
+(`tests/fixtures/fake-lsp-server.mjs`, this repo's own node binary) and cover the
+handshake, byte-at-a-time framing, all four modes, and every degrade path: binary not on
+`PATH`, unclaimed file extension, handshake timeout, request timeout, mid-session crash
+(with a pool re-spawn on the next call), protocol desync, unreadable file, missing
+position. Every one resolves to `available: false` plus a reason — none throws.
+
+**Not verified: a real language server.** `typescript-language-server` is not installed
+on this machine and Golem must not depend on it (Decision 53 criterion 4), so what is
+proven is the protocol and the lifecycle, not tsserver's own behaviour — notably how long
+a cold project load actually takes against `knowledge.lsp_timeout_ms` (15s default), and
+whether `DIAGNOSTICS_SETTLE_MS` (400ms) is enough for its two-phase publish. That is a
+live-traffic question, like R8.5's displacement question, and it wants the same answer:
+measure it on real use, do not guess it now.
+
+**Also unmeasured — the same open question R8.5 left.** Whether an agent given
+`definition`/`references` actually *stops* grepping and reading whole files. The
+displacement claim is the whole justification for both features and neither has evidence
+yet; §101's +21.4 accuracy points for the map is the closest thing, and it measures
+retrieval, not avoided reads.

@@ -282,6 +282,44 @@ export const SETTINGS_LEAVES = {
      */
     read_skeleton_enabled: z.boolean(),
     /**
+     * OPT-IN (R8.6): add the LSP modes — `diagnostics`, `definition`,
+     * `references`, `hover` — to the `code` tool, answered by a language server
+     * the USER installed and Golem merely spawns (tier-2, Decision 53). Off by
+     * default for two reasons: a language server is a long-lived process nobody
+     * asked for, and the extra modes widen the `code` tool's schema, which bills
+     * on every request (§88/§100). Without a server on `PATH` each mode reports
+     * why rather than failing. Lives beside `repo_map_enabled` because it gates
+     * the same tool: the map says what exists, the LSP says what refers to what.
+     */
+    lsp_enabled: z.boolean(),
+    /**
+     * R8.6: extra language-server rows, layered over the built-in
+     * `typescript-language-server` one (a row with the same `id` replaces it).
+     * `command` is resolved on `PATH` (`PATHEXT`-aware) or given as an explicit
+     * path; `args` is an argument ARRAY, never a shell string. This is how
+     * `gopls` or `rust-analyzer` arrive — as a user's config, not a Golem
+     * release, because a row Golem asserts but cannot exercise is the kind of
+     * unverified claim Decision 53's registry exists to prevent.
+     */
+    lsp_servers: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          command: z.string().min(1),
+          args: z.array(z.string()).default([]),
+          language_id: z.string().min(1),
+          extensions: z.array(z.string().min(1)).min(1),
+        }),
+      )
+      .optional(),
+    /**
+     * R8.6: per-request budget for an LSP call, in ms. The whole point of the
+     * bridge is that a hung language server is a no-op rather than a hang, and
+     * this is the number that makes it so. The `initialize` handshake gets its
+     * own, larger allowance internally (a cold tsserver loading a big project).
+     */
+    lsp_timeout_ms: timeoutMsSchema,
+    /**
      * OPT-OUT (R3.4, spec Decision 20e's local/P1 tier): federate the
      * user-scope wiki (`~/.golem/wiki/`) into `search`/`fetch` alongside this
      * project's own wiki, read-only. On by default — set false if a user
@@ -461,6 +499,15 @@ export interface KnowledgeSettings {
   readonly syntax_aware_chunking: boolean;
   readonly repo_map_enabled: boolean;
   readonly read_skeleton_enabled: boolean;
+  readonly lsp_enabled: boolean;
+  readonly lsp_servers?: readonly {
+    readonly id: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly language_id: string;
+    readonly extensions: readonly string[];
+  }[];
+  readonly lsp_timeout_ms: number;
   readonly user_wiki_enabled: boolean;
   readonly rerank_enabled: boolean;
   readonly memory_federation_enabled: boolean;
@@ -551,6 +598,8 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     syntax_aware_chunking: false,
     repo_map_enabled: true,
     read_skeleton_enabled: true,
+    lsp_enabled: false,
+    lsp_timeout_ms: 15_000,
     user_wiki_enabled: true,
     rerank_enabled: false,
     memory_federation_enabled: false,

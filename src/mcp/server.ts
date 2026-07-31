@@ -33,6 +33,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { EffectiveCompression } from "../compression/effective-level.js";
+import { LSP_MODES, type LspBridge, type LspMode } from "../ext/index.js";
 import {
   availabilityWarning,
   createProbeRunner,
@@ -131,6 +132,14 @@ export interface GolemMcpServerDeps {
    * built from the filesystem by tree-sitter, not from the vector index.
    */
   readonly codeRoot?: string;
+  /**
+   * R8.6 — the language-server bridge behind the `code` tool's `diagnostics` /
+   * `definition` / `references` / `hover` modes. Present only when
+   * `knowledge.lsp_enabled` is on; without it the tool keeps exactly the schema
+   * it had for `map` alone, so nobody pays per-request for modes they disabled.
+   * Requires {@link codeRoot}: the LSP modes are modes of that tool, not tools.
+   */
+  readonly lsp?: LspBridge;
   /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
@@ -499,7 +508,7 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
   }
 
   if (deps.codeRoot !== undefined) {
-    registerCodeTool(server, deps.codeRoot, tel);
+    registerCodeTool(server, deps.codeRoot, tel, deps.lsp);
   }
 
   if (deps.wiki !== undefined) {
@@ -508,12 +517,65 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
 }
 
 /**
- * R8.5 — the `code` tool: ONE tool with a `mode` parameter, never one tool per
- * capability. §88/§100 measured tool definitions as a permanent per-request bill
- * (11 tools ≈ 3,847 tokens as listed, ~1,130 as forwarded), so a map, and later
- * R8.6's LSP surfaces, share a single definition and a single schema.
+ * R8.5/R8.6 — the `code` tool: ONE tool with a `mode` parameter, never one tool
+ * per capability. §88/§100 measured tool definitions as a permanent per-request
+ * bill (11 tools ≈ 3,847 tokens as listed, ~1,130 as forwarded), so the map and
+ * R8.6's four LSP questions share a single definition and a single schema.
+ *
+ * The LSP half is present only when a bridge is injected
+ * (`knowledge.lsp_enabled`, default off): the mode enum, the position
+ * parameters and the extra prose all disappear from the definition when the
+ * feature is off, so a user who never enables it pays nothing per request for
+ * it. Absence of the language server itself is a no-op *result*, not an error
+ * (Decision 53).
  */
-function registerCodeTool(server: McpServer, root: string, tel?: ToolTelemetry): void {
+/** Validated `code` arguments — the union of the map shape and the LSP shape. */
+interface CodeToolArgs {
+  readonly mode?: string | undefined;
+  readonly query?: string | undefined;
+  readonly paths?: string[] | undefined;
+  readonly budget_tokens?: number | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly character?: number | undefined;
+  readonly symbol?: string | undefined;
+}
+
+function registerCodeTool(
+  server: McpServer,
+  root: string,
+  tel?: ToolTelemetry,
+  lsp?: LspBridge,
+): void {
+  const modes = lsp !== undefined ? (["map", ...LSP_MODES] as const) : (["map"] as const);
+  const modeDescription =
+    lsp !== undefined
+      ? "`map` (whole-repo skeleton), or an LSP question about one position: " +
+        "`diagnostics` | `definition` | `references` | `hover`"
+      : "What to return; only `map` (the whole-repo skeleton) exists today";
+  const lspInputs =
+    lsp !== undefined
+      ? {
+          file: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Repo-relative file the LSP modes ask about (required by those modes)"),
+          line: z.number().int().min(1).optional().describe("1-based line for the LSP position"),
+          character: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe("1-based column; defaults to `symbol`'s position or the first non-blank"),
+          symbol: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Name to locate instead of a column — pairs with a `map` row"),
+        }
+      : {};
+
   server.registerTool(
     "code",
     {
@@ -524,12 +586,15 @@ function registerCodeTool(server: McpServer, root: string, tel?: ToolTelemetry):
         "rendered to a token budget (~1.4k). Use it BEFORE reading files to find " +
         "where something lives — pass the question as `query` and it re-ranks " +
         "toward that topic. Cheaper than opening candidate files: read a narrow " +
-        "range of the file it names instead. Local, no network.",
+        "range of the file it names instead. Local, no network." +
+        (lsp !== undefined
+          ? " Other modes ask a language server about one position instead of the " +
+            "whole repo: `definition`/`references` beat grepping, `hover` gives the " +
+            "resolved type, `diagnostics` lists a file's problems. Pass `file` plus " +
+            "`symbol` (or `line`)."
+          : ""),
       inputSchema: {
-        mode: z
-          .enum(["map"])
-          .optional()
-          .describe("What to return; only `map` (the whole-repo skeleton) exists today"),
+        mode: z.enum(modes).optional().describe(modeDescription),
         query: z
           .string()
           .min(1)
@@ -546,20 +611,65 @@ function registerCodeTool(server: McpServer, root: string, tel?: ToolTelemetry):
           .max(MAX_MAP_BUDGET_TOKENS)
           .optional()
           .describe(`Token budget for the rendered map (default ${DEFAULT_MAP_BUDGET_TOKENS})`),
+        ...lspInputs,
       },
       outputSchema: {
         mode: z.string(),
         available: z.boolean(),
-        files_scanned: z.number().int().nonnegative(),
-        files_shown: z.number().int().nonnegative(),
-        symbols_total: z.number().int().nonnegative(),
-        symbols_shown: z.number().int().nonnegative(),
-        tokens: z.number().int().nonnegative(),
-        budget_tokens: z.number().int().nonnegative(),
+        // Map-only fields. Optional since R8.6: an LSP mode answers a position,
+        // not a tree, and reporting `files_scanned: 0` for it would be a claim
+        // about a scan that never happened.
+        files_scanned: z.number().int().nonnegative().optional(),
+        files_shown: z.number().int().nonnegative().optional(),
+        symbols_total: z.number().int().nonnegative().optional(),
+        symbols_shown: z.number().int().nonnegative().optional(),
+        tokens: z.number().int().nonnegative().optional(),
+        budget_tokens: z.number().int().nonnegative().optional(),
+        ...(lsp !== undefined
+          ? {
+              reason: z.string().optional(),
+              server: z.string().optional(),
+              locations: z
+                .array(
+                  z.object({
+                    file: z.string(),
+                    line: z.number().int(),
+                    character: z.number().int(),
+                  }),
+                )
+                .optional(),
+              diagnostics: z
+                .array(
+                  z.object({
+                    file: z.string(),
+                    line: z.number().int(),
+                    character: z.number().int(),
+                    severity: z.string(),
+                    message: z.string(),
+                    code: z.string().optional(),
+                    source: z.string().optional(),
+                  }),
+                )
+                .optional(),
+            }
+          : {}),
       },
     },
-    async ({ mode, query, paths, budget_tokens }) => {
+    // Explicitly typed: the shape is assembled conditionally (the LSP keys are
+    // absent when the bridge is), so the SDK cannot infer the callback's args
+    // from a literal object the way it does for the fixed-shape tools.
+    async ({ mode, query, paths, budget_tokens, file, line, character, symbol }: CodeToolArgs) => {
       const startMs = Date.now();
+
+      if (lsp !== undefined && mode !== undefined && mode !== "map") {
+        return instrumented(
+          tel,
+          "code",
+          startMs,
+          await runLspMode(lsp, mode as LspMode, { file, line, character, symbol }),
+        );
+      }
+
       const result = await buildRepoMap(root, {
         ...(query !== undefined ? { query } : {}),
         ...(paths !== undefined ? { focusPaths: paths } : {}),
@@ -603,6 +713,54 @@ function registerCodeTool(server: McpServer, root: string, tel?: ToolTelemetry):
       });
     },
   );
+}
+
+/**
+ * R8.6 — one LSP mode of the `code` tool, rendered as a tool result.
+ *
+ * Nothing here is an error path. A missing `file`, an absent language server, a
+ * timeout and a protocol failure all come back as `available: false` plus the
+ * reason, because a tool that throws teaches the model to stop asking — and the
+ * fallback (read the file, grep it) was always available anyway.
+ */
+async function runLspMode(
+  lsp: LspBridge,
+  mode: LspMode,
+  args: {
+    file?: string | undefined;
+    line?: number | undefined;
+    character?: number | undefined;
+    symbol?: string | undefined;
+  },
+): Promise<{
+  content: { type: "text"; text: string }[];
+  structuredContent: Record<string, unknown>;
+}> {
+  if (args.file === undefined) {
+    const text = `No LSP ${mode} available: this mode needs a \`file\``;
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { mode, available: false, reason: "missing `file`" },
+    };
+  }
+  const result = await lsp.query({
+    mode,
+    file: args.file,
+    ...(args.line !== undefined ? { line: args.line } : {}),
+    ...(args.character !== undefined ? { character: args.character } : {}),
+    ...(args.symbol !== undefined ? { symbol: args.symbol } : {}),
+  });
+  return {
+    content: [{ type: "text" as const, text: result.text }],
+    structuredContent: {
+      mode: result.mode,
+      available: result.available,
+      ...(result.reason !== undefined ? { reason: result.reason } : {}),
+      ...(result.server !== undefined ? { server: result.server } : {}),
+      ...(result.locations.length > 0 ? { locations: [...result.locations] } : {}),
+      ...(result.diagnostics.length > 0 ? { diagnostics: [...result.diagnostics] } : {}),
+    },
+  };
 }
 
 /** Longest chunk preview echoed in a search result's text/summary. */

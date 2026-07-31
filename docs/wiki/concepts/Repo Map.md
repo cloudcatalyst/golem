@@ -102,5 +102,8 @@ that needs live traffic.
 
 ## Related
 
+[[LSP Bridge]] — the other half of the same tool: the map says what exists, the
+language server says what refers to what.
+
 [[Context Ledger]] · [[Knowledge Base]] · [[Compression]] · [[Tool Search]] ·
 [[Managed Tools]] · [[Architecture]]

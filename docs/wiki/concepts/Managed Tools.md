@@ -155,6 +155,7 @@ cannot itself conflict; treat the combination as unverified.
 
 ## Related
 
+- [[LSP Bridge]] — the R8.6 tier-2 row: spawn the user's own language server, degrade to a no-op
 - [[Compression]] — the Headroom sidecar's only caller, and why it stays idle
 - [[Slider Levels]] — the gate that makes "enabled" not mean "running"
 - [[Configuration Surfaces]] — where `enabledBy` settings are rendered and written

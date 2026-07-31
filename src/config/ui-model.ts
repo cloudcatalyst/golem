@@ -379,6 +379,28 @@ export const SETTING_META = {
     detail: "Makes the cheap recovery a narrow re-read instead of expanding the whole original.",
     advanced: true,
   },
+  "knowledge.lsp_enabled": {
+    label: "LSP modes on the code tool",
+    summary: "Offer diagnostics / definition / references / hover via a language server",
+    detail:
+      "You install the server (e.g. typescript-language-server); Golem only spawns it, and " +
+      "reports why rather than failing when it is absent. Adds modes to the existing `code` " +
+      "tool rather than new tools, but a wider schema still bills on every request.",
+    restart: "mcp",
+  },
+  "knowledge.lsp_servers": {
+    label: "Language server rows",
+    summary: "Extra servers by file extension, layered over the built-in TypeScript row",
+    detail: "How gopls or rust-analyzer are added — config, not a Golem release.",
+    advanced: true,
+    restart: "mcp",
+  },
+  "knowledge.lsp_timeout_ms": {
+    label: "LSP request timeout",
+    summary: "Budget for one language-server call before it degrades to a no-op",
+    advanced: true,
+    restart: "mcp",
+  },
   "knowledge.user_wiki_enabled": {
     label: "Federate the user wiki",
     summary: "Include ~/.golem/wiki/ in search results, read-only",
