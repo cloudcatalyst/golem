@@ -141,6 +141,15 @@ export interface GolemMcpServerDeps {
    */
   readonly lsp?: LspBridge;
   /**
+   * R8.7 — offer `coder`'s `edit` mode (`inference.local_editor_enabled`).
+   *
+   * Same permanent-bill logic as {@link codeRoot} and {@link lsp}: the mode's
+   * three schema properties cost +313 definition tokens on every request (§110),
+   * so when this is absent `coder`'s definition is byte-identical to R8.6's.
+   * Requires {@link projectRootDir} — an edit must be containable to a project.
+   */
+  readonly localEditor?: boolean;
+  /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
    * under it above equal-scoring non-wiki hits, since the wiki is canonical
@@ -502,6 +511,10 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
         wikiDir: deps.wikiDir,
         rerank: deps.rerank,
         defaultProjectId: deps.defaultProjectId ?? "default",
+        // R8.7: `mode: "edit"` needs a filesystem root to contain the edit in.
+        // Without one the mode declines rather than resolving paths from cwd.
+        ...(deps.projectRootDir === undefined ? {} : { projectRootDir: deps.projectRootDir }),
+        editEnabled: deps.localEditor === true,
       },
       tel,
     );
@@ -1494,6 +1507,13 @@ interface CoderGroundingDeps {
   readonly wikiDir?: string | undefined;
   readonly rerank?: InferenceService | undefined;
   readonly defaultProjectId: string;
+  /** R8.7 — filesystem root `mode: "edit"` resolves and contains paths against. */
+  readonly projectRootDir?: string | undefined;
+  /**
+   * R8.7 — offer the `edit` mode at all (`inference.local_editor_enabled`).
+   * Its schema is omitted when false, so the mode costs nothing when unused.
+   */
+  readonly editEnabled?: boolean | undefined;
 }
 
 /**
@@ -1519,12 +1539,53 @@ function refineNote(r: RefineOutcome): string {
   }
 }
 
+/**
+ * R8.7 — the `edit` mode's schema half, added ONLY when the mode is enabled.
+ *
+ * R8.6's discipline (§109) applied to a costlier case: these three properties
+ * plus their prose are +313 definition tokens on **every** request (§110), so a
+ * user who does not want a local editor must not pay for its schema. With
+ * `inference.local_editor_enabled` false — the default — `coder`'s definition is
+ * byte-identical to what R8.6 shipped.
+ */
+const EDIT_MODE_DESCRIPTION =
+  ' With `mode: "edit"` plus `file`, the local model rewrites that ONE small ' +
+  "file from `task` and Golem validates the result (syntax must still parse, no " +
+  "definition may disappear) — you get a diff to review instead of writing the " +
+  "edit yourself; add `apply: true` to have Golem write it.";
+
+const EDIT_MODE_SCHEMA = {
+  mode: z
+    .enum(["draft", "edit"])
+    .optional()
+    .describe(
+      'Default "draft" returns text. "edit" needs `file`: the local model ' +
+        "rewrites it and Golem validates the result before anything is written.",
+    ),
+  file: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Project-relative file to edit (mode "edit" only). Small files only — ' +
+        "bigger ones are declined rather than guessed at.",
+    ),
+  apply: z
+    .boolean()
+    .optional()
+    .describe(
+      "Write the validated edit to disk (default false: propose a diff and " +
+        "change nothing). Never writes an edit that failed validation.",
+    ),
+} as const;
+
 function registerCoderTool(
   server: McpServer,
   inference: InferenceService,
   grounding: CoderGroundingDeps,
   tel?: ToolTelemetry,
 ): void {
+  const editEnabled = grounding.editEnabled === true;
   server.registerTool(
     "coder",
     {
@@ -1538,9 +1599,11 @@ function registerCoderTool(
         "Golem's local knowledge base (project code, docs, wiki) so the draft fits " +
         "this codebase; pass `ground: false` to skip that. Nothing leaves the " +
         "machine, but the local model may be slower or lower-quality than you: " +
-        "treat the result as a draft to review, not a final answer.",
+        "treat the result as a draft to review, not a final answer." +
+        (editEnabled ? EDIT_MODE_DESCRIPTION : ""),
       inputSchema: {
         task: z.string().min(1).describe("The task or instructions for the local model"),
+        ...(editEnabled ? EDIT_MODE_SCHEMA : {}),
         context: z
           .string()
           .optional()
@@ -1570,6 +1633,26 @@ function registerCoderTool(
         text: z.string(),
         model: z.string(),
         role: z.string(),
+        // R8.7: declared only when the edit mode is on, so `coder`'s definition
+        // is byte-identical to R8.6's when it is off (§110). Claude Code does not
+        // forward `outputSchema` (§100), but `golem bench tools` counts the whole
+        // serialized definition — and a census that reports a cost nobody pays is
+        // the dishonest metric this repo keeps rejecting.
+        ...(editEnabled
+          ? {
+              edit: z
+                .object({
+                  status: z.enum(["applied", "proposed", "rejected"]),
+                  path: z.string(),
+                  validation: z.string(),
+                  added: z.number().int().nonnegative(),
+                  removed: z.number().int().nonnegative(),
+                  syntax_checked: z.boolean(),
+                  reason: z.string().optional(),
+                })
+                .optional(),
+            }
+          : {}),
         // R4.2: present only when grounding actually injected context.
         grounding: z
           .object({
@@ -1587,8 +1670,71 @@ function registerCoderTool(
           .optional(),
       },
     },
-    async ({ task, context, ground, refine, project_id }) => {
+    async ({ task, mode, file, apply, context, ground, refine, project_id }) => {
       const startMs = Date.now();
+
+      // R8.7 — the edit mode. Kept as a MODE of `coder` rather than a new tool
+      // (R8.6's discipline, §109): three optional properties on an existing
+      // definition, not another ~300-token tool in every request.
+      if (mode === "edit") {
+        if (file === undefined) {
+          return errorResult('mode "edit" needs `file` — the one file to rewrite.');
+        }
+        if (grounding.projectRootDir === undefined) {
+          return errorResult(
+            "This MCP server has no project root configured, so an edit cannot be " +
+              "contained to the project — refusing to edit any path.",
+          );
+        }
+        const { coderEdit } = await import("./coder-edit.js");
+        const outcome = await coderEdit(
+          { inference, projectDir: grounding.projectRootDir },
+          {
+            instruction: task,
+            file,
+            ...(apply === undefined ? {} : { apply }),
+            ...(context === undefined ? {} : { context }),
+          },
+        );
+        const headline =
+          outcome.status === "applied"
+            ? `Applied to ${outcome.path} (+${outcome.added}/-${outcome.removed})`
+            : outcome.status === "proposed"
+              ? `Proposed for ${outcome.path} (+${outcome.added}/-${outcome.removed}) — nothing written; call again with apply: true to write it`
+              : `Refused to edit ${outcome.path}`;
+        const validationNote =
+          outcome.status === "rejected"
+            ? ` Validation: ${outcome.validation}.`
+            : outcome.parseChecked
+              ? " Validated: it still parses and defines everything it did before."
+              : " NOT syntax-checked (no grammar for this file type).";
+        const body = outcome.diff === null ? "" : `\n\n${outcome.diff}`;
+        return instrumented(tel, "coder", startMs, {
+          content: [
+            {
+              type: "text",
+              text:
+                `**Golem** ${headline}. Edited by ${outcome.model ?? "the local model"} — review the diff.` +
+                `${validationNote}${outcome.reason === null ? "" : ` ${outcome.reason}`}${body}`,
+            },
+          ],
+          structuredContent: {
+            text: outcome.diff ?? outcome.reason ?? "",
+            model: outcome.model ?? "",
+            role: "drafter",
+            edit: {
+              status: outcome.status,
+              path: outcome.path,
+              validation: outcome.validation,
+              added: outcome.added,
+              removed: outcome.removed,
+              syntax_checked: outcome.parseChecked,
+              ...(outcome.reason === null ? {} : { reason: outcome.reason }),
+            },
+          },
+        });
+      }
+
       const grounded =
         ground !== false && grounding.knowledge !== undefined
           ? await gatherGrounding(task, project_id ?? grounding.defaultProjectId, {

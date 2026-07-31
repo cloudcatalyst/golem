@@ -268,6 +268,16 @@ export const SETTING_META = {
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
     restart: "mcp",
   },
+  "inference.local_editor_enabled": {
+    label: "Local editor mode",
+    summary: 'Offer `coder`\'s `mode: "edit"` — a validated local rewrite of one small file',
+    detail:
+      "Off by default because the mode's schema costs ~313 tokens on EVERY request (§110), " +
+      "while the saving only lands when it is used. Golem validates every edit (syntax must " +
+      "still parse, no definition may disappear) and writes nothing unless `apply: true`. " +
+      "Measured on ~10–40-line TypeScript files; bigger files are declined, not guessed at.",
+    restart: "mcp",
+  },
 
   // --- compression ----------------------------------------------------------
   "compression.headroom_sidecar": {

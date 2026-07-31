@@ -403,3 +403,35 @@ export async function extractFileFacts(ext: string, content: string): Promise<Fi
     return null;
   }
 }
+
+/**
+ * R8.7 — "does this still parse?", the syntax half of Golem's edit validation.
+ *
+ * Returns `true` when the parse tree contains a syntax error, `false` when it is
+ * clean, and **`null` when nothing could be checked** (grammar absent,
+ * `web-tree-sitter` not installed, unsupported extension). The three-way return
+ * matters: an edit validator must never read "could not check" as "clean", or a
+ * machine without the optional grammars silently loses the only automatic guard
+ * against a local model writing unparseable code.
+ *
+ * Note tree-sitter is an error-*recovering* parser — it always returns a tree,
+ * so `hasError` (not a thrown exception) is the signal. `isMissing` catches the
+ * subtler case where recovery inserted a token that was never written.
+ */
+export async function hasParseError(ext: string, content: string): Promise<boolean | null> {
+  if (!(ext in GRAMMAR_BY_EXT)) return null;
+  const mod = await loadRuntime();
+  if (mod === null) return null;
+  const language = await loadLanguage(mod, ext);
+  if (language === null) return null;
+
+  try {
+    const parser = new mod.Parser();
+    parser.setLanguage(language);
+    const tree = parser.parse(content);
+    if (tree === null) return null;
+    return tree.rootNode.hasError || tree.rootNode.isMissing;
+  } catch {
+    return null;
+  }
+}

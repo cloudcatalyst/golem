@@ -6,7 +6,7 @@
  * exercises every P0 tool with valid and invalid inputs.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -34,6 +34,7 @@ import {
   sliderPolicyForLevel,
 } from "../../src/interfaces/index.js";
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
+import { MAX_EDIT_LINES } from "../../src/mcp/coder-edit.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
 import { JsonlTelemetryStore, recordToolCall } from "../../src/telemetry/index.js";
 import { rmTemp } from "../helpers/tmp.js";
@@ -967,6 +968,195 @@ describe("coder tool", () => {
       arguments: { task: "write something" },
     });
     expect(result.structuredContent).not.toHaveProperty("refinement");
+  });
+
+  /**
+   * R8.7 — `mode: "edit"`. The properties under test are the refusals: the
+   * default outcome of an edit call is a diff and an unchanged file, an edit that
+   * fails validation is never written, and no path outside the project root is
+   * touched whatever the model or the caller says.
+   */
+  describe('mode: "edit" (R8.7)', () => {
+    const FIXTURE = ["export function f(a: number): number {", "  return a + 1;", "}", ""].join(
+      "\n",
+    );
+
+    /** A drafter that replies with `after` as a whole-file block. */
+    function wholeFileDrafter(after: string): FakeInferenceService {
+      return new FakeInferenceService(async (role) => ({
+        text: `fixture.ts\n\`\`\`\n${after.replace(/\n$/u, "")}\n\`\`\`\n`,
+        model: "qwen2.5-coder:7b",
+        role,
+        promptTokens: 1,
+        completionTokens: 1,
+        finishReason: "stop",
+      }));
+    }
+
+    async function withProject(
+      inference: InferenceService,
+      contents = FIXTURE,
+    ): Promise<{ client: Client; dir: string; file: string }> {
+      const dir = await mkdtemp(path.join(tmpdir(), "golem-edit-"));
+      const file = path.join(dir, "fixture.ts");
+      await writeFile(file, contents, "utf8");
+      const client = await connectInMemory({
+        ...depsWithInference(inference),
+        projectRootDir: dir,
+        localEditor: true,
+      });
+      return { client, dir, file };
+    }
+
+    it("is not in the schema at all unless localEditor is wired (the +313-token bill)", async () => {
+      const client = await connectInMemory(depsWithInference(okDrafter()));
+      const { tools } = await client.listTools();
+      const coder = tools.find((t) => t.name === "coder");
+      const properties = (coder?.inputSchema.properties ?? {}) as Record<string, unknown>;
+      expect(Object.keys(properties)).not.toContain("mode");
+      expect(Object.keys(properties)).not.toContain("apply");
+      expect(coder?.description).not.toContain('mode: "edit"');
+    });
+
+    it("appears in the schema when localEditor is wired", async () => {
+      const dir = await mkdtemp(path.join(tmpdir(), "golem-edit-schema-"));
+      try {
+        const client = await connectInMemory({
+          ...depsWithInference(okDrafter()),
+          projectRootDir: dir,
+          localEditor: true,
+        });
+        const { tools } = await client.listTools();
+        const coder = tools.find((t) => t.name === "coder");
+        const properties = (coder?.inputSchema.properties ?? {}) as Record<string, unknown>;
+        expect(Object.keys(properties)).toContain("mode");
+        expect(Object.keys(properties)).toContain("file");
+        expect(Object.keys(properties)).toContain("apply");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("proposes a diff and changes nothing by default", async () => {
+      const { client, dir, file } = await withProject(
+        wholeFileDrafter(FIXTURE.replace("a + 1", "a + 2")),
+      );
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: { task: "return a + 2 instead", mode: "edit", file: "fixture.ts" },
+        });
+        expect(result.isError).toBeFalsy();
+        const text = textOf(result);
+        expect(text).toContain("Proposed for fixture.ts");
+        expect(text).toContain("nothing written");
+        expect(text).toContain("-  return a + 1;");
+        expect(text).toContain("+  return a + 2;");
+        expect(result.structuredContent).toMatchObject({
+          edit: { status: "proposed", path: "fixture.ts", validation: "valid" },
+        });
+        expect(await readFile(file, "utf8")).toBe(FIXTURE);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("writes the file only when apply is true", async () => {
+      const after = FIXTURE.replace("a + 1", "a + 2");
+      const { client, dir, file } = await withProject(wholeFileDrafter(after));
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: {
+            task: "return a + 2 instead",
+            mode: "edit",
+            file: "fixture.ts",
+            apply: true,
+          },
+        });
+        expect(textOf(result)).toContain("Applied to fixture.ts");
+        expect(result.structuredContent).toMatchObject({ edit: { status: "applied" } });
+        expect(await readFile(file, "utf8")).toBe(after);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses — and does not write — an edit that drops an existing definition", async () => {
+      const { client, dir, file } = await withProject(
+        wholeFileDrafter("export function g(): void {}\n"),
+      );
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: { task: "add a g function", mode: "edit", file: "fixture.ts", apply: true },
+        });
+        const text = textOf(result);
+        expect(text).toContain("Refused to edit fixture.ts");
+        expect(text).toContain("no longer defines f");
+        expect(result.structuredContent).toMatchObject({
+          edit: { status: "rejected", validation: "symbols-lost" },
+        });
+        expect(await readFile(file, "utf8")).toBe(FIXTURE);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses a path outside the project root", async () => {
+      const { client, dir } = await withProject(wholeFileDrafter("whatever\n"));
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: { task: "edit it", mode: "edit", file: "../outside.ts", apply: true },
+        });
+        expect(textOf(result)).toContain("outside this project");
+        expect(result.structuredContent).toMatchObject({ edit: { validation: "refused" } });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("declines a file above the line cap rather than guessing at it", async () => {
+      const big = `${"// a line\n".repeat(MAX_EDIT_LINES + 5)}export const x = 1;\n`;
+      const { client, dir } = await withProject(wholeFileDrafter("export const x = 2;\n"), big);
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: { task: "change x to 2", mode: "edit", file: "fixture.ts" },
+        });
+        expect(textOf(result)).toContain(`above the ${MAX_EDIT_LINES}-line cap`);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("asks for a file rather than editing something it guessed", async () => {
+      const { client, dir } = await withProject(okDrafter());
+      try {
+        const result = await client.callTool({
+          name: "coder",
+          arguments: { task: "fix the bug", mode: "edit" },
+        });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).toContain("needs `file`");
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses to edit at all when the server has no project root", async () => {
+      const client = await connectInMemory({
+        ...depsWithInference(okDrafter()),
+        localEditor: true,
+      });
+      const result = await client.callTool({
+        name: "coder",
+        arguments: { task: "fix the bug", mode: "edit", file: "fixture.ts" },
+      });
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("no project root");
+    });
   });
 });
 

@@ -11,6 +11,31 @@ export type { SelectionCase } from "./cases.js";
 export { ARGUMENT_CASES, SELECTION_CASES } from "./cases.js";
 export type { CatalogTool, ToolCensus } from "./catalog.js";
 export { golemToolCensus } from "./catalog.js";
+export type {
+  EditStatus,
+  MatchStrategy,
+  ValidatedEdit,
+  ValidateOptions,
+} from "./edit-apply.js";
+export { countOccurrences, findTrimmedSpan, validateEdits } from "./edit-apply.js";
+export type {
+  EditBenchReport,
+  EditOutcome,
+  EditRun,
+  EditVerdict,
+} from "./edit-bench.js";
+export { benchEdits, EDIT_BAR, renderEditBench, runEditArm } from "./edit-bench.js";
+export type { EditAssertion, EditCase } from "./edit-cases.js";
+export { EDIT_CASES } from "./edit-cases.js";
+export type { DiffOptions, DiffStat } from "./edit-diff.js";
+export { diffLines, renderDiff } from "./edit-diff.js";
+export type { EditFormat, ParsedEditReply, ProposedEdit } from "./edit-format.js";
+export {
+  EDIT_FORMATS,
+  editFormatInstructions,
+  isEditFormat,
+  parseEditReply,
+} from "./edit-format.js";
 export type { ExternalShrinker } from "./ext-shrink.js";
 export { resolveCavemanShrink } from "./ext-shrink.js";
 export type { ToolBenchReport } from "./report.js";

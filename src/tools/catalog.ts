@@ -115,6 +115,12 @@ export interface ToolCensusOptions {
    * §99's cache-prefix verdict is on the roadmap for.
    */
   readonly lsp?: boolean;
+  /**
+   * R8.7: register `coder`'s `edit` mode, as `inference.local_editor_enabled`
+   * would. Off by default for the same reason as {@link lsp} — the shipped
+   * default is off, and the on-state must be measurable rather than assumed.
+   */
+  readonly editor?: boolean;
 }
 
 /**
@@ -127,6 +133,7 @@ export async function golemToolCensus(options: ToolCensusOptions = {}): Promise<
   const deps = {
     ...catalogDeps(),
     ...(options.lsp === true ? { lsp: await catalogLspBridge() } : {}),
+    ...(options.editor === true ? { localEditor: true } : {}),
   };
   const server = createGolemMcpServer(deps);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
