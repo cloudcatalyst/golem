@@ -281,18 +281,15 @@ it removes an argument from every later row.
 
 ## Open questions (for `verification-notes.md`)
 
-1. **Hook precedence between a rewriting hook and a denying hook — UNRESOLVED.**
-   Verified 2026-07-30 against `code.claude.com/docs/en/hooks` (301 from
-   `docs.claude.com/en/docs/claude-code/hooks`): PreToolUse hooks run **in
-   parallel**, entries **merge** across settings levels, `permissionDecision` is
-   `allow|deny|ask|defer`, and `updatedInput` under `hookSpecificOutput`
-   **replaces a tool's arguments before it runs**. What the docs do **not**
-   state is the precedence when parallel hooks return conflicting decisions —
-   e.g. RTK returning `updatedInput` for a Bash rewrite while Golem's hook
-   returns `deny` for snooze/coder-first/autonomy. Golem's PreToolUse is
-   registered with **no matcher** (`src/cli/init.ts:704`), so it fires on every
-   Bash call and this interaction is live for any user who installs both.
-   **Assert it in a test; do not trust it.**
+1. **Hook precedence between a rewriting hook and a denying hook — ANSWERED
+   (§105, 2026-07-31).** The docs now state it (`deny > defer > ask > allow`),
+   and the case they still omit — a hook returning only `updatedInput` racing a
+   `deny` — is pinned by a live test against Claude Code 2.1.220
+   (`tests/e2e/hook-precedence.live.test.ts`, opt-in via `GOLEM_LIVE_CLAUDE=1`):
+   both hooks fire, the **deny wins**, the rewrite is discarded. Golem's `deny`
+   paths are safe alongside a peer that rewrites Bash input. The *other*
+   asymmetry stands and was fixed separately: a peer's rewrite changes what
+   Golem's classifier reads (§96, `stripOutputWrapper`).
 2. **How much of R8.2's dedup opportunity actually exists in real traffic?**
    Measure before building: count near-identical tool-result blocks per session
    from the proxy's own view.

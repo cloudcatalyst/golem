@@ -65,12 +65,21 @@ favour of *embracing* backgrounding:
   notification when the call settles"* (code.claude.com/docs/en/mcp). That
   completion notification **re-invokes the agent in-place** — the same mechanism
   that resumes this repo's own background-task watches.
-- So the near-limit flow is **document → snooze → wait** (P2b): the agent
-  captures its progress into an R5.1 durable task, calls `snooze`, and **stops**
-  (the PreToolUse gate denies further tool work; guidance says wait). The
-  session idles — **no quota burned** — and when `snooze` completes at the reset,
-  its task notification resumes the agent in-place. The durable task is the
-  safety net if the session dies before then.
+- So the near-limit flow is **document+snooze → wait** (P2b): the agent calls
+  `snooze` with `note="<where it's up to + next steps>"` and **stops** (the
+  PreToolUse gate denies further tool work; guidance says wait). The session
+  idles — **no quota burned** — and when `snooze` completes at the reset, its task
+  notification resumes the agent in-place. The note is filed as an R5.1 durable
+  task *before* the wait — the safety net if the session dies before then.
+- **Revised 2026-07-31 (task `snooze-taskadd`, §105).** Documenting was originally
+  a *separate first step* — `golem task add "<note>"` through `Bash`. Decision 45
+  then made enforcement the default, and enforcement denies every non-`snooze`
+  call: step 1 was denied by step 2's own mechanism, observed live 2026-07-30. The
+  alternative — exempting that `Bash` command — would have re-opened the hole
+  enforcement exists to close, on a string match. Folding the note into `snooze`
+  makes the ordering problem **structurally impossible** instead of exempted:
+  the one permitted tool is the one that writes the safety net. See
+  `src/mcp/snooze-note.ts`.
 - No global override needed. The only remaining config is per-server, non-invasive:
   **`timeout: 23_400_000` (6.5 h)** on the golem `.mcp.json` entry — a wall-clock
   cap above snooze's own 6 h cap (default `MCP_TOOL_TIMEOUT` is ~28 h, so this is

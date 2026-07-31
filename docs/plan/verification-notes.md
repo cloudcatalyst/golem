@@ -3751,6 +3751,11 @@ call including Bash. Any user who installs both is exercising this interaction.
 Golem's `deny` paths must still win. Until that test exists, treat coexistence as
 unverified.
 
+> **CLOSED by §105 (2026-07-31).** The docs have since gained the precedence sentence
+> (`deny > defer > ask > allow`), and the case they still omit — a hook returning only
+> `updatedInput` racing a `deny` — is now pinned by a live test against Claude Code
+> 2.1.220. The deny wins; the rewrite is discarded.
+
 ## §92 — Dependency-tier audit: two documented-as-optional things that were not (2026-07-30)
 
 Found while writing Decision 53's ladder, by checking each claim rather than
@@ -4603,3 +4608,55 @@ obvious candidate; not chased, because the verdict is now correct either way).
    98%-bust report coexist with a 98.4% hit rate for a day. Even across the *whole*
    pre-fix history the deepest bust re-prefilled only 7.0% of the history — visible at a
    glance now, invisible before.
+
+## §105 — §91 closed on both halves: the docs now state PreToolUse precedence, and a live run proves `deny` beats a rewrite (2026-07-31)
+
+Task `hook-precedence`. Source: `code.claude.com/docs/en/hooks` (re-read 2026-07-31,
+served from Golem's own webcache), plus a live run against **Claude Code 2.1.220**.
+
+**Half one — the docs no longer withhold it.** §91 recorded the precedence question as
+undocumented and pointed at `#pretooluse-decision-control` as the place to look next.
+That section now contains the sentence verbatim:
+
+> When multiple PreToolUse hooks return different decisions, precedence is
+> deny > defer > ask > allow.
+
+and, on `permissionDecision`:
+
+> Deny and ask rules are still evaluated regardless of what the hook returns
+
+So the *conflicting-decisions* case is settled by the vendor: `deny` outranks everything.
+
+**Half two — the case the docs still do not cover, asserted.** The RTK shape is not a
+conflicting decision: it returns **no `permissionDecision` at all**, only
+`hookSpecificOutput.updatedInput`, which "replaces a tool's arguments before it runs".
+Nothing in the reference says what happens to that rewrite when a *different* hook on the
+same call denies. §91's instruction was "assert it; do not trust it", so
+`tests/e2e/hook-precedence.live.test.ts` does:
+
+- a temp project with **two** project-scope `PreToolUse` hooks, both `matcher: "Bash"` —
+  one returning only `updatedInput` (rewriting the command to one that creates a marker
+  file), one returning `deny`;
+- a real `claude -p` turn asked to run `cat note.txt` through Bash;
+- ground truth is the **marker file**: if it exists, the rewritten command executed and
+  the deny lost.
+
+**Observed: both hooks fired on the same call, and the marker was never created.** The
+deny won; the rewrite was discarded rather than executed. The test also refuses to pass
+vacuously — it fails if neither hook fired, which would mean Bash was never attempted.
+
+**What this licenses.** Golem's `deny` paths — snooze enforcement (Decision 45),
+coder-first (Decision 39), the autonomy gate (ADR-0002) — are safe to rely on alongside a
+peer that rewrites Bash input. §96's finding stands as the *other* asymmetry: a peer's
+rewrite can still change what Golem's classifier *reads* (fixed by `stripOutputWrapper`),
+and that is a matching problem, not a precedence one.
+
+**Cost of the check, and why it is opt-in.** The test spends one model turn, so it is
+gated behind `GOLEM_LIVE_CLAUDE=1` and never runs in the default suite:
+
+```
+GOLEM_LIVE_CLAUDE=1 npx vitest run tests/e2e/hook-precedence.live.test.ts
+```
+
+Re-run it after any Claude Code upgrade that touches hooks — this is a vendor behaviour
+pinned by observation, not by contract, and the docs were silent on it three days ago.

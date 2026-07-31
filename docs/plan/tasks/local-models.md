@@ -1,7 +1,7 @@
 ---
 task: local-models
 title: golem devices reports the tier CATALOG, not what Ollama has actually pulled
-state: queued
+state: done
 owner: agent
 size: S
 design: docs/plan/verification-notes.md §89, §100; BACKLOG 2026-07-17 (the judge bug)
@@ -9,7 +9,7 @@ gate: A missing model is reported as missing BEFORE a harness or a tool silently
 depends_on: []
 touches: [src/inference/, src/cli/]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31T00:11:58.671Z
 ---
 
 ## Goal
@@ -47,3 +47,7 @@ models were available.
 
 Auto-pulling models — that is a large download decided by the user, not the tool.
 Changing the tier catalog itself (advisory per Decision 6).
+
+## Outcome
+
+New src/inference/availability.ts resolves every tier slot against Ollama /api/tags with THREE states (pulled / not-pulled / unknown — an unreachable endpoint never reports 'missing'). Surfaced in golem devices (per-slot table + N/7 runnable + pull commands), golem local status (coder model state), and the devices MCP tool; golem bench tools/repo-map now warn on stderr BEFORE scoring, which is the caveat §89/§100 each wrote by hand afterwards. Stricter matcher than hasModel's startsWith (qwen2.5:32b no longer satisfies qwen2.5:3b). Live-verified against this machine's ollama list: 3/7 runnable at P_MID.
