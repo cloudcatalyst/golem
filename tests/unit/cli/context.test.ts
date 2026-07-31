@@ -10,6 +10,7 @@
 import { describe, expect, it } from "vitest";
 import { renderContextLedger } from "../../../src/cli/context.js";
 import { buildContextLedger, type ContextLedger } from "../../../src/proxy/index.js";
+import type { ModelCatalog } from "../../../src/telemetry/index.js";
 
 function ledger(body: Record<string, unknown>): ContextLedger {
   return { ...buildContextLedger(body), capturedAt: "2026-07-30T12:00:00.000Z" };
@@ -140,5 +141,77 @@ describe("renderContextLedger", () => {
     );
     expect(out).toContain("2026-07-30T12:00:00.000Z");
     expect(out).toContain("2 message(s)");
+  });
+});
+
+/**
+ * R8.8 — the context-window line. The interesting cases are all the ways it
+ * declines to warn: no model on the capture, no catalog entry, no stated limit.
+ */
+describe("renderContextLedger — context window (R8.8)", () => {
+  const catalog: ModelCatalog = {
+    source: "test-prices",
+    asOf: "2026-07-31",
+    entries: [
+      { id: "small-window", provider: "anthropic", contextTokens: 1000 },
+      { id: "no-window", provider: "anthropic", inputUsdPerMTok: 1 },
+    ],
+  };
+  const window = { catalog, warnFraction: 0.8 };
+
+  it("says nothing at all when the capture carried no model", () => {
+    const out = renderContextLedger(
+      ledger({ messages: [{ role: "user", content: "hi" }] }),
+      window,
+    );
+    expect(out).not.toContain("Context window");
+  });
+
+  it("reports the share of the window and stays quiet about pruning when within it", () => {
+    const out = renderContextLedger(
+      ledger({ model: "small-window", messages: [{ role: "user", content: "hi" }] }),
+      window,
+    );
+    expect(out).toContain("Context window — small-window");
+    expect(out).toContain("within the window");
+  });
+
+  it("warns when approaching, and shouts when over", () => {
+    const approaching = renderContextLedger(
+      ledger({ model: "small-window", messages: [{ role: "user", content: "x".repeat(3400) }] }),
+      window,
+    );
+    expect(approaching).toContain("approaching the window");
+
+    const over = renderContextLedger(
+      ledger({ model: "small-window", messages: [{ role: "user", content: "x".repeat(8000) }] }),
+      window,
+    );
+    expect(over).toContain("OVER the window");
+  });
+
+  it("names the model verbatim and declines to check an uncatalogued one", () => {
+    const out = renderContextLedger(
+      ledger({ model: "claude-opus-9-preview", messages: [{ role: "user", content: "hi" }] }),
+      window,
+    );
+    expect(out).toContain("claude-opus-9-preview");
+    expect(out).toContain("not in the catalog (unknown)");
+  });
+
+  it("declines when the catalogued entry states no window", () => {
+    const out = renderContextLedger(
+      ledger({ model: "no-window", messages: [{ role: "user", content: "hi" }] }),
+      window,
+    );
+    expect(out).toContain("no stated context window");
+  });
+
+  it("renders the R8.4 report unchanged when no catalog is passed", () => {
+    const out = renderContextLedger(
+      ledger({ model: "small-window", messages: [{ role: "user", content: "x".repeat(8000) }] }),
+    );
+    expect(out).not.toContain("Context window");
+    expect(out).toContain("By bucket:");
   });
 });

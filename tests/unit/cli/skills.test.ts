@@ -105,13 +105,18 @@ describe("footgun-guard skills (upstream + park)", () => {
     expect(skill.toLowerCase()).toContain("not the claude code model picker");
   });
 
-  it("park documents a durable task before snoozing", () => {
+  // Task `snooze-taskadd`: documenting and parking are ONE call. The old
+  // document-then-park ordering was unreachable — enforcement denies the `Bash`
+  // running `golem task add`, so the skill must ask for snooze's `note` instead.
+  it("park documents via snooze's own note, in the same call", () => {
     const skill = P0_SKILLS.park;
     if (skill === undefined) throw new Error("expected a park skill");
-    expect(skill).toContain("golem task add");
     expect(skill).toContain("snooze");
-    // Document-then-park: the task add must come before the snooze step.
-    expect(skill.indexOf("golem task add")).toBeLessThan(skill.indexOf("Park until reset"));
+    expect(skill).toContain("note=");
+    expect(skill).toContain("ONE call");
+    // It may still MENTION `golem task add` — but only to warn against it.
+    const add = skill.indexOf("golem task add");
+    if (add !== -1) expect(skill.slice(add - 40, add)).toMatch(/Don't reach for/);
   });
 });
 
@@ -136,9 +141,23 @@ describe("P0 skill registry", () => {
       "cache-health",
       "context-hygiene",
       "fresh-eyes",
+      "checkpoint",
     ]) {
       expect(P0_SKILLS[name], `missing skill: ${name}`).toBeDefined();
     }
+  });
+
+  // R8.9: the ledger is only worth its tool surface if the model reaches for it
+  // BEFORE the risky attempt — and never auto-accepts the destructive half.
+  it("checkpoint teaches create-before-attempt and never --yes on restore", () => {
+    const skill = P0_SKILLS.checkpoint;
+    if (skill === undefined) throw new Error("expected a checkpoint skill");
+    expect(skill).toContain("golem checkpoint create");
+    expect(skill).toContain("golem checkpoint show");
+    expect(skill).toMatch(/never pass\s+\\?`--yes\\?` on the user's behalf/);
+    // The promises that make it safe to run at all.
+    expect(skill).toContain("refs/golem/ledger");
+    expect(skill).toContain("detached HEAD");
   });
 
   it("fresh-eyes reads code before docs and sorts findings into three buckets", () => {

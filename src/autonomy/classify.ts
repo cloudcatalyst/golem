@@ -64,6 +64,11 @@ const SAFE_BASH = [
 /** Bash patterns that make a command DESTRUCTIVE (local data loss). */
 const DESTRUCTIVE_BASH = [
   /\brm\s+-[a-z]*[rf]/i,
+  // R8.9: the change ledger's write half. `restore`/`undo` overwrite and delete
+  // worktree files; `drop`/`prune` destroy snapshots. The CLI asks too, but this
+  // is the gate the task's brief requires: destructive is in ADR-0002's
+  // never-auto set, so no autonomy level can approve it for the agent.
+  /\bgolem\s+(checkpoint|cp)\s+(restore|undo|drop|prune)\b/i,
   /\bgit\s+reset\s+--hard/i,
   /\bgit\s+clean\s+-[a-z]*f/i,
   /\bgit\s+checkout\s+--\s/i,

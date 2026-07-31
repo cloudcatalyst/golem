@@ -147,6 +147,20 @@ export const SETTINGS_LEAVES = {
      * must still be reachable for coder to actually work.
      */
     local_coder_enabled: z.boolean(),
+    /**
+     * OPT-IN (R8.7, default **false**): offer `coder`'s `edit` mode — the local
+     * model rewrites one small file, Golem validates the result (syntax must
+     * still parse, no definition may disappear) and only then writes it.
+     *
+     * Off by default for a measured reason, not a cautious one: the mode's three
+     * extra schema properties cost **+313 definition tokens on every request**
+     * (§110), a permanent bill in the shape §100 rejected, while the saving is
+     * conditional on the mode being used AND the local edit being right.
+     * `golem bench edit` clears the bar for whole-file edits on ~10–40-line
+     * TypeScript files and nothing larger, so the people who benefit turn it on
+     * deliberately. When it is off, the schema is byte-identical to R8.6's.
+     */
+    local_editor_enabled: z.boolean(),
   },
   compression: {
     /**
@@ -264,6 +278,62 @@ export const SETTINGS_LEAVES = {
      */
     syntax_aware_chunking: z.boolean(),
     /**
+     * OPT-OUT (R8.5): register the `code` MCP tool, whose `map` mode renders a
+     * graph-ranked, budgeted signature skeleton of the repo so the model can
+     * find a file without reading three wrong ones. On by default, but it is a
+     * real cost either way — a tool definition bills on every request (§88/§100)
+     * — so set false to stop paying for it. The map itself needs the tier-2
+     * tree-sitter packages; without them the tool reports no map rather than
+     * failing (Decision 53).
+     */
+    repo_map_enabled: z.boolean(),
+    /**
+     * OPT-OUT (R8.5): when an oversized `Read` is swapped for a digest, include
+     * the file's symbol skeleton (every definition with its line number) beside
+     * the head/tail excerpt, so the cheap recovery is a narrow re-read rather
+     * than an `expand` that re-enters the whole original (§95 measured one
+     * expand at 6,356 tokens). Needs tree-sitter; degrades to the plain digest.
+     */
+    read_skeleton_enabled: z.boolean(),
+    /**
+     * OPT-IN (R8.6): add the LSP modes — `diagnostics`, `definition`,
+     * `references`, `hover` — to the `code` tool, answered by a language server
+     * the USER installed and Golem merely spawns (tier-2, Decision 53). Off by
+     * default for two reasons: a language server is a long-lived process nobody
+     * asked for, and the extra modes widen the `code` tool's schema, which bills
+     * on every request (§88/§100). Without a server on `PATH` each mode reports
+     * why rather than failing. Lives beside `repo_map_enabled` because it gates
+     * the same tool: the map says what exists, the LSP says what refers to what.
+     */
+    lsp_enabled: z.boolean(),
+    /**
+     * R8.6: extra language-server rows, layered over the built-in
+     * `typescript-language-server` one (a row with the same `id` replaces it).
+     * `command` is resolved on `PATH` (`PATHEXT`-aware) or given as an explicit
+     * path; `args` is an argument ARRAY, never a shell string. This is how
+     * `gopls` or `rust-analyzer` arrive — as a user's config, not a Golem
+     * release, because a row Golem asserts but cannot exercise is the kind of
+     * unverified claim Decision 53's registry exists to prevent.
+     */
+    lsp_servers: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          command: z.string().min(1),
+          args: z.array(z.string()).default([]),
+          language_id: z.string().min(1),
+          extensions: z.array(z.string().min(1)).min(1),
+        }),
+      )
+      .optional(),
+    /**
+     * R8.6: per-request budget for an LSP call, in ms. The whole point of the
+     * bridge is that a hung language server is a no-op rather than a hang, and
+     * this is the number that makes it so. The `initialize` handshake gets its
+     * own, larger allowance internally (a cold tsserver loading a big project).
+     */
+    lsp_timeout_ms: timeoutMsSchema,
+    /**
      * OPT-OUT (R3.4, spec Decision 20e's local/P1 tier): federate the
      * user-scope wiki (`~/.golem/wiki/`) into `search`/`fetch` alongside this
      * project's own wiki, read-only. On by default — set false if a user
@@ -332,6 +402,28 @@ export const SETTINGS_LEAVES = {
     /** Show advanced/rarely-touched controls when the panel opens. */
     advanced: z.boolean(),
   },
+  models: {
+    /**
+     * R8.8: URL of a models.dev-shaped catalog `golem models refresh` fetches.
+     * **Nothing fetches it implicitly** — a cost report must never make a network
+     * call (tier 3b: no runtime dependency). Golem's own built-in table always
+     * wins on a collision, so a wrong third-party price cannot reach a cost
+     * claim; the fetched half only fills gaps for models Golem has not priced.
+     */
+    catalog_url: z.string().url(),
+    /**
+     * R8.8: how old the price data may be before surfaces warn. Prices move, and
+     * a silently-stale figure is the failure mode this exists to prevent; the
+     * warning never suppresses the number, it labels it.
+     */
+    catalog_max_age_days: z.number().int().positive(),
+    /**
+     * R8.8: fraction of a model's context window at which `golem stats
+     * --context` warns. Only fires when the catalog knows the window — an
+     * unknown limit produces no warning rather than a guessed one.
+     */
+    context_warn_fraction: z.number().min(0.1).max(1),
+  },
   snooze: {
     /**
      * Enforce the document-and-hold park at the usage limit (spec Decision 45).
@@ -396,6 +488,7 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
+  readonly local_editor_enabled: boolean;
 }
 
 export interface CompressionSettings {
@@ -419,6 +512,17 @@ export interface KnowledgeSettings {
   readonly local_answer_enabled: boolean;
   readonly local_answer_min_confidence: number;
   readonly syntax_aware_chunking: boolean;
+  readonly repo_map_enabled: boolean;
+  readonly read_skeleton_enabled: boolean;
+  readonly lsp_enabled: boolean;
+  readonly lsp_servers?: readonly {
+    readonly id: string;
+    readonly command: string;
+    readonly args: readonly string[];
+    readonly language_id: string;
+    readonly extensions: readonly string[];
+  }[];
+  readonly lsp_timeout_ms: number;
   readonly user_wiki_enabled: boolean;
   readonly rerank_enabled: boolean;
   readonly memory_federation_enabled: boolean;
@@ -438,6 +542,13 @@ export interface UiSettings {
   readonly advanced: boolean;
 }
 
+/** R8.8 — the model catalog (price + context limits) settings. */
+export interface ModelsSettings {
+  readonly catalog_url: string;
+  readonly catalog_max_age_days: number;
+  readonly context_warn_fraction: number;
+}
+
 export interface SnoozeSettings {
   readonly enforce: boolean;
 }
@@ -451,6 +562,7 @@ export interface GolemSettings {
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
   readonly ui: UiSettings;
+  readonly models: ModelsSettings;
   readonly snooze: SnoozeSettings;
 }
 
@@ -478,6 +590,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
+    local_editor_enabled: false,
   },
   compression: {
     headroom_sidecar: false,
@@ -499,6 +612,10 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     local_answer_enabled: true,
     local_answer_min_confidence: 0.6,
     syntax_aware_chunking: false,
+    repo_map_enabled: true,
+    read_skeleton_enabled: true,
+    lsp_enabled: false,
+    lsp_timeout_ms: 15_000,
     user_wiki_enabled: true,
     rerank_enabled: false,
     memory_federation_enabled: false,
@@ -515,6 +632,14 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     pet_color: "#a78bfa",
     color: "auto",
     advanced: false,
+  },
+  models: {
+    // The JSON API of the open catalog the R8d memo names; verified 2026-07-31
+    // (§106) to carry `cost.{input,output,cache_read,cache_write}` and
+    // `limit.{context,output}`. Fetched only by `golem models refresh`.
+    catalog_url: "https://models.dev/api.json",
+    catalog_max_age_days: 45,
+    context_warn_fraction: 0.8,
   },
   snooze: {
     enforce: true,

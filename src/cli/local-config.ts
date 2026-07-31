@@ -20,7 +20,14 @@
  */
 
 import { loadConfig, type SettingsScope } from "../config/index.js";
-import { chatModelFor, createProbeRunner, detectCapability } from "../inference/index.js";
+import {
+  chatModelFor,
+  createProbeRunner,
+  detectCapability,
+  matchesPulledName,
+  OllamaNativeClient,
+  type PulledState,
+} from "../inference/index.js";
 import type { HardwareTier } from "../interfaces/inference.js";
 import { type ConfigWriteResult, setConfig } from "./config.js";
 import { InitError } from "./init.js";
@@ -77,6 +84,13 @@ export interface LocalModelReport {
   /** The model the coder/drafter role runs at this tier. */
   readonly coder_model: string;
   /**
+   * Whether `coder_model` is actually pulled on `base_url` (task `local-models`).
+   * `"unknown"` when the endpoint didn't answer — reporting "not pulled" for a
+   * model we could not look up would be a fabricated fact, and a not-pulled
+   * drafter is precisely what made `coder --refine` silently do nothing (§89/§100).
+   */
+  readonly coder_model_state: PulledState;
+  /**
    * The effective state the status surfaces show: the local model counts as
    * ACTIVE only when it is both enabled and reachable. Neither alone is enough —
    * which is the distinction the VS Code status bar previously lost.
@@ -91,6 +105,8 @@ export interface LocalModelOptions {
   readonly probe?: (baseUrl: string) => Promise<boolean>;
   /** Test seam: override hardware/model detection. */
   readonly detect?: () => Promise<{ tier: HardwareTier; coderModel: string }>;
+  /** Test seam: what the endpoint reports as pulled (task `local-models`). */
+  readonly listModels?: () => Promise<readonly { readonly name: string }[]>;
 }
 
 async function detectTierAndModel(): Promise<{ tier: HardwareTier; coderModel: string }> {
@@ -118,11 +134,30 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
   // Both are guarded here rather than inside the defaults: a status command must
   // not throw because hardware detection or a network probe failed, and that has
   // to hold for an injected implementation too.
-  const [reachable, detected] = await Promise.all([
+  const listModels =
+    opts.listModels ??
+    (() =>
+      new OllamaNativeClient({
+        baseUrl,
+        requestTimeoutMs: URL_PROBE_TIMEOUT_MS,
+      }).listModels());
+  const [reachable, detected, pulledNames] = await Promise.all([
     probe(baseUrl).catch(() => false),
     detect().catch(() => ({ tier: 0 as HardwareTier, coderModel: "" })),
+    listModels()
+      .then((models) => models.map((m) => m.name))
+      .catch(() => null),
   ]);
   const { tier, coderModel } = detected;
+
+  // Three states, not two: an endpoint we couldn't list tells us nothing about
+  // what is pulled, and saying "not pulled" there would invent a fact.
+  const coderModelState: PulledState =
+    pulledNames === null || coderModel === ""
+      ? "unknown"
+      : pulledNames.some((n) => matchesPulledName(n, coderModel))
+        ? "pulled"
+        : "not-pulled";
 
   return {
     coder_enabled: coderEnabled,
@@ -134,6 +169,7 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
     tier,
     tier_name: TIER_NAMES[tier],
     coder_model: coderModel,
+    coder_model_state: coderModelState,
     active: coderEnabled && reachable,
   };
 }
@@ -216,13 +252,32 @@ export function renderLocalModel(report: LocalModelReport): string {
       `(inference.ollama_base_url, from ${report.base_url_layer})`,
   );
   lines.push(`  hardware:   tier ${report.tier} (${report.tier_name})`);
-  if (report.coder_model !== "") lines.push(`  coder model: ${report.coder_model}`);
+  if (report.coder_model !== "") {
+    // Say whether the model is actually there. "coder model: X" alone read as a
+    // promise that X would run, which is how a never-pulled judge model spent
+    // three investigations looking like a prompt bug (task `local-models`).
+    const state =
+      report.coder_model_state === "pulled"
+        ? "pulled"
+        : report.coder_model_state === "not-pulled"
+          ? "NOT pulled"
+          : "pulled state unknown";
+    lines.push(`  coder model: ${report.coder_model} — ${state}`);
+  }
 
   // Say what to do about it, and be specific about WHICH of the two conditions
   // is unmet — "not active" with no reason is the unhelpful version.
   if (!report.coder_enabled) {
     lines.push("");
     lines.push("The coder tool is disabled — enable it with: golem local enable");
+  }
+  if (report.reachable && report.coder_model_state === "not-pulled") {
+    lines.push("");
+    lines.push(
+      `Ollama answers, but ${report.coder_model} is not downloaded — the coder tool ` +
+        "will step down a tier or fail. Pull it with: " +
+        `ollama pull ${report.coder_model} (or: golem ollama setup)`,
+    );
   }
   if (!report.reachable) {
     lines.push("");

@@ -12,9 +12,14 @@
 
 import http from "node:http";
 import path from "node:path";
+import {
+  type EffectiveCompression,
+  resolveEffectiveCompression,
+} from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
-import { resolveUpstreamDisplay } from "../providers/index.js";
+import type { SliderLevel } from "../interfaces/policy.js";
+import { resolveUpstreamDisplay, upstreamAssumesCaching } from "../providers/index.js";
 // Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
 // which imports `undici` (~270ms), and both of these only read a JSON file.
 import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
@@ -23,7 +28,7 @@ import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { type DialInfo, getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
 import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
-import { getSliderInfo, type SliderInfo } from "./slider.js";
+import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 
 /** Decision 52 — one dial's state in the JSON report. */
 export interface DialStatus {
@@ -102,6 +107,20 @@ export interface StatusReport {
   readonly dials: {
     readonly brevity: DialStatus;
     readonly compression: DialStatus;
+  };
+  /**
+   * §103: what the compression level ACTUALLY does on the configured upstream, as
+   * opposed to what it is set to. Levels 2–3 collapse to level 1 on a
+   * prompt-caching upstream (Decision 31), so reporting the nominal level alone
+   * told the user "aggressive" while the pipeline ran lossless.
+   */
+  readonly effective_compression: {
+    readonly nominal: number;
+    readonly nominal_name: string;
+    readonly effective: number;
+    readonly effective_name: string;
+    readonly degraded: boolean;
+    readonly reason?: string;
   };
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
@@ -245,6 +264,20 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const limits =
     limitState === null ? undefined : buildLimits(limitState, nowMs, settings.snooze.enforce);
 
+  // §103: what the compression dial will ACTUALLY do on this upstream. The dial —
+  // not the slider — is the input-side level the pipeline reads (Decision 52), and
+  // it may be pinned away from the slider, so predict from the dial's effective
+  // value. The provider override wins over the URL heuristic exactly as it does in
+  // the pipeline; `undefined` means "use the heuristic" and must not be passed.
+  const assumeCaching = upstreamAssumesCaching(upstream.provider);
+  const effective = resolveEffectiveCompression({
+    level: sliderLevelFromDial(compressionDial.effective, slider.level),
+    upstreamBaseUrl: upstream.baseUrl,
+    ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
+    headroomSidecar: settings.compression.headroom_sidecar,
+    forceSemanticOnCaching: settings.compression.force_semantic_on_caching,
+  });
+
   const config: Record<string, ConfigKeyStatus> = {};
   for (const [dotted, entry] of Object.entries(provenance)) {
     const [section, key] = dotted.split(".", 2) as [string, string];
@@ -282,6 +315,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     },
     slider: sliderJson(slider),
     dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
+    effective_compression: effectiveCompressionJson(effective),
     config,
     local_model: {
       reachable: localInfo.reachable,
@@ -355,9 +389,24 @@ function updateWarnings(latest: string, sliderLevel: number): string[] {
  * dials.ts but works off the JSON report (which is what the VS Code panel and
  * any script read), so the two surfaces cannot disagree.
  */
-function renderDial(kind: string, dial: DialStatus, sliderLevel: number): string {
-  if (!dial.pinned) return `${kind} ${dial.effective} (auto — follows slider ${sliderLevel})`;
-  return `${kind} ${dial.effective} (${dial.layer === "default" ? "default" : "pinned"})`;
+/**
+ * One dial's line. `effectiveValue` (§103) overrides the displayed value when the
+ * dial's setting is not what the pipeline will apply — the compression dial can
+ * read "3" while the upstream gate makes it behave as 1, and showing the setting
+ * alone is the misreport this exists to prevent.
+ */
+function renderDial(
+  kind: string,
+  dial: DialStatus,
+  sliderLevel: number,
+  effectiveValue?: string,
+): string {
+  const shown =
+    effectiveValue !== undefined && effectiveValue !== dial.effective
+      ? `${dial.effective}→${effectiveValue}`
+      : dial.effective;
+  if (!dial.pinned) return `${kind} ${shown} (auto — follows slider ${sliderLevel})`;
+  return `${kind} ${shown} (${dial.layer === "default" ? "default" : "pinned"})`;
 }
 
 /** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
@@ -384,6 +433,30 @@ function dialJson(dial: DialInfo): DialStatus {
     pinned: dial.pinned,
     layer: dial.layer,
     ...(dial.source !== undefined && { source: dial.source }),
+  };
+}
+
+/**
+ * The compression dial's effective value as a {@link SliderLevel}. The dial is a
+ * string (`"auto"` resolves to a numeral before it reaches here), so a
+ * non-numeric or out-of-range value falls back to the slider's own level rather
+ * than guessing — status must never invent a level.
+ */
+function sliderLevelFromDial(dialEffective: string, fallback: SliderLevel): SliderLevel {
+  const n = Number(dialEffective);
+  return n === 0 || n === 1 || n === 2 || n === 3 ? n : fallback;
+}
+
+function effectiveCompressionJson(
+  eff: EffectiveCompression,
+): StatusReport["effective_compression"] {
+  return {
+    nominal: eff.nominal,
+    nominal_name: SLIDER_LEVEL_NAMES[eff.nominal],
+    effective: eff.effective,
+    effective_name: SLIDER_LEVEL_NAMES[eff.effective],
+    degraded: eff.degraded,
+    ...(eff.reason !== undefined && { reason: eff.reason }),
   };
 }
 
@@ -419,15 +492,30 @@ export function renderStatus(report: StatusReport): string {
   );
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
   const slider = report.slider;
+  const ec = report.effective_compression;
+  // §103: the LABEL carries the truth. A warning line under a headline that still
+  // reads "aggressive" leaves the headline wrong — which is exactly what the first
+  // pass at this got wrong.
+  const effSuffix = ec.degraded ? ` → effectively ${ec.effective} (${ec.effective_name})` : "";
   lines.push(
-    `Slider: level ${slider.level} (${slider.name}) — set by ${slider.layer}` +
+    `Slider: level ${slider.level} (${slider.name})${effSuffix} — set by ${slider.layer}` +
       (slider.source !== undefined ? ` (${slider.source})` : ""),
   );
   // Decision 52: the slider is a preset, so name both dials and whether the
   // slider is driving them. A pinned dial must never look like a preset.
   lines.push(
-    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial("compression", report.dials.compression, slider.level)}`,
+    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial(
+      "compression",
+      report.dials.compression,
+      slider.level,
+      String(ec.effective),
+    )}`,
   );
+  // The headline already says the effective level; this line says WHY and what to
+  // do about it, which does not fit in a label.
+  if (ec.degraded) {
+    lines.push(`  ⚠ level ${ec.nominal} (${ec.nominal_name}) is inert here: ${ec.reason ?? ""}`);
+  }
   if (report.dials.brevity.effective !== "off") {
     lines.push(
       `  ⚠ brevity ${report.dials.brevity.effective} is active: replies are shortened ` +

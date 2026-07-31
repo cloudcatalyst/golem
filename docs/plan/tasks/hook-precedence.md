@@ -1,7 +1,7 @@
 ---
 task: hook-precedence
 title: Assert PreToolUse precedence between a rewriting hook and a denying hook (§91, still open)
-state: queued
+state: done
 owner: agent
 size: S
 design: docs/plan/verification-notes.md §91, §96
@@ -9,7 +9,7 @@ gate: A test that proves Golem's `deny` still wins when another hook returns `up
 depends_on: []
 touches: [src/hooks/, tests/integration/]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31T00:11:59.672Z
 ---
 
 ## Goal
@@ -45,3 +45,7 @@ firing. §91's own instruction: **assert it; do not trust it.**
 
 Fixing Claude Code. Changing Golem's deny paths on the basis of a guess. Removing the
 no-matcher registration (each stage self-filters by design).
+
+## Outcome
+
+Closed on both halves (§105). The docs have since gained the precedence sentence (deny > defer > ask > allow); the case they still omit — a hook returning ONLY updatedInput racing a deny — is now pinned by tests/e2e/hook-precedence.live.test.ts, an opt-in (GOLEM_LIVE_CLAUDE=1) live run against Claude Code 2.1.220. Two competing project-scope Bash hooks: both fired, the marker file was never created, so the deny won and the rewrite was discarded. Test fails rather than passing vacuously if neither hook fires.

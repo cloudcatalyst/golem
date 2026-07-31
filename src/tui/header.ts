@@ -35,12 +35,18 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
       : `○ not running (${report.proxy.port})`,
     tone: report.proxy.reachable ? "ok" : "warn",
   };
+  // §103: when the configured level is inert on this upstream, the header shows the
+  // level that is RUNNING and marks the set-but-inert one, rather than displaying a
+  // name the pipeline is not honouring.
+  const ec = report.effective_compression;
   const slider: HeaderSegment = {
     label: "Level",
     // Level 0 is the redaction-off bypass — flagged in the header, not just in a
     // warning line, so it can't be running unnoticed.
-    value: `${report.slider.level} ${report.slider.name}`,
-    tone: report.slider.level === 0 ? "error" : undefined,
+    value: ec.degraded
+      ? `${ec.effective} ${ec.effective_name} (${ec.nominal} inert)`
+      : `${report.slider.level} ${report.slider.name}`,
+    tone: report.slider.level === 0 ? "error" : ec.degraded ? "warn" : undefined,
   };
 
   const local = report.local_model;

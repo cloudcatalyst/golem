@@ -143,6 +143,20 @@ function parseEvent(line: string): TelemetryEvent | null {
     ...(typeof parsed.cacheBustComponent === "string"
       ? { cacheBustComponent: parsed.cacheBustComponent }
       : {}),
+    // R8.13 — and the same allow-list rule applies to these two.
+    ...(typeof parsed.cacheBustMessageIndex === "number"
+      ? { cacheBustMessageIndex: parsed.cacheBustMessageIndex }
+      : {}),
+    ...(typeof parsed.cacheMessageCount === "number"
+      ? { cacheMessageCount: parsed.cacheMessageCount }
+      : {}),
+    // R8.8 — the same allow-list rule again, and it bit again: the proxy wrote
+    // `model`/`modelProvider` and `golem bench cost` still reported every sample
+    // as unattributed until these two lines existed. Caught by running the real
+    // command against real telemetry, which is why the round-trip test below
+    // exists rather than a fold-only unit test.
+    ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+    ...(typeof parsed.modelProvider === "string" ? { modelProvider: parsed.modelProvider } : {}),
   };
 }
 

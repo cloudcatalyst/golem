@@ -1,7 +1,7 @@
 ---
 task: P3b
 title: Point golem bench tools at caveman-shrink rather than rebuilding it
-state: queued
+state: done
 owner: agent
 size: S
 design: docs/plan/proposals/r8-context-economy.md (Workstream P, P3b); verification-notes §89, §100
@@ -9,7 +9,7 @@ gate: The existing harness decides. Either it clears the bar and becomes a manag
 depends_on: []
 touches: [src/tools/]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31T04:22:05.071Z
 ---
 
 ## Goal
@@ -44,3 +44,7 @@ served from the webcache free and offline (Decision 42).
 ## Out of scope
 
 Rebuilding the shrinker. Reopening R8.S1 (§100 closed it). Vendoring any of their code.
+
+## Outcome
+
+Reproducible negative published (§107): caveman-shrink saves 53 of 1,089 description tokens (4.9%) with no accuracy change on 27x3 cases. Not adopted, not vendored — the harness gained --shrink ext-caveman-shrink, resolved from the user's own install.

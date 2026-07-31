@@ -47,7 +47,7 @@
 
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
 import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
@@ -66,6 +66,14 @@ export const DEFAULT_MAX_INLINE_CHARS = 12_000;
  */
 export const DIGEST_HEAD_CHARS = 2_400;
 export const DIGEST_TAIL_CHARS = 1_200;
+/**
+ * R8.5 — char budget for the symbol skeleton added to an oversized `Read`.
+ * Sized so head + tail + skeleton stays under Claude Code's 10k-char hook-output
+ * cap (§20) with room for the JSON envelope, and so the skeleton is a small
+ * fraction of what it makes recoverable: ~1.5k chars buys every definition in a
+ * typical 1,000-line module with its line number.
+ */
+export const SKELETON_CHARS = 1_500;
 
 /**
  * Hook stdin payload (external surface -> zod; verification-notes §20).
@@ -95,6 +103,14 @@ export interface HookIo {
 export interface PostToolUseOptions {
   /** Inline threshold in characters; default {@link DEFAULT_MAX_INLINE_CHARS}. */
   readonly maxInlineChars?: number;
+  /**
+   * R8.5 — per-project gate for the oversized-`Read` symbol skeleton, read from
+   * `knowledge.read_skeleton_enabled` by the CLI layer (this module stays free of
+   * a config dependency, like `revalidateEnabled` in web-fetch.ts). Omitted →
+   * enabled; a gate that throws is treated as enabled, since the skeleton can
+   * only ever add navigation to a digest that is already being written.
+   */
+  readonly skeletonEnabled?: (projectDir: string) => Promise<boolean>;
   /**
    * Pipeline redaction stage (task T-C3). Defaults to `pipelineRedact` — the
    * full REDACTION_RULES table plus the high-entropy sweep. Runs BEFORE the
@@ -230,7 +246,113 @@ function externalRecoveryPointer(text: string): string | null {
   return match === null ? null : match[0].trim();
 }
 
-export function buildDigest(toolName: string | undefined, text: string, refId: string): string {
+/**
+ * R8.5 — an oversized `Read` also gets the file's SYMBOL SKELETON.
+ *
+ * The head/tail excerpt tells the model what the file starts and ends with; the
+ * skeleton tells it what is in the elided middle and, crucially, on which line.
+ * That converts the recovery path from `expand` (re-enters the whole original —
+ * §95 measured one at 6,356 tokens) into a `Read` of forty lines. It is the
+ * cheapest half of the repo map: the same tree-sitter extractor, one file, no
+ * graph.
+ *
+ * Not a product surface of its own — per-file signature extraction is RTK's
+ * `read -l aggressive` (out of scope by the R8 memo); this is the swap target
+ * the map task asked for.
+ */
+const READ_LINE_RE = /^\s*(\d+)\t(.*)$/u;
+
+/**
+ * Strip Claude Code's `cat -n`-style `<line>\t<text>` prefixes from a `Read`
+ * output, returning the bare source plus the first line number it covered (a
+ * `Read` with an `offset` does not start at 1, and the skeleton's line numbers
+ * must be the FILE's, not the excerpt's). Null when the payload does not look
+ * like a numbered read — then no skeleton is attempted.
+ */
+export function stripReadLineNumbers(
+  text: string,
+): { readonly content: string; readonly firstLine: number } | null {
+  const lines = text.split("\n");
+  let sampled = 0;
+  let matched = 0;
+  for (const line of lines) {
+    if (line.trim().length === 0) continue;
+    sampled += 1;
+    if (READ_LINE_RE.test(line)) matched += 1;
+    if (sampled >= 20) break;
+  }
+  if (sampled === 0 || matched / sampled < 0.8) return null;
+
+  const out: string[] = [];
+  let firstLine: number | null = null;
+  for (const line of lines) {
+    const match = READ_LINE_RE.exec(line);
+    if (match === null) {
+      out.push(line);
+      continue;
+    }
+    if (firstLine === null) firstLine = Number.parseInt(match[1] as string, 10);
+    out.push(match[2] as string);
+  }
+  if (firstLine === null || !Number.isFinite(firstLine)) return null;
+  return { content: out.join("\n"), firstLine };
+}
+
+function readFilePath(toolInput: unknown): string | null {
+  if (typeof toolInput !== "object" || toolInput === null) return null;
+  const value = (toolInput as { file_path?: unknown }).file_path;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The skeleton section for an oversized `Read`, or null (wrong tool, no
+ * `file_path`, no grammar for the extension, tree-sitter absent, parse failure,
+ * or nothing worth listing). Every one of those is a no-op, never an error:
+ * the digest is written either way.
+ *
+ * tree-sitter is imported lazily so a hook process that is not swapping a `Read`
+ * never pays the WASM load.
+ */
+async function buildReadSkeleton(
+  toolName: string | undefined,
+  toolInput: unknown,
+  text: string,
+): Promise<string | null> {
+  if (toolName !== "Read") return null;
+  const filePath = readFilePath(toolInput);
+  if (filePath === null) return null;
+  const ext = extname(filePath).toLowerCase();
+
+  try {
+    const [{ extractFileFacts, isSymbolExtractable }, { renderFileSkeleton }] = await Promise.all([
+      import("../knowledge/tree-sitter-chunker.js"),
+      import("../knowledge/repo-map.js"),
+    ]);
+    if (!isSymbolExtractable(ext)) return null;
+    const stripped = stripReadLineNumbers(text);
+    if (stripped === null) return null;
+    const facts = await extractFileFacts(ext, stripped.content);
+    if (facts === null || facts.defs.length === 0) return null;
+    const offset = stripped.firstLine - 1;
+    const shifted = facts.defs.map((def) => ({ ...def, line: def.line + offset }));
+    const skeleton = renderFileSkeleton(shifted, SKELETON_CHARS);
+    if (skeleton.shown === 0) return null;
+    const of = skeleton.hidden > 0 ? ` of ${shifted.length}` : "";
+    return (
+      `--- symbol skeleton: ${skeleton.shown}${of} definition(s) with their line numbers ` +
+      `(Read one of these ranges instead of expanding) ---\n${skeleton.text}\n`
+    );
+  } catch {
+    return null; // tier-2 absence or any parse trouble — the digest stands alone
+  }
+}
+
+export function buildDigest(
+  toolName: string | undefined,
+  text: string,
+  refId: string,
+  skeleton?: string,
+): string {
   const bytes = Buffer.byteLength(text, "utf8");
   const allLines = text.split("\n");
   const lines = allLines.length;
@@ -268,10 +390,13 @@ export function buildDigest(toolName: string | undefined, text: string, refId: s
     elidedCount > 0
       ? `${elidedCount} line(s) elided (lines ${elidedFrom}-${elidedTo})`
       : "content elided mid-line";
+  const skeletonSection = skeleton !== undefined && !complete ? skeleton : "";
+  const viaSkeleton =
+    skeletonSection.length > 0 ? "the skeleton above names every definition and its line, so " : "";
   const recovery = complete
     ? `--- end of excerpt: full output above. Retrieve original: expand MCP tool with ` +
       `ref_id "${refId}" (or /golem/expand ${refId}) ---`
-    : `--- ${elided}. PREFER a narrower re-read of just what you need (e.g. Read with ` +
+    : `--- ${elided}. PREFER a narrower re-read of just what you need (${viaSkeleton}Read with ` +
       `offset/limit, or grep the file) — expanding re-enters the FULL original and costs ` +
       `back the tokens this swap saved. To expand anyway: expand MCP tool with ` +
       `ref_id "${refId}" (or /golem/expand ${refId}) ---`;
@@ -280,6 +405,7 @@ export function buildDigest(toolName: string | undefined, text: string, refId: s
     `[Golem: oversized ${toolName ?? "tool"} output (${bytes} bytes, ${lines} lines, ` +
     `~${tokens} tokens) swapped for a head/tail excerpt. The full original is stored ` +
     `losslessly. Retrieve original: hash=${refId}]\n` +
+    skeletonSection +
     body +
     preserved +
     recovery
@@ -336,12 +462,31 @@ export async function runPostToolUseHook(
     const stored = stripKnownSecrets((options.redact ?? pipelineRedact)(slot.text));
     const refId = createHash("sha256").update(stored, "utf8").digest("hex");
 
-    const digest = buildDigest(payload.tool_name, stored, refId);
+    // R8.5: extracted from the REDACTED text, like the excerpts — the skeleton
+    // must never re-introduce something redaction removed.
+    const projectDir = options.projectDir ?? payload.cwd ?? process.cwd();
+    let skeletonAllowed = true;
+    if (options.skeletonEnabled !== undefined) {
+      try {
+        skeletonAllowed = await options.skeletonEnabled(projectDir);
+      } catch {
+        skeletonAllowed = true;
+      }
+    }
+    const skeleton = skeletonAllowed
+      ? await buildReadSkeleton(payload.tool_name, payload.tool_input, stored)
+      : null;
+
+    const digest = buildDigest(
+      payload.tool_name,
+      stored,
+      refId,
+      ...(skeleton !== null ? ([skeleton] as const) : ([] as const)),
+    );
     if (digest.length >= slot.text.length) {
       return 0; // swap would not pay for itself (tiny custom thresholds only)
     }
 
-    const projectDir = options.projectDir ?? payload.cwd ?? process.cwd();
     const ccr = new CcrStore(new LocalDirBlobStore(join(projectDir, ".golem", "ccr")));
     await ccr.putIfAbsent(refId, {
       v: 1,

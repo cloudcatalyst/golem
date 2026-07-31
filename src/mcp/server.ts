@@ -32,7 +32,17 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
+import type { EffectiveCompression } from "../compression/effective-level.js";
+import { LSP_MODES, type LspBridge, type LspMode } from "../ext/index.js";
+import {
+  availabilityWarning,
+  createProbeRunner,
+  DEFAULT_OLLAMA_BASE_URL,
+  detectCapability,
+  modelsForTier,
+  OllamaNativeClient,
+  resolveTierAvailability,
+} from "../inference/index.js";
 import type {
   CompressionService,
   HardwareTier,
@@ -53,6 +63,11 @@ import {
   WikiWriteConflictError,
 } from "../interfaces/index.js";
 import { isMemoryChunkId } from "../knowledge/knowledge-base.js";
+import {
+  buildRepoMap,
+  DEFAULT_MAP_BUDGET_TOKENS,
+  MAX_MAP_BUDGET_TOKENS,
+} from "../knowledge/repo-map.js";
 import { rerankHits } from "../knowledge/rerank.js";
 import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
@@ -60,6 +75,7 @@ import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { abortableSleep, DEFAULT_SNOOZE_MAX_MS, runSnooze, SnoozeInputError } from "./snooze.js";
+import { persistSnoozeNote } from "./snooze-note.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
 
 export const GOLEM_MCP_SERVER_NAME = "golem";
@@ -69,6 +85,15 @@ export const GOLEM_MCP_SERVER_VERSION = "0.1.0";
 export interface GolemMcpServerDeps {
   readonly compression: CompressionService;
   readonly sliderStore: SliderStore;
+  /**
+   * §103 — predicts what a slider level will ACTUALLY do on the configured
+   * upstream, so `level` reports the running level instead of the requested one.
+   * Levels 2–3 collapse to 1 on a prompt-caching upstream (Decision 31), and a
+   * reply saying "aggressive" teaches the model a false belief about its own
+   * context budget. Injected (not computed here) because the server takes no
+   * config dependency; omitted → the tool reports the nominal level as before.
+   */
+  readonly compressionGate?: (level: SliderLevel) => EffectiveCompression;
   /**
    * WS-C knowledge base (task B3). When present, the P1 knowledge tools
    * (`search`, `fetch`, `ingest`) are registered.
@@ -92,12 +117,38 @@ export interface GolemMcpServerDeps {
   /** projectId used by knowledge tools when a call omits `project_id`. */
   readonly defaultProjectId?: string;
   /**
-   * Absolute project root the `ingest` tool indexes when a call omits `path`.
+   * Absolute project root: what `ingest` indexes when a call omits `path`, and
+   * where `snooze` files its `note` as a durable local task (`.golem/tasks/`).
    * Kept separate from {@link defaultProjectId} on purpose: the CLI happens to
    * use the project directory as the project id today, but ids are opaque —
    * only this field is guaranteed to be a filesystem path.
    */
   readonly projectRootDir?: string;
+  /**
+   * R8.5 — absolute project root the `code` tool maps. The `code` tool is
+   * registered only when this is set (`knowledge.repo_map_enabled`), because a
+   * tool definition is a permanent per-request bill (§88/§100) and a map of
+   * nothing is worth none of it. Independent of {@link knowledge}: the map is
+   * built from the filesystem by tree-sitter, not from the vector index.
+   */
+  readonly codeRoot?: string;
+  /**
+   * R8.6 — the language-server bridge behind the `code` tool's `diagnostics` /
+   * `definition` / `references` / `hover` modes. Present only when
+   * `knowledge.lsp_enabled` is on; without it the tool keeps exactly the schema
+   * it had for `map` alone, so nobody pays per-request for modes they disabled.
+   * Requires {@link codeRoot}: the LSP modes are modes of that tool, not tools.
+   */
+  readonly lsp?: LspBridge;
+  /**
+   * R8.7 — offer `coder`'s `edit` mode (`inference.local_editor_enabled`).
+   *
+   * Same permanent-bill logic as {@link codeRoot} and {@link lsp}: the mode's
+   * three schema properties cost +313 definition tokens on every request (§110),
+   * so when this is absent `coder`'s definition is byte-identical to R8.6's.
+   * Requires {@link projectRootDir} — an edit must be containable to a project.
+   */
+  readonly localEditor?: boolean;
   /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits
@@ -127,6 +178,13 @@ export interface GolemMcpServerDeps {
    * turns a successful search into an error.
    */
   readonly rerank?: InferenceService;
+  /**
+   * Task `local-models` — the Ollama endpoint the `devices` tool checks for pulled
+   * models (`inference.ollama_base_url`). Injected rather than read here because
+   * this server takes no config dependency; omitted → localhost is assumed, which
+   * is right for every default install and wrong only for a LAN endpoint.
+   */
+  readonly localEndpoint?: string;
   /**
    * R4.3 — durable telemetry store. When present, the knowledge/coder tools
    * (`search`/`fetch`/`ingest`/`wiki_read`/`coder`) record a per-call `tool`
@@ -389,23 +447,38 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
           ? " ⚠ Level 0 is a full bypass: redaction is OFF, so secrets/PII reach" +
             " the upstream unredacted. Use level 1 to keep redaction on."
           : "";
+      // §103: say which level is actually running. Reporting the requested level
+      // alone would have the model believe compression it is not getting.
+      const gate = deps.compressionGate?.(sliderLevel);
+      const inert =
+        gate?.degraded === true
+          ? ` ⚠ On this upstream that behaves as level ${gate.effective} ` +
+            `(${LEVEL_NAMES[gate.effective]}), not ${sliderLevel}: ${gate.reason ?? ""}`
+          : "";
       return {
         content: [
           {
             type: "text",
-            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}`,
+            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}${inert}`,
           },
         ],
         structuredContent: {
           slider_level: sliderLevel,
           slider_level_name: LEVEL_NAMES[sliderLevel],
+          ...(gate !== undefined
+            ? {
+                effective_level: gate.effective,
+                effective_level_name: LEVEL_NAMES[gate.effective],
+                degraded: gate.degraded,
+              }
+            : {}),
         },
       };
     },
   );
 
-  registerDevicesTool(server);
-  registerSnoozeTool(server);
+  registerDevicesTool(server, deps);
+  registerSnoozeTool(server, deps);
 
   // R4.3 — where the knowledge/coder tools record their per-call telemetry.
   const tel: ToolTelemetry | undefined =
@@ -438,14 +511,269 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
         wikiDir: deps.wikiDir,
         rerank: deps.rerank,
         defaultProjectId: deps.defaultProjectId ?? "default",
+        // R8.7: `mode: "edit"` needs a filesystem root to contain the edit in.
+        // Without one the mode declines rather than resolving paths from cwd.
+        ...(deps.projectRootDir === undefined ? {} : { projectRootDir: deps.projectRootDir }),
+        editEnabled: deps.localEditor === true,
       },
       tel,
     );
   }
 
+  if (deps.codeRoot !== undefined) {
+    registerCodeTool(server, deps.codeRoot, tel, deps.lsp);
+  }
+
   if (deps.wiki !== undefined) {
     registerWikiTools(server, deps.wiki, tel);
   }
+}
+
+/**
+ * R8.5/R8.6 — the `code` tool: ONE tool with a `mode` parameter, never one tool
+ * per capability. §88/§100 measured tool definitions as a permanent per-request
+ * bill (11 tools ≈ 3,847 tokens as listed, ~1,130 as forwarded), so the map and
+ * R8.6's four LSP questions share a single definition and a single schema.
+ *
+ * The LSP half is present only when a bridge is injected
+ * (`knowledge.lsp_enabled`, default off): the mode enum, the position
+ * parameters and the extra prose all disappear from the definition when the
+ * feature is off, so a user who never enables it pays nothing per request for
+ * it. Absence of the language server itself is a no-op *result*, not an error
+ * (Decision 53).
+ */
+/** Validated `code` arguments — the union of the map shape and the LSP shape. */
+interface CodeToolArgs {
+  readonly mode?: string | undefined;
+  readonly query?: string | undefined;
+  readonly paths?: string[] | undefined;
+  readonly budget_tokens?: number | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly character?: number | undefined;
+  readonly symbol?: string | undefined;
+}
+
+function registerCodeTool(
+  server: McpServer,
+  root: string,
+  tel?: ToolTelemetry,
+  lsp?: LspBridge,
+): void {
+  const modes = lsp !== undefined ? (["map", ...LSP_MODES] as const) : (["map"] as const);
+  const modeDescription =
+    lsp !== undefined
+      ? "`map` (whole-repo skeleton), or an LSP question about one position: " +
+        "`diagnostics` | `definition` | `references` | `hover`"
+      : "What to return; only `map` (the whole-repo skeleton) exists today";
+  const lspInputs =
+    lsp !== undefined
+      ? {
+          file: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Repo-relative file the LSP modes ask about (required by those modes)"),
+          line: z.number().int().min(1).optional().describe("1-based line for the LSP position"),
+          character: z
+            .number()
+            .int()
+            .min(1)
+            .optional()
+            .describe("1-based column; defaults to `symbol`'s position or the first non-blank"),
+          symbol: z
+            .string()
+            .min(1)
+            .optional()
+            .describe("Name to locate instead of a column — pairs with a `map` row"),
+        }
+      : {};
+
+  server.registerTool(
+    "code",
+    {
+      title: "Map this repository's code",
+      description:
+        "Whole-repo code map: the files that matter, each with its key symbol " +
+        "signatures and line numbers, ranked by an import/reference graph and " +
+        "rendered to a token budget (~1.4k). Use it BEFORE reading files to find " +
+        "where something lives — pass the question as `query` and it re-ranks " +
+        "toward that topic. Cheaper than opening candidate files: read a narrow " +
+        "range of the file it names instead. Local, no network." +
+        (lsp !== undefined
+          ? " Other modes ask a language server about one position instead of the " +
+            "whole repo: `definition`/`references` beat grepping, `hover` gives the " +
+            "resolved type, `diagnostics` lists a file's problems. Pass `file` plus " +
+            "`symbol` (or `line`)."
+          : ""),
+      inputSchema: {
+        mode: z.enum(modes).optional().describe(modeDescription),
+        query: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("What you are looking for — re-ranks the map toward matching files/symbols"),
+        paths: z
+          .array(z.string().min(1))
+          .optional()
+          .describe("Repo-relative paths to weight heavily, e.g. files already in play"),
+        budget_tokens: z
+          .number()
+          .int()
+          .min(200)
+          .max(MAX_MAP_BUDGET_TOKENS)
+          .optional()
+          .describe(`Token budget for the rendered map (default ${DEFAULT_MAP_BUDGET_TOKENS})`),
+        ...lspInputs,
+      },
+      outputSchema: {
+        mode: z.string(),
+        available: z.boolean(),
+        // Map-only fields. Optional since R8.6: an LSP mode answers a position,
+        // not a tree, and reporting `files_scanned: 0` for it would be a claim
+        // about a scan that never happened.
+        files_scanned: z.number().int().nonnegative().optional(),
+        files_shown: z.number().int().nonnegative().optional(),
+        symbols_total: z.number().int().nonnegative().optional(),
+        symbols_shown: z.number().int().nonnegative().optional(),
+        tokens: z.number().int().nonnegative().optional(),
+        budget_tokens: z.number().int().nonnegative().optional(),
+        ...(lsp !== undefined
+          ? {
+              reason: z.string().optional(),
+              server: z.string().optional(),
+              locations: z
+                .array(
+                  z.object({
+                    file: z.string(),
+                    line: z.number().int(),
+                    character: z.number().int(),
+                  }),
+                )
+                .optional(),
+              diagnostics: z
+                .array(
+                  z.object({
+                    file: z.string(),
+                    line: z.number().int(),
+                    character: z.number().int(),
+                    severity: z.string(),
+                    message: z.string(),
+                    code: z.string().optional(),
+                    source: z.string().optional(),
+                  }),
+                )
+                .optional(),
+            }
+          : {}),
+      },
+    },
+    // Explicitly typed: the shape is assembled conditionally (the LSP keys are
+    // absent when the bridge is), so the SDK cannot infer the callback's args
+    // from a literal object the way it does for the fixed-shape tools.
+    async ({ mode, query, paths, budget_tokens, file, line, character, symbol }: CodeToolArgs) => {
+      const startMs = Date.now();
+
+      if (lsp !== undefined && mode !== undefined && mode !== "map") {
+        return instrumented(
+          tel,
+          "code",
+          startMs,
+          await runLspMode(lsp, mode as LspMode, { file, line, character, symbol }),
+        );
+      }
+
+      const result = await buildRepoMap(root, {
+        ...(query !== undefined ? { query } : {}),
+        ...(paths !== undefined ? { focusPaths: paths } : {}),
+        ...(budget_tokens !== undefined ? { budgetTokens: budget_tokens } : {}),
+      });
+      if (!result.available) {
+        // Absence of the optional parser is a no-op, NOT an error path
+        // (CLAUDE.md's tier-2 rule): say so plainly and let the caller read files
+        // the ordinary way.
+        return instrumented(tel, "code", startMs, {
+          content: [
+            {
+              type: "text" as const,
+              text: `No repo map available: ${result.reason}`,
+            },
+          ],
+          structuredContent: {
+            mode: mode ?? "map",
+            available: false,
+            files_scanned: 0,
+            files_shown: 0,
+            symbols_total: 0,
+            symbols_shown: 0,
+            tokens: 0,
+            budget_tokens: 0,
+          },
+        });
+      }
+      return instrumented(tel, "code", startMs, {
+        content: [{ type: "text" as const, text: result.text }],
+        structuredContent: {
+          mode: mode ?? "map",
+          available: true,
+          files_scanned: result.filesScanned,
+          files_shown: result.filesShown,
+          symbols_total: result.symbolsTotal,
+          symbols_shown: result.symbolsShown,
+          tokens: result.tokens,
+          budget_tokens: result.budgetTokens,
+        },
+      });
+    },
+  );
+}
+
+/**
+ * R8.6 — one LSP mode of the `code` tool, rendered as a tool result.
+ *
+ * Nothing here is an error path. A missing `file`, an absent language server, a
+ * timeout and a protocol failure all come back as `available: false` plus the
+ * reason, because a tool that throws teaches the model to stop asking — and the
+ * fallback (read the file, grep it) was always available anyway.
+ */
+async function runLspMode(
+  lsp: LspBridge,
+  mode: LspMode,
+  args: {
+    file?: string | undefined;
+    line?: number | undefined;
+    character?: number | undefined;
+    symbol?: string | undefined;
+  },
+): Promise<{
+  content: { type: "text"; text: string }[];
+  structuredContent: Record<string, unknown>;
+}> {
+  if (args.file === undefined) {
+    const text = `No LSP ${mode} available: this mode needs a \`file\``;
+    return {
+      content: [{ type: "text" as const, text }],
+      structuredContent: { mode, available: false, reason: "missing `file`" },
+    };
+  }
+  const result = await lsp.query({
+    mode,
+    file: args.file,
+    ...(args.line !== undefined ? { line: args.line } : {}),
+    ...(args.character !== undefined ? { character: args.character } : {}),
+    ...(args.symbol !== undefined ? { symbol: args.symbol } : {}),
+  });
+  return {
+    content: [{ type: "text" as const, text: result.text }],
+    structuredContent: {
+      mode: result.mode,
+      available: result.available,
+      ...(result.reason !== undefined ? { reason: result.reason } : {}),
+      ...(result.server !== undefined ? { server: result.server } : {}),
+      ...(result.locations.length > 0 ? { locations: [...result.locations] } : {}),
+      ...(result.diagnostics.length > 0 ? { diagnostics: [...result.diagnostics] } : {}),
+    },
+  };
 }
 
 /** Longest chunk preview echoed in a search result's text/summary. */
@@ -1179,6 +1507,13 @@ interface CoderGroundingDeps {
   readonly wikiDir?: string | undefined;
   readonly rerank?: InferenceService | undefined;
   readonly defaultProjectId: string;
+  /** R8.7 — filesystem root `mode: "edit"` resolves and contains paths against. */
+  readonly projectRootDir?: string | undefined;
+  /**
+   * R8.7 — offer the `edit` mode at all (`inference.local_editor_enabled`).
+   * Its schema is omitted when false, so the mode costs nothing when unused.
+   */
+  readonly editEnabled?: boolean | undefined;
 }
 
 /**
@@ -1204,12 +1539,53 @@ function refineNote(r: RefineOutcome): string {
   }
 }
 
+/**
+ * R8.7 — the `edit` mode's schema half, added ONLY when the mode is enabled.
+ *
+ * R8.6's discipline (§109) applied to a costlier case: these three properties
+ * plus their prose are +313 definition tokens on **every** request (§110), so a
+ * user who does not want a local editor must not pay for its schema. With
+ * `inference.local_editor_enabled` false — the default — `coder`'s definition is
+ * byte-identical to what R8.6 shipped.
+ */
+const EDIT_MODE_DESCRIPTION =
+  ' With `mode: "edit"` plus `file`, the local model rewrites that ONE small ' +
+  "file from `task` and Golem validates the result (syntax must still parse, no " +
+  "definition may disappear) — you get a diff to review instead of writing the " +
+  "edit yourself; add `apply: true` to have Golem write it.";
+
+const EDIT_MODE_SCHEMA = {
+  mode: z
+    .enum(["draft", "edit"])
+    .optional()
+    .describe(
+      'Default "draft" returns text. "edit" needs `file`: the local model ' +
+        "rewrites it and Golem validates the result before anything is written.",
+    ),
+  file: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Project-relative file to edit (mode "edit" only). Small files only — ' +
+        "bigger ones are declined rather than guessed at.",
+    ),
+  apply: z
+    .boolean()
+    .optional()
+    .describe(
+      "Write the validated edit to disk (default false: propose a diff and " +
+        "change nothing). Never writes an edit that failed validation.",
+    ),
+} as const;
+
 function registerCoderTool(
   server: McpServer,
   inference: InferenceService,
   grounding: CoderGroundingDeps,
   tel?: ToolTelemetry,
 ): void {
+  const editEnabled = grounding.editEnabled === true;
   server.registerTool(
     "coder",
     {
@@ -1223,9 +1599,11 @@ function registerCoderTool(
         "Golem's local knowledge base (project code, docs, wiki) so the draft fits " +
         "this codebase; pass `ground: false` to skip that. Nothing leaves the " +
         "machine, but the local model may be slower or lower-quality than you: " +
-        "treat the result as a draft to review, not a final answer.",
+        "treat the result as a draft to review, not a final answer." +
+        (editEnabled ? EDIT_MODE_DESCRIPTION : ""),
       inputSchema: {
         task: z.string().min(1).describe("The task or instructions for the local model"),
+        ...(editEnabled ? EDIT_MODE_SCHEMA : {}),
         context: z
           .string()
           .optional()
@@ -1255,6 +1633,26 @@ function registerCoderTool(
         text: z.string(),
         model: z.string(),
         role: z.string(),
+        // R8.7: declared only when the edit mode is on, so `coder`'s definition
+        // is byte-identical to R8.6's when it is off (§110). Claude Code does not
+        // forward `outputSchema` (§100), but `golem bench tools` counts the whole
+        // serialized definition — and a census that reports a cost nobody pays is
+        // the dishonest metric this repo keeps rejecting.
+        ...(editEnabled
+          ? {
+              edit: z
+                .object({
+                  status: z.enum(["applied", "proposed", "rejected"]),
+                  path: z.string(),
+                  validation: z.string(),
+                  added: z.number().int().nonnegative(),
+                  removed: z.number().int().nonnegative(),
+                  syntax_checked: z.boolean(),
+                  reason: z.string().optional(),
+                })
+                .optional(),
+            }
+          : {}),
         // R4.2: present only when grounding actually injected context.
         grounding: z
           .object({
@@ -1272,8 +1670,71 @@ function registerCoderTool(
           .optional(),
       },
     },
-    async ({ task, context, ground, refine, project_id }) => {
+    async ({ task, mode, file, apply, context, ground, refine, project_id }) => {
       const startMs = Date.now();
+
+      // R8.7 — the edit mode. Kept as a MODE of `coder` rather than a new tool
+      // (R8.6's discipline, §109): three optional properties on an existing
+      // definition, not another ~300-token tool in every request.
+      if (mode === "edit") {
+        if (file === undefined) {
+          return errorResult('mode "edit" needs `file` — the one file to rewrite.');
+        }
+        if (grounding.projectRootDir === undefined) {
+          return errorResult(
+            "This MCP server has no project root configured, so an edit cannot be " +
+              "contained to the project — refusing to edit any path.",
+          );
+        }
+        const { coderEdit } = await import("./coder-edit.js");
+        const outcome = await coderEdit(
+          { inference, projectDir: grounding.projectRootDir },
+          {
+            instruction: task,
+            file,
+            ...(apply === undefined ? {} : { apply }),
+            ...(context === undefined ? {} : { context }),
+          },
+        );
+        const headline =
+          outcome.status === "applied"
+            ? `Applied to ${outcome.path} (+${outcome.added}/-${outcome.removed})`
+            : outcome.status === "proposed"
+              ? `Proposed for ${outcome.path} (+${outcome.added}/-${outcome.removed}) — nothing written; call again with apply: true to write it`
+              : `Refused to edit ${outcome.path}`;
+        const validationNote =
+          outcome.status === "rejected"
+            ? ` Validation: ${outcome.validation}.`
+            : outcome.parseChecked
+              ? " Validated: it still parses and defines everything it did before."
+              : " NOT syntax-checked (no grammar for this file type).";
+        const body = outcome.diff === null ? "" : `\n\n${outcome.diff}`;
+        return instrumented(tel, "coder", startMs, {
+          content: [
+            {
+              type: "text",
+              text:
+                `**Golem** ${headline}. Edited by ${outcome.model ?? "the local model"} — review the diff.` +
+                `${validationNote}${outcome.reason === null ? "" : ` ${outcome.reason}`}${body}`,
+            },
+          ],
+          structuredContent: {
+            text: outcome.diff ?? outcome.reason ?? "",
+            model: outcome.model ?? "",
+            role: "drafter",
+            edit: {
+              status: outcome.status,
+              path: outcome.path,
+              validation: outcome.validation,
+              added: outcome.added,
+              removed: outcome.removed,
+              syntax_checked: outcome.parseChecked,
+              ...(outcome.reason === null ? {} : { reason: outcome.reason }),
+            },
+          },
+        });
+      }
+
       const grounded =
         ground !== false && grounding.knowledge !== undefined
           ? await gatherGrounding(task, project_id ?? grounding.defaultProjectId, {
@@ -1351,15 +1812,23 @@ const DEVICE_TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
  * Registered unconditionally: detection needs no injected service, only the
  * always-available hardware-probe functions, and `detectCapability` never
  * throws (every failure path degrades to P_CPU).
+ *
+ * Task `local-models`: it also reports, per slot, whether that model is actually
+ * **pulled**. The flat model list read as an availability claim and was wrong for
+ * most slots on the author's machine — and an agent that believes a role is
+ * available will call it and get a silent failure (the LE2 judge bug). Three
+ * states: `pulled` / `not-pulled` / `unknown` (endpoint unreachable — never claim
+ * missing when we could not look).
  */
-function registerDevicesTool(server: McpServer): void {
+function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps): void {
   server.registerTool(
     "devices",
     {
       title: "Show detected local hardware",
       description:
         "Report Golem's detected local hardware tier (GPU/accelerator, memory) and " +
-        "the local models Golem would use at that tier. Same info as the " +
+        "the local models Golem would use at that tier — including, per role, whether " +
+        "that model is actually downloaded and callable. Same info as the " +
         "`golem devices` CLI command.",
       outputSchema: {
         tier: z.number().int().min(0).max(3),
@@ -1369,17 +1838,43 @@ function registerDevicesTool(server: McpServer): void {
         memory_mib: z.number().optional(),
         detail: z.string(),
         models: z.array(z.string()),
+        endpoint: z.string(),
+        endpoint_reachable: z.boolean(),
+        /** One entry per role/embedding slot with its pulled state. */
+        model_slots: z.array(
+          z.object({
+            slot: z.string(),
+            model: z.string(),
+            state: z.enum(["pulled", "not-pulled", "unknown"]),
+          }),
+        ),
+        missing: z.array(z.string()),
       },
     },
     async () => {
       const facts = await detectCapability(createProbeRunner());
       const models = modelsForTier(facts.tier);
       const tierName = DEVICE_TIER_NAMES[facts.tier];
+      const endpoint = deps.localEndpoint ?? DEFAULT_OLLAMA_BASE_URL;
+      const availability = await resolveTierAvailability(facts.tier, {
+        endpoint,
+        listModels: () =>
+          new OllamaNativeClient({ baseUrl: endpoint, requestTimeoutMs: 2500 }).listModels(),
+      });
       const lines = [`Hardware tier: ${facts.tier} (${tierName}) — via ${facts.source}`];
       if (facts.device !== undefined) lines.push(`  device: ${facts.device}`);
       if (facts.memoryMiB !== undefined) lines.push(`  memory: ${facts.memoryMiB} MiB`);
       lines.push(`  ${facts.detail}`);
-      lines.push(`  models for this tier: ${models.join(", ")}`);
+      lines.push(
+        `  models for this tier (endpoint ${endpoint}${availability.reachable ? "" : " — NOT reachable"}):`,
+      );
+      for (const m of availability.models) {
+        const state =
+          m.state === "pulled" ? "pulled" : m.state === "not-pulled" ? "NOT pulled" : "unknown";
+        lines.push(`    ${m.slot}: ${m.model} — ${state}`);
+      }
+      const warning = availabilityWarning(availability);
+      if (warning !== null) lines.push("", warning);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         structuredContent: {
@@ -1388,6 +1883,16 @@ function registerDevicesTool(server: McpServer): void {
           source: facts.source,
           detail: facts.detail,
           models,
+          endpoint,
+          endpoint_reachable: availability.reachable,
+          model_slots: availability.models.map((m) => ({
+            slot: m.slot,
+            model: m.model,
+            state: m.state,
+          })),
+          // Deduplicated: it is a list of models to pull, and three roles sharing
+          // one absent model is still one download.
+          missing: [...new Set(availability.missing.map((m) => m.model))],
           ...(facts.device !== undefined ? { device: facts.device } : {}),
           ...(facts.memoryMiB !== undefined ? { memory_mib: facts.memoryMiB } : {}),
         },
@@ -1403,8 +1908,13 @@ function registerDevicesTool(server: McpServer): void {
  * signal and progress token. See snooze.ts for the timing core; the heartbeat
  * emits an MCP progress notification (when the client sent a progress token) so
  * the deliberately long tool call is not idle-timed-out.
+ *
+ * `note` (task `snooze-taskadd`) folds the park procedure's first step into this
+ * call: it is persisted as a durable local task BEFORE the wait. Under enforcement
+ * (Decision 45) every other tool — including the `Bash` running `golem task add` —
+ * is denied, so a separate documenting step was unreachable. See snooze-note.ts.
  */
-function registerSnoozeTool(server: McpServer): void {
+function registerSnoozeTool(server: McpServer, deps: GolemMcpServerDeps): void {
   server.registerTool(
     "snooze",
     {
@@ -1417,8 +1927,20 @@ function registerSnoozeTool(server: McpServer): void {
         "waits. Use it when you are about to hit — or have just hit — a usage limit " +
         "and want to resume this conversation once quota returns rather than losing " +
         "the session. Declines if the reset is further out than the cap (e.g. a " +
-        "multi-day weekly limit).",
+        "multi-day weekly limit). Pass `note` with where you're up to and the next " +
+        "steps: it is filed as a durable local task BEFORE the wait starts, so your " +
+        "place survives even if the session ends before the reset — you do not need " +
+        "(and under enforcement cannot make) a separate `golem task add` call.",
       inputSchema: {
+        note: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Where you're up to + the next steps. Persisted as a durable local task " +
+              "(the same thing `golem task add` writes) BEFORE the wait begins, so it " +
+              "survives the session ending. Strongly recommended when parking at a limit.",
+          ),
         until: z
           .string()
           .min(1)
@@ -1443,11 +1965,40 @@ function registerSnoozeTool(server: McpServer): void {
         target_ms: z.number().int().nonnegative(),
         heartbeats: z.number().int().nonnegative(),
         reason: z.string().optional(),
+        /** Id of the local task the `note` was filed as (absent when no note / it failed). */
+        task_id: z.string().optional(),
+        /** Why a supplied `note` could not be persisted. The wait still happened. */
+        note_error: z.string().optional(),
       },
     },
-    async ({ until, duration_ms, max_ms }, extra) => {
+    async ({ note, until, duration_ms, max_ms }, extra) => {
       const progressToken = extra._meta?.progressToken;
       let progress = 0;
+      // File the note BEFORE waiting: the point of the note is to survive the
+      // session ending, and a note written after a multi-hour wait would not.
+      // A failure here never blocks the park (fail-open) — it is reported and the
+      // note is echoed back so it is at least in the transcript, never dropped.
+      let taskId: string | undefined;
+      let noteError: string | undefined;
+      if (note !== undefined) {
+        if (deps.projectRootDir === undefined) {
+          noteError = "no project root is configured for this MCP server — nothing to write into";
+        } else {
+          const saved = await persistSnoozeNote(deps.projectRootDir, note);
+          if (saved.ok) taskId = saved.id;
+          else noteError = saved.error;
+        }
+      }
+      const noteLines = (): string => {
+        if (note === undefined) return "";
+        if (taskId !== undefined) {
+          return ` Your note is filed as local task \`${taskId.slice(0, 8)}\` (\`golem task list\`).`;
+        }
+        return (
+          ` WARNING: your note could NOT be filed as a task (${noteError ?? "unknown error"}), ` +
+          `so it exists only here — re-file it once you resume: ${note}`
+        );
+      };
       try {
         const outcome = await runSnooze(
           {
@@ -1470,9 +2021,11 @@ function registerSnoozeTool(server: McpServer): void {
           },
         );
         const mins = Math.round(outcome.waitedMs / 60_000);
-        const text = outcome.reset
-          ? `**Golem** Snoozed ~${mins} min — the usage window should have reset; continuing here.`
-          : `**Golem** Snooze ended without a full wait (${outcome.reason ?? "stopped"}).`;
+        const text =
+          (outcome.reset
+            ? `**Golem** Snoozed ~${mins} min — the usage window should have reset; continuing here.`
+            : `**Golem** Snooze ended without a full wait (${outcome.reason ?? "stopped"}).`) +
+          noteLines();
         return {
           content: [{ type: "text", text }],
           structuredContent: {
@@ -1481,10 +2034,14 @@ function registerSnoozeTool(server: McpServer): void {
             target_ms: outcome.targetMs,
             heartbeats: outcome.heartbeats,
             ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+            ...(taskId !== undefined ? { task_id: taskId } : {}),
+            ...(noteError !== undefined ? { note_error: noteError } : {}),
           },
         };
       } catch (err) {
-        if (err instanceof SnoozeInputError) return errorResult(err.message);
+        // A bad `until`/`duration_ms` is the caller's mistake, not a reason to lose
+        // an already-filed note — say where it went so the park can be retried.
+        if (err instanceof SnoozeInputError) return errorResult(err.message + noteLines());
         throw err;
       }
     },

@@ -206,6 +206,16 @@ settings scopes don't map onto user/project/local.
 Additive, so `GOLEM_UI_*` env overrides and `golem config set ui.pet false` came
 for free.
 
+## The `models` settings section (R8.8, 2026-07-31)
+
+`models.catalog_url` · `models.catalog_max_age_days` · `models.context_warn_fraction`.
+The per-model price/context catalog behind `golem bench cost`'s money figures and
+`golem stats --context`'s window check. `catalog_url` is **only** read by
+`golem models refresh` — no report path fetches, and Golem's own built-in price table
+beats the fetched one on every collision, so a third-party figure can fill a gap but
+never overwrite a verified price. `catalog_max_age_days` labels stale data rather than
+suppressing it; `context_warn_fraction` only fires when the catalog knows the window.
+
 ## Related
 
 [[Guidance Rules]] · [[Slider Levels]] · [[Architecture]] · [[Dogfooding Golem]]

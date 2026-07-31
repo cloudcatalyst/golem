@@ -12,6 +12,7 @@ import type {
   ContextToolsBlock,
   ToolOrigin,
 } from "../proxy/index.js";
+import { contextWarning, lookupModel, type ModelCatalog } from "../telemetry/model-catalog.js";
 
 const BUCKET_LABELS: Readonly<Record<ContextBucket, string>> = {
   tools: "tool definitions",
@@ -109,10 +110,56 @@ function renderToolsBlock(block: ContextToolsBlock): string[] {
 }
 
 /**
+ * R8.8 — the window line: how much of the model's context this request used.
+ *
+ * Three ways to produce nothing, all deliberate: no model on the ledger (an older
+ * capture, or a body without a readable `model`), no catalog entry for that id, or
+ * an entry with no stated limit. A guessed window would turn an observability
+ * surface into a source of wrong warnings.
+ */
+function renderWindow(
+  ledger: ContextLedger,
+  catalog: ModelCatalog,
+  warnFraction: number,
+): string[] {
+  const model = ledger.model;
+  if (model === undefined) return [];
+  const match = lookupModel(catalog, model, { preferProvider: "anthropic" });
+  if (match.entry === null) {
+    return [
+      "",
+      `Model ${model} — not in the catalog (${match.how}), so no context-window check.`,
+      "  `golem models refresh` adds catalogued models; ids always print verbatim.",
+    ];
+  }
+  const warning = contextWarning(match.entry, ledger.totalTokens, warnFraction);
+  if (warning === null) {
+    return ["", `Model ${model} — catalogued, but with no stated context window.`];
+  }
+  const pct = (warning.usedFraction * 100).toFixed(1);
+  const verdict =
+    warning.level === "over"
+      ? "OVER the window — the upstream will reject or compact this"
+      : warning.level === "approaching"
+        ? `approaching the window (warns at ${(warnFraction * 100).toFixed(0)}%)`
+        : "within the window";
+  return [
+    "",
+    `Context window — ${model}: ~${num(warning.tokens)} of ${num(warning.contextTokens)} ` +
+      `(${pct}%) — ${verdict}`,
+  ];
+}
+
+/**
  * Human-readable ledger. `null` means the proxy has not written one yet — said
  * plainly rather than rendered as an empty table.
+ *
+ * `window` is optional: without a catalog this renders exactly the R8.4 report.
  */
-export function renderContextLedger(ledger: ContextLedger | null): string {
+export function renderContextLedger(
+  ledger: ContextLedger | null,
+  window?: { readonly catalog: ModelCatalog; readonly warnFraction: number },
+): string {
   const out: string[] = ["Context ledger — what you are paying to re-read", ""];
 
   if (ledger === null) {
@@ -126,6 +173,9 @@ export function renderContextLedger(ledger: ContextLedger | null): string {
     `Captured ${ledger.capturedAt} · ${num(ledger.messages)} message(s) · ` +
       `~${num(ledger.totalTokens)} tokens in the request`,
   );
+  if (window !== undefined) {
+    out.push(...renderWindow(ledger, window.catalog, window.warnFraction));
+  }
   out.push("");
 
   const entries = (Object.entries(ledger.buckets) as [ContextBucket, number][])

@@ -121,7 +121,24 @@ describe("runPreToolUseHook", () => {
     const out = JSON.parse(h.stdout.text);
     expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(out.hookSpecificOutput.permissionDecisionReason).toContain("mcp__golem__snooze");
-    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("golem task add");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("note=");
+  });
+
+  // Task `snooze-taskadd`, reproduced: the documenting step the guidance rule asked
+  // for FIRST was itself a `Bash` call, so enforcement denied it — the procedure's
+  // step 1 was blocked by its own step 2. It must stay denied (no command-matched
+  // exemption); the note now rides on the snooze call instead.
+  it("enforce mode: still denies `golem task add` — and says to use snooze's note", async () => {
+    const h = io(payload("Bash", { command: 'golem task add "where I am + next steps"' }, dir));
+    await runPreToolUseHook(h, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+      isSnoozeEnforced: () => Promise.resolve(true),
+    });
+    const out = JSON.parse(h.stdout.text);
+    expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("note=");
   });
 
   it("is one-shot: the second near-limit call in the same window is not denied", async () => {

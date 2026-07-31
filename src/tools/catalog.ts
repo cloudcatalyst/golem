@@ -16,6 +16,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { estimateTokens } from "../compression/tokens.js";
+import type { LspBridge } from "../ext/index.js";
 import type {
   Chunk,
   Hit,
@@ -82,7 +83,44 @@ function catalogDeps() {
     listPages: (): Promise<readonly WikiPage[]> => REJECT(),
     upsertPage: (): Promise<WikiPage> => REJECT(),
   };
-  return { ...createStandaloneDeps(), knowledge, inference, coder: inference, wiki };
+  return {
+    ...createStandaloneDeps(),
+    knowledge,
+    inference,
+    coder: inference,
+    wiki,
+    // R8.5: `code` registers only when a root is set, and its definition bills on
+    // every request like any other — so the census must see it. The path is never
+    // read here (nothing is invoked), it only satisfies registration.
+    codeRoot: process.cwd(),
+  };
+}
+
+/**
+ * R8.6 — a bridge that registers the LSP modes without being able to spawn
+ * anything. `resolveCommand` returning null is the honest posture for a census:
+ * the question is what the *definition* costs, and no census should start a
+ * language server as a side effect of counting tokens.
+ */
+async function catalogLspBridge(): Promise<LspBridge> {
+  const { LspBridge: Bridge } = await import("../ext/index.js");
+  return new Bridge({ root: process.cwd(), resolveCommand: () => null });
+}
+
+export interface ToolCensusOptions {
+  /**
+   * R8.6: register the `code` tool's LSP modes, as `knowledge.lsp_enabled`
+   * would. Off by default because the shipped default is off — a census that
+   * reported a cost nobody is paying would be exactly the dishonest metric
+   * §99's cache-prefix verdict is on the roadmap for.
+   */
+  readonly lsp?: boolean;
+  /**
+   * R8.7: register `coder`'s `edit` mode, as `inference.local_editor_enabled`
+   * would. Off by default for the same reason as {@link lsp} — the shipped
+   * default is off, and the on-state must be measurable rather than assumed.
+   */
+  readonly editor?: boolean;
 }
 
 /**
@@ -91,8 +129,13 @@ function catalogDeps() {
  * Sorted by descending description size: the first rows are where any shrinker
  * would have to earn its keep.
  */
-export async function golemToolCensus(): Promise<ToolCensus> {
-  const server = createGolemMcpServer(catalogDeps());
+export async function golemToolCensus(options: ToolCensusOptions = {}): Promise<ToolCensus> {
+  const deps = {
+    ...catalogDeps(),
+    ...(options.lsp === true ? { lsp: await catalogLspBridge() } : {}),
+    ...(options.editor === true ? { localEditor: true } : {}),
+  };
+  const server = createGolemMcpServer(deps);
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "golem-tool-census", version: "0.0.0" });
   try {

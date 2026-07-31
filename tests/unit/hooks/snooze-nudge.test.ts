@@ -142,10 +142,17 @@ describe("snoozeNudgeReason", () => {
   it("instructs the document-and-hold pattern with the rounded utilization and reset", () => {
     const r = snoozeNudgeReason(FUTURE, 0.937);
     expect(r).toContain("94%");
-    expect(r).toContain("golem task add");
     expect(r).toContain("mcp__golem__snooze");
     expect(r).toContain(`until="${FUTURE}"`);
     expect(r).toContain("STOP");
+  });
+
+  // Task `snooze-taskadd`: the documenting step is snooze's own `note`, never a
+  // separate `golem task add` — enforcement denies that Bash call (§105).
+  it("asks for the note on the snooze call, not a separate task-add command", () => {
+    const r = snoozeNudgeReason(FUTURE, 0.937);
+    expect(r).toContain("note=");
+    expect(r).not.toContain("golem task add");
   });
 });
 
@@ -168,6 +175,14 @@ describe("snoozeEnforceReason", () => {
     expect(r).toContain("mcp__golem__snooze");
     expect(r).toContain(`until="${FUTURE}"`);
     expect(r).toContain("GOLEM_SNOOZE_ENFORCE=false");
+  });
+
+  // Task `snooze-taskadd`: enforcement denies `Bash`, so the enforce reason must
+  // point at snooze's `note` and explicitly warn AGAINST trying `golem task add`.
+  it("routes the documenting step through `note` and warns off `golem task add`", () => {
+    const r = snoozeEnforceReason(FUTURE, 0.95);
+    expect(r).toContain("note=");
+    expect(r).toMatch(/do NOT try to run `golem task add`/);
   });
 });
 

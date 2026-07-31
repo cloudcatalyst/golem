@@ -21,6 +21,10 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
+// Constant only — the ledger's implementation is behind `await import()` in each
+// `golem checkpoint` action, so `git` is never spawned by an unrelated command.
+import { DEFAULT_KEEP } from "../checkpoint/ledger.js";
+import { resolveEffectiveCompression } from "../compression/effective-level.js";
 // Imported from the module, not the config barrel: the barrel deliberately does
 // not re-export the control surface (see src/config/index.ts).
 import { collectControlSurface } from "../config/control-surface.js";
@@ -44,11 +48,13 @@ import {
   createProbeRunner,
   detectCapability,
   embedModelFor,
-  modelsForTier,
   OllamaClient,
   OllamaInferenceService,
+  OllamaNativeClient,
+  resolveTierAvailability,
+  roleWarning,
 } from "../inference/index.js";
-import type { HardwareTier, InferenceService } from "../interfaces/inference.js";
+import type { HardwareTier, InferenceService, Role } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { fetchRawPage } from "../knowledge/index.js";
@@ -64,7 +70,12 @@ import {
   translatePrompt,
   writeLastSuggestion,
 } from "../prompt/index.js";
-import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
+import {
+  resolveUpstreamDisplay,
+  UPSTREAM_AUTH_SCHEMES,
+  UPSTREAM_PROVIDERS,
+  upstreamAssumesCaching,
+} from "../providers/index.js";
 import {
   buildResumeArgv,
   createTask,
@@ -77,6 +88,7 @@ import {
 import {
   type BenchWindow,
   buildCostBenchmark,
+  type ModelCatalog,
   openTelemetryStore,
   readTelemetryEvents,
   renderCostBenchmark,
@@ -113,6 +125,7 @@ import {
   setConfig,
   unsetConfig,
 } from "./config.js";
+import { collectDevices, devicesJson, renderDevices } from "./devices.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
 import { collectExt, renderExt } from "./ext.js";
@@ -863,6 +876,33 @@ mcp
         );
       }
       const { JsonFileSliderStore, serveStdio } = await import("../mcp/index.js");
+      // R8.6: the LSP modes of the `code` tool. Opt-in, and only alongside the
+      // map — they are modes of that one tool, never tools of their own. The
+      // bridge spawns nothing until a mode is actually called.
+      const lspBridge =
+        settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
+          ? await (async () => {
+              const { LspBridge } = await import("../ext/index.js");
+              const bridge = new LspBridge({
+                root: opts.dir,
+                requestTimeoutMs: settings.knowledge.lsp_timeout_ms,
+                ...(settings.knowledge.lsp_servers !== undefined
+                  ? {
+                      servers: settings.knowledge.lsp_servers.map((row) => ({
+                        id: row.id,
+                        command: row.command,
+                        args: row.args,
+                        languageId: row.language_id,
+                        extensions: row.extensions,
+                      })),
+                    }
+                  : {}),
+              });
+              // A parent that dies must not orphan a language server.
+              process.once("exit", () => bridge.killAll());
+              return bridge;
+            })()
+          : undefined;
       await serveStdio({
         compression: mcpCompressionService(opts.dir, telemetry),
         telemetry,
@@ -870,11 +910,30 @@ mcp
         // slider.level key) the E1 loader and `golem slider` use; the slider is a
         // personal, transient dial kept out of committed settings (Decision 43).
         sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).local),
+        // §103: let `level` report the level that will actually run. Config is in
+        // scope here; the MCP server deliberately takes no config dependency.
+        compressionGate: (level) => {
+          const up = resolveUpstreamDisplay(settings.proxy);
+          const assumeCaching = upstreamAssumesCaching(up.provider);
+          return resolveEffectiveCompression({
+            level,
+            upstreamBaseUrl: up.baseUrl,
+            ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
+            headroomSidecar: settings.compression.headroom_sidecar,
+            forceSemanticOnCaching: settings.compression.force_semantic_on_caching,
+          });
+        },
+        // Unconditional: `snooze` is registered whatever else is enabled, and its
+        // `note` needs somewhere to write the durable task (task `snooze-taskadd`).
+        // `ingest` also uses it as its default target when the KB is on.
+        projectRootDir: opts.dir,
+        // Task `local-models`: which Ollama the `devices` tool asks about what is
+        // actually pulled. Config is in scope here; the MCP server takes none.
+        localEndpoint: settings.inference.ollama_base_url,
         ...(knowledge !== undefined
           ? {
               knowledge,
               defaultProjectId: opts.dir,
-              projectRootDir: opts.dir,
               wikiDir: wikiSourcePrefix(
                 opts.dir,
                 resolveWikiDir(opts.dir, settings.knowledge.wiki_dir),
@@ -883,6 +942,15 @@ mcp
           : {}),
         ...(inference !== undefined ? { inference } : {}),
         ...(coderInference !== undefined ? { coder: coderInference } : {}),
+        // R8.7: `coder`'s edit mode is +313 definition tokens on every request
+        // (§110), so its schema is offered only when opted in — the same
+        // permanent-bill discipline as `code`/`lsp` above.
+        ...(settings.inference.local_editor_enabled ? { localEditor: true } : {}),
+        // R8.5: the `code` tool maps the filesystem via tree-sitter, so it is
+        // independent of the knowledge base — but it is a permanent per-request
+        // definition cost, so it is registered only when opted in.
+        ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),
+        ...(lspBridge !== undefined ? { lsp: lspBridge } : {}),
         // R3.1 (spec Decision 34): opt-in chat-judge rerank, decoupled from the
         // slider (Decision 31) via its own settings leaf.
         ...(inference !== undefined && settings.knowledge.rerank_enabled
@@ -1141,6 +1209,18 @@ program
             `${o.source !== undefined ? ` (${o.source})` : ""}\n`,
         );
       }
+      // §103: say so immediately when the level just chosen is inert on this
+      // upstream, rather than reporting success and letting the name mislead.
+      const ec = result.effectiveCompression;
+      if (ec.degraded) {
+        process.stdout.write(
+          `⚠ on this upstream that behaves as level ${ec.effective} ` +
+            `(${SLIDER_LEVEL_NAMES[ec.effective]}), not ${ec.nominal} ` +
+            `(${SLIDER_LEVEL_NAMES[ec.nominal]}): ${ec.reason ?? ""}\n` +
+            `  The setting is kept — it applies as chosen on a non-caching account ` +
+            `(golem account use <id>).\n`,
+        );
+      }
     } catch (err) {
       fail(err);
     }
@@ -1196,8 +1276,24 @@ program
             import("./context.js"),
           ]);
           const ledger = await readContextLedger(opts.dir);
+          // R8.8 — the context-window line. Catalog load is cache-only (never a
+          // network call) and best-effort: a failure drops the window line and
+          // leaves the R8.4 report exactly as it was.
+          let window: { catalog: ModelCatalog; warnFraction: number } | undefined;
+          try {
+            const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+            const { settings } = await loadConfig({ projectDir: opts.dir });
+            window = {
+              catalog: await loadModelCatalog(opts.dir),
+              warnFraction: settings.models.context_warn_fraction,
+            };
+          } catch {
+            window = undefined;
+          }
           process.stdout.write(
-            opts.json ? `${JSON.stringify(ledger, null, 2)}\n` : renderContextLedger(ledger),
+            opts.json
+              ? `${JSON.stringify(ledger, null, 2)}\n`
+              : renderContextLedger(ledger, window),
           );
           return;
         }
@@ -1260,6 +1356,34 @@ program
 
 const benchCmd = program.command("bench").description("Golem benchmarks (spec Decision 21f)");
 
+/**
+ * Task `local-models` — warn on stderr, BEFORE a benchmark runs, when the local
+ * role it is about to use has no model pulled.
+ *
+ * §89 and §100 both had to substitute `--role drafter` because the tier's
+ * `classifier` model was not present, and both recorded that by hand as a caveat
+ * *after* the fact. The fact was knowable up front; nothing asked. stderr (not
+ * stdout) so `--json` output stays machine-parseable, and it never throws — a
+ * benchmark must not fail because Ollama could not be listed.
+ */
+async function warnLocalRoleAvailability(
+  tier: HardwareTier,
+  endpoint: string,
+  role: Role,
+): Promise<void> {
+  try {
+    const availability = await resolveTierAvailability(tier, {
+      endpoint,
+      listModels: () =>
+        new OllamaNativeClient({ baseUrl: endpoint, requestTimeoutMs: 2500 }).listModels(),
+    });
+    const warning = roleWarning(availability, role);
+    if (warning !== null) process.stderr.write(`golem bench: ${warning}\n`);
+  } catch {
+    // Availability is advisory context, never a gate on the benchmark itself.
+  }
+}
+
 benchCmd
   .command("cost")
   .description(
@@ -1290,11 +1414,22 @@ benchCmd
       } catch {
         claudeMdLines = undefined;
       }
+      // R8.8 — real money when a catalog is available. Cache-only (this command
+      // never makes a network call) and best-effort: without it the report is
+      // exactly R6.4's token-and-baselines view.
+      let catalog: ModelCatalog | undefined;
+      try {
+        const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+        catalog = await loadModelCatalog(opts.dir);
+      } catch {
+        catalog = undefined;
+      }
       const report = buildCostBenchmark(events, {
         ...(opts.project !== undefined ? { projectId: opts.project } : {}),
         window,
         nowMs: Date.now(),
         ...(claudeMdLines !== undefined ? { claudeMdLines } : {}),
+        ...(catalog !== undefined ? { catalog } : {}),
       });
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderCostBenchmark(report),
@@ -1303,6 +1438,185 @@ benchCmd
       fail(err);
     }
   });
+
+benchCmd
+  .command("map")
+  .description(
+    "R8.5 gate: what the repo map costs, and whether it lets the model name the right " +
+      "file WITHOUT reading it (retrieval-accuracy A/B against a plain path list)",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--score", "run the retrieval A/B (needs the local model); omit for cost only", false)
+  .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
+  .option(
+    "--role <role>",
+    "local role that does the choosing: classifier (default) | drafter | judge",
+    "classifier",
+  )
+  .option("--budget <n>", "token budget for the rendered map (default 1400)")
+  .option("--print", "also print the map itself", false)
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      dir: string;
+      score: boolean;
+      repeats: string;
+      role: string;
+      budget?: string;
+      print: boolean;
+      json: boolean;
+    }) => {
+      try {
+        const { benchRepoMap, renderRepoMapBench, RETRIEVAL_CASES, buildRepoMap } = await import(
+          "../knowledge/index.js"
+        );
+        let budgetTokens: number | undefined;
+        if (opts.budget !== undefined) {
+          const parsed = Number.parseInt(opts.budget, 10);
+          if (!Number.isFinite(parsed) || parsed < 200) {
+            throw new InitError(`invalid --budget "${opts.budget}" (expected an integer ≥ 200)`);
+          }
+          budgetTokens = parsed;
+        }
+        const repeats = Number.parseInt(opts.repeats, 10);
+        if (!Number.isFinite(repeats) || repeats < 1) {
+          throw new InitError(`invalid --repeats "${opts.repeats}" (expected a positive integer)`);
+        }
+        const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+        const role = opts.role as (typeof roles)[number];
+        if (!roles.includes(role)) {
+          throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+        }
+
+        // Scoring needs the local model, and unlike the census it cannot degrade
+        // silently — an A/B with no chooser is not a result.
+        let inference: OllamaInferenceService | undefined;
+        if (opts.score) {
+          const { settings } = await loadConfig({ projectDir: opts.dir });
+          const client = new OllamaClient({
+            baseUrl: settings.inference.ollama_base_url,
+            requestTimeoutMs: settings.inference.request_timeout_ms,
+          });
+          const facts = await detectCapability(createProbeRunner());
+          inference = new OllamaInferenceService(client, facts);
+          await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
+        }
+
+        const report = await benchRepoMap({
+          root: opts.dir,
+          cases: RETRIEVAL_CASES,
+          repeats,
+          role,
+          ...(inference !== undefined ? { inference } : {}),
+          ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+        });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderRepoMapBench(report),
+        );
+        if (opts.print) {
+          const map = await buildRepoMap(
+            opts.dir,
+            budgetTokens !== undefined ? { budgetTokens } : {},
+          );
+          process.stdout.write(`\n${map.available ? map.text : `No map: ${map.reason}\n`}`);
+        }
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+benchCmd
+  .command("edit")
+  .description(
+    "R8.7 gate: can the LOCAL model turn a ~50-token instruction into an edit Golem's " +
+      "validator accepts AND a human would call correct? Scores all three edit formats.",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--repeats <n>", "passes over the case set (default 1)", "1")
+  .option(
+    "--role <role>",
+    "local role that does the editing: drafter (default) | judge | classifier",
+    "drafter",
+  )
+  .option(
+    "--format <format>",
+    "limit to one format: search-replace | udiff | whole (default: all three)",
+  )
+  .option(
+    "--strict-match",
+    "require byte-exact search text (default also retries ignoring trailing whitespace)",
+    false,
+  )
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      dir: string;
+      repeats: string;
+      role: string;
+      format?: string;
+      strictMatch: boolean;
+      json: boolean;
+    }) => {
+      try {
+        const { benchEdits, EDIT_CASES, isEditFormat, renderEditBench } = await import(
+          "../tools/index.js"
+        );
+        const { extractFileFacts, hasParseError } = await import("../knowledge/index.js");
+        // The definition-loss guard, wired the same way it would ship: a
+        // whole-file rewrite that parses but has dropped a function is the
+        // failure the ≤40-line fixtures cannot show, so the harness measures
+        // the guard rather than a version of the feature without it.
+        const symbolCheck = async (ext: string, content: string): Promise<string[] | null> => {
+          const facts = await extractFileFacts(ext, content);
+          return facts === null ? null : facts.defs.map((d) => d.name);
+        };
+        const repeats = Number.parseInt(opts.repeats, 10);
+        if (!Number.isFinite(repeats) || repeats < 1) {
+          throw new InitError(`invalid --repeats "${opts.repeats}" (expected a positive integer)`);
+        }
+        const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+        const role = opts.role as (typeof roles)[number];
+        if (!roles.includes(role)) {
+          throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+        }
+        if (opts.format !== undefined && !isEditFormat(opts.format)) {
+          throw new InitError(
+            `invalid --format "${opts.format}" (expected search-replace | udiff | whole)`,
+          );
+        }
+
+        // There is no census half here: an edit harness with no editor is not a
+        // result, so the local model is required rather than optional.
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const client = new OllamaClient({
+          baseUrl: settings.inference.ollama_base_url,
+          requestTimeoutMs: settings.inference.request_timeout_ms,
+        });
+        const facts = await detectCapability(createProbeRunner());
+        const inference = new OllamaInferenceService(client, facts);
+        await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
+
+        const report = await benchEdits({
+          inference,
+          cases: EDIT_CASES,
+          repeats,
+          role,
+          matchStrategy: opts.strictMatch ? "exact" : "exact-then-trimmed",
+          parseCheck: hasParseError,
+          symbolCheck,
+          ...(opts.format !== undefined && isEditFormat(opts.format)
+            ? { formats: [opts.format] }
+            : {}),
+        });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderEditBench(report),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
 
 benchCmd
   .command("tools")
@@ -1314,8 +1628,13 @@ benchCmd
   .option(
     "--shrink <mode>",
     "score a candidate transform: whitespace | first-sentence (descriptions) | " +
-      "schema-meta | schema-validation | schema-descriptions (input schemas) — " +
+      "schema-meta | schema-validation | schema-descriptions (input schemas) | " +
+      "ext-caveman-shrink (the user's own caveman-shrink install, P3b) — " +
       "omit for census only",
+  )
+  .option(
+    "--shrink-path <file>",
+    "for an ext-* mode: path to the external module, when it is not resolvable by name",
   )
   .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
   .option(
@@ -1324,13 +1643,26 @@ benchCmd
       "substitute when the tier's classifier model is not pulled",
     "classifier",
   )
+  .option(
+    "--lsp",
+    "count the R8.6 LSP modes of the `code` tool (knowledge.lsp_enabled, default off)",
+    false,
+  )
+  .option(
+    "--editor",
+    "count the R8.7 `edit` mode of `coder` (inference.local_editor_enabled, default off)",
+    false,
+  )
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
       dir: string;
       shrink?: string;
+      shrinkPath?: string;
       repeats: string;
       role: string;
+      lsp: boolean;
+      editor: boolean;
       json: boolean;
     }) => {
       try {
@@ -1340,11 +1672,13 @@ benchCmd
           SHRINK_MODES,
           shrinkCatalog,
           isSchemaMode,
+          isExternalMode,
+          resolveCavemanShrink,
           compareCatalogs,
           SELECTION_CASES,
           ARGUMENT_CASES,
         } = await import("../tools/index.js");
-        const census = await golemToolCensus();
+        const census = await golemToolCensus({ lsp: opts.lsp, editor: opts.editor });
         if (opts.shrink === undefined) {
           const report = { census };
           process.stdout.write(
@@ -1376,14 +1710,36 @@ benchCmd
         if (!roles.includes(role)) {
           throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
         }
+        await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
         // A schema transform is invisible to a description-only chooser, and its
         // real hazard is argument construction rather than selection — so the two
         // gates are switched on together, never separately (R8.S1).
         const schemaMode = isSchemaMode(mode);
+        // P3b: an external mode measures somebody else's implementation, resolved
+        // from the user's own install. Absent → refuse, loudly. Measuring an
+        // identity transform would publish a fake number under their name.
+        let external: ReturnType<typeof resolveCavemanShrink> = null;
+        if (isExternalMode(mode)) {
+          external = resolveCavemanShrink(
+            opts.shrinkPath !== undefined ? { explicitPath: opts.shrinkPath } : undefined,
+          );
+          if (external === null) {
+            throw new InitError(
+              `--shrink ${mode} needs caveman-shrink installed (it is never vendored): ` +
+                "`npm i -g caveman-shrink`, or pass --shrink-path <file>, or set " +
+                "GOLEM_CAVEMAN_SHRINK. Golem ships none of its bytes.",
+            );
+          }
+          process.stderr.write(`golem bench tools: using ${external.resolvedFrom}\n`);
+        }
         const result = await compareCatalogs({
           inference,
           baseline: census.tools,
-          candidate: shrinkCatalog(census.tools, mode),
+          candidate: shrinkCatalog(
+            census.tools,
+            mode,
+            external !== null ? { externalTransform: external.compress } : undefined,
+          ),
           cases: SELECTION_CASES,
           repeats,
           role,
@@ -1408,6 +1764,222 @@ benchCmd
     },
   );
 
+const checkpointCmd = program
+  .command("checkpoint")
+  .alias("cp")
+  .description(
+    "Change ledger (R8.9): snapshot the worktree to a shadow git ref so a failed attempt can be DISCARDED instead of repaired — never a commit on your branch",
+  );
+
+checkpointCmd
+  .command("create", { isDefault: true })
+  .alias("take")
+  .description("Snapshot the working tree under refs/golem/ledger/<id> (nothing else is touched)")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--note <text>", "what this attempt is about (shown in the list)")
+  .option("--keep <n>", "how many checkpoints to retain", String(DEFAULT_KEEP))
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; note?: string; keep: string; json: boolean }) => {
+    try {
+      const { createCheckpoint } = await import("../checkpoint/index.js");
+      const keep = Number(opts.keep);
+      if (!Number.isInteger(keep) || keep < 1) {
+        fail(new Error(`--keep must be a positive integer (got "${opts.keep}")`));
+      }
+      const result = await createCheckpoint(opts.dir, {
+        keep,
+        ...(opts.note === undefined ? {} : { note: opts.note }),
+      });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!result.ok) {
+        // A no-op with a reason is the documented degrade path, not an error.
+        process.stdout.write(`No checkpoint taken: ${result.reason}\n`);
+        return;
+      }
+      const { checkpoint, unchanged, pruned } = result.value;
+      if (unchanged) {
+        process.stdout.write(
+          `Working tree unchanged since ${checkpoint.id} — reusing that checkpoint (no new ref).\n`,
+        );
+        return;
+      }
+      const prunedNote = pruned > 0 ? ` · pruned ${pruned} older` : "";
+      process.stdout.write(
+        `Checkpoint ${checkpoint.id} — ${checkpoint.note}\n${checkpoint.ref}${prunedNote}\nRestore with: golem checkpoint restore ${checkpoint.id}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("list")
+  .alias("ls")
+  .description("List checkpoints, newest first")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--keep <n>", "retention shown in the footer", String(DEFAULT_KEEP))
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; keep: string; json: boolean }) => {
+    try {
+      const { listCheckpoints } = await import("../checkpoint/index.js");
+      const { renderCheckpointList } = await import("./checkpoint.js");
+      const result = await listCheckpoints(opts.dir);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!result.ok) {
+        process.stdout.write(`No change ledger here: ${result.reason}\n`);
+        return;
+      }
+      process.stdout.write(
+        renderCheckpointList(result.value, new Date().toISOString(), Number(opts.keep)),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("show")
+  .description("Show what restoring a checkpoint would change (reads only — nothing is written)")
+  .argument("[id]", "checkpoint id, an unambiguous prefix, or 'latest'", "latest")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (id: string, opts: { dir: string; json: boolean }) => {
+    try {
+      const { planRestore, resolveCheckpoint } = await import("../checkpoint/index.js");
+      const { renderRestorePlan } = await import("./checkpoint.js");
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const plan = await planRestore(opts.dir, found.value);
+      if (!plan.ok) {
+        process.stdout.write(`${plan.reason}\n`);
+        return;
+      }
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(plan.value, null, 2)}\n` : renderRestorePlan(plan.value),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("restore")
+  .alias("undo")
+  .description(
+    "DESTRUCTIVE: put worktree files back to a checkpoint, discarding changes since it (a pre-restore checkpoint is taken first)",
+  )
+  .argument("[id]", "checkpoint id, an unambiguous prefix, or 'latest'", "latest")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .action(async (id: string, opts: { dir: string; yes: boolean }) => {
+    try {
+      const { planRestore, resolveCheckpoint, restoreCheckpoint } = await import(
+        "../checkpoint/index.js"
+      );
+      const { confirmDestructive, renderRestorePlan, renderRestoreResult } = await import(
+        "./checkpoint.js"
+      );
+
+      // Preview from the plan BEFORE anything is written; the same plan is
+      // recomputed inside restoreCheckpoint, which is where the refusals live.
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const plan = await planRestore(opts.dir, found.value);
+      if (!plan.ok) {
+        process.stdout.write(`Cannot restore: ${plan.reason}\n`);
+        return;
+      }
+      if (plan.value.restore.length === 0 && plan.value.delete.length === 0) {
+        process.stdout.write(renderRestorePlan(plan.value));
+        return;
+      }
+      const accepted = await confirmDestructive(
+        renderRestorePlan(plan.value),
+        `Discard the changes above and restore ${found.value.id}?`,
+        { yes: opts.yes },
+      );
+      if (!accepted) {
+        process.stdout.write("aborted — nothing was changed.\n");
+        return;
+      }
+
+      const result = await restoreCheckpoint(opts.dir, found.value.id);
+      if (!result.ok) {
+        process.stdout.write(`Cannot restore: ${result.reason}\n`);
+        return;
+      }
+      process.stdout.write(renderRestoreResult(result.value));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("drop")
+  .description("Delete one checkpoint's shadow ref (loses the snapshot; touches no file)")
+  .argument("<id>", "checkpoint id, an unambiguous prefix, or 'latest'")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .action(async (id: string, opts: { dir: string; yes: boolean }) => {
+    try {
+      const { dropCheckpoint, resolveCheckpoint } = await import("../checkpoint/index.js");
+      const { confirmDestructive } = await import("./checkpoint.js");
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const accepted = await confirmDestructive(
+        `Drop checkpoint ${found.value.id} — "${found.value.note}" (${found.value.ref})\nNo working-tree file changes; the snapshot itself is lost.\n`,
+        `Delete checkpoint ${found.value.id}?`,
+        { yes: opts.yes },
+      );
+      if (!accepted) {
+        process.stdout.write("aborted — the checkpoint is still there.\n");
+        return;
+      }
+      const dropped = await dropCheckpoint(opts.dir, found.value.id);
+      process.stdout.write(dropped.ok ? `dropped ${dropped.value.id}\n` : `${dropped.reason}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("prune")
+  .description("Delete all but the newest N checkpoints")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--keep <n>", "how many to retain", String(DEFAULT_KEEP))
+  .action(async (opts: { dir: string; keep: string }) => {
+    try {
+      const { pruneCheckpoints } = await import("../checkpoint/index.js");
+      const keep = Number(opts.keep);
+      if (!Number.isInteger(keep) || keep < 0) {
+        fail(new Error(`--keep must be a non-negative integer (got "${opts.keep}")`));
+      }
+      const result = await pruneCheckpoints(opts.dir, keep);
+      process.stdout.write(
+        result.ok
+          ? `pruned ${result.value} checkpoint(s), keeping the ${keep} newest\n`
+          : `${result.reason}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
 const extCmd = program
   .command("ext")
   .description(
@@ -1428,6 +2000,73 @@ extCmd
       const report = await collectExt(opts.dir);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const modelsCmd = program
+  .command("models")
+  .description(
+    "Per-model price and context limits — Golem's own cached data, never a runtime dependency (R8.8)",
+  );
+
+modelsCmd
+  .command("list", { isDefault: true })
+  .alias("show")
+  .description("Show catalogued models with their price and context window (ids verbatim)")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--filter <text>", "case-insensitive substring over '<provider> <id>'")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; filter?: string; json: boolean }) => {
+    try {
+      const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+      const { renderModelCatalog } = await import("./models.js");
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const catalog = await loadModelCatalog(opts.dir);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(catalog, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(
+        renderModelCatalog(catalog, {
+          nowMs: Date.now(),
+          maxAgeDays: settings.models.catalog_max_age_days,
+          ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
+        }),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+modelsCmd
+  .command("refresh")
+  .description(
+    "Fetch `models.catalog_url` once and cache it locally — the only path that touches the network",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--url <url>", "override models.catalog_url for this run")
+  .action(async (opts: { dir: string; url?: string }) => {
+    try {
+      const { BUILTIN_MODEL_CATALOG, fetchModelCatalog, mergeCatalogs, writeModelCatalog } =
+        await import("../telemetry/model-catalog.js");
+      const { renderRefreshResult } = await import("./models.js");
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const url = opts.url ?? settings.models.catalog_url;
+      const nowIso = new Date().toISOString();
+      const fetched = await fetchModelCatalog(url, { nowIso });
+      await writeModelCatalog(opts.dir, fetched);
+      const merged = mergeCatalogs(BUILTIN_MODEL_CATALOG, fetched);
+      process.stdout.write(
+        renderRefreshResult({
+          url,
+          fetched: fetched.entries.length,
+          added: merged.entries.length - BUILTIN_MODEL_CATALOG.entries.length,
+          builtin: BUILTIN_MODEL_CATALOG.entries.length,
+          fetchedAt: nowIso,
+        }),
       );
     } catch (err) {
       fail(err);
@@ -2737,13 +3376,6 @@ program
     },
   );
 
-const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
-  0: "P_CPU",
-  1: "P_MIN",
-  2: "P_MID",
-  3: "P_MAX",
-};
-
 program
   .command("index")
   .description("Index a file or directory into the Golem knowledge base (local embeddings)")
@@ -2833,23 +3465,17 @@ program
 
 program
   .command("devices")
-  .description("Show detected local hardware tier and the models Golem would use")
+  .description(
+    "Show detected local hardware tier and, per role, whether that model is actually pulled",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { json: boolean }) => {
+  .action(async (opts: { dir: string; json: boolean }) => {
     try {
-      const facts = await detectCapability(createProbeRunner());
-      const models = modelsForTier(facts.tier);
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ ...facts, models }, null, 2)}\n`);
-        return;
-      }
+      const report = await collectDevices({ projectDir: opts.dir });
       process.stdout.write(
-        `Hardware tier: ${facts.tier} (${TIER_NAMES[facts.tier]}) — via ${facts.source}\n`,
+        opts.json ? `${JSON.stringify(devicesJson(report), null, 2)}\n` : renderDevices(report),
       );
-      if (facts.device !== undefined) process.stdout.write(`  device: ${facts.device}\n`);
-      if (facts.memoryMiB !== undefined) process.stdout.write(`  memory: ${facts.memoryMiB} MiB\n`);
-      process.stdout.write(`  ${facts.detail}\n`);
-      process.stdout.write(`  models for this tier: ${models.join(", ")}\n`);
     } catch (err) {
       fail(err);
     }
@@ -2913,6 +3539,16 @@ const hookCmd = buildHookCommand({
       return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
     } catch {
       return false; // config unreadable → behave as if disabled (pure-TTL)
+    }
+  },
+  // R8.5: the oversized-`Read` symbol skeleton, gated by
+  // `knowledge.read_skeleton_enabled` (default on) — same pattern, so src/hooks
+  // keeps no config dependency.
+  skeletonEnabled: async (projectDir) => {
+    try {
+      return (await loadConfig({ projectDir })).settings.knowledge.read_skeleton_enabled;
+    } catch {
+      return true; // config unreadable → default on
     }
   },
   // Decision 42: fetch + cache the RAW page ourselves instead of Claude Code's

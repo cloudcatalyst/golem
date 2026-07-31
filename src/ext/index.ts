@@ -11,6 +11,25 @@
 
 export { commandOnPath, moduleOnDisk } from "./detect.js";
 export {
+  DEFAULT_LSP_DIAGNOSTICS_WAIT_MS,
+  DEFAULT_LSP_IDLE_TIMEOUT_MS,
+  DEFAULT_LSP_INITIALIZE_TIMEOUT_MS,
+  DEFAULT_LSP_REQUEST_TIMEOUT_MS,
+  DEFAULT_LSP_SERVERS,
+  LSP_MODES,
+  LspBridge,
+  type LspBridgeOptions,
+  type LspDiagnostic,
+  type LspLocation,
+  type LspMode,
+  type LspQueryInput,
+  type LspQueryResult,
+  type LspServerSpec,
+  resolveLspServers,
+  serverForFile,
+  TYPESCRIPT_LSP,
+} from "./lsp/index.js";
+export {
   EXT_MANIFESTS,
   type ExtDetect,
   type ExtManifest,
