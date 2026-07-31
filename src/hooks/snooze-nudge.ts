@@ -126,11 +126,11 @@ export function snoozeNudgeReason(resetAtIso: string, utilization: number): stri
   const pct = Math.round(utilization * 100);
   return (
     `**Golem** You're near your usage limit (session window ~${pct}% used). ` +
-    `Before it's exhausted: (1) capture your current progress as a durable task ` +
-    `with \`golem task add "<where you're up to + next steps>"\`, then (2) call the ` +
-    `\`mcp__golem__snooze\` tool with \`until="${resetAtIso}"\` to park until the ` +
-    `window resets, then (3) STOP — do not keep working. The session resumes here ` +
-    `automatically when snooze completes.`
+    `Before it's exhausted, park in ONE call: the \`mcp__golem__snooze\` tool with ` +
+    `\`until="${resetAtIso}"\` and \`note="<where you're up to + next steps>"\` — the ` +
+    `note is filed as a durable local task before the wait starts, so your place ` +
+    `survives even if the session ends. Then STOP — do not keep working. The session ` +
+    `resumes here automatically when snooze completes.`
   );
 }
 
@@ -149,10 +149,11 @@ export function snoozeEnforceReason(resetAtIso: string, utilization: number): st
     `**Golem** Usage-limit ENFORCEMENT is on and the session window is ~${pct}% used. ` +
     `The ONLY permitted action now is the \`mcp__golem__snooze\` tool ` +
     `(\`until="${resetAtIso}"\`) — every other tool is denied until you park or the ` +
-    `window resets. Call snooze now: your context is retained in-place and the session ` +
-    `resumes automatically at reset (optionally note next steps in the snooze reason). ` +
-    `To lift enforcement, the user can set \`snooze.enforce\` false (env ` +
-    `\`GOLEM_SNOOZE_ENFORCE=false\`).`
+    `window resets, so do NOT try to run \`golem task add\` first: pass ` +
+    `\`note="<where you're up to + next steps>"\` to snooze instead and it files that ` +
+    `durable task for you, before the wait. Call snooze now: your context is retained ` +
+    `in-place and the session resumes automatically at reset. To lift enforcement, the ` +
+    `user can set \`snooze.enforce\` false (env \`GOLEM_SNOOZE_ENFORCE=false\`).`
   );
 }
 

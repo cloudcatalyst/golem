@@ -33,7 +33,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { EffectiveCompression } from "../compression/effective-level.js";
-import { createProbeRunner, detectCapability, modelsForTier } from "../inference/index.js";
+import {
+  availabilityWarning,
+  createProbeRunner,
+  DEFAULT_OLLAMA_BASE_URL,
+  detectCapability,
+  modelsForTier,
+  OllamaNativeClient,
+  resolveTierAvailability,
+} from "../inference/index.js";
 import type {
   CompressionService,
   HardwareTier,
@@ -66,6 +74,7 @@ import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
 import { abortableSleep, DEFAULT_SNOOZE_MAX_MS, runSnooze, SnoozeInputError } from "./snooze.js";
+import { persistSnoozeNote } from "./snooze-note.js";
 import { InMemoryCompressionService } from "./stub-compression.js";
 
 export const GOLEM_MCP_SERVER_NAME = "golem";
@@ -107,7 +116,8 @@ export interface GolemMcpServerDeps {
   /** projectId used by knowledge tools when a call omits `project_id`. */
   readonly defaultProjectId?: string;
   /**
-   * Absolute project root the `ingest` tool indexes when a call omits `path`.
+   * Absolute project root: what `ingest` indexes when a call omits `path`, and
+   * where `snooze` files its `note` as a durable local task (`.golem/tasks/`).
    * Kept separate from {@link defaultProjectId} on purpose: the CLI happens to
    * use the project directory as the project id today, but ids are opaque —
    * only this field is guaranteed to be a filesystem path.
@@ -150,6 +160,13 @@ export interface GolemMcpServerDeps {
    * turns a successful search into an error.
    */
   readonly rerank?: InferenceService;
+  /**
+   * Task `local-models` — the Ollama endpoint the `devices` tool checks for pulled
+   * models (`inference.ollama_base_url`). Injected rather than read here because
+   * this server takes no config dependency; omitted → localhost is assumed, which
+   * is right for every default install and wrong only for a LAN endpoint.
+   */
+  readonly localEndpoint?: string;
   /**
    * R4.3 — durable telemetry store. When present, the knowledge/coder tools
    * (`search`/`fetch`/`ingest`/`wiki_read`/`coder`) record a per-call `tool`
@@ -442,8 +459,8 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
     },
   );
 
-  registerDevicesTool(server);
-  registerSnoozeTool(server);
+  registerDevicesTool(server, deps);
+  registerSnoozeTool(server, deps);
 
   // R4.3 — where the knowledge/coder tools record their per-call telemetry.
   const tel: ToolTelemetry | undefined =
@@ -1491,15 +1508,23 @@ const DEVICE_TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
  * Registered unconditionally: detection needs no injected service, only the
  * always-available hardware-probe functions, and `detectCapability` never
  * throws (every failure path degrades to P_CPU).
+ *
+ * Task `local-models`: it also reports, per slot, whether that model is actually
+ * **pulled**. The flat model list read as an availability claim and was wrong for
+ * most slots on the author's machine — and an agent that believes a role is
+ * available will call it and get a silent failure (the LE2 judge bug). Three
+ * states: `pulled` / `not-pulled` / `unknown` (endpoint unreachable — never claim
+ * missing when we could not look).
  */
-function registerDevicesTool(server: McpServer): void {
+function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps): void {
   server.registerTool(
     "devices",
     {
       title: "Show detected local hardware",
       description:
         "Report Golem's detected local hardware tier (GPU/accelerator, memory) and " +
-        "the local models Golem would use at that tier. Same info as the " +
+        "the local models Golem would use at that tier — including, per role, whether " +
+        "that model is actually downloaded and callable. Same info as the " +
         "`golem devices` CLI command.",
       outputSchema: {
         tier: z.number().int().min(0).max(3),
@@ -1509,17 +1534,43 @@ function registerDevicesTool(server: McpServer): void {
         memory_mib: z.number().optional(),
         detail: z.string(),
         models: z.array(z.string()),
+        endpoint: z.string(),
+        endpoint_reachable: z.boolean(),
+        /** One entry per role/embedding slot with its pulled state. */
+        model_slots: z.array(
+          z.object({
+            slot: z.string(),
+            model: z.string(),
+            state: z.enum(["pulled", "not-pulled", "unknown"]),
+          }),
+        ),
+        missing: z.array(z.string()),
       },
     },
     async () => {
       const facts = await detectCapability(createProbeRunner());
       const models = modelsForTier(facts.tier);
       const tierName = DEVICE_TIER_NAMES[facts.tier];
+      const endpoint = deps.localEndpoint ?? DEFAULT_OLLAMA_BASE_URL;
+      const availability = await resolveTierAvailability(facts.tier, {
+        endpoint,
+        listModels: () =>
+          new OllamaNativeClient({ baseUrl: endpoint, requestTimeoutMs: 2500 }).listModels(),
+      });
       const lines = [`Hardware tier: ${facts.tier} (${tierName}) — via ${facts.source}`];
       if (facts.device !== undefined) lines.push(`  device: ${facts.device}`);
       if (facts.memoryMiB !== undefined) lines.push(`  memory: ${facts.memoryMiB} MiB`);
       lines.push(`  ${facts.detail}`);
-      lines.push(`  models for this tier: ${models.join(", ")}`);
+      lines.push(
+        `  models for this tier (endpoint ${endpoint}${availability.reachable ? "" : " — NOT reachable"}):`,
+      );
+      for (const m of availability.models) {
+        const state =
+          m.state === "pulled" ? "pulled" : m.state === "not-pulled" ? "NOT pulled" : "unknown";
+        lines.push(`    ${m.slot}: ${m.model} — ${state}`);
+      }
+      const warning = availabilityWarning(availability);
+      if (warning !== null) lines.push("", warning);
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         structuredContent: {
@@ -1528,6 +1579,16 @@ function registerDevicesTool(server: McpServer): void {
           source: facts.source,
           detail: facts.detail,
           models,
+          endpoint,
+          endpoint_reachable: availability.reachable,
+          model_slots: availability.models.map((m) => ({
+            slot: m.slot,
+            model: m.model,
+            state: m.state,
+          })),
+          // Deduplicated: it is a list of models to pull, and three roles sharing
+          // one absent model is still one download.
+          missing: [...new Set(availability.missing.map((m) => m.model))],
           ...(facts.device !== undefined ? { device: facts.device } : {}),
           ...(facts.memoryMiB !== undefined ? { memory_mib: facts.memoryMiB } : {}),
         },
@@ -1543,8 +1604,13 @@ function registerDevicesTool(server: McpServer): void {
  * signal and progress token. See snooze.ts for the timing core; the heartbeat
  * emits an MCP progress notification (when the client sent a progress token) so
  * the deliberately long tool call is not idle-timed-out.
+ *
+ * `note` (task `snooze-taskadd`) folds the park procedure's first step into this
+ * call: it is persisted as a durable local task BEFORE the wait. Under enforcement
+ * (Decision 45) every other tool — including the `Bash` running `golem task add` —
+ * is denied, so a separate documenting step was unreachable. See snooze-note.ts.
  */
-function registerSnoozeTool(server: McpServer): void {
+function registerSnoozeTool(server: McpServer, deps: GolemMcpServerDeps): void {
   server.registerTool(
     "snooze",
     {
@@ -1557,8 +1623,20 @@ function registerSnoozeTool(server: McpServer): void {
         "waits. Use it when you are about to hit — or have just hit — a usage limit " +
         "and want to resume this conversation once quota returns rather than losing " +
         "the session. Declines if the reset is further out than the cap (e.g. a " +
-        "multi-day weekly limit).",
+        "multi-day weekly limit). Pass `note` with where you're up to and the next " +
+        "steps: it is filed as a durable local task BEFORE the wait starts, so your " +
+        "place survives even if the session ends before the reset — you do not need " +
+        "(and under enforcement cannot make) a separate `golem task add` call.",
       inputSchema: {
+        note: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Where you're up to + the next steps. Persisted as a durable local task " +
+              "(the same thing `golem task add` writes) BEFORE the wait begins, so it " +
+              "survives the session ending. Strongly recommended when parking at a limit.",
+          ),
         until: z
           .string()
           .min(1)
@@ -1583,11 +1661,40 @@ function registerSnoozeTool(server: McpServer): void {
         target_ms: z.number().int().nonnegative(),
         heartbeats: z.number().int().nonnegative(),
         reason: z.string().optional(),
+        /** Id of the local task the `note` was filed as (absent when no note / it failed). */
+        task_id: z.string().optional(),
+        /** Why a supplied `note` could not be persisted. The wait still happened. */
+        note_error: z.string().optional(),
       },
     },
-    async ({ until, duration_ms, max_ms }, extra) => {
+    async ({ note, until, duration_ms, max_ms }, extra) => {
       const progressToken = extra._meta?.progressToken;
       let progress = 0;
+      // File the note BEFORE waiting: the point of the note is to survive the
+      // session ending, and a note written after a multi-hour wait would not.
+      // A failure here never blocks the park (fail-open) — it is reported and the
+      // note is echoed back so it is at least in the transcript, never dropped.
+      let taskId: string | undefined;
+      let noteError: string | undefined;
+      if (note !== undefined) {
+        if (deps.projectRootDir === undefined) {
+          noteError = "no project root is configured for this MCP server — nothing to write into";
+        } else {
+          const saved = await persistSnoozeNote(deps.projectRootDir, note);
+          if (saved.ok) taskId = saved.id;
+          else noteError = saved.error;
+        }
+      }
+      const noteLines = (): string => {
+        if (note === undefined) return "";
+        if (taskId !== undefined) {
+          return ` Your note is filed as local task \`${taskId.slice(0, 8)}\` (\`golem task list\`).`;
+        }
+        return (
+          ` WARNING: your note could NOT be filed as a task (${noteError ?? "unknown error"}), ` +
+          `so it exists only here — re-file it once you resume: ${note}`
+        );
+      };
       try {
         const outcome = await runSnooze(
           {
@@ -1610,9 +1717,11 @@ function registerSnoozeTool(server: McpServer): void {
           },
         );
         const mins = Math.round(outcome.waitedMs / 60_000);
-        const text = outcome.reset
-          ? `**Golem** Snoozed ~${mins} min — the usage window should have reset; continuing here.`
-          : `**Golem** Snooze ended without a full wait (${outcome.reason ?? "stopped"}).`;
+        const text =
+          (outcome.reset
+            ? `**Golem** Snoozed ~${mins} min — the usage window should have reset; continuing here.`
+            : `**Golem** Snooze ended without a full wait (${outcome.reason ?? "stopped"}).`) +
+          noteLines();
         return {
           content: [{ type: "text", text }],
           structuredContent: {
@@ -1621,10 +1730,14 @@ function registerSnoozeTool(server: McpServer): void {
             target_ms: outcome.targetMs,
             heartbeats: outcome.heartbeats,
             ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+            ...(taskId !== undefined ? { task_id: taskId } : {}),
+            ...(noteError !== undefined ? { note_error: noteError } : {}),
           },
         };
       } catch (err) {
-        if (err instanceof SnoozeInputError) return errorResult(err.message);
+        // A bad `until`/`duration_ms` is the caller's mistake, not a reason to lose
+        // an already-filed note — say where it went so the park can be retried.
+        if (err instanceof SnoozeInputError) return errorResult(err.message + noteLines());
         throw err;
       }
     },

@@ -49,9 +49,11 @@ golem task index --write       # regenerate the ROADMAP.md index
   done) or a **blocker** — `tests/integration/plan-tasks-roadmap.test.ts` enforces that,
   plus no dangling `depends_on`, no cycles, and a non-stale index. An idea that isn't yet
   work goes in `BACKLOG.md` as one line instead.
-- **Park with a task, not with a message.** At a usage limit, `golem task add` a durable
-  local task before calling `snooze` (see `.claude/rules/golem-snooze-hold.md`) — a chat
-  message is lost if the session ends, a task file is not.
+- **Park with a task, not with a message.** At a usage limit, call `snooze` with
+  `note="<where you're up to + next steps>"` (see `.claude/rules/golem-snooze-hold.md`) —
+  it files that durable local task itself, before the wait. A chat message is lost if the
+  session ends, a task file is not. Don't try `golem task add` first: enforcement denies
+  every non-`snooze` tool call, `Bash` included, which is exactly why `note` exists.
 
 ## Hard rules
 - **Interfaces in `src/interfaces/` are frozen contracts.** Changing one requires updating its contract tests and flagging all dependent workstreams in the PR description.

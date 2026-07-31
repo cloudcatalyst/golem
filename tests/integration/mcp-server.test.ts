@@ -256,6 +256,10 @@ describe("golem MCP server (in-memory transport)", () => {
         memory_mib?: number;
         detail: string;
         models: string[];
+        endpoint: string;
+        endpoint_reachable: boolean;
+        model_slots: Array<{ slot: string; model: string; state: string }>;
+        missing: string[];
       };
       expect(Object.values(HardwareTier)).toContain(structured.tier);
       expect(structured.tier_name).toMatch(/^P_(CPU|MIN|MID|MAX)$/);
@@ -274,7 +278,37 @@ describe("golem MCP server (in-memory transport)", () => {
       const text = textOf(result);
       expect(text).toContain(`Hardware tier: ${structured.tier} (${structured.tier_name})`);
       expect(text).toContain(structured.detail);
-      expect(text).toContain(structured.models.join(", "));
+
+      // Task `local-models`: the tool reports, per slot, whether the model is
+      // actually pulled — the flat list alone read as an availability claim.
+      // Written to hold whether or not this machine has an Ollama running.
+      expect(structured.model_slots.map((s) => s.slot)).toEqual([
+        "summarizer",
+        "extractor",
+        "classifier",
+        "drafter",
+        "judge",
+        "text-embed",
+        "code-embed",
+      ]);
+      expect(text).toContain(`endpoint ${structured.endpoint}`);
+      for (const slot of structured.model_slots) {
+        expect(["pulled", "not-pulled", "unknown"]).toContain(slot.state);
+        expect(text).toContain(`${slot.slot}: ${slot.model}`);
+      }
+      if (structured.endpoint_reachable) {
+        // A reachable endpoint yields a verdict for every slot, never "unknown".
+        expect(structured.model_slots.every((s) => s.state !== "unknown")).toBe(true);
+        expect(structured.missing).toEqual([
+          ...new Set(
+            structured.model_slots.filter((s) => s.state === "not-pulled").map((s) => s.model),
+          ),
+        ]);
+      } else {
+        // Unreachable: nothing is KNOWN to be missing. Never invent an absence.
+        expect(structured.model_slots.every((s) => s.state === "unknown")).toBe(true);
+        expect(structured.missing).toEqual([]);
+      }
     });
   });
 
@@ -308,6 +342,59 @@ describe("golem MCP server (in-memory transport)", () => {
       const s = result.structuredContent as { reset: boolean; reason?: string };
       expect(s.reset).toBe(false);
       expect(s.reason ?? "").toMatch(/beyond/i);
+    });
+
+    // Task `snooze-taskadd`: parking and documenting are ONE call, because
+    // enforcement (Decision 45) denies the `Bash` that `golem task add` needs.
+    describe("`note` — the park procedure's documenting step", () => {
+      it("files the note as a durable local task before waiting", async () => {
+        const dir = await mkdtemp(path.join(tmpdir(), "golem-snooze-note-mcp-"));
+        try {
+          const client = await connectInMemory({
+            ...createStandaloneDeps(),
+            projectRootDir: dir,
+          });
+          const result = await client.callTool({
+            name: "snooze",
+            arguments: {
+              until: "2020-01-01T00:00:00.000Z",
+              note: "R8 batch parked\nnext: finish local-models",
+            },
+          });
+          expect(result.isError).toBeFalsy();
+          const s = result.structuredContent as { task_id?: string; note_error?: string };
+          expect(s.note_error).toBeUndefined();
+          expect(s.task_id).toBeTruthy();
+          expect(textOf(result)).toContain(`local task \`${(s.task_id as string).slice(0, 8)}\``);
+
+          const { FileTaskStore } = await import("../../src/tasks/store.js");
+          const stored = await new FileTaskStore(dir).get(s.task_id as string);
+          expect(stored?.prompt).toBe("R8 batch parked\nnext: finish local-models");
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
+      });
+
+      it("still parks — and echoes the note back — when it cannot be filed", async () => {
+        // No projectRootDir: nowhere to write. The wait must happen anyway, and the
+        // note must survive in the transcript rather than being silently dropped.
+        const client = await connectInMemory(createStandaloneDeps());
+        const result = await client.callTool({
+          name: "snooze",
+          arguments: { until: "2020-01-01T00:00:00.000Z", note: "do not lose this" },
+        });
+        expect(result.isError).toBeFalsy();
+        const s = result.structuredContent as {
+          reset: boolean;
+          task_id?: string;
+          note_error?: string;
+        };
+        expect(s.reset).toBe(true); // parked regardless
+        expect(s.task_id).toBeUndefined();
+        expect(s.note_error).toMatch(/project root/i);
+        expect(textOf(result)).toContain("do not lose this");
+        expect(textOf(result)).toContain("WARNING");
+      });
     });
   });
 

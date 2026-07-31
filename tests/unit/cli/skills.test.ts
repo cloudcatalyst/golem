@@ -105,13 +105,18 @@ describe("footgun-guard skills (upstream + park)", () => {
     expect(skill.toLowerCase()).toContain("not the claude code model picker");
   });
 
-  it("park documents a durable task before snoozing", () => {
+  // Task `snooze-taskadd`: documenting and parking are ONE call. The old
+  // document-then-park ordering was unreachable — enforcement denies the `Bash`
+  // running `golem task add`, so the skill must ask for snooze's `note` instead.
+  it("park documents via snooze's own note, in the same call", () => {
     const skill = P0_SKILLS.park;
     if (skill === undefined) throw new Error("expected a park skill");
-    expect(skill).toContain("golem task add");
     expect(skill).toContain("snooze");
-    // Document-then-park: the task add must come before the snooze step.
-    expect(skill.indexOf("golem task add")).toBeLessThan(skill.indexOf("Park until reset"));
+    expect(skill).toContain("note=");
+    expect(skill).toContain("ONE call");
+    // It may still MENTION `golem task add` — but only to warn against it.
+    const add = skill.indexOf("golem task add");
+    if (add !== -1) expect(skill.slice(add - 40, add)).toMatch(/Don't reach for/);
   });
 });
 

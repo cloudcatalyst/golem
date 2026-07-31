@@ -45,11 +45,13 @@ import {
   createProbeRunner,
   detectCapability,
   embedModelFor,
-  modelsForTier,
   OllamaClient,
   OllamaInferenceService,
+  OllamaNativeClient,
+  resolveTierAvailability,
+  roleWarning,
 } from "../inference/index.js";
-import type { HardwareTier, InferenceService } from "../interfaces/inference.js";
+import type { HardwareTier, InferenceService, Role } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { fetchRawPage } from "../knowledge/index.js";
@@ -119,6 +121,7 @@ import {
   setConfig,
   unsetConfig,
 } from "./config.js";
+import { collectDevices, devicesJson, renderDevices } from "./devices.js";
 import { distillOne, pendingDrafts, renderPendingDrafts } from "./distill.js";
 import { distillNoteCapture } from "./distill-note.js";
 import { collectExt, renderExt } from "./ext.js";
@@ -889,11 +892,17 @@ mcp
             forceSemanticOnCaching: settings.compression.force_semantic_on_caching,
           });
         },
+        // Unconditional: `snooze` is registered whatever else is enabled, and its
+        // `note` needs somewhere to write the durable task (task `snooze-taskadd`).
+        // `ingest` also uses it as its default target when the KB is on.
+        projectRootDir: opts.dir,
+        // Task `local-models`: which Ollama the `devices` tool asks about what is
+        // actually pulled. Config is in scope here; the MCP server takes none.
+        localEndpoint: settings.inference.ollama_base_url,
         ...(knowledge !== undefined
           ? {
               knowledge,
               defaultProjectId: opts.dir,
-              projectRootDir: opts.dir,
               wikiDir: wikiSourcePrefix(
                 opts.dir,
                 resolveWikiDir(opts.dir, settings.knowledge.wiki_dir),
@@ -1295,6 +1304,34 @@ program
 
 const benchCmd = program.command("bench").description("Golem benchmarks (spec Decision 21f)");
 
+/**
+ * Task `local-models` — warn on stderr, BEFORE a benchmark runs, when the local
+ * role it is about to use has no model pulled.
+ *
+ * §89 and §100 both had to substitute `--role drafter` because the tier's
+ * `classifier` model was not present, and both recorded that by hand as a caveat
+ * *after* the fact. The fact was knowable up front; nothing asked. stderr (not
+ * stdout) so `--json` output stays machine-parseable, and it never throws — a
+ * benchmark must not fail because Ollama could not be listed.
+ */
+async function warnLocalRoleAvailability(
+  tier: HardwareTier,
+  endpoint: string,
+  role: Role,
+): Promise<void> {
+  try {
+    const availability = await resolveTierAvailability(tier, {
+      endpoint,
+      listModels: () =>
+        new OllamaNativeClient({ baseUrl: endpoint, requestTimeoutMs: 2500 }).listModels(),
+    });
+    const warning = roleWarning(availability, role);
+    if (warning !== null) process.stderr.write(`golem bench: ${warning}\n`);
+  } catch {
+    // Availability is advisory context, never a gate on the benchmark itself.
+  }
+}
+
 benchCmd
   .command("cost")
   .description(
@@ -1397,10 +1434,9 @@ benchCmd
             baseUrl: settings.inference.ollama_base_url,
             requestTimeoutMs: settings.inference.request_timeout_ms,
           });
-          inference = new OllamaInferenceService(
-            client,
-            await detectCapability(createProbeRunner()),
-          );
+          const facts = await detectCapability(createProbeRunner());
+          inference = new OllamaInferenceService(client, facts);
+          await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
         }
 
         const report = await benchRepoMap({
@@ -1499,6 +1535,7 @@ benchCmd
         if (!roles.includes(role)) {
           throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
         }
+        await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
         // A schema transform is invisible to a description-only chooser, and its
         // real hazard is argument construction rather than selection — so the two
         // gates are switched on together, never separately (R8.S1).
@@ -2860,13 +2897,6 @@ program
     },
   );
 
-const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
-  0: "P_CPU",
-  1: "P_MIN",
-  2: "P_MID",
-  3: "P_MAX",
-};
-
 program
   .command("index")
   .description("Index a file or directory into the Golem knowledge base (local embeddings)")
@@ -2956,23 +2986,17 @@ program
 
 program
   .command("devices")
-  .description("Show detected local hardware tier and the models Golem would use")
+  .description(
+    "Show detected local hardware tier and, per role, whether that model is actually pulled",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
   .option("--json", "machine-readable output", false)
-  .action(async (opts: { json: boolean }) => {
+  .action(async (opts: { dir: string; json: boolean }) => {
     try {
-      const facts = await detectCapability(createProbeRunner());
-      const models = modelsForTier(facts.tier);
-      if (opts.json) {
-        process.stdout.write(`${JSON.stringify({ ...facts, models }, null, 2)}\n`);
-        return;
-      }
+      const report = await collectDevices({ projectDir: opts.dir });
       process.stdout.write(
-        `Hardware tier: ${facts.tier} (${TIER_NAMES[facts.tier]}) — via ${facts.source}\n`,
+        opts.json ? `${JSON.stringify(devicesJson(report), null, 2)}\n` : renderDevices(report),
       );
-      if (facts.device !== undefined) process.stdout.write(`  device: ${facts.device}\n`);
-      if (facts.memoryMiB !== undefined) process.stdout.write(`  memory: ${facts.memoryMiB} MiB\n`);
-      process.stdout.write(`  ${facts.detail}\n`);
-      process.stdout.write(`  models for this tier: ${models.join(", ")}\n`);
     } catch (err) {
       fail(err);
     }

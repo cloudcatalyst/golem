@@ -26,6 +26,14 @@ let dir: string;
 /** Injected detection so the report is deterministic on any machine. */
 const detect = async () => ({ tier: 2 as const, coderModel: "qwen2.5-coder:7b" });
 
+/**
+ * Injected `/api/tags` so nothing here touches a real Ollama (task
+ * `local-models` added the pulled-state lookup; left uninjected it would make
+ * these tests depend on what the CI box happens to have downloaded).
+ */
+const pulled = (names: readonly string[]) => () => Promise.resolve(names.map((name) => ({ name })));
+const listModels = pulled(["qwen2.5-coder:7b"]);
+
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "golem-local-"));
 });
@@ -57,6 +65,7 @@ describe("collectLocalModel", () => {
       projectDir: dir,
       probe: async () => true,
       detect,
+      listModels,
     });
     expect(report.coder_enabled).toBe(true);
     expect(report.base_url).toBe("http://localhost:11434");
@@ -65,6 +74,47 @@ describe("collectLocalModel", () => {
     expect(report.active).toBe(true);
     expect(report.tier_name).toBe("P_MID");
     expect(report.coder_model).toBe("qwen2.5-coder:7b");
+    expect(report.coder_model_state).toBe("pulled");
+  });
+
+  // Task `local-models`: naming the model was never the same as having it. A
+  // never-pulled drafter/judge is what made `coder --refine` report rounds: 0.
+  describe("coder_model_state", () => {
+    it("is not-pulled when the endpoint answers but lacks the model", async () => {
+      const report = await collectLocalModel({
+        projectDir: dir,
+        probe: async () => true,
+        detect,
+        listModels: pulled(["bge-m3:latest"]),
+      });
+      expect(report.coder_model_state).toBe("not-pulled");
+      const out = renderLocalModel(report);
+      expect(out).toContain("qwen2.5-coder:7b — NOT pulled");
+      expect(out).toContain("ollama pull qwen2.5-coder:7b");
+    });
+
+    it("is unknown — never not-pulled — when the endpoint cannot be listed", async () => {
+      const report = await collectLocalModel({
+        projectDir: dir,
+        probe: async () => false,
+        detect,
+        listModels: () => Promise.reject(new Error("ECONNREFUSED")),
+      });
+      expect(report.coder_model_state).toBe("unknown");
+      const out = renderLocalModel(report);
+      expect(out).toContain("pulled state unknown");
+      expect(out).not.toContain("NOT pulled");
+    });
+
+    it("matches an untagged catalog id against the endpoint's tagged name", async () => {
+      const report = await collectLocalModel({
+        projectDir: dir,
+        probe: async () => true,
+        detect: async () => ({ tier: 2 as const, coderModel: "bge-m3" }),
+        listModels: pulled(["bge-m3:latest"]),
+      });
+      expect(report.coder_model_state).toBe("pulled");
+    });
   });
 
   /**
@@ -74,14 +124,24 @@ describe("collectLocalModel", () => {
    */
   it("is not active when the coder tool is disabled, even if the endpoint answers", async () => {
     await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
-    const report = await collectLocalModel({ projectDir: dir, probe: async () => true, detect });
+    const report = await collectLocalModel({
+      projectDir: dir,
+      probe: async () => true,
+      detect,
+      listModels,
+    });
     expect(report.coder_enabled).toBe(false);
     expect(report.reachable).toBe(true);
     expect(report.active).toBe(false);
   });
 
   it("is not active when nothing answers, even if the coder tool is enabled", async () => {
-    const report = await collectLocalModel({ projectDir: dir, probe: async () => false, detect });
+    const report = await collectLocalModel({
+      projectDir: dir,
+      probe: async () => false,
+      detect,
+      listModels,
+    });
     expect(report.coder_enabled).toBe(true);
     expect(report.reachable).toBe(false);
     expect(report.active).toBe(false);
@@ -99,6 +159,7 @@ describe("collectLocalModel", () => {
         return true;
       },
       detect,
+      listModels,
     });
     expect(probed).toEqual(["http://gpubox.lan:11434"]);
     expect(report.remote).toBe(true);
@@ -111,9 +172,13 @@ describe("collectLocalModel", () => {
       detect: async () => {
         throw new Error("no probe runner here");
       },
+      listModels,
     });
     // The injected detect throws, so the report simply carries no model.
     expect(report.reachable).toBe(false);
+    // …and with no model name, its pulled state is unknown rather than invented.
+    expect(report.coder_model).toBe("");
+    expect(report.coder_model_state).toBe("unknown");
   }, 10_000);
 });
 
@@ -211,7 +276,7 @@ describe("rendering", () => {
   it("says WHY the local model is inactive, and how to fix it", async () => {
     await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => true, detect }),
+      await collectLocalModel({ projectDir: dir, probe: async () => true, detect, listModels }),
     );
     expect(out).toContain("not active");
     expect(out).toContain("DISABLED");
@@ -223,14 +288,14 @@ describe("rendering", () => {
       projectDir: dir,
     });
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => false, detect }),
+      await collectLocalModel({ projectDir: dir, probe: async () => false, detect, listModels }),
     );
     expect(out).toContain("OLLAMA_HOST=0.0.0.0");
   });
 
   it("points at `golem ollama status` when the LOCAL endpoint is unreachable", async () => {
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => false, detect }),
+      await collectLocalModel({ projectDir: dir, probe: async () => false, detect, listModels }),
     );
     expect(out).toContain("golem ollama status");
     expect(out).not.toContain("OLLAMA_HOST");
@@ -238,7 +303,7 @@ describe("rendering", () => {
 
   it("reports an active local model without remediation noise", async () => {
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => true, detect }),
+      await collectLocalModel({ projectDir: dir, probe: async () => true, detect, listModels }),
     );
     expect(out).toContain("ACTIVE");
     expect(out).not.toContain("golem local enable");
