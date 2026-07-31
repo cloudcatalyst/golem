@@ -14,10 +14,13 @@ batch. Do these in order; stop and surface any failure rather than pressing on.
    `golem mcp serve` connection must be reconnected by Claude Code; and if
    `vscode-extension/` changed, run `cd vscode-extension && npm run deploy:local`
    then reload the window. Skip the parts nothing touched.
-3. **Tidy the planning docs.** Mark tasks done in `docs/plan/ROADMAP.md` (empty
-   the loose-ends table where you can) and update any living-doc references
-   (CLAUDE.md, ROADMAP, IMPLEMENTATION_PLAN, spec) to point at git history /
-   shipped artifacts.
+3. **Tidy the planning docs.** Close the task and refresh the generated index:
+   `golem task done <id> --note "<outcome>"` → `golem task index --write` →
+   add a one-liner to `docs/plan/SHIPPED.md` pointing at the debrief. Never
+   hand-edit the roadmap's index table (it is generated between the
+   `golem:task-index` markers). Then update any living-doc references
+   (CLAUDE.md, IMPLEMENTATION_PLAN, spec) to point at git history / shipped
+   artifacts.
 4. **Write the debrief.** Run `/golem/debrief` to author the dated
    `docs/wiki/debriefs/` page (wiki writes are un-gated, Decision 44).
 5. **Retire the batch brief.** Delete the completed batch brief from the tree —

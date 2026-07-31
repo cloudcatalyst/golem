@@ -29,6 +29,14 @@ The `*` stages are lossy and engage **only on non-caching upstreams** (see
 behave like level 1. For how these stages sit in the full request path, see
 [[Architecture]].
 
+**Golem tells you when the level you set is not the level you get.** Because 2–3
+collapse to 1 on a caching upstream, every surface that prints a level prints the
+*effective* one — `golem status` (`level 3 (aggressive) → effectively 1 (lossless)`),
+the status line (`⬢ Golem · Lossless … ⚠ 3 inert`), the `golem` panel header,
+`golem slider <n>` at set time, and the `level` MCP tool. Setting 3 against
+Anthropic is not an error and is not refused — the same setting is correct on a
+non-caching account — it is just inert until you switch to one.
+
 ```mermaid
 flowchart TB
   L0["Level 0 · passthrough"] --> N["Nothing runs — redaction OFF (warned loudly)"]
@@ -52,8 +60,16 @@ redaction is off).
 
 Level 1 is byte-faithful (lossless only) and is the default. Levels 2–3 add lossy
 semantic compression, which only pays on non-caching upstreams — see
-[[Compression]] for why higher levels give ~0% honest savings on Anthropic's
-cached traffic. The exact per-stage config is the authoritative `LEVEL_TABLE` in
+[[Compression]].
+
+**On cached traffic the cost of forcing them is not "no saving" — it is a large
+loss.** Measured 2026-07-31 (verification-notes §103) on two real transcripts from
+this repo: the lossy stage's *gross* reduction is genuinely 7–22% and grows with
+session length, but it rewrites history from **message 6 of 4,631**, forfeiting a
+prefix billed at a 98.4% cache-hit rate. Net effect: **8.7×–11.3× more expensive
+than not compressing at all.** On a non-caching upstream the same runs save
+9–30%. That asymmetry is the entire reason for the gate, and why
+`compression.force_semantic_on_caching` should stay off. The exact per-stage config is the authoritative `LEVEL_TABLE` in
 `src/interfaces/policy.ts`; this page is the conceptual summary, not a
 duplicate of that table.
 

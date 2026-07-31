@@ -129,6 +129,20 @@ export interface TelemetryEvent {
    */
   readonly usage?: UsageTotals;
   /**
+   * R8.8: the upstream model this `usage` sample was billed against, VERBATIM
+   * (spec Decision 49 — never a prettified name). Only set on `kind: "usage"`
+   * events, and only when the proxy could observe it; absent on every event
+   * written before this field existed, which is why the cost report has an
+   * explicit *unattributed* bucket rather than defaulting to any model.
+   */
+  readonly model?: string;
+  /**
+   * R8.8: which provider served {@link model} (`anthropic`, `openai`, …). A bare
+   * id can exist under several providers at different prices; without this the
+   * catalog lookup is ambiguous and prices nothing (deliberately).
+   */
+  readonly modelProvider?: string;
+  /**
    * R2.6: whether `compression.force_semantic_on_caching` was on when this
    * usage sample was recorded (a static per-run setting, not a per-request
    * pipeline decision — see {@link recordUsageEvent}). Only set on `kind:
@@ -190,6 +204,20 @@ export interface TelemetryEvent {
    * `messages`). Set only alongside `cachePrefix: "bust"`.
    */
   readonly cacheBustComponent?: string;
+  /**
+   * R8.13: 0-based index of the first message whose bytes differed, when
+   * `cacheBustComponent === "messages"`. The discriminator §99 was missing: a
+   * change at index 2 of 180 invalidates the whole history, while a change at
+   * index 179 of 180 costs the tail only. Without it every bust reads equally
+   * catastrophic and the verdict cannot be reconciled with the billed split.
+   */
+  readonly cacheBustMessageIndex?: number;
+  /**
+   * R8.13: how many messages the classified request carried. Only meaningful
+   * beside {@link cacheBustMessageIndex} — the index is a position, and a
+   * position without a length says nothing about how much prefix was lost.
+   */
+  readonly cacheMessageCount?: number;
   /**
    * R4.3: for `coder`, the character length of the locally-drafted text — the
    * "drafted-locally" bucket (output the paid model did not have to generate).

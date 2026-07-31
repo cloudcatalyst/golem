@@ -30,5 +30,11 @@ The user (or Claude's own judgment) has identified development work to do: $ARGU
 5. **Report** what changed and which files were touched. Don't commit unless
    asked.
 
+Before a **wide or speculative** change (a refactor across several files, a
+migration, a "let's see if this works"), take a checkpoint first: `golem
+checkpoint create --note "<the attempt>"`. If it fails, propose discarding it
+(`/golem/checkpoint`) instead of spending a repair cycle — the repair also
+leaves its wreckage in context for every later turn.
+
 If `coder`/`research` are unavailable, say the Golem MCP server isn't
 connected and suggest `golem init` and restarting Claude Code.

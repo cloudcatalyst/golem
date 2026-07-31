@@ -43,6 +43,13 @@ const REPORT: StatusReport = {
     brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
     compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
   },
+  effective_compression: {
+    nominal: 1,
+    nominal_name: "lossless",
+    effective: 1,
+    effective_name: "lossless",
+    degraded: false,
+  },
   config: {},
   local_model: {
     reachable: true,

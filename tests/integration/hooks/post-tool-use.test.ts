@@ -26,6 +26,7 @@ import {
   REDACTED_SK_ANT_PLACEHOLDER,
   type RedactFn,
   runPostToolUseHook,
+  stripReadLineNumbers,
 } from "../../../src/hooks/index.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
@@ -330,5 +331,114 @@ ${"a".repeat(12000)}`,
     const digest = buildDigest("Bash", bigWith(teeLine), refId);
     expect(digest).toContain(`hash=${refId}`);
     expect(digest).toContain(teeLine);
+  });
+});
+
+describe("runPostToolUseHook — oversized Read gets a symbol skeleton (R8.5)", () => {
+  /** A Read output as Claude Code renders it: `<line>\t<text>`, 1-based. */
+  function numbered(lines: readonly string[], firstLine = 1): string {
+    return lines.map((l, i) => `${String(firstLine + i).padStart(6)}\t${l}`).join("\n");
+  }
+
+  /** A file big enough to be swapped, with real declarations spread through it. */
+  function bigTsFile(): string {
+    const lines: string[] = ["export function headSymbol(a: string): string {", "  return a;", "}"];
+    while (lines.length < 700) lines.push(`// filler comment line ${lines.length}`);
+    lines.push("export class MiddleThing {", "  poke(): void {}", "}");
+    while (lines.length < 1400) lines.push(`// more filler ${lines.length}`);
+    lines.push("export const TAIL_CONST = 1;");
+    return numbered(lines);
+  }
+
+  function readPayload(filePath: string, output: string): string {
+    return JSON.stringify({
+      session_id: "s1",
+      cwd: projectDir,
+      hook_event_name: "PostToolUse",
+      tool_name: "Read",
+      tool_input: { file_path: filePath },
+      tool_response: output,
+    });
+  }
+
+  it("lists definitions the head/tail excerpt elides, with their real line numbers", async () => {
+    const io = fakeIo(readPayload("/repo/src/thing.ts", bigTsFile()));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+
+    expect(digest).toContain("symbol skeleton");
+    // `MiddleThing` sits ~700 lines in — elided from both excerpts, present here.
+    expect(digest).toContain("MiddleThing");
+    expect(digest).toContain("TAIL_CONST");
+    expect(digest).toMatch(/70[0-9] {2}export class MiddleThing/);
+    // The recovery line points at the skeleton before it mentions expanding.
+    expect(digest.indexOf("symbol skeleton")).toBeLessThan(digest.indexOf("expand MCP tool"));
+    expect(digest).toContain("the skeleton above names every definition and its line");
+  });
+
+  it("offsets line numbers by a Read's own offset", async () => {
+    const lines = ["export function offsetSymbol(): void {", "  return;", "}"];
+    while (lines.length < 900) lines.push(`// filler ${lines.length}`);
+    const io = fakeIo(readPayload("/repo/src/thing.ts", numbered(lines, 500)));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    expect(digest).toMatch(/ 500 {2}export function offsetSymbol/);
+  });
+
+  it("adds nothing for a file type with no grammar", async () => {
+    const lines = ["def f():", "    return 1"];
+    while (lines.length < 900) lines.push(`# filler ${lines.length}`);
+    const io = fakeIo(readPayload("/repo/thing.py", numbered(lines)));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    expect(digest).not.toContain("symbol skeleton");
+  });
+
+  it("adds nothing for a Bash output, however large", async () => {
+    const io = fakeIo(payload("Bash", "export function notReallyCode() {}\n".repeat(600)));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    expect(digest).not.toContain("symbol skeleton");
+  });
+
+  it("honours the per-project gate", async () => {
+    const io = fakeIo(readPayload("/repo/src/thing.ts", bigTsFile()));
+    expect(await runPostToolUseHook(io, { projectDir, skeletonEnabled: async () => false })).toBe(
+      0,
+    );
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    expect(digest).not.toContain("symbol skeleton");
+  });
+
+  it("still swaps, and stays lossless, when the skeleton is added", async () => {
+    const source = bigTsFile();
+    const io = fakeIo(readPayload("/repo/src/thing.ts", source));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    const refId = (CCR_MARKER_RE.exec(digest) as RegExpExecArray | null)?.[1] as string;
+    expect(await retrieveOriginal(refId)).toBe(source);
+    expect(digest.length).toBeLessThan(source.length);
+  });
+
+  it("extracts from the REDACTED text — a skeleton can never reveal a stripped secret", async () => {
+    const secret = "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const lines = [`export const TOKEN = "${secret}";`];
+    while (lines.length < 900) lines.push(`// filler ${lines.length}`);
+    const io = fakeIo(readPayload("/repo/src/thing.ts", numbered(lines)));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    const digest = parseStdout(io).hookSpecificOutput.updatedToolOutput as string;
+    expect(digest).not.toContain(secret);
+  });
+});
+
+describe("stripReadLineNumbers", () => {
+  it("strips the prefix and reports the first line number", () => {
+    const stripped = stripReadLineNumbers("   41\tconst a = 1;\n   42\tconst b = 2;");
+    expect(stripped?.content).toBe("const a = 1;\nconst b = 2;");
+    expect(stripped?.firstLine).toBe(41);
+  });
+
+  it("returns null for text that is not a numbered read", () => {
+    expect(stripReadLineNumbers("just some output\nwith no numbers")).toBeNull();
   });
 });

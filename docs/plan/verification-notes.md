@@ -785,7 +785,10 @@ knobs drive the absent ML stage). The 5.48% decomposes into two transforms:
    + LLMLingua/Kompress) — a heavyweight GPU/ML dep that CLAUDE.md mandates be
    **opt-in, never in the default install**. Its ceiling is **unmeasured** (no
    torch here) and must be measured on a torch-enabled box before any claim.
-3. **NET-savings caveat (Decision-23 gate, §31/§32 lesson — UNRESOLVED).** The
+3. **NET-savings caveat (Decision-23 gate, §31/§32 lesson — UNRESOLVED).**
+   *[ANSWERED 2026-07-30 — see §103: measured net-NEGATIVE on caching traffic,
+   8.7×–11.3× worse than not compressing, because divergence starts at message 6.
+   The gross number below stands; the net question it flagged is now closed.]* The
    5.48% is a **gross input-token** reduction. Headroom *rewrites* content
    (`router`) and *drops mid-history reads* (`read_lifecycle`), which changes
    prefix bytes → risks breaking Anthropic prompt-cache (0.1×→1.0× on the whole
@@ -3748,6 +3751,11 @@ call including Bash. Any user who installs both is exercising this interaction.
 Golem's `deny` paths must still win. Until that test exists, treat coexistence as
 unverified.
 
+> **CLOSED by §105 (2026-07-31).** The docs have since gained the precedence sentence
+> (`deny > defer > ask > allow`), and the case they still omit — a hook returning only
+> `updatedInput` racing a `deny` — is now pinned by a live test against Claude Code
+> 2.1.220. The deny wins; the rewrite is discarded.
+
 ## §92 — Dependency-tier audit: two documented-as-optional things that were not (2026-07-30)
 
 Found while writing Decision 53's ladder, by checking each claim rather than
@@ -4283,3 +4291,764 @@ recorded caveat that the local chooser cannot currently exercise them.
 `--role drafter`. `golem devices` lists the tier's *catalog*, not what Ollama has
 downloaded — the same class of gap as the 2026-07-17 judge bug. Worth a real check
 rather than a third caveat.
+
+---
+
+## §101 — R8.5 measured: the repo map wins the retrieval question by +21.4 points, for 57 tokens (2026-07-30)
+
+R8.5's gate was "does the map let the model find the right file **without** the
+read? Report saving and accuracy together." Built as `golem bench map`, on 22
+hand-labelled retrieval cases against this repo. Unlike the last three
+context-economy items, the instrument said **yes**.
+
+### The A/B
+
+Both arms are shown to the same chooser, on the same cases, in the same run. The
+baseline is deliberately not "no context" — it is the **plain file list**, which
+the model can already get for almost nothing (`Glob`, `ls`), capped to the same
+token budget. Chooser `qwen2.5-coder:7b`, temperature 0, `--role drafter`
+(the tier's `classifier` model is *still* not pulled — third occurrence, see
+§100's standing gap and the `local-models` task).
+
+| arm | context | mean tokens/call | correct/scored | accuracy |
+|---|---|--:|--:|--:|
+| baseline | plain path list (386 paths) | ~1,329 | 18/63 | **28.6%** |
+| candidate | repo map, re-ranked per question | ~1,386 | 33/66 | **50.0%** |
+
+**Delta +21.4 points for +57 tokens per call**, at 22 cases × 3 repeats.
+Resolution is 4.5% (one case), so the delta is 4.7× what the set can resolve, and
+it reproduced *exactly* across 1 and 3 repeats. Verdict **MAP-HELPS**.
+
+Cases the map won and the path list lost: `autonomy-classify`, `hardware-tier`,
+`model-catalog-roles`, `openai-translation`, `settings-precedence`, `statusline`.
+One case went the other way (`brevity-dial`) — recorded, not hidden.
+
+### What it costs, stated beside what it buys
+
+- **The map:** ~1,390 tokens at the default 1.4k budget — 386 files with symbols,
+  2,712 symbols extracted, 12 files / ~70 symbols shown.
+- **What it displaces:** a whole-file read of a labelled file averages **~2,238
+  tokens**, so the map costs **~0.6× one read**. It pays if it avoids one.
+- **The tool definition** (permanent, every request): `golem bench tools` before
+  11 tools / ~902 desc / ~1,128 schema; after 12 / ~1,003 / ~1,289. `code` is
+  **~101 description + ~161 schema = ~262 forwarded tokens** (§100: MCP metadata
+  and `outputSchema` are not forwarded, and an unused tool costs ~nothing until
+  first use).
+
+### Three things the measurement changed in the implementation
+
+1. **Only exported symbols may be graph targets.** Counting every top-level
+   definition as an edge target let file-local names (`body`, `url`, `draft`)
+   attract inbound reference weight from the whole repo, which floated
+   `tests/unit/proxy/cache-prefix.test.ts` above `src/interfaces/`. Restricting
+   targets to exported, non-member definitions fixed the ranking outright.
+2. **A queried map needs more than a personalized teleport vector.** With damping
+   0.85 the hubs still won: `src/cli/init.ts` ranked first for "where is the
+   oversized tool output digest built". A queried map now also lowers damping to
+   0.5 and scales the final rank by the file's own query affinity.
+3. **Word-part matching, not substring matching, and IDF weights.** `the` is a
+   substring of `pathExists` and `and` of `expand`; with raw substring matching
+   those function words out-scored `digest` (2 files). Splitting identifiers into
+   word parts (`runPostToolUseHook` → run, post, tool, use, hook) and weighting
+   each token by rarity put `src/hooks/post-tool-use.ts` first for that question.
+
+### Honest limits
+
+- The chooser is a **local 7B model**, not the frontier model that reads a map in
+  production. A positive result here is evidence the *map* carries the signal, not
+  a claim about how Opus would use it.
+- 22 cases resolve ~4.5% at best, and the labels are hand-written against this
+  repo. The harness reports labelled paths that no longer resolve rather than
+  scoring them wrong, so the set fails loudly when it rots.
+- **This does not answer memo open question 3.** It measures whether the map
+  *names* the right file, not whether the model then skips reading it.
+  Displacement needs live traffic, and remains open.
+- The verdict rule was tightened while running this: a blanket "any excluded
+  chooser error ⇒ inconclusive" let one reproducible unusable reply erase a delta
+  4.7× the resolution. It now scores excluded errors the worst possible way and
+  asks whether the sign survives (here: +18.2%, so it cannot flip).
+
+## §102 — Ollama's OpenAI-compat `/v1/embeddings` silently discards `keep_alive`; native `/api/embed` honours it (2026-07-30)
+
+Checked because a visible GPU spike prompted the question of whether Golem should
+refresh the embedding model's keep-alive on each knowledge-path use. Probed live
+against **ollama 0.32.5** on the dev box (RTX 3070, `nomic-embed-text:latest`,
+323 MB, 100% GPU) rather than reasoned about, because both halves of the answer
+turned out to be counter-intuitive.
+
+**What the probes showed.**
+
+| probe | `ollama ps` → `UNTIL` | reading |
+|---|---|---|
+| plain `POST /v1/embeddings` | 56 min → **59 min** | idle timer **is** refreshed by an ordinary request |
+| `POST /v1/embeddings` + `"keep_alive":"10m"` | **stays 59 min** | param accepted, **silently ignored**, HTTP 200 |
+| `POST /api/embed` + `"keep_alive":"10m"` | → **9 min** | native endpoint honours it |
+
+**Consequence 1 — the nudge already happens, so there is nothing to add.** Every
+embed request resets the unload timer, including through the compat path. The
+knowledge path *is* the keep-alive nudge; an extra refresh call would be redundant
+work. No code change was made.
+
+**Consequence 2 — the silent-failure trap.** `src/inference/ollama-client.ts` posts
+to `/v1/embeddings` (chosen so the "point it at any OpenAI-compat server" story of
+Decision 12 holds). Had we added `keep_alive` there, it would have returned 200,
+passed review, shipped, and done **nothing** — no error, no warning, no log line.
+Setting the duration requires Ollama-native `/api/embed`, which costs the
+endpoint-portability property that endpoint choice exists to preserve. Recorded as
+a deliberate non-change: bad trade for a ~3 s cold load a few times a day.
+
+**Where the observed 1h window actually came from.** The machine's **User** env
+`OLLAMA_KEEP_ALIVE=1h`, not this repo — `grep -rE 'keep_alive|keepAlive|KEEP_ALIVE'`
+over the tree has **zero hits**. So keep-alive behaviour here is *machine state*, and
+a contributor without that variable gets Ollama's own default instead. That default
+is documented as 5 minutes but was **not verified in this pass** — if anything ever
+depends on it, probe it.
+
+**Method caveat worth keeping.** These probes mutate shared local state: the 10 min
+arm left the live model on a 10 min timer, which was explicitly restored to 1h with
+a follow-up `/api/embed` call. A keep-alive probe is not read-only — restore it, or
+the next person's cold-start measurement is measuring your leftover.
+
+**Unrelated but observed while measuring:** the GPU sat at **89 °C while drawing
+36 W of 115 W** at near-idle. That is a thermal/fan condition on the box, not
+anything Ollama or Golem is doing, and it is noted here only so a future latency
+measurement on this hardware is not read as a software regression.
+
+## §103 — Headroom's net effect on CACHING traffic MEASURED: 8.7×–11.3× WORSE than not compressing (2026-07-30, answers §34 conclusion 3)
+
+§34 measured Headroom's gross saving and closed with an explicit refusal to claim a
+net number: *"No net savings may be claimed until this is measured live."* That
+question stayed open for 25 days. It is now measured, offline, on two real
+transcripts from this repo. **The gate in Decision 31 is correct, and the margin is
+not close.**
+
+### The gross number is real — and larger than §34 recorded
+
+`scripts/measure_headroom.py`, `headroom-ai==0.30.0` (the shipped pin), no torch:
+
+| transcript | messages | tokens before | gross saved |
+|---|--:|--:|--:|
+| `9d45e10b…` (2026-07-30) | 1,404 | 445,116 | **7.08%** |
+| `fa06e9c0…` (2026-07-15) | 4,631 | 2,010,745 | **21.69%** |
+| §34's session (2026-07-05) | 2,008 | 787,169 | 5.48% |
+
+**Savings scale with session length**, which §34's single sample could not show —
+1,433 transforms fired on the 4,631-message history. `read_lifecycle` earns more the
+longer an agent works, because more files get re-read and superseded. Still flat
+across `target_ratio` / `savings_profile` / `compress_user_messages` (confirming
+§34/§35: those knobs drive the absent ML stage, and §35 already showed ML is
+irrelevant on code traffic regardless).
+
+### The net number, and the structural reason it is bad
+
+New: `scripts/measure_headroom_cache.py`. The insight that makes this cheap to
+measure — **you do not need live billing to answer it.** Find the first index where
+the compressed history stops matching the original; everything from there on is a
+changed prefix, so it cannot be a cache hit. That index is the whole ballgame.
+
+| | `fa06e9c0…` | `9d45e10b…` |
+|---|--:|--:|
+| first divergence | message **6** of 4,631 | message **21** of 1,404 |
+| untouched prefix still cache-readable | **0.01%** of history | **1.00%** |
+| A: no compression (0.1× on all) | 126,814 units | 30,426 units |
+| B: compressed (0.1× prefix + 1.25× suffix) | 1,107,999 units | 342,388 units |
+| **verdict** | **NET LOSS 8.74×** | **NET LOSS 11.25×** |
+
+**Why divergence is always early, and why that is not fixable by tuning.**
+`read_lifecycle` saves tokens by dropping the *earliest superseded* copy of a
+re-read file. The transform's value and its cache damage are the *same act*: the
+stalest copy is by construction near the start of the history. A transform that
+paid off later in the history would be a different, weaker transform. So this is
+not a bad default to be tuned around — it is inherent to how the saving is earned.
+
+Against a **98.4% billed hit rate** (§93), 0.1× on everything beats 1.25× on 70% of
+it by an order of magnitude. Trading a 21.7% gross reduction for near-total prefix
+loss is the §31 artifact trap in its purest form: the gross number looks like a win
+and the bill goes up ~9×.
+
+### On a non-caching upstream it is a clean win
+
+Same runs, priced without a cache: **9.06%** and **30.09%** saved. This is exactly
+Decision 23's "compression is situational" claim, now measured on *both* sides
+rather than asserted on one. The sidecar is worth keeping for the case (a)
+non-caching providers; it must never engage on Anthropic.
+
+### Consequences
+
+1. **`force_semantic_on_caching` must stay `false`.** Its doc comment said the risk
+   was unproven ("until proven net-safe by a real `aggregateUsageBySemanticForced`
+   comparison"). It is now proven *un*safe. The live-A/B path remains available for
+   research, but nobody should flip this expecting savings.
+2. **The R2.6 live A/B is no longer worth spending real tokens on.** It was scoped
+   to answer this question against live billing. An 8.7×–11.3× predicted loss does
+   not need confirming at cost; if it is ever run, run it to validate the *model*,
+   not to look for a win.
+3. **Every surface that named the level was lying by omission.** `golem status`
+   reported `Slider: level 3 (aggressive)` while the two stages that distinguish
+   levels 2–3 from level 1 were gated off, so the observed behaviour was level 1.
+   Fixed in the same batch, and the fix took two passes worth recording: the first
+   added a *warning line beneath* the headline, which is not enough — a footnote
+   under a headline that still reads "aggressive" leaves the headline wrong. The
+   **label itself** now carries the effective level, at every surface that prints
+   one: `golem status` (headline, dial line, reason), `golem statusline` (leads with
+   the running level, badges the inert one — the per-prompt surface, so the
+   most-read version of the misreport), the `golem` TUI header, `golem slider <n>`
+   at set time, and the `level` MCP tool (whose reply otherwise teaches the *model*
+   a false belief about its own context budget).
+4. **The script is the reusable gate.** Any future compressor (Caveman-class,
+   context substitution, a new Headroom release) gets held to the same bar: report
+   first-divergence index, not just gross tokens. A compressor that only touches the
+   *tail* of history could pass this gate where Headroom fails it — that is the shape
+   worth looking for.
+
+### Honest limits
+
+- The flattening tokenizer in the cache script counts 1,268,139 where Headroom's own
+  counts 2,010,745 (it does not descend every block shape). **Absolute cost-units are
+  understated; the A/B ratio is not affected** — both arms use the same counter. The
+  first-divergence index, which drives the verdict, is tokenizer-independent.
+- This prices one steady-state turn against a warm cache, not a full session replay
+  with Claude Code's real ≤4 cache breakpoints. A breakpoint-accurate simulation would
+  change the multiple, not the sign: with divergence at message 6, no breakpoint
+  placement rescues the prefix.
+- Measured on this repo's own agent traffic (heavy Read/Edit, long sessions). A
+  workload with a different re-read profile would show a different gross number; the
+  net argument depends only on divergence being early, which follows from the
+  transform's design rather than from this workload.
+
+---
+
+## §104 — R8.13 closed: §99's 98%-wrong verdict was a `cache_control` marker counted as content, not a colliding conversation key (2026-07-31)
+
+Source: https://platform.claude.com/docs/en/build-with-claude/prompt-caching.md (re-read
+2026-07-31), plus a live trace on this repo's own traffic through the running proxy.
+
+§99 recorded 142 `bust` / 3 `first` / **0 `append`** against a billed 98.4% hit rate and
+named three candidate causes, leading with a colliding conversation key. **The leading
+candidate was wrong.** The fix was one line of hashing.
+
+### The diagnosis, measured not reasoned
+
+`cacheBustMessageIndex` and `cacheMessageCount` were added to the pipeline event first,
+because the discriminator §99 needed had never been recorded: a bust said *that* an
+earlier byte changed, never *how far back*. One proxy restart and three turns settled it:
+
+| request | verdict | component | bust index | messages | billed read | billed write |
+|---|---|---|--:|--:|--:|--:|
+| n | `first` | — | — | 41 | 77,240 | 313 |
+| n+1 | `bust` | messages | **40** | 43 | 77,553 | 483 |
+| n+2 | `bust` | messages | **42** | 45 | 78,036 | 235 |
+
+The bust index is always `prevCount - 1` — **the previous request's final message**,
+every single turn, while the bill shows a ~99% cache read. That rules the conversation
+key out (one `first`, a coherent chain, no interleaving) and points at the last message.
+
+**The cause: Claude Code moves its `cache_control` breakpoint to the newest block each
+turn.** The previously-final block therefore *loses* a key it used to carry, its JSON
+hash changes, and `classifyPrefixChange` called it an edit to already-sent history.
+
+### What the docs say (the part that decides it)
+
+- **`cache_control` is a breakpoint marker, not cached content.** The cache key is "a
+  hash of the prefix ending at that block" — of *content*. Breakpoint placement is not
+  on the documented invalidation list (that list is tool definitions, web-search and
+  citations toggles, speed setting, `tool_choice`, images, thinking parameters, effort,
+  non-tool results with thinking).
+- Verbatim on exactly our case: *"blocks that were previously marked with a
+  `cache_control` block are later not marked with this, but they will still be considered
+  a cache hit (and also a cache refresh!) if they are hit within 5 minutes."*
+- **Reads walk backward.** "If none exists, it walks backward one block at a time" —
+  which is why a moved breakpoint still finds the earlier write.
+- **The lookback window is 20 blocks**, the breakpoint counting as the first. A turn that
+  appends 20+ blocks past the last write misses a prefix that is still byte-identical and
+  still live. A second breakpoint opens a second window that recovers it.
+
+### The fix
+
+- Hashes exclude `cache_control` at any depth, via a `JSON.stringify` replacer rather
+  than a deep clone (no copy allocated on the request path).
+- `blockCounts` and `breakpoints` added to the fingerprint, and a fourth bust component
+  **`lookback`** models the 20-block window — a bust where *nothing changed* and the fix
+  is an extra breakpoint, not fewer edits. Suppressed when the request carries ≥2
+  breakpoints, since a second window would find the write.
+- `cache_report` gained a `lookback` bucket and a **deepest history bust** line
+  (`message 40 of 43 — 3 message(s) (7.0% of history) re-prefilled`).
+
+### The gate: the distribution is now explicable
+
+Live, post-deploy, same repo and workload:
+
+| | before (§99) | after |
+|---|--:|--:|
+| append | 0 | **8** |
+| bust (all `messages`, all tail) | 142 | 3 |
+| append share | **0%** | **73%** |
+| billed hit rate | 98.4% | 99.0% |
+
+And the surviving busts are **real**, not residue — they predict a billed difference,
+which is the whole point of a predictor:
+
+- mean billed cache **write on bust turns: 2,951 tokens** (n=3)
+- mean billed cache **write on append turns: 892 tokens** (n=11)
+
+**3.3×.** Before the fix the verdict predicted nothing at all, because every turn was a
+bust. The remaining busts are genuine tail rewrites (an already-sent last message whose
+content really did change between turns — ephemeral `<system-reminder>` blocks are the
+obvious candidate; not chased, because the verdict is now correct either way).
+
+### Two lessons worth keeping
+
+1. **§99's own leading hypothesis cost nothing to disprove and would have cost a
+   redesign to implement.** Candidate A (prefix-chain identity) would have removed the
+   conversation key — machinery, in exchange for nothing, since the key was never the
+   problem. What settled it was recording *one more number* (the bust index) and reading
+   three requests. Instrument before redesigning.
+2. **"A bust" was never one thing.** A change at index 2 of 180 re-prefills everything;
+   one at index 179 of 180 costs the tail. Reporting them under one counter is what let a
+   98%-bust report coexist with a 98.4% hit rate for a day. Even across the *whole*
+   pre-fix history the deepest bust re-prefilled only 7.0% of the history — visible at a
+   glance now, invisible before.
+
+## §105 — §91 closed on both halves: the docs now state PreToolUse precedence, and a live run proves `deny` beats a rewrite (2026-07-31)
+
+Task `hook-precedence`. Source: `code.claude.com/docs/en/hooks` (re-read 2026-07-31,
+served from Golem's own webcache), plus a live run against **Claude Code 2.1.220**.
+
+**Half one — the docs no longer withhold it.** §91 recorded the precedence question as
+undocumented and pointed at `#pretooluse-decision-control` as the place to look next.
+That section now contains the sentence verbatim:
+
+> When multiple PreToolUse hooks return different decisions, precedence is
+> deny > defer > ask > allow.
+
+and, on `permissionDecision`:
+
+> Deny and ask rules are still evaluated regardless of what the hook returns
+
+So the *conflicting-decisions* case is settled by the vendor: `deny` outranks everything.
+
+**Half two — the case the docs still do not cover, asserted.** The RTK shape is not a
+conflicting decision: it returns **no `permissionDecision` at all**, only
+`hookSpecificOutput.updatedInput`, which "replaces a tool's arguments before it runs".
+Nothing in the reference says what happens to that rewrite when a *different* hook on the
+same call denies. §91's instruction was "assert it; do not trust it", so
+`tests/e2e/hook-precedence.live.test.ts` does:
+
+- a temp project with **two** project-scope `PreToolUse` hooks, both `matcher: "Bash"` —
+  one returning only `updatedInput` (rewriting the command to one that creates a marker
+  file), one returning `deny`;
+- a real `claude -p` turn asked to run `cat note.txt` through Bash;
+- ground truth is the **marker file**: if it exists, the rewritten command executed and
+  the deny lost.
+
+**Observed: both hooks fired on the same call, and the marker was never created.** The
+deny won; the rewrite was discarded rather than executed. The test also refuses to pass
+vacuously — it fails if neither hook fired, which would mean Bash was never attempted.
+
+**What this licenses.** Golem's `deny` paths — snooze enforcement (Decision 45),
+coder-first (Decision 39), the autonomy gate (ADR-0002) — are safe to rely on alongside a
+peer that rewrites Bash input. §96's finding stands as the *other* asymmetry: a peer's
+rewrite can still change what Golem's classifier *reads* (fixed by `stripOutputWrapper`),
+and that is a matching problem, not a precedence one.
+
+**Cost of the check, and why it is opt-in.** The test spends one model turn, so it is
+gated behind `GOLEM_LIVE_CLAUDE=1` and never runs in the default suite:
+
+```
+GOLEM_LIVE_CLAUDE=1 npx vitest run tests/e2e/hook-precedence.live.test.ts
+```
+
+Re-run it after any Claude Code upgrade that touches hooks — this is a vendor behaviour
+pinned by observation, not by contract, and the docs were silent on it three days ago.
+
+## §106 — R8.8: models.dev's JSON API is usable, its web table is not, and Anthropic's own prices stay the authority (2026-07-31)
+
+Checked before wiring R8.8's catalog, because the whole feature turns tokens into
+**money** and a wrong price is worse than no price.
+
+**The web page renders several Anthropic models at $0.00.** `https://models.dev/`
+(fetched 2026-07-31) lists `anthropic/claude-opus-5`, `claude-sonnet-5`,
+`claude-fable-5` and `claude-opus-4-8` in its Price column as **`$0.00 / $0.00`**.
+Had the catalog been built by scraping that surface, Golem's cost report would have
+priced this project's entire Opus traffic at zero.
+
+**The JSON API is correct.** `https://models.dev/api.json` (HTTP 200,
+`application/json`, 3,325,795 bytes) is a provider map, and the Anthropic entries
+carry real numbers:
+
+```
+{ "anthropic": { "id", "env", "npm", "doc",
+    "models": { "claude-opus-5": {
+      "limit": { "context": 1000000, "output": 128000 },
+      "cost":  { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 } } } } }
+```
+
+Shape as of this date: **175 providers, 5,900 models**; every model carries
+`limit.context`, 404 of the 5,900 carry **no** `cost` block. Trimmed to the fields
+Golem reports the whole set is **723 KB**, which is why the cache stores a
+normalised derivation rather than the upstream document.
+
+Spot-checks against Anthropic's published pricing (per MTok, input/output):
+`claude-opus-5` 5/25 ✓, `claude-haiku-4-5` 1/5 ✓, `claude-sonnet-5` **2/10** —
+the introductory price in force through 2026-08-31, not the 3/15 list price.
+
+**Design consequence (shipped).** Two layers with the built-in winning:
+Golem's own dated table (`BUILTIN_MODEL_CATALOG`, sourced from
+`platform.claude.com/docs/en/pricing`, `asOf: 2026-07-31`) is authoritative for the
+7 Claude ids this project runs on; the fetched catalog only **fills gaps** and can
+never overwrite a built-in entry (`mergeCatalogs`). Nothing fetches implicitly —
+`golem models refresh` is the only network path, so a cost report can never depend
+on a third party's uptime or a third party's mistake. `claude-sonnet-5` carries a
+`note` naming the introductory window, because a price with an expiry date that
+prints without one is a trap for whoever reads the report in September.
+
+**Live numbers after wiring (this repo, 24h window, 20 attributed samples):**
+`in 40 / write 12,359 / read 9,627,462 / out 4,738` → **$5.01**, i.e. ~96% of the
+bill is cache *reads* at 0.1×. The remaining 1,501 samples in the same window are
+reported as **unattributed** rather than priced, because they were recorded before
+the proxy tagged the model — the honest degradation the task's gate asked for.
+
+**Third time for the same defect class.** `parseEvent` in
+`src/telemetry/jsonl-store.ts` is a field-by-field allow-list, so the proxy wrote
+`model`/`modelProvider` on every sample while `golem bench cost` reported *every*
+sample as unattributed — exactly §99/R8.13's failure, and before that R8.1's. Only
+running the real command against real telemetry caught it; the unit tests were
+green throughout. The round-trip test in
+`tests/integration/cache-verdict-roundtrip.test.ts` now covers the model fields
+too. **Any new `TelemetryEvent` field needs a line in `parseEvent` AND a case in
+that file.**
+
+## §107 — P3b answered: caveman-shrink saves 53 of 1,089 description tokens (4.9%) with no accuracy change — a reproducible negative (2026-07-31)
+
+The last open Caveman-adoption row. §87 flagged that `caveman-shrink`'s install and
+config were **undocumented on the README**, so this starts with what the package
+actually is, then runs Golem's existing gate against *their* implementation rather
+than rebuilding it (P3b's whole point).
+
+**What the package is** (`caveman-shrink@0.1.0`, MIT, published 2026-05-01, 4 files,
+11,674 bytes unpacked; `main: compress.js`, `bin: index.js`; repo
+`JuliusBrussee/caveman`, directory `mcp-servers/caveman-shrink`). The npm *web* page
+403s to a plain fetch; `npm view caveman-shrink --json` and `npm pack` both work, and
+the tarball's own README documents the surface §87 could not find:
+
+- **Install/wrap:** `npx caveman-shrink <upstream-command> [...args]` — a **stdio MCP
+  proxy** that spawns the upstream server as a subprocess and rewrites `description`
+  fields in `tools/list` / `prompts/list` / `resources/list` responses.
+- **Config (env only):** `CAVEMAN_SHRINK_FIELDS` (default `description`) and
+  `CAVEMAN_SHRINK_DEBUG=1`.
+- **Deliberately not touched in v1:** request payloads to the upstream, and
+  `tools/call` response content.
+- **Transform** (`compress.js`): drop articles / fillers / pleasantries / hedges /
+  leading "I'll|you can|let me", collapse whitespace, re-capitalise sentences —
+  with fenced code, inline code, URLs, paths, CONST_CASE, dotted.calls and version
+  numbers protected by sentinel substitution.
+
+**How it was measured.** New mode `--shrink ext-caveman-shrink` on `golem bench
+tools`, resolving `compress.js` from the **user's own install** (`src/tools/ext-shrink.ts`;
+`--shrink-path` / `GOLEM_CAVEMAN_SHRINK` / `caveman-shrink/compress.js` / package
+root, in that order). Golem ships none of its bytes, and an unresolvable package is a
+hard refusal — measuring an identity transform would publish a fake 0% under their
+name. Run: 27 selection cases × 3 repeats, chooser `qwen2.5-coder:7b` (`--role
+drafter`; the tier's `classifier` model is still not pulled — the `local-models`
+warning now says so up front rather than after the fact).
+
+**The number.**
+
+| | baseline | caveman-shrink |
+|---|--:|--:|
+| description tokens (Golem's 12 tools) | ~1,089 | **~1,036** |
+| accuracy (27×3) | 88.9% | 91.4% |
+| false positives | 3 | 3 |
+| abstentions | 3 | 0 |
+
+**~53 tokens saved — 4.9% of the descriptions.** Accuracy nominally +2.5 points, which
+the harness itself flags as within ~1 case of the baseline on 27×3: `NO-MATERIAL-CHANGE`.
+Per-string savings are 1.3%–11.6% of characters on Golem's own prose (probe against
+their `compress()`), because these descriptions are already terse — the transform's
+own protections (code/paths/identifiers) cover much of what is left.
+
+**Verdict: reproducible negative, and the same one §100 reached from the other side.**
+53 tokens is **0.04% of a 139k request**, it sits in the cached prefix at 0.1×
+(≈5 full-price-input-token equivalents per request), and collecting it would mean the
+proxy rewriting tool descriptions in flight — including other servers' and the
+client's built-ins, which §100 established are 93.9% of the block and not Golem's to
+rewrite. There is no accuracy objection to their transform; the objection is that the
+prize does not exist. **Not adopted, not vendored, not wrapped.** The mode stays in
+the harness so anyone whose catalog is more verbose than Golem's can rerun the gate
+on their own descriptions in one command.
+
+**Note the shape of the finding:** the accuracy risk was never the binding constraint
+here either (§100's lesson, restated) — *ownership* and *magnitude* were.
+
+## §108 — R8.S2 answered: system-prompt slimming is 0.92% of the request and is DECLINED (2026-07-31)
+
+The spike expected a no; the deliverable was the arithmetic. Third independent
+capture of the system prompt on this project's own traffic (§95: 3,350; §100: 3,365;
+here **3,347** tokens) — remarkably stable, and **0.92% of a 362,283-token request**.
+
+**Live per-request cost basis** (`golem bench cost`, 24h, the 20 samples R8.8 now
+attributes): `in 40 / cache-write 12,359 / cache-read 9,627,462 / out 4,738` across
+20 requests → **~48,912 full-price-input-token equivalents per request** (write 1.25×,
+read 0.1×), and ~237 output tokens per request. So ~96% of the input bill is cache
+*reads*, and the system prompt is inside that cached prefix.
+
+**What a trim would collect** (cut × 0.1× cache-read, then Opus 5 at $5/MTok input,
+at this repo's ~1,500 requests/day):
+
+| trim of `system` | tokens | equivalents/request | share of request's input cost | per month |
+|---|--:|--:|--:|--:|
+| 10% | 335 | 33.5 | 0.068% | **$7.54** |
+| 30% | 1,004 | 100.4 | 0.205% | **$22.59** |
+| 50% | 1,674 | 167.4 | 0.342% | **$37.66** |
+
+**What it risks.** An unstable rewrite — one whose bytes move between turns — busts
+the tools+system prefix on every request: the whole 362k prefix reprices from 0.1× to
+1×, **+326,055 equivalents ≈ 6.7× a normal request**, i.e. **3,247× the per-request
+saving a 30% trim would collect**. Golem has already measured the shape of that
+mistake once (§103: Headroom on caching traffic, 8.7×–11.3× worse than doing nothing).
+Byte-stability is achievable — Decision 52's marker-fenced append proves it — so the
+risk is manageable rather than inevitable, but the asymmetry is the whole story.
+
+**Why it is declined even at $22/month.**
+
+1. **The bytes are not Golem's.** `system` is where the *client* puts the instructions
+   that make the harness work. Trimming them is a fidelity change, and CLAUDE.md's
+   hard rule is byte-faithful passthrough at level ≤1 — so this could only ever be a
+   level-2/3 behaviour, where Decision 23 already says the input axis is ~0% on
+   caching traffic. Same ownership argument that closed §100 (93.9% of the tools block
+   is the client's) and §107 (caveman-shrink's 53 tokens).
+2. **Nothing in it is provably inert.** The one transform this project ever proved
+   invisible — dropping `$schema` (§100) — was worth 72 tokens (0.05%) and was still
+   rejected for mutating a cached prefix. There is no equivalent "provably ignorable"
+   region of a system prompt; every candidate cut is a behaviour bet.
+3. **The prize is 0.2% for a behaviour bet on the highest-consequence bytes in the
+   request.** A 30% cut of the client's own operating instructions to save one fifth
+   of one percent is not a trade this project should offer its users.
+
+**Verdict: DECLINED, not deferred.** No code shipped; `system` keeps its only
+sanctioned mutation, Decision 52's byte-stable marker-fenced append. Reopen only with
+a *provably inert* region and a byte-stability proof, and even then measure against
+this table first. Fourth consecutive input-side idea to die on the same two questions:
+**whose bytes are they, and how big is the prize actually** (§100, §103, §107, §108).
+
+## §109 — R8.6 shipped: four LSP questions as `code` modes cost +333 definition tokens *when enabled*, and 0 when not (2026-07-31)
+
+R8.6's gate was cross-OS spawn/lifecycle plus "server absent → no-op, never an error
+path". Both are met. The number the R8b discipline demands is the definition cost, and
+it has an unusual shape here: **it is zero in the shipped default.**
+
+**Measured** (`golem bench tools`, this repo, 12 tools):
+
+| | `code` desc | `code` schema | `code` full | block full |
+|---|--:|--:|--:|--:|
+| before R8.6 | ~101 | ~161 | ~437 | ~4,562 |
+| after, LSP **off** (default) | ~101 | ~161 | ~437 | **~4,540** |
+| after, LSP **on** (`--lsp`) | ~159 | ~301 | ~770 | ~4,895 |
+
+Two readings:
+
+1. **Off costs nothing — it costs 22 tokens less.** The LSP mode enum, the `file` /
+   `line` / `character` / `symbol` parameters and the extra prose are only added to the
+   schema when a bridge is injected (`knowledge.lsp_enabled`, default **false**). The
+   −22 is incidental: making the map-only output fields `.optional()` — an LSP mode
+   answers a position, not a tree, and reporting `files_scanned: 0` for it would be a
+   claim about a scan that never happened — shortened the serialised `required` list.
+2. **On costs +333 full-definition tokens, and modes are ~3× cheaper than tools.**
+   Every tool pays a fixed envelope: `devices`, with a 9-token schema, still costs ~318
+   full. Four separate `diagnostics`/`definition`/`references`/`hover` tools would each
+   pay that envelope — ≈1,000–1,300 tokens on the same census — against the +333
+   measured for one tool with four extra modes. §100's "a tool definition is a permanent
+   per-request bill" is what made this the design, and the census now shows the size of
+   the avoided bill rather than asserting it.
+
+`--lsp` is a new flag on `golem bench tools` precisely so the on-state is measurable
+rather than assumed; the default census keeps reporting the state users actually ship,
+which is the §99/§104 lesson about metrics that describe a configuration nobody is in.
+
+**What is verified, and what is not.** 17 integration tests spawn a real child process
+(`tests/fixtures/fake-lsp-server.mjs`, this repo's own node binary) and cover the
+handshake, byte-at-a-time framing, all four modes, and every degrade path: binary not on
+`PATH`, unclaimed file extension, handshake timeout, request timeout, mid-session crash
+(with a pool re-spawn on the next call), protocol desync, unreadable file, missing
+position. Every one resolves to `available: false` plus a reason — none throws.
+
+**Not verified: a real language server.** `typescript-language-server` is not installed
+on this machine and Golem must not depend on it (Decision 53 criterion 4), so what is
+proven is the protocol and the lifecycle, not tsserver's own behaviour — notably how long
+a cold project load actually takes against `knowledge.lsp_timeout_ms` (15s default), and
+whether `DIAGNOSTICS_SETTLE_MS` (400ms) is enough for its two-phase publish. That is a
+live-traffic question, like R8.5's displacement question, and it wants the same answer:
+measure it on real use, do not guess it now.
+
+**Also unmeasured — the same open question R8.5 left.** Whether an agent given
+`definition`/`references` actually *stops* grepping and reading whole files. The
+displacement claim is the whole justification for both features and neither has evidence
+yet; §101's +21.4 accuracy points for the map is the closest thing, and it measures
+retrieval, not avoided reads.
+
+## §110 — R8.7: the local editor SHIPS, but only in the format the harness approved — whole-file, 91.7% semantic, and the two diff formats fail at 33.3% (2026-07-31)
+
+R8.7's gate was "harness before code, non-negotiable", with the format as a measured
+independent variable the way Aider treats it. `golem bench edit` was built first, its bar
+(`EDIT_BAR` in `src/tools/edit-bench.ts`) was fixed **before the first run**, and the
+result is the second R8 item an instrument *approved* rather than redirected — but it
+approved exactly one of the three candidate designs, and it was not the one the task
+document assumed.
+
+**Measured** (this repo, `qwen2.5-coder:7b` at the `drafter` role, 12 hand-labelled edit
+cases, `temperature: 0`, definition-loss guard active — the shipped configuration):
+
+| format | in-format | apply | exact | **semantic** | local reply tok |
+|---|--:|--:|--:|--:|--:|
+| `search-replace` | 6/12 (50.0%) | 50.0% | 16.7% | **33.3%** | ~69 |
+| `udiff` | 12/12 (100%) | 50.0% | 33.3% | **33.3%** | ~75 |
+| **`whole`** | 12/12 (100%) | **100%** | 41.7% | **91.7%** | ~58 |
+
+Pre-registered bar: ship at semantic ≥ 80% **and** apply ≥ 70%; advisory-only at
+semantic ≥ 50%; otherwise reject. `whole` clears it; the other two are rejected by it.
+
+**Why the two diff formats fail, and they fail differently.** The task document assumed
+search/replace, because that is what Aider's leaderboard rewards on frontier models. A
+7B-class local model cannot hold up either half of that bargain:
+
+1. **`search-replace` — half the replies were not in the format at all** (6/12
+   `unparsed`). Asked for `<<<<<<< SEARCH` blocks, the model returns the whole rewritten
+   file instead. That is a *compliance* failure, so the harness counts it separately from
+   an editing failure — an aggregated "50% apply" would have hidden which of the two was
+   broken, which is §100's lesson restated.
+2. **`udiff` — perfect compliance, and half the hunks still do not apply** (6/12
+   `no-match`). Every reply was a well-formed diff; the model simply does not reproduce
+   existing lines byte for byte, and *both* diff formats require exactly that. The
+   trailing-whitespace leniency (`exact-then-trimmed`) rescued **zero** of them, so this
+   is not a whitespace problem: the model paraphrases code it was told to copy.
+
+Golem's validator turns that into a refusal rather than corruption, which is the point:
+`no-match` and `ambiguous` are the two failures a search/replace applier must never
+resolve by guessing.
+
+**Whole-file wins for a reason that is also its risk.** There is nothing to copy — the
+model emits the file it wants, so there is no byte-for-byte requirement to fail. That
+removes the failure mode the diff formats died of and introduces one a parse check cannot
+see: a rewrite that parses perfectly and has quietly *dropped* an unrelated function
+("// ...rest of the file unchanged"). So validation gained a **definition-loss guard**
+(`symbolCheck` in `src/tools/edit-apply.ts`): the tree-sitter definition list before and
+after must not lose a name, and losing one is `symbols-lost`, a rejection. On the 12
+measured cases the guard rejected **nothing** — it costs nothing here; its value is
+entirely on the large files this case set does not contain, and it is pinned by unit and
+integration tests that deliberately drop a definition.
+
+**The cost, reported beside the accuracy (Decision 52's rule).**
+
+| | tokens |
+|---|--:|
+| the instruction a frontier model writes | ~21 output |
+| the same edit written by hand | ~51 output |
+| the whole fixture re-emitted | ~44 output |
+| `coder` definition, editor mode **off** (default) | 614 — **byte-identical to R8.6** |
+| `coder` definition, editor mode **on** | 927 (**+313**) |
+
+**This arithmetic does not close on the measured fixtures, and that is why the mode is
+off by default.** ~30 output tokens saved per edit against +313 input tokens on *every*
+request is the shape §100 rejected R8.S1 for. Two things make it shippable anyway: the
+cost is **opt-in and provably zero when off** (`inference.local_editor_enabled`, default
+false — `golem bench tools --editor` exists so the on-state is measurable, the `--lsp`
+precedent from §109), and the fixtures are ~10–40 lines, which is the *worst* case for
+the ratio. The saving scales with edit size while the schema cost is fixed, so the
+honest claim is a **conditional** one: this pays on files big enough to matter and is a
+loss on files this small. What is NOT measured is where the crossover sits — that needs
+larger labelled cases, and until they exist `MAX_EDIT_LINES = 200` is a *guard*, not a
+measured bound.
+
+**Two instrument findings, both worth more than the verdict.**
+
+- **`--repeats` cannot sharpen this harness.** At `temperature: 0` all three arms
+  reproduced identical per-case outcomes across 2 and 3 passes (36 attempts per arm, same
+  rates as 12). The report now says so: repeats buy reproducibility, not statistical
+  power, and only more cases move the ±8.3-point resolution. Any future "raise repeats"
+  advice on a deterministic local model is noise.
+- **The compliance/apply split is the finding.** Had the harness reported one number, the
+  conclusion would have been "diff formats apply about half the time" — true, and useless.
+  The split says search/replace fails because the model *ignores the format* while udiff
+  fails because it *cannot copy*, and only the second is a property of the model rather
+  than of the prompt.
+
+**What is verified, and what is not.** 50 unit tests over the parsers, the validator, the
+diff renderer and the harness's own verdict logic (including the adverse-error guard and
+the §100 insensitivity check), plus 9 MCP integration tests over the shipped mode: propose
+by default, write only on `apply: true`, refuse a definition-dropping rewrite, refuse a
+path outside the project root, refuse a file above the cap, and the schema's absence when
+the flag is off. **Not verified:** any file over ~40 lines, any language without a
+tree-sitter grammar (those can be *proposed* but never written — an unvalidated whole-file
+overwrite is the corruption path R8.7 forbids), and — as with R8.5 and R8.6 — whether an
+agent given this mode actually *stops* writing edits itself. That is the same live-traffic
+displacement question, and it is still open.
+
+## §111 — R8.9 shipped: a change ledger on shadow refs; the live smoke test caught what 11 green tests could not (2026-07-31)
+
+**What was built.** `golem checkpoint create|list|show|restore|drop|prune` snapshots the
+worktree into `refs/golem/ledger/<id>` — a `commit-tree` object parented on `HEAD` that no
+branch points at — and can put it back. The task's rule was the repo's own: **commit only
+when asked**. So: no branch, no commit on `HEAD`, and no index write, because every staging
+step runs against a throwaway `GIT_INDEX_FILE` at `<gitDir>/golem-index-<pid>-<n>` and the
+restore is `read-tree` + `checkout-index -f -z --stdin` against that same temp index. Two
+consequences worth recording: git's default fetch/push refspecs do not carry
+`refs/golem/*`, so a checkpoint cannot leave the machine by accident; and since a snapshot
+is an ordinary commit, `git diff refs/golem/ledger/<id>` works with no Golem command
+involved.
+
+**The gate split, and why.** `restore|undo|drop|prune` are classified `destructive` in
+`src/autonomy/classify.ts`, which puts them in ADR-0002's never-auto set — no autonomy
+level approves them, and `ask` overrides an allow-list (this repo allow-lists
+`Bash(golem:*)`, so that override is the operative half). `create`/`list` were deliberately
+left unescalated: gate the *snapshot* and the model stops taking snapshots, at which point
+the feature saves nothing. A restore also takes its own `pre-restore` checkpoint first and
+prints the command that reverses it, which is what makes a preview-plus-prompt sufficient
+consent for a destructive act.
+
+**No MCP tool, on purpose.** §88/§100 measured what a tool definition costs on every
+request (~250–320 tokens of envelope before any content). The model reaches this through
+`Bash` for free, so the guidance ships as a lazy `/golem/checkpoint` skill plus one
+paragraph in `/golem/develop`. First R8 feature where that trade was made explicitly rather
+than by default.
+
+**Finding 1 — the smoke test found the bug, 11 green tests did not.** In a scratch repo
+with **no `.gitignore`**, the first live restore reported "2 deleted" against a plan of 1.
+The extra path was Golem's own `.golem/` state — telemetry, tasks, CCR blobs — written
+*after* the checkpoint by the very command under test. A restore that deletes it is
+rewinding Golem, not the user's attempt. Fixed by putting the exclusion in the pathspec
+(`git add --all -- . :(exclude).golem`) so the snapshot and the plan agree it is out of
+scope; a filter on the delete list alone would have left it inside the tree and inside
+every diff. Why no test caught it: every realistic project gitignores `.golem/`, so
+`.gitignore` was silently doing the job. The regression test now creates `.golem/` state
+**untracked and un-ignored** and asserts the plan is empty of it. Generalisable: a
+Golem feature that walks the worktree must exclude Golem's own state *explicitly*, never
+by relying on the user's ignore file.
+
+**Finding 2 — restored files carry git's line endings, not the disk's.** `checkout-index`
+runs the smudge filter, so with `core.autocrlf=true` (this machine, and many Windows
+installs) an LF-only working copy comes back CRLF; three tests failed on `\r\n` before this
+was understood. Not a defect — it is exactly what `git checkout` does, and matching git is
+the contract — so it is documented in `src/checkpoint/ledger.ts` and on the concept page,
+and the test repos pin `core.autocrlf=false` so the suite tests the ledger rather than the
+developer's git config.
+
+**Degrade paths, all asserted.** No git on `PATH`, not a repo, a **detached HEAD**, and a
+**dirty index** each produce a no-op naming the reason — never a partial restore. The
+dirty-index refusal is not squeamishness: a restore writes worktree files, so staged
+content would afterwards describe a state that no longer exists on disk. An **unborn HEAD**
+(a repo with no commits) is supported rather than refused — the snapshot is simply
+parentless — which also drove the choice of `status --porcelain` over `diff --cached` for
+the staged-change probe, since the latter errors with no HEAD to compare against.
+
+**Also of note (dogfooding).** Golem's redaction stage rewrites e-mail literals on the way
+*back* to the model, so the committer address written into `ledger.ts` reads as
+`[REDACTED:email:N]` when the model greps for it afterwards. The bytes on disk are correct
+— it is a display effect — but an agent cannot `Edit`-match such a line and must anchor
+elsewhere. Worth knowing before someone "fixes" a redacted-looking literal in source.
+
+**What is not measured.** The saving is structural: no one has yet counted a repair cycle
+against a discard on real traffic. The mechanism costs ~0 tokens when unused (no
+definition, no hook), so the downside is bounded, but "discarding is cheaper than
+repairing" rests on §93's re-reading share, not an A/B. And the displacement question R8.5
+and R8.6 both left open applies again: whether an agent actually reaches for a checkpoint
+before a risky attempt is a dogfooding observation nobody has made yet.

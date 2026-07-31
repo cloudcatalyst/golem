@@ -1,7 +1,7 @@
 ---
 task: snooze-taskadd
 title: Snooze enforcement denies the `golem task add` its own guidance rule asks for first
-state: queued
+state: done
 owner: agent
 size: S
 design: docs/plan/proposals/golem-snooze.md; spec Decision 45; .claude/rules/golem-snooze-hold.md
@@ -9,7 +9,7 @@ gate: Either the documented step 1 succeeds under enforcement, or the rule stops
 depends_on: []
 touches: [src/hooks/, .claude/rules/golem-snooze-hold.md, src/cli/init.ts]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-07-31T00:11:47.180Z
 ---
 
 ## Goal
@@ -74,3 +74,7 @@ behaviour changes.
 
 Reopening Decision 45 (enforcement-by-default is the user's call). Making the park
 advisory. Any change to how the reset time is read from the rate-limit headers.
+
+## Outcome
+
+snooze gained a `note` param that files the durable local task itself, before the wait — the ordering problem is structurally impossible rather than exempted. Reproduced the deny first (95% util scratch project, real hook), verified end-to-end through a real `golem mcp serve`, and confirmed `golem task add` is STILL denied under enforcement. Guidance rule + generator, /golem/park skill, CLAUDE.md, both deny reasons and the snooze proposal all updated.

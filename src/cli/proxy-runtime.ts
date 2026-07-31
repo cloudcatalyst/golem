@@ -361,9 +361,16 @@ export function buildProxyFromSettings(
         }\n`,
       );
     },
-    onResponseUsage: (usage) => {
+    onResponseUsage: (usage, request) => {
       if (usage === null) return;
       const nowIso = new Date().toISOString();
+      // R8.8: which model this sample was billed against. Same rule as the
+      // served-model snapshot below — the configured model wins on a translating
+      // upstream (the client's `claude-*` never reaches it), otherwise read the
+      // client's own model back out of the request body (observe-only). Absent
+      // when neither is available, so the cost report can say "unattributed"
+      // instead of pricing tokens against a guessed model.
+      const billedModel = upstreamModel ?? sniffRequestModel(request.body);
       void (async () => {
         // Decision 52: tag the sample with the brevity level in force, so
         // `aggregateUsageByBrevity` can compare BILLED output tokens per level.
@@ -381,6 +388,8 @@ export function buildProxyFromSettings(
             usage,
             semanticForced: forceSemanticOnCaching,
             brevity: policy.brevity,
+            ...(billedModel !== undefined ? { model: billedModel } : {}),
+            provider: upstreamProvider,
           },
           nowIso,
         );

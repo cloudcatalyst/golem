@@ -186,7 +186,9 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
   {
     id: "web-tree-sitter",
     title: "web-tree-sitter",
-    what: "Syntax-aware code chunking (WASM grammars) instead of the heuristic chunker.",
+    what:
+      "Syntax-aware code chunking (WASM grammars) instead of the heuristic chunker, and " +
+      "the symbol extraction behind the R8.5 repo map (`code` tool) and the oversized-Read skeleton.",
     tier: "tier-2",
     shape: "in-process",
     upstream: "https://github.com/tree-sitter/tree-sitter",
@@ -194,9 +196,44 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
     detect: { kind: "module", specifier: "web-tree-sitter" },
     install:
       "npm install web-tree-sitter plus the grammar packages you want (devDependencies here; never shipped).",
-    enabledBy: "knowledge.syntax_aware_chunking",
+    // Two independent consumers, two flags. `enabledBy` names the default-ON one
+    // (R8.5's map), because reporting `[off]` while the map is happily parsing with
+    // it would be exactly the kind of "claims a state it isn't in" this surface
+    // exists to avoid; the chunker's own opt-in is called out in `gate`.
+    enabledBy: "knowledge.repo_map_enabled",
     adapter: "src/knowledge/tree-sitter-chunker.ts",
-    degrade: "Chunking falls back to the heuristic `chunkFile`, which is always available.",
+    degrade:
+      "Chunking falls back to the heuristic `chunkFile`, which is always available; the " +
+      "`code` tool reports no map, and a swapped Read keeps its plain head/tail digest.",
+    gate:
+      "Used by two features with separate switches: the R8.5 repo map / oversized-Read " +
+      "skeleton (`knowledge.repo_map_enabled`, `knowledge.read_skeleton_enabled` — both " +
+      "default ON, shown here) and R3.3 syntax-aware chunking " +
+      "(`knowledge.syntax_aware_chunking`, default off). Either can be on without the other.",
+  },
+  {
+    id: "typescript-language-server",
+    title: "typescript-language-server",
+    what:
+      "Answers the R8.6 `code` tool's LSP modes — diagnostics / definition / references / hover — " +
+      "so an agent stops grepping to find out what refers to what.",
+    tier: "tier-2",
+    shape: "callable",
+    upstream: "https://github.com/typescript-language-server/typescript-language-server",
+    licence: "Apache-2.0",
+    detect: { kind: "command", command: "typescript-language-server" },
+    install:
+      "npm i -g typescript-language-server typescript — Golem spawns it, never installs it. " +
+      "Any other server (gopls, rust-analyzer, pyright) is a `knowledge.lsp_servers` row, not a release.",
+    enabledBy: "knowledge.lsp_enabled",
+    adapter: "src/ext/lsp/",
+    degrade:
+      "The `code` tool's LSP modes report `available: false` with the reason and the session " +
+      "continues; `map` mode is unaffected.",
+    gate:
+      "Enabled does NOT mean running. The server is spawned lazily on the first LSP-mode call, " +
+      "pooled, and evicted after an idle period — so `golem ext status` can say [on] while no " +
+      "process exists. It is also per-file-type: a row only answers for the extensions it claims.",
   },
   {
     id: "rtk",

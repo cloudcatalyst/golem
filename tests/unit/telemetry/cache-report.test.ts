@@ -94,7 +94,13 @@ describe("aggregateCacheStats", () => {
       requestEvent("bust"),
     ]);
     expect(stats.prefix.bust).toBe(5);
-    expect(stats.busts).toEqual({ tools: 1, system: 1, messages: 2, unattributed: 1 });
+    expect(stats.busts).toEqual({
+      tools: 1,
+      system: 1,
+      messages: 2,
+      lookback: 0,
+      unattributed: 1,
+    });
   });
 
   it("keeps the billed and predicted signals independent", () => {
@@ -190,8 +196,12 @@ describe("renderCacheReport — contradiction warning (§99)", () => {
   it("warns when a high billed hit rate coexists with mostly-bust verdicts", () => {
     const out = withBoth(984, 16, 98, 2);
     expect(out).toContain("These two disagree");
-    expect(out).toContain("notes §99");
-    expect(out).toContain("ignore the bust count");
+    // §104 reworded this: the warning is a standing consistency check on the
+    // predictor, not a pointer to one fixed bug. It must still name which half to
+    // distrust and still cite the precedent.
+    expect(out).toContain("§99");
+    expect(out).toContain("distrust");
+    expect(out).toContain("read the billed section as the answer");
   });
 
   it("stays quiet when the two signals agree (high hit rate, few busts)", () => {

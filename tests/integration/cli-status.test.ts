@@ -183,6 +183,13 @@ describe("renderStatus", () => {
       brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
       compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
     },
+    effective_compression: {
+      nominal: 1,
+      nominal_name: "lossless",
+      effective: 1,
+      effective_name: "lossless",
+      degraded: false,
+    },
     config: {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
@@ -212,6 +219,17 @@ describe("renderStatus", () => {
     dials: {
       brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
       compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+    },
+    // Level 3 against Anthropic: the §103 degraded case, so renderStatus must say
+    // the effective level is 1 rather than letting "aggressive" stand alone.
+    effective_compression: {
+      nominal: 3,
+      nominal_name: "aggressive",
+      effective: 1,
+      effective_name: "lossless",
+      degraded: true,
+      reason:
+        "the lossy semantic and context-substitution stages are off on a prompt-caching upstream",
     },
     config: {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
@@ -258,7 +276,14 @@ describe("renderStatus", () => {
     );
     // No active account, no configured model, host label == provider → just the provider.
     expect(output).toMatch(/Upstream: anthropic(\n| —|$)/m);
-    expect(output).toContain("Slider: level 3 (aggressive) — set by env (GOLEM_SLIDER_LEVEL)");
+    // §103: this fixture is level 3 against Anthropic, so the HEADLINE itself must
+    // name the level that runs. A warning line under a headline still reading
+    // "aggressive" was the bug — assert the label, not just the footnote.
+    expect(output).toContain(
+      "Slider: level 3 (aggressive) → effectively 1 (lossless) — set by env (GOLEM_SLIDER_LEVEL)",
+    );
+    expect(output).toContain("compression 3→1 (auto — follows slider 3)");
+    expect(output).toContain("⚠ level 3 (aggressive) is inert here:");
     expect(output).toContain("slider.level = 3 — env (GOLEM_SLIDER_LEVEL)");
     expect(output).toContain("Warnings:");
     expect(output).toContain(

@@ -4,6 +4,15 @@
  * fallback (D3).
  */
 
+export type { ModelAvailability, PulledState, TierAvailability } from "./availability.js";
+export {
+  availabilityWarning,
+  CHAT_ROLE_SLOTS,
+  matchesPulledName,
+  resolveTierAvailability,
+  roleState,
+  roleWarning,
+} from "./availability.js";
 export type { CapabilityFacts, ProbeCommand, ProbeResult, ProbeRunner } from "./capability.js";
 export { detectCapability, tierForMemoryMiB } from "./capability.js";
 export type { TierCatalogEntry } from "./catalog.js";

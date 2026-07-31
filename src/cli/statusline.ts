@@ -20,12 +20,19 @@
 // path: prefer the narrowest module over a barrel, and the read-only half of
 // anything that also has a write path (verification-notes §86).
 import path from "node:path";
+// §103. Dependency-free pure module, so the per-prompt surface pays nothing to
+// predict the compression gate (verification-notes §86).
+import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
-import { resolveBrevity, type SliderLevel } from "../interfaces/policy.js";
-import { resolveUpstreamDisplay, type UpstreamProvider } from "../providers/index.js";
+import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
+import {
+  resolveUpstreamDisplay,
+  type UpstreamProvider,
+  upstreamAssumesCaching,
+} from "../providers/index.js";
 // `../proxy/served-model.js`, not the `../proxy/index.js` barrel: the barrel reaches
 // server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
 import { servedModelFor } from "../proxy/served-model.js";
@@ -56,6 +63,14 @@ export interface SessionInput {
 /** Golem-side state for the line. */
 export interface GolemState {
   readonly sliderLevel: number;
+  /**
+   * §103 — the level the pipeline will ACTUALLY apply, when it differs from
+   * `sliderLevel`. The status line runs on every prompt, so it is the surface a
+   * user actually reads their configuration off: showing "Aggressive" here while
+   * the pipeline ran lossless was the most-seen version of that misreport.
+   * Absent → nothing is degraded and `sliderLevel` is the truth.
+   */
+  readonly effectiveLevel?: number;
   /**
    * Decision 52 — the effective brevity level ("off" when the dial is off).
    * Surfaced because brevity changes the model's own output style: an unexplained
@@ -241,7 +256,13 @@ export function renderStatusLine(
   // or it's running at level 0 (full bypass, Decision 30). Both read the same —
   // traffic passes straight through to the upstream, untransformed.
   const passthrough = !active || golem.sliderLevel === 0;
-  const label = passthrough ? "Passthrough" : levelName(golem.sliderLevel);
+  // §103: name the level that is RUNNING, not the one that was set. The nominal
+  // level still gets said — as a badge below — but it must not be the headline
+  // when the pipeline is doing something else.
+  const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
+  const label = passthrough
+    ? "Passthrough"
+    : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
 
   // Brand · Level → destination. The destination names each backend with its
   // own model id verbatim (`local (qwen2.5-coder:7b) + anthropic
@@ -256,6 +277,11 @@ export function renderStatusLine(
   // default (off) costs no width.
   if (golem.brevity !== undefined && golem.brevity !== "off") {
     parts.push(yellow(`✂ ${golem.brevity}`));
+  }
+  // The set-but-inert level, said explicitly so the difference is visible rather
+  // than merely absent. Costs width only in the degraded case.
+  if (inert && !passthrough) {
+    parts.push(yellow(`⚠ ${golem.sliderLevel} inert`));
   }
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
@@ -276,6 +302,7 @@ export async function collectGolemState(
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
   let activeAccount: string | null = null;
+  let effectiveLevel: number | undefined;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
@@ -294,6 +321,25 @@ export async function collectGolemState(
     provider = upstream.provider;
     model = upstream.model;
     activeAccount = upstream.accountId;
+    // §103. Pure computation on settings already loaded — no extra I/O, which is
+    // the constraint that matters on a per-prompt surface. The compression DIAL,
+    // not the slider, is what the pipeline reads (Decision 52).
+    const assumeCaching = upstreamAssumesCaching(upstream.provider);
+    // The dial is stored as a string enum ("auto" | "1" | "2" | "3"); coerce the
+    // same way dials.ts does rather than inventing a second convention.
+    const pin = settings.compression.level;
+    const dialLevel = resolveCompressionLevel(
+      settings.slider.level,
+      pin === "auto" ? "auto" : (Number(pin) as SliderLevel),
+    );
+    const eff = resolveEffectiveCompression({
+      level: dialLevel,
+      upstreamBaseUrl: upstream.baseUrl,
+      ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
+      headroomSidecar: settings.compression.headroom_sidecar,
+      forceSemanticOnCaching: settings.compression.force_semantic_on_caching,
+    });
+    if (eff.degraded) effectiveLevel = eff.effective;
   } catch {
     // defaults
   }
@@ -302,6 +348,7 @@ export async function collectGolemState(
     brevity,
     upstreamLabel: label,
     localCoderEnabled: coderEnabled,
+    ...(effectiveLevel !== undefined ? { effectiveLevel } : {}),
     ...(provider !== undefined ? { upstreamProvider: provider } : {}),
     ...(model !== undefined ? { upstreamModel: model } : {}),
   };

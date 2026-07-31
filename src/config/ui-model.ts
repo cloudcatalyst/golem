@@ -268,6 +268,16 @@ export const SETTING_META = {
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
     restart: "mcp",
   },
+  "inference.local_editor_enabled": {
+    label: "Local editor mode",
+    summary: 'Offer `coder`\'s `mode: "edit"` — a validated local rewrite of one small file',
+    detail:
+      "Off by default because the mode's schema costs ~313 tokens on EVERY request (§110), " +
+      "while the saving only lands when it is used. Golem validates every edit (syntax must " +
+      "still parse, no definition may disappear) and writes nothing unless `apply: true`. " +
+      "Measured on ~10–40-line TypeScript files; bigger files are declined, not guessed at.",
+    restart: "mcp",
+  },
 
   // --- compression ----------------------------------------------------------
   "compression.headroom_sidecar": {
@@ -364,6 +374,43 @@ export const SETTING_META = {
     detail: "Falls back to the heuristic chunker when the packages aren't installed.",
     advanced: true,
   },
+  "knowledge.repo_map_enabled": {
+    label: "Repo map tool",
+    summary: "Offer the `code` tool: a graph-ranked signature map of the repo",
+    detail:
+      "Lets the model find the right file without reading the wrong ones. Needs the " +
+      "optional tree-sitter packages; without them the tool reports no map. A tool " +
+      "definition costs tokens on every request, so turn it off if unused.",
+    restart: "mcp",
+  },
+  "knowledge.read_skeleton_enabled": {
+    label: "Symbol skeleton on oversized reads",
+    summary: "Add each definition and its line number to a swapped-out Read",
+    detail: "Makes the cheap recovery a narrow re-read instead of expanding the whole original.",
+    advanced: true,
+  },
+  "knowledge.lsp_enabled": {
+    label: "LSP modes on the code tool",
+    summary: "Offer diagnostics / definition / references / hover via a language server",
+    detail:
+      "You install the server (e.g. typescript-language-server); Golem only spawns it, and " +
+      "reports why rather than failing when it is absent. Adds modes to the existing `code` " +
+      "tool rather than new tools, but a wider schema still bills on every request.",
+    restart: "mcp",
+  },
+  "knowledge.lsp_servers": {
+    label: "Language server rows",
+    summary: "Extra servers by file extension, layered over the built-in TypeScript row",
+    detail: "How gopls or rust-analyzer are added — config, not a Golem release.",
+    advanced: true,
+    restart: "mcp",
+  },
+  "knowledge.lsp_timeout_ms": {
+    label: "LSP request timeout",
+    summary: "Budget for one language-server call before it degrades to a no-op",
+    advanced: true,
+    restart: "mcp",
+  },
   "knowledge.user_wiki_enabled": {
     label: "Federate the user wiki",
     summary: "Include ~/.golem/wiki/ in search results, read-only",
@@ -430,6 +477,27 @@ export const SETTING_META = {
     summary: "Reveal rarely-touched controls when the panel opens",
   },
 
+  // --- models ---------------------------------------------------------------
+  "models.catalog_url": {
+    label: "Model catalog URL",
+    summary: "models.dev-shaped price/context catalog `golem models refresh` fetches",
+    detail:
+      "Nothing fetches it implicitly — a cost report never makes a network call. Golem's " +
+      "own built-in prices always win, so a wrong third-party figure cannot reach a cost claim.",
+    advanced: true,
+  },
+  "models.catalog_max_age_days": {
+    label: "Catalog staleness warning",
+    summary: "Days before price data is labelled stale",
+    detail: "The warning labels the number; it never suppresses or adjusts it.",
+    advanced: true,
+  },
+  "models.context_warn_fraction": {
+    label: "Context warning threshold",
+    summary: "Fraction of the model's context window at which `golem stats --context` warns",
+    detail: "Only fires when the catalog knows the window — an unknown limit warns not at all.",
+  },
+
   // --- snooze ---------------------------------------------------------------
   "snooze.enforce": {
     label: "Enforce the usage-limit park",
@@ -481,6 +549,11 @@ export const SECTION_META = {
   proxy: { title: "Proxy & upstream", summary: "Port, upstream, and timeouts", order: 40 },
   telemetry: { title: "Telemetry", summary: "Local savings attribution and dashboard", order: 50 },
   snooze: { title: "Usage limits", summary: "Parking behaviour at the session limit", order: 60 },
+  models: {
+    title: "Model catalog",
+    summary: "Per-model price and context limits (R8.8) — cached, never fetched implicitly",
+    order: 65,
+  },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
   slider: { title: "Savings", summary: "The compression dial", order: 80 },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
