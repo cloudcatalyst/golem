@@ -4885,3 +4885,100 @@ measure it on real use, do not guess it now.
 displacement claim is the whole justification for both features and neither has evidence
 yet; §101's +21.4 accuracy points for the map is the closest thing, and it measures
 retrieval, not avoided reads.
+
+## §110 — R8.7: the local editor SHIPS, but only in the format the harness approved — whole-file, 91.7% semantic, and the two diff formats fail at 33.3% (2026-07-31)
+
+R8.7's gate was "harness before code, non-negotiable", with the format as a measured
+independent variable the way Aider treats it. `golem bench edit` was built first, its bar
+(`EDIT_BAR` in `src/tools/edit-bench.ts`) was fixed **before the first run**, and the
+result is the second R8 item an instrument *approved* rather than redirected — but it
+approved exactly one of the three candidate designs, and it was not the one the task
+document assumed.
+
+**Measured** (this repo, `qwen2.5-coder:7b` at the `drafter` role, 12 hand-labelled edit
+cases, `temperature: 0`, definition-loss guard active — the shipped configuration):
+
+| format | in-format | apply | exact | **semantic** | local reply tok |
+|---|--:|--:|--:|--:|--:|
+| `search-replace` | 6/12 (50.0%) | 50.0% | 16.7% | **33.3%** | ~69 |
+| `udiff` | 12/12 (100%) | 50.0% | 33.3% | **33.3%** | ~75 |
+| **`whole`** | 12/12 (100%) | **100%** | 41.7% | **91.7%** | ~58 |
+
+Pre-registered bar: ship at semantic ≥ 80% **and** apply ≥ 70%; advisory-only at
+semantic ≥ 50%; otherwise reject. `whole` clears it; the other two are rejected by it.
+
+**Why the two diff formats fail, and they fail differently.** The task document assumed
+search/replace, because that is what Aider's leaderboard rewards on frontier models. A
+7B-class local model cannot hold up either half of that bargain:
+
+1. **`search-replace` — half the replies were not in the format at all** (6/12
+   `unparsed`). Asked for `<<<<<<< SEARCH` blocks, the model returns the whole rewritten
+   file instead. That is a *compliance* failure, so the harness counts it separately from
+   an editing failure — an aggregated "50% apply" would have hidden which of the two was
+   broken, which is §100's lesson restated.
+2. **`udiff` — perfect compliance, and half the hunks still do not apply** (6/12
+   `no-match`). Every reply was a well-formed diff; the model simply does not reproduce
+   existing lines byte for byte, and *both* diff formats require exactly that. The
+   trailing-whitespace leniency (`exact-then-trimmed`) rescued **zero** of them, so this
+   is not a whitespace problem: the model paraphrases code it was told to copy.
+
+Golem's validator turns that into a refusal rather than corruption, which is the point:
+`no-match` and `ambiguous` are the two failures a search/replace applier must never
+resolve by guessing.
+
+**Whole-file wins for a reason that is also its risk.** There is nothing to copy — the
+model emits the file it wants, so there is no byte-for-byte requirement to fail. That
+removes the failure mode the diff formats died of and introduces one a parse check cannot
+see: a rewrite that parses perfectly and has quietly *dropped* an unrelated function
+("// ...rest of the file unchanged"). So validation gained a **definition-loss guard**
+(`symbolCheck` in `src/tools/edit-apply.ts`): the tree-sitter definition list before and
+after must not lose a name, and losing one is `symbols-lost`, a rejection. On the 12
+measured cases the guard rejected **nothing** — it costs nothing here; its value is
+entirely on the large files this case set does not contain, and it is pinned by unit and
+integration tests that deliberately drop a definition.
+
+**The cost, reported beside the accuracy (Decision 52's rule).**
+
+| | tokens |
+|---|--:|
+| the instruction a frontier model writes | ~21 output |
+| the same edit written by hand | ~51 output |
+| the whole fixture re-emitted | ~44 output |
+| `coder` definition, editor mode **off** (default) | 614 — **byte-identical to R8.6** |
+| `coder` definition, editor mode **on** | 927 (**+313**) |
+
+**This arithmetic does not close on the measured fixtures, and that is why the mode is
+off by default.** ~30 output tokens saved per edit against +313 input tokens on *every*
+request is the shape §100 rejected R8.S1 for. Two things make it shippable anyway: the
+cost is **opt-in and provably zero when off** (`inference.local_editor_enabled`, default
+false — `golem bench tools --editor` exists so the on-state is measurable, the `--lsp`
+precedent from §109), and the fixtures are ~10–40 lines, which is the *worst* case for
+the ratio. The saving scales with edit size while the schema cost is fixed, so the
+honest claim is a **conditional** one: this pays on files big enough to matter and is a
+loss on files this small. What is NOT measured is where the crossover sits — that needs
+larger labelled cases, and until they exist `MAX_EDIT_LINES = 200` is a *guard*, not a
+measured bound.
+
+**Two instrument findings, both worth more than the verdict.**
+
+- **`--repeats` cannot sharpen this harness.** At `temperature: 0` all three arms
+  reproduced identical per-case outcomes across 2 and 3 passes (36 attempts per arm, same
+  rates as 12). The report now says so: repeats buy reproducibility, not statistical
+  power, and only more cases move the ±8.3-point resolution. Any future "raise repeats"
+  advice on a deterministic local model is noise.
+- **The compliance/apply split is the finding.** Had the harness reported one number, the
+  conclusion would have been "diff formats apply about half the time" — true, and useless.
+  The split says search/replace fails because the model *ignores the format* while udiff
+  fails because it *cannot copy*, and only the second is a property of the model rather
+  than of the prompt.
+
+**What is verified, and what is not.** 50 unit tests over the parsers, the validator, the
+diff renderer and the harness's own verdict logic (including the adverse-error guard and
+the §100 insensitivity check), plus 9 MCP integration tests over the shipped mode: propose
+by default, write only on `apply: true`, refuse a definition-dropping rewrite, refuse a
+path outside the project root, refuse a file above the cap, and the schema's absence when
+the flag is off. **Not verified:** any file over ~40 lines, any language without a
+tree-sitter grammar (those can be *proposed* but never written — an unvalidated whole-file
+overwrite is the corruption path R8.7 forbids), and — as with R8.5 and R8.6 — whether an
+agent given this mode actually *stops* writing edits itself. That is the same live-traffic
+displacement question, and it is still open.

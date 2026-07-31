@@ -147,6 +147,20 @@ export const SETTINGS_LEAVES = {
      * must still be reachable for coder to actually work.
      */
     local_coder_enabled: z.boolean(),
+    /**
+     * OPT-IN (R8.7, default **false**): offer `coder`'s `edit` mode — the local
+     * model rewrites one small file, Golem validates the result (syntax must
+     * still parse, no definition may disappear) and only then writes it.
+     *
+     * Off by default for a measured reason, not a cautious one: the mode's three
+     * extra schema properties cost **+313 definition tokens on every request**
+     * (§110), a permanent bill in the shape §100 rejected, while the saving is
+     * conditional on the mode being used AND the local edit being right.
+     * `golem bench edit` clears the bar for whole-file edits on ~10–40-line
+     * TypeScript files and nothing larger, so the people who benefit turn it on
+     * deliberately. When it is off, the schema is byte-identical to R8.6's.
+     */
+    local_editor_enabled: z.boolean(),
   },
   compression: {
     /**
@@ -474,6 +488,7 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
+  readonly local_editor_enabled: boolean;
 }
 
 export interface CompressionSettings {
@@ -575,6 +590,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
+    local_editor_enabled: false,
   },
   compression: {
     headroom_sidecar: false,

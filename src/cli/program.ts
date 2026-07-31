@@ -939,6 +939,10 @@ mcp
           : {}),
         ...(inference !== undefined ? { inference } : {}),
         ...(coderInference !== undefined ? { coder: coderInference } : {}),
+        // R8.7: `coder`'s edit mode is +313 definition tokens on every request
+        // (§110), so its schema is offered only when opted in — the same
+        // permanent-bill discipline as `code`/`lsp` above.
+        ...(settings.inference.local_editor_enabled ? { localEditor: true } : {}),
         // R8.5: the `code` tool maps the filesystem via tree-sitter, so it is
         // independent of the knowledge base — but it is a permanent per-request
         // definition cost, so it is registered only when opted in.
@@ -1520,6 +1524,98 @@ benchCmd
   );
 
 benchCmd
+  .command("edit")
+  .description(
+    "R8.7 gate: can the LOCAL model turn a ~50-token instruction into an edit Golem's " +
+      "validator accepts AND a human would call correct? Scores all three edit formats.",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--repeats <n>", "passes over the case set (default 1)", "1")
+  .option(
+    "--role <role>",
+    "local role that does the editing: drafter (default) | judge | classifier",
+    "drafter",
+  )
+  .option(
+    "--format <format>",
+    "limit to one format: search-replace | udiff | whole (default: all three)",
+  )
+  .option(
+    "--strict-match",
+    "require byte-exact search text (default also retries ignoring trailing whitespace)",
+    false,
+  )
+  .option("--json", "machine-readable output", false)
+  .action(
+    async (opts: {
+      dir: string;
+      repeats: string;
+      role: string;
+      format?: string;
+      strictMatch: boolean;
+      json: boolean;
+    }) => {
+      try {
+        const { benchEdits, EDIT_CASES, isEditFormat, renderEditBench } = await import(
+          "../tools/index.js"
+        );
+        const { extractFileFacts, hasParseError } = await import("../knowledge/index.js");
+        // The definition-loss guard, wired the same way it would ship: a
+        // whole-file rewrite that parses but has dropped a function is the
+        // failure the ≤40-line fixtures cannot show, so the harness measures
+        // the guard rather than a version of the feature without it.
+        const symbolCheck = async (ext: string, content: string): Promise<string[] | null> => {
+          const facts = await extractFileFacts(ext, content);
+          return facts === null ? null : facts.defs.map((d) => d.name);
+        };
+        const repeats = Number.parseInt(opts.repeats, 10);
+        if (!Number.isFinite(repeats) || repeats < 1) {
+          throw new InitError(`invalid --repeats "${opts.repeats}" (expected a positive integer)`);
+        }
+        const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+        const role = opts.role as (typeof roles)[number];
+        if (!roles.includes(role)) {
+          throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+        }
+        if (opts.format !== undefined && !isEditFormat(opts.format)) {
+          throw new InitError(
+            `invalid --format "${opts.format}" (expected search-replace | udiff | whole)`,
+          );
+        }
+
+        // There is no census half here: an edit harness with no editor is not a
+        // result, so the local model is required rather than optional.
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const client = new OllamaClient({
+          baseUrl: settings.inference.ollama_base_url,
+          requestTimeoutMs: settings.inference.request_timeout_ms,
+        });
+        const facts = await detectCapability(createProbeRunner());
+        const inference = new OllamaInferenceService(client, facts);
+        await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
+
+        const report = await benchEdits({
+          inference,
+          cases: EDIT_CASES,
+          repeats,
+          role,
+          matchStrategy: opts.strictMatch ? "exact" : "exact-then-trimmed",
+          parseCheck: hasParseError,
+          symbolCheck,
+          ...(opts.format !== undefined && isEditFormat(opts.format)
+            ? { formats: [opts.format] }
+            : {}),
+        });
+        process.stdout.write(
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderEditBench(report),
+        );
+      } catch (err) {
+        fail(err);
+      }
+    },
+  );
+
+benchCmd
   .command("tools")
   .description(
     "Tools-block token census, and optionally A/B a shrinking transform against " +
@@ -1549,6 +1645,11 @@ benchCmd
     "count the R8.6 LSP modes of the `code` tool (knowledge.lsp_enabled, default off)",
     false,
   )
+  .option(
+    "--editor",
+    "count the R8.7 `edit` mode of `coder` (inference.local_editor_enabled, default off)",
+    false,
+  )
   .option("--json", "machine-readable output", false)
   .action(
     async (opts: {
@@ -1558,6 +1659,7 @@ benchCmd
       repeats: string;
       role: string;
       lsp: boolean;
+      editor: boolean;
       json: boolean;
     }) => {
       try {
@@ -1573,7 +1675,7 @@ benchCmd
           SELECTION_CASES,
           ARGUMENT_CASES,
         } = await import("../tools/index.js");
-        const census = await golemToolCensus({ lsp: opts.lsp });
+        const census = await golemToolCensus({ lsp: opts.lsp, editor: opts.editor });
         if (opts.shrink === undefined) {
           const report = { census };
           process.stdout.write(

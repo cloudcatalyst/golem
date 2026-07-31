@@ -121,6 +121,7 @@ export type { FileFacts, SymbolDef, SymbolKind } from "./tree-sitter-chunker.js"
 export {
   chunkCodeSyntaxAware,
   extractFileFacts,
+  hasParseError,
   isSymbolExtractable,
 } from "./tree-sitter-chunker.js";
 export type { WebCacheEntry, WebCacheMeta } from "./web-cache.js";
