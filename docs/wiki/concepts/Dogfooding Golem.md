@@ -105,6 +105,29 @@ node dist/cli/main.js proxy start --port 4655 --dir /tmp/somewhere   # transient
 Unit/integration tests (`npx vitest run`) don't touch either running proxy —
 prefer them; only use a live dev proxy for true end-to-end checks.
 
+## Batch redeploy (close-out step 2)
+
+At the end of a batch the *running* processes must be on the code that just
+landed. CLAUDE.md makes this a numbered close-out step; the rule that keeps
+getting broken is **ordering**:
+
+- Redeploy **after the last source edit** — including after a `biome --write`
+  autofix. A restart followed by another `npm run build` leaves a stale daemon.
+- Restart **even if you already restarted mid-batch**. Mid-batch restarts are for
+  testing; they are not the deploy.
+- **Verify, don't assume:** `golem proxy status` should report a *new* pid, and
+  one command that exercises the change should print the new behaviour
+  (`golem bench cost`, `golem stats --context`, `golem status`). An unverified
+  restart is not a deploy — this is the same "recompute, don't assume" rule the
+  telemetry code follows.
+- A live `golem mcp serve` connection is **reconnected by Claude Code**, not by
+  the CLI — only needed when an MCP tool's name, schema, or behaviour changed,
+  and the agent should say so explicitly.
+- `vscode-extension` only needs `npm run deploy:local` + "Developer: Reload
+  Window" when extension files changed.
+
+Docs-only commits afterwards need no redeploy.
+
 ## Promoting dev → stable
 
 When a change is committed, tested, and you want it in your live proxy:
