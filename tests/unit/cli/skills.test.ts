@@ -141,9 +141,23 @@ describe("P0 skill registry", () => {
       "cache-health",
       "context-hygiene",
       "fresh-eyes",
+      "checkpoint",
     ]) {
       expect(P0_SKILLS[name], `missing skill: ${name}`).toBeDefined();
     }
+  });
+
+  // R8.9: the ledger is only worth its tool surface if the model reaches for it
+  // BEFORE the risky attempt — and never auto-accepts the destructive half.
+  it("checkpoint teaches create-before-attempt and never --yes on restore", () => {
+    const skill = P0_SKILLS.checkpoint;
+    if (skill === undefined) throw new Error("expected a checkpoint skill");
+    expect(skill).toContain("golem checkpoint create");
+    expect(skill).toContain("golem checkpoint show");
+    expect(skill).toMatch(/never pass\s+\\?`--yes\\?` on the user's behalf/);
+    // The promises that make it safe to run at all.
+    expect(skill).toContain("refs/golem/ledger");
+    expect(skill).toContain("detached HEAD");
   });
 
   it("fresh-eyes reads code before docs and sorts findings into three buckets", () => {

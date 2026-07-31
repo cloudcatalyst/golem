@@ -4982,3 +4982,73 @@ tree-sitter grammar (those can be *proposed* but never written — an unvalidate
 overwrite is the corruption path R8.7 forbids), and — as with R8.5 and R8.6 — whether an
 agent given this mode actually *stops* writing edits itself. That is the same live-traffic
 displacement question, and it is still open.
+
+## §111 — R8.9 shipped: a change ledger on shadow refs; the live smoke test caught what 11 green tests could not (2026-07-31)
+
+**What was built.** `golem checkpoint create|list|show|restore|drop|prune` snapshots the
+worktree into `refs/golem/ledger/<id>` — a `commit-tree` object parented on `HEAD` that no
+branch points at — and can put it back. The task's rule was the repo's own: **commit only
+when asked**. So: no branch, no commit on `HEAD`, and no index write, because every staging
+step runs against a throwaway `GIT_INDEX_FILE` at `<gitDir>/golem-index-<pid>-<n>` and the
+restore is `read-tree` + `checkout-index -f -z --stdin` against that same temp index. Two
+consequences worth recording: git's default fetch/push refspecs do not carry
+`refs/golem/*`, so a checkpoint cannot leave the machine by accident; and since a snapshot
+is an ordinary commit, `git diff refs/golem/ledger/<id>` works with no Golem command
+involved.
+
+**The gate split, and why.** `restore|undo|drop|prune` are classified `destructive` in
+`src/autonomy/classify.ts`, which puts them in ADR-0002's never-auto set — no autonomy
+level approves them, and `ask` overrides an allow-list (this repo allow-lists
+`Bash(golem:*)`, so that override is the operative half). `create`/`list` were deliberately
+left unescalated: gate the *snapshot* and the model stops taking snapshots, at which point
+the feature saves nothing. A restore also takes its own `pre-restore` checkpoint first and
+prints the command that reverses it, which is what makes a preview-plus-prompt sufficient
+consent for a destructive act.
+
+**No MCP tool, on purpose.** §88/§100 measured what a tool definition costs on every
+request (~250–320 tokens of envelope before any content). The model reaches this through
+`Bash` for free, so the guidance ships as a lazy `/golem/checkpoint` skill plus one
+paragraph in `/golem/develop`. First R8 feature where that trade was made explicitly rather
+than by default.
+
+**Finding 1 — the smoke test found the bug, 11 green tests did not.** In a scratch repo
+with **no `.gitignore`**, the first live restore reported "2 deleted" against a plan of 1.
+The extra path was Golem's own `.golem/` state — telemetry, tasks, CCR blobs — written
+*after* the checkpoint by the very command under test. A restore that deletes it is
+rewinding Golem, not the user's attempt. Fixed by putting the exclusion in the pathspec
+(`git add --all -- . :(exclude).golem`) so the snapshot and the plan agree it is out of
+scope; a filter on the delete list alone would have left it inside the tree and inside
+every diff. Why no test caught it: every realistic project gitignores `.golem/`, so
+`.gitignore` was silently doing the job. The regression test now creates `.golem/` state
+**untracked and un-ignored** and asserts the plan is empty of it. Generalisable: a
+Golem feature that walks the worktree must exclude Golem's own state *explicitly*, never
+by relying on the user's ignore file.
+
+**Finding 2 — restored files carry git's line endings, not the disk's.** `checkout-index`
+runs the smudge filter, so with `core.autocrlf=true` (this machine, and many Windows
+installs) an LF-only working copy comes back CRLF; three tests failed on `\r\n` before this
+was understood. Not a defect — it is exactly what `git checkout` does, and matching git is
+the contract — so it is documented in `src/checkpoint/ledger.ts` and on the concept page,
+and the test repos pin `core.autocrlf=false` so the suite tests the ledger rather than the
+developer's git config.
+
+**Degrade paths, all asserted.** No git on `PATH`, not a repo, a **detached HEAD**, and a
+**dirty index** each produce a no-op naming the reason — never a partial restore. The
+dirty-index refusal is not squeamishness: a restore writes worktree files, so staged
+content would afterwards describe a state that no longer exists on disk. An **unborn HEAD**
+(a repo with no commits) is supported rather than refused — the snapshot is simply
+parentless — which also drove the choice of `status --porcelain` over `diff --cached` for
+the staged-change probe, since the latter errors with no HEAD to compare against.
+
+**Also of note (dogfooding).** Golem's redaction stage rewrites e-mail literals on the way
+*back* to the model, so the committer address written into `ledger.ts` reads as
+`[REDACTED:email:N]` when the model greps for it afterwards. The bytes on disk are correct
+— it is a display effect — but an agent cannot `Edit`-match such a line and must anchor
+elsewhere. Worth knowing before someone "fixes" a redacted-looking literal in source.
+
+**What is not measured.** The saving is structural: no one has yet counted a repair cycle
+against a discard on real traffic. The mechanism costs ~0 tokens when unused (no
+definition, no hook), so the downside is bounded, but "discarding is cheaper than
+repairing" rests on §93's re-reading share, not an A/B. And the displacement question R8.5
+and R8.6 both left open applies again: whether an agent actually reaches for a checkpoint
+before a risky attempt is a dogfooding observation nobody has made yet.

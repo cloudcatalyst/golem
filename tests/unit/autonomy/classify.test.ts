@@ -63,6 +63,26 @@ describe("classifyBash", () => {
       expect(classifyBash(c)).toBe("destructive");
     }
   });
+  it("flags the change ledger's write half as destructive (R8.9)", () => {
+    // ADR-0002's never-auto set: no autonomy level may approve these for the
+    // agent, even though `Bash(golem:*)` is allow-listed in this repo.
+    for (const c of [
+      "golem checkpoint restore latest",
+      "golem checkpoint undo 20260731T120000Z",
+      "golem cp restore --yes",
+      "golem checkpoint drop 20260731T120000Z --yes",
+      "golem checkpoint prune --keep 0",
+    ]) {
+      expect(classifyBash(c)).toBe("destructive");
+    }
+  });
+  it("leaves the ledger's read/snapshot half unescalated (R8.9)", () => {
+    // Taking a checkpoint writes only a shadow ref — it must stay cheap, or the
+    // model will not do it. Unknown (native flow governs), never destructive.
+    for (const c of ["golem checkpoint create --note x", "golem checkpoint list"]) {
+      expect(classifyBash(c)).toBe("unknown");
+    }
+  });
   it("flags outward commands", () => {
     for (const c of [
       "git push origin main",

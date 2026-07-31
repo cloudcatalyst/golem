@@ -246,7 +246,7 @@ tools.** Measure the delta with `golem bench tools` before wiring.
 |---|---|---|
 | **R8.10** | **Supply-chain hardening + sandbox story.** From Pi, and overdue with R7.5 imminent: `save-exact=true`, a minimum release age, `npm-shrinkwrap.json` in the published package, a check wired into `npm run check`. Plus a documented container/sandbox pattern beside the existing autonomy gate. Fold in the two P-audit fixes (`unpdf`, `LICENSE`). | Highest credibility per hour in this memo. |
 | **R8.8** | **Model catalog** (models.dev-style, fetched + cached, Tier 3b — own data, no runtime dep). Turns `golem bench cost` into real money instead of reference baselines; enables correct context-limit warnings. | Must not fight Decision 49: ids still print **verbatim**. The catalog adds price/context, never a prettified name. |
-| **R8.9** | **Change ledger: checkpoint / revert.** Opt-in shadow git refs — **not** real commits (repo rule: commit only when asked). Lets the model *discard* a failed attempt instead of spending context repairing it; gives `/undo` parity. | Opt-in; never touches the user's branch or index without an explicit act. |
+| **R8.9** ✅ SHIPPED 2026-07-31 (§111, [[Change Ledger]]) | **Change ledger: checkpoint / revert.** Opt-in shadow git refs — **not** real commits (repo rule: commit only when asked). Lets the model *discard* a failed attempt instead of spending context repairing it; gives `/undo` parity. | Opt-in; never touches the user's branch or index without an explicit act. |
 
 ### R9 — ecosystem
 

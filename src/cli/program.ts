@@ -21,6 +21,9 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../autonomy/index.js";
+// Constant only — the ledger's implementation is behind `await import()` in each
+// `golem checkpoint` action, so `git` is never spawned by an unrelated command.
+import { DEFAULT_KEEP } from "../checkpoint/ledger.js";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
 // Imported from the module, not the config barrel: the barrel deliberately does
 // not re-export the control surface (see src/config/index.ts).
@@ -1760,6 +1763,222 @@ benchCmd
       }
     },
   );
+
+const checkpointCmd = program
+  .command("checkpoint")
+  .alias("cp")
+  .description(
+    "Change ledger (R8.9): snapshot the worktree to a shadow git ref so a failed attempt can be DISCARDED instead of repaired — never a commit on your branch",
+  );
+
+checkpointCmd
+  .command("create", { isDefault: true })
+  .alias("take")
+  .description("Snapshot the working tree under refs/golem/ledger/<id> (nothing else is touched)")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--note <text>", "what this attempt is about (shown in the list)")
+  .option("--keep <n>", "how many checkpoints to retain", String(DEFAULT_KEEP))
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; note?: string; keep: string; json: boolean }) => {
+    try {
+      const { createCheckpoint } = await import("../checkpoint/index.js");
+      const keep = Number(opts.keep);
+      if (!Number.isInteger(keep) || keep < 1) {
+        fail(new Error(`--keep must be a positive integer (got "${opts.keep}")`));
+      }
+      const result = await createCheckpoint(opts.dir, {
+        keep,
+        ...(opts.note === undefined ? {} : { note: opts.note }),
+      });
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!result.ok) {
+        // A no-op with a reason is the documented degrade path, not an error.
+        process.stdout.write(`No checkpoint taken: ${result.reason}\n`);
+        return;
+      }
+      const { checkpoint, unchanged, pruned } = result.value;
+      if (unchanged) {
+        process.stdout.write(
+          `Working tree unchanged since ${checkpoint.id} — reusing that checkpoint (no new ref).\n`,
+        );
+        return;
+      }
+      const prunedNote = pruned > 0 ? ` · pruned ${pruned} older` : "";
+      process.stdout.write(
+        `Checkpoint ${checkpoint.id} — ${checkpoint.note}\n${checkpoint.ref}${prunedNote}\nRestore with: golem checkpoint restore ${checkpoint.id}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("list")
+  .alias("ls")
+  .description("List checkpoints, newest first")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--keep <n>", "retention shown in the footer", String(DEFAULT_KEEP))
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; keep: string; json: boolean }) => {
+    try {
+      const { listCheckpoints } = await import("../checkpoint/index.js");
+      const { renderCheckpointList } = await import("./checkpoint.js");
+      const result = await listCheckpoints(opts.dir);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      if (!result.ok) {
+        process.stdout.write(`No change ledger here: ${result.reason}\n`);
+        return;
+      }
+      process.stdout.write(
+        renderCheckpointList(result.value, new Date().toISOString(), Number(opts.keep)),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("show")
+  .description("Show what restoring a checkpoint would change (reads only — nothing is written)")
+  .argument("[id]", "checkpoint id, an unambiguous prefix, or 'latest'", "latest")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (id: string, opts: { dir: string; json: boolean }) => {
+    try {
+      const { planRestore, resolveCheckpoint } = await import("../checkpoint/index.js");
+      const { renderRestorePlan } = await import("./checkpoint.js");
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const plan = await planRestore(opts.dir, found.value);
+      if (!plan.ok) {
+        process.stdout.write(`${plan.reason}\n`);
+        return;
+      }
+      process.stdout.write(
+        opts.json ? `${JSON.stringify(plan.value, null, 2)}\n` : renderRestorePlan(plan.value),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("restore")
+  .alias("undo")
+  .description(
+    "DESTRUCTIVE: put worktree files back to a checkpoint, discarding changes since it (a pre-restore checkpoint is taken first)",
+  )
+  .argument("[id]", "checkpoint id, an unambiguous prefix, or 'latest'", "latest")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .action(async (id: string, opts: { dir: string; yes: boolean }) => {
+    try {
+      const { planRestore, resolveCheckpoint, restoreCheckpoint } = await import(
+        "../checkpoint/index.js"
+      );
+      const { confirmDestructive, renderRestorePlan, renderRestoreResult } = await import(
+        "./checkpoint.js"
+      );
+
+      // Preview from the plan BEFORE anything is written; the same plan is
+      // recomputed inside restoreCheckpoint, which is where the refusals live.
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const plan = await planRestore(opts.dir, found.value);
+      if (!plan.ok) {
+        process.stdout.write(`Cannot restore: ${plan.reason}\n`);
+        return;
+      }
+      if (plan.value.restore.length === 0 && plan.value.delete.length === 0) {
+        process.stdout.write(renderRestorePlan(plan.value));
+        return;
+      }
+      const accepted = await confirmDestructive(
+        renderRestorePlan(plan.value),
+        `Discard the changes above and restore ${found.value.id}?`,
+        { yes: opts.yes },
+      );
+      if (!accepted) {
+        process.stdout.write("aborted — nothing was changed.\n");
+        return;
+      }
+
+      const result = await restoreCheckpoint(opts.dir, found.value.id);
+      if (!result.ok) {
+        process.stdout.write(`Cannot restore: ${result.reason}\n`);
+        return;
+      }
+      process.stdout.write(renderRestoreResult(result.value));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("drop")
+  .description("Delete one checkpoint's shadow ref (loses the snapshot; touches no file)")
+  .argument("<id>", "checkpoint id, an unambiguous prefix, or 'latest'")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--yes", "skip the confirmation prompt (required in non-interactive use)", false)
+  .action(async (id: string, opts: { dir: string; yes: boolean }) => {
+    try {
+      const { dropCheckpoint, resolveCheckpoint } = await import("../checkpoint/index.js");
+      const { confirmDestructive } = await import("./checkpoint.js");
+      const found = await resolveCheckpoint(opts.dir, id);
+      if (!found.ok) {
+        process.stdout.write(`${found.reason}\n`);
+        return;
+      }
+      const accepted = await confirmDestructive(
+        `Drop checkpoint ${found.value.id} — "${found.value.note}" (${found.value.ref})\nNo working-tree file changes; the snapshot itself is lost.\n`,
+        `Delete checkpoint ${found.value.id}?`,
+        { yes: opts.yes },
+      );
+      if (!accepted) {
+        process.stdout.write("aborted — the checkpoint is still there.\n");
+        return;
+      }
+      const dropped = await dropCheckpoint(opts.dir, found.value.id);
+      process.stdout.write(dropped.ok ? `dropped ${dropped.value.id}\n` : `${dropped.reason}\n`);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+checkpointCmd
+  .command("prune")
+  .description("Delete all but the newest N checkpoints")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--keep <n>", "how many to retain", String(DEFAULT_KEEP))
+  .action(async (opts: { dir: string; keep: string }) => {
+    try {
+      const { pruneCheckpoints } = await import("../checkpoint/index.js");
+      const keep = Number(opts.keep);
+      if (!Number.isInteger(keep) || keep < 0) {
+        fail(new Error(`--keep must be a non-negative integer (got "${opts.keep}")`));
+      }
+      const result = await pruneCheckpoints(opts.dir, keep);
+      process.stdout.write(
+        result.ok
+          ? `pruned ${result.value} checkpoint(s), keeping the ${keep} newest\n`
+          : `${result.reason}\n`,
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
 
 const extCmd = program
   .command("ext")
