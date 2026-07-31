@@ -21,11 +21,31 @@ export {
   COST_DOC_BASELINES,
   type CostBenchmarkReport,
   type GolemSavings,
+  type ModelSpendRow,
   renderCostBenchmark,
+  type SpendSummary,
   type ToolAttribution,
   windowStartMs,
 } from "./cost-benchmark.js";
 export { JsonlTelemetryStore, readTelemetryEvents, telemetryFilePath } from "./jsonl-store.js";
+export {
+  BUILTIN_MODEL_CATALOG,
+  type ContextWarning,
+  catalogAgeDays,
+  contextWarning,
+  fetchModelCatalog,
+  loadModelCatalog,
+  lookupModel,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  type ModelMatch,
+  mergeCatalogs,
+  modelCatalogPath,
+  normaliseModelsDevPayload,
+  priceUsage,
+  readModelCatalog,
+  writeModelCatalog,
+} from "./model-catalog.js";
 export type {
   AvoidedUpstreamStats,
   TelemetryEvent,
@@ -145,6 +165,20 @@ export function recordUsageEvent(
      * which only the upstream `usage` block knows.
      */
     readonly brevity?: string;
+    /**
+     * R8.8: the upstream model that served this response, VERBATIM (Decision 49)
+     * — for a translating upstream the configured `proxy.upstream_model`, for a
+     * byte-faithful Anthropic upstream the client's own per-request model read
+     * back out of the request body. Absent when the proxy could not observe it;
+     * `golem bench cost` then counts the tokens as unattributed rather than
+     * pricing them against a guess.
+     */
+    readonly model?: string;
+    /**
+     * R8.8: which provider served it, so a bare id that several providers offer
+     * at different prices can be disambiguated instead of guessed.
+     */
+    readonly provider?: string;
   },
   nowIso: string,
 ): Promise<void> {
@@ -164,6 +198,11 @@ export function recordUsageEvent(
     usage,
     semanticForced: event.semanticForced ?? false,
     brevity: event.brevity ?? "off",
+    // Absent, not empty-string: an unobserved model is not a model named "".
+    ...(event.model !== undefined && event.model !== "" ? { model: event.model } : {}),
+    ...(event.provider !== undefined && event.provider !== ""
+      ? { modelProvider: event.provider }
+      : {}),
   };
   return store.record(telemetryEvent);
 }

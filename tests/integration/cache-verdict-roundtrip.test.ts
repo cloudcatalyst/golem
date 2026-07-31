@@ -16,7 +16,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { aggregateCacheStats } from "../../src/telemetry/cache-report.js";
-import { JsonlTelemetryStore, readTelemetryEvents } from "../../src/telemetry/index.js";
+import {
+  BUILTIN_MODEL_CATALOG,
+  buildCostBenchmark,
+  JsonlTelemetryStore,
+  readTelemetryEvents,
+} from "../../src/telemetry/index.js";
 import type { TelemetryEvent } from "../../src/telemetry/types.js";
 import { rmTemp } from "../helpers/tmp.js";
 
@@ -141,5 +146,48 @@ describe("cache verdicts survive a store round-trip", () => {
     expect(stats.cacheReadTokens).toBe(900);
     expect(stats.prefix.append).toBe(1);
     expect(stats.prefix.unobserved).toBe(0);
+  });
+});
+
+/**
+ * R8.8 — the same failure, one release later: the proxy wrote `model` /
+ * `modelProvider` on every usage sample and `golem bench cost` still reported
+ * 1,503 unattributed samples, because `parseEvent`'s allow-list did not carry
+ * them. Found by running the real command against real telemetry, not by a unit
+ * test — hence this case.
+ */
+describe("the billed model survives a store round-trip (R8.8)", () => {
+  it("carries model and provider through write → read → spend", async () => {
+    const store = new JsonlTelemetryStore(projectDir);
+    await store.record({
+      ts: "2026-07-31T00:00:00.000Z",
+      projectId: projectDir,
+      level: 1,
+      kind: "usage",
+      stageSavings: {},
+      ccrRefsStored: 0,
+      usage: {
+        inputTokens: 1_000_000,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        outputTokens: 0,
+      },
+      model: "claude-opus-5",
+      modelProvider: "anthropic",
+    });
+
+    const events = await readTelemetryEvents(projectDir);
+    expect(events[0]?.model).toBe("claude-opus-5");
+    expect(events[0]?.modelProvider).toBe("anthropic");
+
+    // And it composes: the spend rollup prices it instead of calling it unattributed.
+    const report = buildCostBenchmark(events, {
+      window: "all",
+      nowMs: Date.parse("2026-07-31T01:00:00.000Z"),
+      catalog: BUILTIN_MODEL_CATALOG,
+    });
+    expect(report.spend?.unattributed_requests).toBe(0);
+    expect(report.spend?.by_model[0]?.model).toBe("claude-opus-5");
+    expect(report.spend?.by_model[0]?.usd).toBe(5);
   });
 });

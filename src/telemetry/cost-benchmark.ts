@@ -19,6 +19,12 @@
  * telemetry store's "the store never reads the clock" convention.
  */
 
+import {
+  lookupModel,
+  type ModelCatalog,
+  type ModelCatalogEntry,
+  priceUsage,
+} from "./model-catalog.js";
 import type { TelemetryEvent, UsageTotals } from "./types.js";
 import { effectiveInputTokens } from "./usage-report.js";
 
@@ -94,6 +100,49 @@ export interface ToolAttribution {
   readonly share_pct: number;
 }
 
+/**
+ * R8.8 — one model's billed tokens and, when the catalog knows its price, real
+ * money. `model` is the id VERBATIM (Decision 49); `usd` is null for an unpriced
+ * or ambiguous model, which is the R6.4 behaviour and never a wrong number.
+ */
+export interface ModelSpendRow {
+  readonly model: string;
+  readonly requests: number;
+  readonly input_tokens: number;
+  readonly cache_creation_input_tokens: number;
+  readonly cache_read_input_tokens: number;
+  readonly output_tokens: number;
+  readonly usd: number | null;
+  /**
+   * How the catalog resolved the id — or why it did not.
+   * `provider-unconfirmed` means the id resolved, but under a different provider
+   * than the one that served it, so the price is the catalog's best and is
+   * labelled as such rather than presented as verified.
+   */
+  readonly priced_from:
+    | "exact"
+    | "dated-snapshot"
+    | "provider-unconfirmed"
+    | "unpriced"
+    | "unknown"
+    | "ambiguous";
+}
+
+/** R8.8 — the money view: what the window cost, and what could not be priced. */
+export interface SpendSummary {
+  /** Per-model rows, biggest billed-token count first. Ids verbatim. */
+  readonly by_model: readonly ModelSpendRow[];
+  /** Sum of the priced rows. Null when nothing in the window could be priced. */
+  readonly priced_usd: number | null;
+  /** Usage samples that carried no model (pre-R8.8 events, or an unobservable upstream). */
+  readonly unattributed_requests: number;
+  /** Models seen on the wire that the catalog has no price for. Ids verbatim. */
+  readonly unpriced_models: readonly string[];
+  /** Where the prices came from, cited (`catalog.source`), plus its `as_of`. */
+  readonly catalog_source: string;
+  readonly catalog_as_of: string;
+}
+
 export interface CostBenchmarkReport {
   readonly source: string;
   readonly project_id: string | null;
@@ -103,6 +152,12 @@ export interface CostBenchmarkReport {
   readonly generated_at: string;
   readonly golem_savings: GolemSavings;
   readonly tool_attribution: Readonly<Record<string, ToolAttribution>>;
+  /**
+   * R8.8: real money, present only when a catalog was supplied. Absent → the
+   * report is exactly R6.4's token-and-baselines view, which is the honest
+   * degradation for a missing or stale catalog.
+   */
+  readonly spend?: SpendSummary;
   readonly baselines: typeof COST_DOC_BASELINES;
   /** Cheap checkable technique the doc recommends: keep CLAUDE.md lean. */
   readonly claude_md?: {
@@ -124,8 +179,93 @@ const HONEST_SCOPE_NOTES: readonly string[] = [
     "savings levers are CCR offload, local drafting (coder), and avoidedUpstream.",
 ];
 
+/**
+ * R8.8 — emitted only when a catalog was supplied. Spend is computed from SAMPLED
+ * usage events at catalogued list prices; it is not an invoice, and a model the
+ * catalog cannot price is reported as tokens with no money rather than estimated.
+ */
+const SPEND_NOTE =
+  "Spend is computed from Golem's own sampled `usage` events at the catalogued list " +
+  "price per model id — an estimate of this project's traffic, not a billing " +
+  "statement. Unattributed samples and unpriced models are reported separately " +
+  "rather than folded into the total.";
+
 function round1(n: number): number {
   return Math.round(n * 10) / 10;
+}
+
+/** Cents-level precision: below that the figure is noise, above it is false precision. */
+function roundUsd(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * R8.8 — price the per-model billed totals, keeping every "we could not price
+ * this" case visible instead of folding it into the money line.
+ */
+function buildSpend(
+  catalog: ModelCatalog,
+  modelAcc: ReadonlyMap<
+    string,
+    { model: string; provider: string | undefined; requests: number; usage: UsageTotals }
+  >,
+  unattributedRequests: number,
+): SpendSummary {
+  const rows: ModelSpendRow[] = [];
+  const unpriced: string[] = [];
+  let pricedTotal = 0;
+  let anyPriced = false;
+
+  for (const acc of modelAcc.values()) {
+    const match = lookupModel(
+      catalog,
+      acc.model,
+      acc.provider !== undefined ? { preferProvider: acc.provider } : undefined,
+    );
+    const entry: ModelCatalogEntry | null = match.entry;
+    let usd: number | null = entry === null ? null : priceUsage(entry, acc.usage);
+    let pricedFrom: ModelSpendRow["priced_from"];
+    if (entry === null) {
+      pricedFrom = match.how === "ambiguous" ? "ambiguous" : "unknown";
+    } else if (usd === null) {
+      pricedFrom = "unpriced";
+    } else {
+      pricedFrom = match.how;
+    }
+    if (usd === null) {
+      unpriced.push(acc.model);
+    } else {
+      anyPriced = true;
+      pricedTotal += usd;
+      usd = roundUsd(usd);
+    }
+    rows.push({
+      model: acc.model,
+      requests: acc.requests,
+      input_tokens: acc.usage.inputTokens,
+      cache_creation_input_tokens: acc.usage.cacheCreationInputTokens,
+      cache_read_input_tokens: acc.usage.cacheReadInputTokens,
+      output_tokens: acc.usage.outputTokens,
+      usd,
+      priced_from: pricedFrom,
+    });
+  }
+
+  const billed = (row: ModelSpendRow): number =>
+    row.input_tokens +
+    row.cache_creation_input_tokens +
+    row.cache_read_input_tokens +
+    row.output_tokens;
+  rows.sort((a, b) => billed(b) - billed(a));
+
+  return {
+    by_model: rows,
+    priced_usd: anyPriced ? roundUsd(pricedTotal) : null,
+    unattributed_requests: unattributedRequests,
+    unpriced_models: [...new Set(unpriced)],
+    catalog_source: catalog.source,
+    catalog_as_of: catalog.asOf,
+  };
 }
 
 /**
@@ -140,6 +280,11 @@ export function buildCostBenchmark(
     readonly window: BenchWindow;
     readonly nowMs: number;
     readonly claudeMdLines?: number;
+    /**
+     * R8.8: price/context data. Omit to get R6.4's token-only report — the
+     * degradation path when no catalog is available.
+     */
+    readonly catalog?: ModelCatalog;
   },
 ): CostBenchmarkReport {
   const start = windowStartMs(opts.window, opts.nowMs);
@@ -156,6 +301,13 @@ export function buildCostBenchmark(
     string,
     { calls: number; durationMs: number; resultBytes: number; draftChars: number }
   >();
+  // R8.8: per-model billed totals, keyed `model provider` so the same id
+  // under two providers is never silently merged at one of their prices.
+  const modelAcc = new Map<
+    string,
+    { model: string; provider: string | undefined; requests: number; usage: UsageTotals }
+  >();
+  let unattributedUsageSamples = 0;
 
   for (const ev of events) {
     if (opts.projectId !== undefined && ev.projectId !== opts.projectId) continue;
@@ -172,9 +324,37 @@ export function buildCostBenchmark(
       case "retrieval":
         ccrRetrieved += ev.ccrRefsRetrieved ?? 0;
         break;
-      case "usage":
-        if (ev.usage !== undefined) effInput += effectiveInputTokens(ev.usage as UsageTotals);
+      case "usage": {
+        if (ev.usage === undefined) break;
+        const sample = ev.usage as UsageTotals;
+        effInput += effectiveInputTokens(sample);
+        if (ev.model === undefined || ev.model === "") {
+          unattributedUsageSamples += 1;
+          break;
+        }
+        const key = `${ev.model} ${ev.modelProvider ?? ""}`;
+        const acc = modelAcc.get(key) ?? {
+          model: ev.model,
+          provider: ev.modelProvider,
+          requests: 0,
+          usage: {
+            inputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            outputTokens: 0,
+          },
+        };
+        acc.requests += 1;
+        acc.usage = {
+          inputTokens: acc.usage.inputTokens + sample.inputTokens,
+          cacheCreationInputTokens:
+            acc.usage.cacheCreationInputTokens + sample.cacheCreationInputTokens,
+          cacheReadInputTokens: acc.usage.cacheReadInputTokens + sample.cacheReadInputTokens,
+          outputTokens: acc.usage.outputTokens + sample.outputTokens,
+        };
+        modelAcc.set(key, acc);
         break;
+      }
       case "avoidedUpstream":
         avoidedInput += ev.avoidedUpstreamInputTokens ?? 0;
         avoidedOutput += ev.avoidedUpstreamOutputTokens ?? 0;
@@ -212,6 +392,11 @@ export function buildCostBenchmark(
     };
   }
 
+  const spend =
+    opts.catalog === undefined
+      ? undefined
+      : buildSpend(opts.catalog, modelAcc, unattributedUsageSamples);
+
   return {
     source: "telemetry",
     project_id: opts.projectId ?? null,
@@ -229,6 +414,7 @@ export function buildCostBenchmark(
       net_of_cache_effective_input_tokens: Math.round(effInput),
     },
     tool_attribution,
+    ...(spend !== undefined ? { spend } : {}),
     baselines: COST_DOC_BASELINES,
     ...(opts.claudeMdLines !== undefined
       ? {
@@ -239,7 +425,7 @@ export function buildCostBenchmark(
           },
         }
       : {}),
-    notes: HONEST_SCOPE_NOTES,
+    notes: spend === undefined ? HONEST_SCOPE_NOTES : [...HONEST_SCOPE_NOTES, SPEND_NOTE],
   };
 }
 
@@ -270,6 +456,41 @@ export function renderCostBenchmark(report: CostBenchmarkReport): string {
     for (const [tool, t] of tools.sort((a, b) => b[1].calls - a[1].calls)) {
       lines.push(`    ${tool.padEnd(12)} ${t.calls} call(s), ${t.share_pct}%`);
     }
+  }
+
+  if (report.spend !== undefined) {
+    const spend = report.spend;
+    lines.push("  billed spend (per model, ids verbatim):");
+    if (spend.by_model.length === 0) {
+      lines.push("    (no usage sample in this window carried a model)");
+    }
+    for (const row of spend.by_model) {
+      const money = row.usd === null ? `no price (${row.priced_from})` : `$${row.usd.toFixed(2)}`;
+      lines.push(
+        `    ${row.model}  ${row.requests} sample(s)  ` +
+          `in ${row.input_tokens} / write ${row.cache_creation_input_tokens} / ` +
+          `read ${row.cache_read_input_tokens} / out ${row.output_tokens} — ${money}` +
+          // A priced row that was not an exact provider+id hit says so on the row
+          // itself; the qualifier is part of the number, not a footnote.
+          (row.usd !== null && row.priced_from !== "exact" ? ` [${row.priced_from}]` : ""),
+      );
+    }
+    lines.push(
+      spend.priced_usd === null
+        ? "    priced total:            — (nothing in this window could be priced)"
+        : `    priced total:            $${spend.priced_usd.toFixed(2)}`,
+    );
+    if (spend.unattributed_requests > 0) {
+      lines.push(
+        `    unattributed samples:    ${spend.unattributed_requests} (no model recorded — not priced)`,
+      );
+    }
+    if (spend.unpriced_models.length > 0) {
+      lines.push(`    unpriced models:         ${spend.unpriced_models.join(", ")}`);
+    }
+    lines.push(
+      `    prices from:             ${spend.catalog_source} (as of ${spend.catalog_as_of})`,
+    );
   }
 
   if (report.claude_md !== undefined) {

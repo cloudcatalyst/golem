@@ -129,6 +129,20 @@ export interface TelemetryEvent {
    */
   readonly usage?: UsageTotals;
   /**
+   * R8.8: the upstream model this `usage` sample was billed against, VERBATIM
+   * (spec Decision 49 — never a prettified name). Only set on `kind: "usage"`
+   * events, and only when the proxy could observe it; absent on every event
+   * written before this field existed, which is why the cost report has an
+   * explicit *unattributed* bucket rather than defaulting to any model.
+   */
+  readonly model?: string;
+  /**
+   * R8.8: which provider served {@link model} (`anthropic`, `openai`, …). A bare
+   * id can exist under several providers at different prices; without this the
+   * catalog lookup is ambiguous and prices nothing (deliberately).
+   */
+  readonly modelProvider?: string;
+  /**
    * R2.6: whether `compression.force_semantic_on_caching` was on when this
    * usage sample was recorded (a static per-run setting, not a per-request
    * pipeline decision — see {@link recordUsageEvent}). Only set on `kind:

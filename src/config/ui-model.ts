@@ -445,6 +445,27 @@ export const SETTING_META = {
     summary: "Reveal rarely-touched controls when the panel opens",
   },
 
+  // --- models ---------------------------------------------------------------
+  "models.catalog_url": {
+    label: "Model catalog URL",
+    summary: "models.dev-shaped price/context catalog `golem models refresh` fetches",
+    detail:
+      "Nothing fetches it implicitly — a cost report never makes a network call. Golem's " +
+      "own built-in prices always win, so a wrong third-party figure cannot reach a cost claim.",
+    advanced: true,
+  },
+  "models.catalog_max_age_days": {
+    label: "Catalog staleness warning",
+    summary: "Days before price data is labelled stale",
+    detail: "The warning labels the number; it never suppresses or adjusts it.",
+    advanced: true,
+  },
+  "models.context_warn_fraction": {
+    label: "Context warning threshold",
+    summary: "Fraction of the model's context window at which `golem stats --context` warns",
+    detail: "Only fires when the catalog knows the window — an unknown limit warns not at all.",
+  },
+
   // --- snooze ---------------------------------------------------------------
   "snooze.enforce": {
     label: "Enforce the usage-limit park",
@@ -496,6 +517,11 @@ export const SECTION_META = {
   proxy: { title: "Proxy & upstream", summary: "Port, upstream, and timeouts", order: 40 },
   telemetry: { title: "Telemetry", summary: "Local savings attribution and dashboard", order: 50 },
   snooze: { title: "Usage limits", summary: "Parking behaviour at the session limit", order: 60 },
+  models: {
+    title: "Model catalog",
+    summary: "Per-model price and context limits (R8.8) — cached, never fetched implicitly",
+    order: 65,
+  },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
   slider: { title: "Savings", summary: "The compression dial", order: 80 },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };

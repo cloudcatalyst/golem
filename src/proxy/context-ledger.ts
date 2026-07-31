@@ -145,6 +145,14 @@ export const contextLedgerCoreSchema = z.object({
    * losing the whole ledger over an added field would be a regression).
    */
   toolsBlock: toolsBlockSchema.optional(),
+  /**
+   * R8.8: the request's own `model`, VERBATIM (spec Decision 49). Recorded so
+   * `golem stats --context` can compare `totalTokens` against that model's
+   * context window; optional because an older ledger has no such field and
+   * because a request without a readable model gets no warning rather than one
+   * measured against a guessed limit.
+   */
+  model: z.string().optional(),
 });
 
 export const contextLedgerSchema = contextLedgerCoreSchema.extend({
@@ -400,6 +408,8 @@ export function buildContextLedger(body: Readonly<Record<string, unknown>>): Con
     largest: largest.slice(0, LARGEST_KEEP),
     perTool,
     ...(toolsBlock !== undefined && { toolsBlock }),
+    // R8.8: verbatim, and only when the body actually carries a string model.
+    ...(typeof body.model === "string" && body.model !== "" ? { model: body.model } : {}),
   };
 }
 

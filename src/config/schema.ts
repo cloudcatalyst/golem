@@ -350,6 +350,28 @@ export const SETTINGS_LEAVES = {
     /** Show advanced/rarely-touched controls when the panel opens. */
     advanced: z.boolean(),
   },
+  models: {
+    /**
+     * R8.8: URL of a models.dev-shaped catalog `golem models refresh` fetches.
+     * **Nothing fetches it implicitly** — a cost report must never make a network
+     * call (tier 3b: no runtime dependency). Golem's own built-in table always
+     * wins on a collision, so a wrong third-party price cannot reach a cost
+     * claim; the fetched half only fills gaps for models Golem has not priced.
+     */
+    catalog_url: z.string().url(),
+    /**
+     * R8.8: how old the price data may be before surfaces warn. Prices move, and
+     * a silently-stale figure is the failure mode this exists to prevent; the
+     * warning never suppresses the number, it labels it.
+     */
+    catalog_max_age_days: z.number().int().positive(),
+    /**
+     * R8.8: fraction of a model's context window at which `golem stats
+     * --context` warns. Only fires when the catalog knows the window — an
+     * unknown limit produces no warning rather than a guessed one.
+     */
+    context_warn_fraction: z.number().min(0.1).max(1),
+  },
   snooze: {
     /**
      * Enforce the document-and-hold park at the usage limit (spec Decision 45).
@@ -458,6 +480,13 @@ export interface UiSettings {
   readonly advanced: boolean;
 }
 
+/** R8.8 — the model catalog (price + context limits) settings. */
+export interface ModelsSettings {
+  readonly catalog_url: string;
+  readonly catalog_max_age_days: number;
+  readonly context_warn_fraction: number;
+}
+
 export interface SnoozeSettings {
   readonly enforce: boolean;
 }
@@ -471,6 +500,7 @@ export interface GolemSettings {
   readonly knowledge: KnowledgeSettings;
   readonly telemetry: TelemetrySettings;
   readonly ui: UiSettings;
+  readonly models: ModelsSettings;
   readonly snooze: SnoozeSettings;
 }
 
@@ -537,6 +567,14 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     pet_color: "#a78bfa",
     color: "auto",
     advanced: false,
+  },
+  models: {
+    // The JSON API of the open catalog the R8d memo names; verified 2026-07-31
+    // (§106) to carry `cost.{input,output,cache_read,cache_write}` and
+    // `limit.{context,output}`. Fetched only by `golem models refresh`.
+    catalog_url: "https://models.dev/api.json",
+    catalog_max_age_days: 45,
+    context_warn_fraction: 0.8,
   },
   snooze: {
     enforce: true,

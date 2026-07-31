@@ -8,7 +8,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { TelemetryEvent } from "../../../src/telemetry/index.js";
+import type { ModelCatalog, TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
   buildCostBenchmark,
   COST_DOC_BASELINES,
@@ -163,6 +163,136 @@ describe("buildCostBenchmark", () => {
   it("sets window_start for a bounded window", () => {
     const r = buildCostBenchmark([], { window: "24h", nowMs: NOW });
     expect(r.window_start).toBe(new Date(NOW - DAY).toISOString());
+  });
+});
+
+/**
+ * R8.8 — the money view. Every assertion here is about the *degradation*: no
+ * catalog means the R6.4 report unchanged, an unpriced or unattributed sample is
+ * reported as itself rather than folded into the total.
+ */
+describe("buildCostBenchmark — spend (R8.8)", () => {
+  const catalog: ModelCatalog = {
+    source: "test-prices",
+    asOf: "2026-07-31",
+    entries: [
+      {
+        id: "claude-opus-5",
+        provider: "anthropic",
+        inputUsdPerMTok: 5,
+        outputUsdPerMTok: 25,
+        cacheReadUsdPerMTok: 0.5,
+        cacheWriteUsdPerMTok: 6.25,
+      },
+      { id: "local-model", provider: "ollama", contextTokens: 32_768 },
+    ],
+  };
+
+  const usageEvent = (model: string | undefined, provider?: string) =>
+    ev({
+      kind: "usage",
+      usage: {
+        inputTokens: 1_000_000,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        outputTokens: 1_000_000,
+      },
+      ...(model !== undefined ? { model } : {}),
+      ...(provider !== undefined ? { modelProvider: provider } : {}),
+    });
+
+  it("omits the whole section without a catalog — R6.4's report, unchanged", () => {
+    const r = buildCostBenchmark([usageEvent("claude-opus-5", "anthropic")], {
+      window: "all",
+      nowMs: NOW,
+    });
+    expect(r.spend).toBeUndefined();
+    expect(r.notes.length).toBe(3);
+  });
+
+  it("prices a catalogued model and cites where the prices came from", () => {
+    const r = buildCostBenchmark([usageEvent("claude-opus-5", "anthropic")], {
+      window: "all",
+      nowMs: NOW,
+      catalog,
+    });
+    expect(r.spend?.by_model).toHaveLength(1);
+    expect(r.spend?.by_model[0]?.model).toBe("claude-opus-5");
+    expect(r.spend?.by_model[0]?.usd).toBe(30);
+    expect(r.spend?.by_model[0]?.priced_from).toBe("exact");
+    expect(r.spend?.priced_usd).toBe(30);
+    expect(r.spend?.catalog_source).toBe("test-prices");
+    expect(r.spend?.catalog_as_of).toBe("2026-07-31");
+    // The spend note only appears when spend does.
+    expect(r.notes.join(" ")).toMatch(/not a billing statement/);
+  });
+
+  it("counts a sample with no model as unattributed, never as any model's spend", () => {
+    const r = buildCostBenchmark(
+      [usageEvent(undefined), usageEvent("claude-opus-5", "anthropic")],
+      {
+        window: "all",
+        nowMs: NOW,
+        catalog,
+      },
+    );
+    expect(r.spend?.unattributed_requests).toBe(1);
+    expect(r.spend?.priced_usd).toBe(30);
+  });
+
+  it("reports an unpriced model as tokens with no money", () => {
+    const r = buildCostBenchmark([usageEvent("local-model", "ollama")], {
+      window: "all",
+      nowMs: NOW,
+      catalog,
+    });
+    expect(r.spend?.by_model[0]?.usd).toBeNull();
+    expect(r.spend?.by_model[0]?.priced_from).toBe("unpriced");
+    expect(r.spend?.unpriced_models).toEqual(["local-model"]);
+    expect(r.spend?.priced_usd).toBeNull();
+  });
+
+  it("reports an uncatalogued model verbatim and unpriced", () => {
+    const r = buildCostBenchmark([usageEvent("kimi-k3", "openai")], {
+      window: "all",
+      nowMs: NOW,
+      catalog,
+    });
+    expect(r.spend?.by_model[0]?.model).toBe("kimi-k3");
+    expect(r.spend?.by_model[0]?.priced_from).toBe("unknown");
+    expect(r.spend?.by_model[0]?.usd).toBeNull();
+  });
+
+  it("keeps the same id under two providers apart, labelling the unconfirmed one", () => {
+    const r = buildCostBenchmark(
+      [usageEvent("claude-opus-5", "anthropic"), usageEvent("claude-opus-5", "openrouter")],
+      { window: "all", nowMs: NOW, catalog },
+    );
+    expect(r.spend?.by_model).toHaveLength(2);
+    // The catalog holds one price for this id, under `anthropic`. The
+    // openrouter-served sample uses it — a gateway may add a markup, so the row
+    // is labelled rather than presented as verified.
+    const hows = (r.spend?.by_model ?? []).map((row) => row.priced_from).sort();
+    expect(hows).toEqual(["exact", "provider-unconfirmed"]);
+  });
+
+  it("renders the spend section with the unpriced cases visible", () => {
+    const out = renderCostBenchmark(
+      buildCostBenchmark(
+        [
+          usageEvent("claude-opus-5", "anthropic"),
+          usageEvent("local-model", "ollama"),
+          usageEvent(undefined),
+        ],
+        { window: "7d", nowMs: NOW, catalog },
+      ),
+    );
+    expect(out).toContain("billed spend (per model, ids verbatim)");
+    expect(out).toContain("claude-opus-5");
+    expect(out).toContain("$30.00");
+    expect(out).toContain("no price (unpriced)");
+    expect(out).toContain("unattributed samples:");
+    expect(out).toMatch(/prices from: +test-prices \(as of 2026-07-31\)/);
   });
 });
 

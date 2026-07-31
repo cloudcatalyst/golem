@@ -85,6 +85,7 @@ import {
 import {
   type BenchWindow,
   buildCostBenchmark,
+  type ModelCatalog,
   openTelemetryStore,
   readTelemetryEvents,
   renderCostBenchmark,
@@ -1240,8 +1241,24 @@ program
             import("./context.js"),
           ]);
           const ledger = await readContextLedger(opts.dir);
+          // R8.8 — the context-window line. Catalog load is cache-only (never a
+          // network call) and best-effort: a failure drops the window line and
+          // leaves the R8.4 report exactly as it was.
+          let window: { catalog: ModelCatalog; warnFraction: number } | undefined;
+          try {
+            const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+            const { settings } = await loadConfig({ projectDir: opts.dir });
+            window = {
+              catalog: await loadModelCatalog(opts.dir),
+              warnFraction: settings.models.context_warn_fraction,
+            };
+          } catch {
+            window = undefined;
+          }
           process.stdout.write(
-            opts.json ? `${JSON.stringify(ledger, null, 2)}\n` : renderContextLedger(ledger),
+            opts.json
+              ? `${JSON.stringify(ledger, null, 2)}\n`
+              : renderContextLedger(ledger, window),
           );
           return;
         }
@@ -1362,11 +1379,22 @@ benchCmd
       } catch {
         claudeMdLines = undefined;
       }
+      // R8.8 — real money when a catalog is available. Cache-only (this command
+      // never makes a network call) and best-effort: without it the report is
+      // exactly R6.4's token-and-baselines view.
+      let catalog: ModelCatalog | undefined;
+      try {
+        const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+        catalog = await loadModelCatalog(opts.dir);
+      } catch {
+        catalog = undefined;
+      }
       const report = buildCostBenchmark(events, {
         ...(opts.project !== undefined ? { projectId: opts.project } : {}),
         window,
         nowMs: Date.now(),
         ...(claudeMdLines !== undefined ? { claudeMdLines } : {}),
+        ...(catalog !== undefined ? { catalog } : {}),
       });
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderCostBenchmark(report),
@@ -1473,8 +1501,13 @@ benchCmd
   .option(
     "--shrink <mode>",
     "score a candidate transform: whitespace | first-sentence (descriptions) | " +
-      "schema-meta | schema-validation | schema-descriptions (input schemas) — " +
+      "schema-meta | schema-validation | schema-descriptions (input schemas) | " +
+      "ext-caveman-shrink (the user's own caveman-shrink install, P3b) — " +
       "omit for census only",
+  )
+  .option(
+    "--shrink-path <file>",
+    "for an ext-* mode: path to the external module, when it is not resolvable by name",
   )
   .option("--repeats <n>", "passes over the case set when scoring (default 1)", "1")
   .option(
@@ -1488,6 +1521,7 @@ benchCmd
     async (opts: {
       dir: string;
       shrink?: string;
+      shrinkPath?: string;
       repeats: string;
       role: string;
       json: boolean;
@@ -1499,6 +1533,8 @@ benchCmd
           SHRINK_MODES,
           shrinkCatalog,
           isSchemaMode,
+          isExternalMode,
+          resolveCavemanShrink,
           compareCatalogs,
           SELECTION_CASES,
           ARGUMENT_CASES,
@@ -1540,10 +1576,31 @@ benchCmd
         // real hazard is argument construction rather than selection — so the two
         // gates are switched on together, never separately (R8.S1).
         const schemaMode = isSchemaMode(mode);
+        // P3b: an external mode measures somebody else's implementation, resolved
+        // from the user's own install. Absent → refuse, loudly. Measuring an
+        // identity transform would publish a fake number under their name.
+        let external: ReturnType<typeof resolveCavemanShrink> = null;
+        if (isExternalMode(mode)) {
+          external = resolveCavemanShrink(
+            opts.shrinkPath !== undefined ? { explicitPath: opts.shrinkPath } : undefined,
+          );
+          if (external === null) {
+            throw new InitError(
+              `--shrink ${mode} needs caveman-shrink installed (it is never vendored): ` +
+                "`npm i -g caveman-shrink`, or pass --shrink-path <file>, or set " +
+                "GOLEM_CAVEMAN_SHRINK. Golem ships none of its bytes.",
+            );
+          }
+          process.stderr.write(`golem bench tools: using ${external.resolvedFrom}\n`);
+        }
         const result = await compareCatalogs({
           inference,
           baseline: census.tools,
-          candidate: shrinkCatalog(census.tools, mode),
+          candidate: shrinkCatalog(
+            census.tools,
+            mode,
+            external !== null ? { externalTransform: external.compress } : undefined,
+          ),
           cases: SELECTION_CASES,
           repeats,
           role,
@@ -1588,6 +1645,73 @@ extCmd
       const report = await collectExt(opts.dir);
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const modelsCmd = program
+  .command("models")
+  .description(
+    "Per-model price and context limits — Golem's own cached data, never a runtime dependency (R8.8)",
+  );
+
+modelsCmd
+  .command("list", { isDefault: true })
+  .alias("show")
+  .description("Show catalogued models with their price and context window (ids verbatim)")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--filter <text>", "case-insensitive substring over '<provider> <id>'")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; filter?: string; json: boolean }) => {
+    try {
+      const { loadModelCatalog } = await import("../telemetry/model-catalog.js");
+      const { renderModelCatalog } = await import("./models.js");
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const catalog = await loadModelCatalog(opts.dir);
+      if (opts.json) {
+        process.stdout.write(`${JSON.stringify(catalog, null, 2)}\n`);
+        return;
+      }
+      process.stdout.write(
+        renderModelCatalog(catalog, {
+          nowMs: Date.now(),
+          maxAgeDays: settings.models.catalog_max_age_days,
+          ...(opts.filter !== undefined ? { filter: opts.filter } : {}),
+        }),
+      );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+modelsCmd
+  .command("refresh")
+  .description(
+    "Fetch `models.catalog_url` once and cache it locally — the only path that touches the network",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--url <url>", "override models.catalog_url for this run")
+  .action(async (opts: { dir: string; url?: string }) => {
+    try {
+      const { BUILTIN_MODEL_CATALOG, fetchModelCatalog, mergeCatalogs, writeModelCatalog } =
+        await import("../telemetry/model-catalog.js");
+      const { renderRefreshResult } = await import("./models.js");
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const url = opts.url ?? settings.models.catalog_url;
+      const nowIso = new Date().toISOString();
+      const fetched = await fetchModelCatalog(url, { nowIso });
+      await writeModelCatalog(opts.dir, fetched);
+      const merged = mergeCatalogs(BUILTIN_MODEL_CATALOG, fetched);
+      process.stdout.write(
+        renderRefreshResult({
+          url,
+          fetched: fetched.entries.length,
+          added: merged.entries.length - BUILTIN_MODEL_CATALOG.entries.length,
+          builtin: BUILTIN_MODEL_CATALOG.entries.length,
+          fetchedAt: nowIso,
+        }),
       );
     } catch (err) {
       fail(err);
