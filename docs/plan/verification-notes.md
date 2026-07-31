@@ -4660,3 +4660,173 @@ GOLEM_LIVE_CLAUDE=1 npx vitest run tests/e2e/hook-precedence.live.test.ts
 
 Re-run it after any Claude Code upgrade that touches hooks — this is a vendor behaviour
 pinned by observation, not by contract, and the docs were silent on it three days ago.
+
+## §106 — R8.8: models.dev's JSON API is usable, its web table is not, and Anthropic's own prices stay the authority (2026-07-31)
+
+Checked before wiring R8.8's catalog, because the whole feature turns tokens into
+**money** and a wrong price is worse than no price.
+
+**The web page renders several Anthropic models at $0.00.** `https://models.dev/`
+(fetched 2026-07-31) lists `anthropic/claude-opus-5`, `claude-sonnet-5`,
+`claude-fable-5` and `claude-opus-4-8` in its Price column as **`$0.00 / $0.00`**.
+Had the catalog been built by scraping that surface, Golem's cost report would have
+priced this project's entire Opus traffic at zero.
+
+**The JSON API is correct.** `https://models.dev/api.json` (HTTP 200,
+`application/json`, 3,325,795 bytes) is a provider map, and the Anthropic entries
+carry real numbers:
+
+```
+{ "anthropic": { "id", "env", "npm", "doc",
+    "models": { "claude-opus-5": {
+      "limit": { "context": 1000000, "output": 128000 },
+      "cost":  { "input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25 } } } } }
+```
+
+Shape as of this date: **175 providers, 5,900 models**; every model carries
+`limit.context`, 404 of the 5,900 carry **no** `cost` block. Trimmed to the fields
+Golem reports the whole set is **723 KB**, which is why the cache stores a
+normalised derivation rather than the upstream document.
+
+Spot-checks against Anthropic's published pricing (per MTok, input/output):
+`claude-opus-5` 5/25 ✓, `claude-haiku-4-5` 1/5 ✓, `claude-sonnet-5` **2/10** —
+the introductory price in force through 2026-08-31, not the 3/15 list price.
+
+**Design consequence (shipped).** Two layers with the built-in winning:
+Golem's own dated table (`BUILTIN_MODEL_CATALOG`, sourced from
+`platform.claude.com/docs/en/pricing`, `asOf: 2026-07-31`) is authoritative for the
+7 Claude ids this project runs on; the fetched catalog only **fills gaps** and can
+never overwrite a built-in entry (`mergeCatalogs`). Nothing fetches implicitly —
+`golem models refresh` is the only network path, so a cost report can never depend
+on a third party's uptime or a third party's mistake. `claude-sonnet-5` carries a
+`note` naming the introductory window, because a price with an expiry date that
+prints without one is a trap for whoever reads the report in September.
+
+**Live numbers after wiring (this repo, 24h window, 20 attributed samples):**
+`in 40 / write 12,359 / read 9,627,462 / out 4,738` → **$5.01**, i.e. ~96% of the
+bill is cache *reads* at 0.1×. The remaining 1,501 samples in the same window are
+reported as **unattributed** rather than priced, because they were recorded before
+the proxy tagged the model — the honest degradation the task's gate asked for.
+
+**Third time for the same defect class.** `parseEvent` in
+`src/telemetry/jsonl-store.ts` is a field-by-field allow-list, so the proxy wrote
+`model`/`modelProvider` on every sample while `golem bench cost` reported *every*
+sample as unattributed — exactly §99/R8.13's failure, and before that R8.1's. Only
+running the real command against real telemetry caught it; the unit tests were
+green throughout. The round-trip test in
+`tests/integration/cache-verdict-roundtrip.test.ts` now covers the model fields
+too. **Any new `TelemetryEvent` field needs a line in `parseEvent` AND a case in
+that file.**
+
+## §107 — P3b answered: caveman-shrink saves 53 of 1,089 description tokens (4.9%) with no accuracy change — a reproducible negative (2026-07-31)
+
+The last open Caveman-adoption row. §87 flagged that `caveman-shrink`'s install and
+config were **undocumented on the README**, so this starts with what the package
+actually is, then runs Golem's existing gate against *their* implementation rather
+than rebuilding it (P3b's whole point).
+
+**What the package is** (`caveman-shrink@0.1.0`, MIT, published 2026-05-01, 4 files,
+11,674 bytes unpacked; `main: compress.js`, `bin: index.js`; repo
+`JuliusBrussee/caveman`, directory `mcp-servers/caveman-shrink`). The npm *web* page
+403s to a plain fetch; `npm view caveman-shrink --json` and `npm pack` both work, and
+the tarball's own README documents the surface §87 could not find:
+
+- **Install/wrap:** `npx caveman-shrink <upstream-command> [...args]` — a **stdio MCP
+  proxy** that spawns the upstream server as a subprocess and rewrites `description`
+  fields in `tools/list` / `prompts/list` / `resources/list` responses.
+- **Config (env only):** `CAVEMAN_SHRINK_FIELDS` (default `description`) and
+  `CAVEMAN_SHRINK_DEBUG=1`.
+- **Deliberately not touched in v1:** request payloads to the upstream, and
+  `tools/call` response content.
+- **Transform** (`compress.js`): drop articles / fillers / pleasantries / hedges /
+  leading "I'll|you can|let me", collapse whitespace, re-capitalise sentences —
+  with fenced code, inline code, URLs, paths, CONST_CASE, dotted.calls and version
+  numbers protected by sentinel substitution.
+
+**How it was measured.** New mode `--shrink ext-caveman-shrink` on `golem bench
+tools`, resolving `compress.js` from the **user's own install** (`src/tools/ext-shrink.ts`;
+`--shrink-path` / `GOLEM_CAVEMAN_SHRINK` / `caveman-shrink/compress.js` / package
+root, in that order). Golem ships none of its bytes, and an unresolvable package is a
+hard refusal — measuring an identity transform would publish a fake 0% under their
+name. Run: 27 selection cases × 3 repeats, chooser `qwen2.5-coder:7b` (`--role
+drafter`; the tier's `classifier` model is still not pulled — the `local-models`
+warning now says so up front rather than after the fact).
+
+**The number.**
+
+| | baseline | caveman-shrink |
+|---|--:|--:|
+| description tokens (Golem's 12 tools) | ~1,089 | **~1,036** |
+| accuracy (27×3) | 88.9% | 91.4% |
+| false positives | 3 | 3 |
+| abstentions | 3 | 0 |
+
+**~53 tokens saved — 4.9% of the descriptions.** Accuracy nominally +2.5 points, which
+the harness itself flags as within ~1 case of the baseline on 27×3: `NO-MATERIAL-CHANGE`.
+Per-string savings are 1.3%–11.6% of characters on Golem's own prose (probe against
+their `compress()`), because these descriptions are already terse — the transform's
+own protections (code/paths/identifiers) cover much of what is left.
+
+**Verdict: reproducible negative, and the same one §100 reached from the other side.**
+53 tokens is **0.04% of a 139k request**, it sits in the cached prefix at 0.1×
+(≈5 full-price-input-token equivalents per request), and collecting it would mean the
+proxy rewriting tool descriptions in flight — including other servers' and the
+client's built-ins, which §100 established are 93.9% of the block and not Golem's to
+rewrite. There is no accuracy objection to their transform; the objection is that the
+prize does not exist. **Not adopted, not vendored, not wrapped.** The mode stays in
+the harness so anyone whose catalog is more verbose than Golem's can rerun the gate
+on their own descriptions in one command.
+
+**Note the shape of the finding:** the accuracy risk was never the binding constraint
+here either (§100's lesson, restated) — *ownership* and *magnitude* were.
+
+## §108 — R8.S2 answered: system-prompt slimming is 0.92% of the request and is DECLINED (2026-07-31)
+
+The spike expected a no; the deliverable was the arithmetic. Third independent
+capture of the system prompt on this project's own traffic (§95: 3,350; §100: 3,365;
+here **3,347** tokens) — remarkably stable, and **0.92% of a 362,283-token request**.
+
+**Live per-request cost basis** (`golem bench cost`, 24h, the 20 samples R8.8 now
+attributes): `in 40 / cache-write 12,359 / cache-read 9,627,462 / out 4,738` across
+20 requests → **~48,912 full-price-input-token equivalents per request** (write 1.25×,
+read 0.1×), and ~237 output tokens per request. So ~96% of the input bill is cache
+*reads*, and the system prompt is inside that cached prefix.
+
+**What a trim would collect** (cut × 0.1× cache-read, then Opus 5 at $5/MTok input,
+at this repo's ~1,500 requests/day):
+
+| trim of `system` | tokens | equivalents/request | share of request's input cost | per month |
+|---|--:|--:|--:|--:|
+| 10% | 335 | 33.5 | 0.068% | **$7.54** |
+| 30% | 1,004 | 100.4 | 0.205% | **$22.59** |
+| 50% | 1,674 | 167.4 | 0.342% | **$37.66** |
+
+**What it risks.** An unstable rewrite — one whose bytes move between turns — busts
+the tools+system prefix on every request: the whole 362k prefix reprices from 0.1× to
+1×, **+326,055 equivalents ≈ 6.7× a normal request**, i.e. **3,247× the per-request
+saving a 30% trim would collect**. Golem has already measured the shape of that
+mistake once (§103: Headroom on caching traffic, 8.7×–11.3× worse than doing nothing).
+Byte-stability is achievable — Decision 52's marker-fenced append proves it — so the
+risk is manageable rather than inevitable, but the asymmetry is the whole story.
+
+**Why it is declined even at $22/month.**
+
+1. **The bytes are not Golem's.** `system` is where the *client* puts the instructions
+   that make the harness work. Trimming them is a fidelity change, and CLAUDE.md's
+   hard rule is byte-faithful passthrough at level ≤1 — so this could only ever be a
+   level-2/3 behaviour, where Decision 23 already says the input axis is ~0% on
+   caching traffic. Same ownership argument that closed §100 (93.9% of the tools block
+   is the client's) and §107 (caveman-shrink's 53 tokens).
+2. **Nothing in it is provably inert.** The one transform this project ever proved
+   invisible — dropping `$schema` (§100) — was worth 72 tokens (0.05%) and was still
+   rejected for mutating a cached prefix. There is no equivalent "provably ignorable"
+   region of a system prompt; every candidate cut is a behaviour bet.
+3. **The prize is 0.2% for a behaviour bet on the highest-consequence bytes in the
+   request.** A 30% cut of the client's own operating instructions to save one fifth
+   of one percent is not a trade this project should offer its users.
+
+**Verdict: DECLINED, not deferred.** No code shipped; `system` keeps its only
+sanctioned mutation, Decision 52's byte-stable marker-fenced append. Reopen only with
+a *provably inert* region and a byte-stability proof, and even then measure against
+this table first. Fourth consecutive input-side idea to die on the same two questions:
+**whose bytes are they, and how big is the prize actually** (§100, §103, §107, §108).

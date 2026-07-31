@@ -11,6 +11,8 @@ export type { SelectionCase } from "./cases.js";
 export { ARGUMENT_CASES, SELECTION_CASES } from "./cases.js";
 export type { CatalogTool, ToolCensus } from "./catalog.js";
 export { golemToolCensus } from "./catalog.js";
+export type { ExternalShrinker } from "./ext-shrink.js";
+export { resolveCavemanShrink } from "./ext-shrink.js";
 export type { ToolBenchReport } from "./report.js";
 export { renderToolBench } from "./report.js";
 export type {
@@ -32,4 +34,11 @@ export {
   runSelectionHarness,
 } from "./selection.js";
 export type { ShrinkMode } from "./shrink.js";
-export { isSchemaMode, SCHEMA_MODES, SHRINK_MODES, shrinkCatalog } from "./shrink.js";
+export {
+  EXTERNAL_MODES,
+  isExternalMode,
+  isSchemaMode,
+  SCHEMA_MODES,
+  SHRINK_MODES,
+  shrinkCatalog,
+} from "./shrink.js";

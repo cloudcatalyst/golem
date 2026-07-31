@@ -51,7 +51,8 @@ export type ShrinkMode =
   | "first-sentence"
   | "schema-meta"
   | "schema-validation"
-  | "schema-descriptions";
+  | "schema-descriptions"
+  | "ext-caveman-shrink";
 
 export const SHRINK_MODES: readonly ShrinkMode[] = [
   "whitespace",
@@ -59,7 +60,20 @@ export const SHRINK_MODES: readonly ShrinkMode[] = [
   "schema-meta",
   "schema-validation",
   "schema-descriptions",
+  "ext-caveman-shrink",
 ];
+
+/**
+ * P3b — the one mode Golem does not implement. `ext-caveman-shrink` delegates to
+ * the user's own `caveman-shrink` install (see `ext-shrink.ts`); the caller must
+ * pass the resolved transform, and {@link shrinkCatalog} THROWS without it rather
+ * than quietly measuring an identity transform as if it were their shrinker.
+ */
+export const EXTERNAL_MODES: readonly ShrinkMode[] = ["ext-caveman-shrink"];
+
+export function isExternalMode(mode: ShrinkMode): boolean {
+  return EXTERNAL_MODES.includes(mode);
+}
 
 /** Modes that rewrite the input schema rather than the description. */
 export const SCHEMA_MODES: readonly ShrinkMode[] = [
@@ -151,6 +165,13 @@ function stripKeys(value: unknown, keys: readonly string[]): unknown {
 export function shrinkCatalog(
   tools: readonly CatalogTool[],
   mode: ShrinkMode,
+  opts?: {
+    /**
+     * P3b: the transform for an {@link EXTERNAL_MODES} mode, resolved from the
+     * user's own install. Required for those modes — see {@link isExternalMode}.
+     */
+    readonly externalTransform?: (text: string) => string;
+  },
 ): readonly CatalogTool[] {
   if (isSchemaMode(mode)) {
     const keys = STRIPPED_KEYS[mode] ?? [];
@@ -166,7 +187,20 @@ export function shrinkCatalog(
     });
   }
 
-  const transform = mode === "whitespace" ? collapseWhitespace : firstSentence;
+  let transform: (text: string) => string;
+  if (isExternalMode(mode)) {
+    const external = opts?.externalTransform;
+    if (external === undefined) {
+      throw new Error(
+        `shrink mode "${mode}" needs the external transform — install caveman-shrink ` +
+          "(npm i -g caveman-shrink) or point GOLEM_CAVEMAN_SHRINK at it. Refusing to " +
+          "measure an identity transform as if it were theirs.",
+      );
+    }
+    transform = external;
+  } else {
+    transform = mode === "whitespace" ? collapseWhitespace : firstSentence;
+  }
   return tools.map((tool) => {
     const description = transform(tool.description);
     return {
