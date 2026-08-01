@@ -633,7 +633,9 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
       requestTimeoutMs: settings.inference.request_timeout_ms,
     });
     facts = await detectCapability(createProbeRunner());
-    inference = new OllamaInferenceService(client, facts);
+    inference = new OllamaInferenceService(client, facts, {
+      providers: settings.inference.providers,
+    });
   } catch (err) {
     process.stderr.write(
       `golem proxy: local inference unavailable, local-answer sub-mode falls back to the hashing embedder (${
@@ -888,7 +890,9 @@ mcp
             requestTimeoutMs: settings.inference.request_timeout_ms,
           });
           const facts = await detectCapability(createProbeRunner());
-          inference = new OllamaInferenceService(client, facts);
+          inference = new OllamaInferenceService(client, facts, {
+            providers: settings.inference.providers,
+          });
         } catch (err) {
           process.stderr.write(
             `golem: local inference unavailable, coder will be disabled (${
@@ -1536,7 +1540,9 @@ benchCmd
             requestTimeoutMs: settings.inference.request_timeout_ms,
           });
           const facts = await detectCapability(createProbeRunner());
-          inference = new OllamaInferenceService(client, facts);
+          inference = new OllamaInferenceService(client, facts, {
+            providers: settings.inference.providers,
+          });
           await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
         }
 
@@ -1632,7 +1638,9 @@ benchCmd
           requestTimeoutMs: settings.inference.request_timeout_ms,
         });
         const facts = await detectCapability(createProbeRunner());
-        const inference = new OllamaInferenceService(client, facts);
+        const inference = new OllamaInferenceService(client, facts, {
+          providers: settings.inference.providers,
+        });
         await warnLocalRoleAvailability(facts.tier, settings.inference.ollama_base_url, role);
 
         const report = await benchEdits({
@@ -1742,7 +1750,9 @@ benchCmd
           requestTimeoutMs: settings.inference.request_timeout_ms,
         });
         const facts = await detectCapability(createProbeRunner());
-        const inference = new OllamaInferenceService(client, facts);
+        const inference = new OllamaInferenceService(client, facts, {
+          providers: settings.inference.providers,
+        });
         const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
         const role = opts.role as (typeof roles)[number];
         if (!roles.includes(role)) {
@@ -2891,7 +2901,9 @@ async function buildInferenceForDir(dir: string): Promise<InferenceService | nul
       requestTimeoutMs: settings.inference.request_timeout_ms,
     });
     const facts = await detectCapability(createProbeRunner());
-    return new OllamaInferenceService(client, facts);
+    return new OllamaInferenceService(client, facts, {
+      providers: settings.inference.providers,
+    });
   } catch {
     return null;
   }

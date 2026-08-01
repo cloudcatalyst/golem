@@ -73,7 +73,9 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
     requestTimeoutMs: settings.inference.request_timeout_ms,
   });
   const facts = await detectCapability(createProbeRunner());
-  const inference = new OllamaInferenceService(client, facts);
+  const inference = new OllamaInferenceService(client, facts, {
+    providers: settings.inference.providers,
+  });
 
   // Semantic only if the query embed model is actually available; else lexical.
   const textEmbedModel = embedModelFor(facts.tier, "text");

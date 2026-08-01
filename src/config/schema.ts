@@ -24,9 +24,26 @@
  */
 
 import { z } from "zod";
+import type { ProviderEntry } from "../inference/providers.js";
+import type { Role } from "../interfaces/inference.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import type { UpstreamAccount, UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
 import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
+
+/**
+ * R8.15 — `Role` as a zod-usable tuple. `ALL_ROLES` in the frozen inference
+ * contract is a `readonly Role[]`, which `z.enum` cannot take; this is the tuple
+ * form. The conditional parameter type is what keeps it honest rather than a
+ * comment: a `Role` added to the contract and not added here makes the call site a
+ * build error, so the settings schema cannot silently fall behind the interface.
+ */
+function rolesTuple<T extends readonly [Role, ...Role[]]>(
+  ...roles: T & ([Role] extends [T[number]] ? unknown : ["a Role is missing from this tuple"])
+): T {
+  return roles;
+}
+
+const ALL_ROLES_TUPLE = rolesTuple("summarizer", "extractor", "classifier", "drafter", "judge");
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
@@ -161,6 +178,50 @@ export const SETTINGS_LEAVES = {
      * deliberately. When it is off, the schema is byte-identical to R8.6's.
      */
     local_editor_enabled: z.boolean(),
+    /**
+     * R8.15: the user's own local model backends, as data. Spec §169 always said
+     * llama.cpp / LM Studio / vLLM were "a drop-in swap via config"; the transport
+     * honoured that and role→model selection did not, because `catalog.ts` is a
+     * frozen table of Ollama tags with no override anywhere.
+     *
+     * Each entry is one OpenAI-compatible server (`base_url`) and the models it
+     * serves. A model claiming `roles` serves exactly those; a model claiming
+     * neither `roles` nor `embed` is a **catch-all** for every chat role nothing
+     * else claims — the llama.cpp case of one server with one loaded GGUF. An
+     * explicit claim always beats a catch-all, and within each of those two passes
+     * declaration order wins, so any resolution is explicable by reading downwards.
+     *
+     * `api` selects the NATIVE surface, not the transport: `"ollama"` means
+     * `/api/tags` and `ollama pull` advice, `"openai-completions"` means
+     * `/v1/models` (and `/props` for llama.cpp's live context window). Both speak
+     * the same chat/embeddings protocol.
+     *
+     * `api_key_env` names the env var holding the key, never the key — secrets are
+     * not settings (Decisions 46/47). Local servers ignore the value; several
+     * clients still require one to be set.
+     *
+     * Empty by default, and an empty list is byte-identical to no provider support
+     * at all: every role resolves from the hardware-tier catalog over
+     * `ollama_base_url`, exactly as before R8.15.
+     */
+    providers: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          api: z.enum(["openai-completions", "ollama"]),
+          base_url: z.string().url(),
+          api_key_env: z.string().min(1).optional(),
+          models: z.array(
+            z.object({
+              id: z.string().min(1),
+              roles: z.array(z.enum(ALL_ROLES_TUPLE)).optional(),
+              embed: z.enum(["text", "code", "both"]).optional(),
+              context_window: z.number().int().positive().optional(),
+            }),
+          ),
+        }),
+      )
+      .optional(),
   },
   compression: {
     /**
@@ -515,6 +576,8 @@ export interface InferenceSettings {
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
   readonly local_editor_enabled: boolean;
+  /** R8.15 — the user's own backends; absent/empty means "the tier catalog, over Ollama". */
+  readonly providers?: readonly ProviderEntry[];
 }
 
 export interface CompressionSettings {

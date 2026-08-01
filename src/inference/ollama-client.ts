@@ -128,9 +128,18 @@ function looksLikeMissingModel(status: number, body: string): boolean {
 export class OllamaClient {
   readonly #pool: Pool;
   readonly #timeoutMs: number;
+  /**
+   * R8.15 — the origin this client is bound to. Exposed so the service can tell
+   * whether a resolved provider endpoint is already served by this client or needs
+   * its own; the paths are always `/v1/...`, so a `base_url` carrying a `/v1`
+   * suffix collapses to the same origin and is correctly treated as the same
+   * endpoint.
+   */
+  readonly origin: string;
 
   constructor(options: OllamaClientOptions = {}) {
     const base = new URL(options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL);
+    this.origin = base.origin;
     this.#pool = new Pool(base.origin);
     this.#timeoutMs = options.requestTimeoutMs ?? 120_000;
   }

@@ -24,14 +24,18 @@ import {
   chatModelFor,
   createProbeRunner,
   detectCapability,
-  matchesPulledName,
+  listedState,
+  type ModelSource,
   OllamaNativeClient,
+  OpenAiModelsClient,
   type PulledState,
+  resolveChatModel,
+  validateProviders,
 } from "../inference/index.js";
 import type { HardwareTier } from "../interfaces/inference.js";
 import { type ConfigWriteResult, setConfig } from "./config.js";
 import { InitError } from "./init.js";
-import { probeLocalModel } from "./local-model.js";
+import { probeInferenceEndpoint, probeLocalModel } from "./local-model.js";
 
 const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
   0: "P_CPU",
@@ -90,6 +94,16 @@ export interface LocalModelReport {
    * drafter is precisely what made `coder --refine` silently do nothing (§89/§100).
    */
   readonly coder_model_state: PulledState;
+  /** R8.15 — which provider serves the drafter (`"ollama"` when it came from the catalog). */
+  readonly coder_provider: string;
+  /** R8.15 — the endpoint that actually serves the drafter; may differ from `base_url`. */
+  readonly coder_endpoint: string;
+  /** R8.15 — whether `coder_model` came from the user's table or the tier catalog. */
+  readonly coder_model_source: ModelSource;
+  /** R8.15 — the declared context window, when the user declared one. */
+  readonly coder_context_window?: number;
+  /** R8.15 — provider-table problems worth printing. Never fatal. */
+  readonly problems: readonly string[];
   /**
    * The effective state the status surfaces show: the local model counts as
    * ACTIVE only when it is both enabled and reachable. Neither alone is enough —
@@ -128,36 +142,55 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
   });
   const baseUrl = settings.inference.ollama_base_url;
   const coderEnabled = settings.inference.local_coder_enabled;
+  const providers = settings.inference.providers;
 
-  const probe = opts.probe ?? ((url: string) => probeLocalModel(url, URL_PROBE_TIMEOUT_MS));
   const detect = opts.detect ?? detectTierAndModel;
-  // Both are guarded here rather than inside the defaults: a status command must
-  // not throw because hardware detection or a network probe failed, and that has
-  // to hold for an injected implementation too.
+  // Guarded here rather than inside the defaults: a status command must not throw
+  // because hardware detection or a network probe failed, and that has to hold for
+  // an injected implementation too.
+  const detected = await detect().catch(() => ({ tier: 0 as HardwareTier, coderModel: "" }));
+  const { tier } = detected;
+
+  // R8.15 — the drafter may not live on Ollama any more, so every question below
+  // is asked of the endpoint that actually serves it. Probing `ollama_base_url`
+  // and reporting THAT as the coder's reachability was correct only while there
+  // was exactly one possible backend.
+  const routed = resolveChatModel("drafter", { providers, tier, ollamaBaseUrl: baseUrl });
+  const coderModel = routed.source === "provider" ? routed.model : detected.coderModel;
+
+  const probe =
+    opts.probe ?? ((url: string) => probeInferenceEndpoint(url, routed.api, URL_PROBE_TIMEOUT_MS));
   const listModels =
     opts.listModels ??
-    (() =>
-      new OllamaNativeClient({
-        baseUrl,
+    (async () => {
+      if (routed.api === "ollama") {
+        return new OllamaNativeClient({
+          baseUrl: routed.baseUrl,
+          requestTimeoutMs: URL_PROBE_TIMEOUT_MS,
+        }).listModels();
+      }
+      const ids = await new OpenAiModelsClient({
+        baseUrl: routed.baseUrl,
         requestTimeoutMs: URL_PROBE_TIMEOUT_MS,
-      }).listModels());
-  const [reachable, detected, pulledNames] = await Promise.all([
-    probe(baseUrl).catch(() => false),
-    detect().catch(() => ({ tier: 0 as HardwareTier, coderModel: "" })),
+      }).listModels();
+      return ids.map((name) => ({ name }));
+    });
+
+  const [reachable, listedNames] = await Promise.all([
+    probe(routed.baseUrl).catch(() => false),
     listModels()
       .then((models) => models.map((m) => m.name))
       .catch(() => null),
   ]);
-  const { tier, coderModel } = detected;
 
-  // Three states, not two: an endpoint we couldn't list tells us nothing about
-  // what is pulled, and saying "not pulled" there would invent a fact.
+  // Three states, not two: an endpoint we couldn't list tells us nothing about what
+  // it can serve, and saying "not pulled" there would invent a fact. `listedState`
+  // additionally refuses to say "not-pulled" for a non-Ollama backend at all — a
+  // llama.cpp server answers for whatever GGUF it loaded, whatever id you send.
   const coderModelState: PulledState =
-    pulledNames === null || coderModel === ""
+    listedNames === null || coderModel === ""
       ? "unknown"
-      : pulledNames.some((n) => matchesPulledName(n, coderModel))
-        ? "pulled"
-        : "not-pulled";
+      : listedState(routed.api, listedNames, coderModel);
 
   return {
     coder_enabled: coderEnabled,
@@ -165,11 +198,16 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
     base_url: baseUrl,
     base_url_layer: provenance[BASE_URL_KEY]?.layer ?? "default",
     reachable,
-    remote: isRemoteEndpoint(baseUrl),
+    remote: isRemoteEndpoint(routed.baseUrl),
     tier,
     tier_name: TIER_NAMES[tier],
     coder_model: coderModel,
     coder_model_state: coderModelState,
+    coder_provider: routed.providerId,
+    coder_endpoint: routed.baseUrl,
+    coder_model_source: routed.source,
+    ...(routed.contextWindow !== undefined ? { coder_context_window: routed.contextWindow } : {}),
+    problems: validateProviders(providers),
     active: coderEnabled && reachable,
   };
 }
@@ -247,22 +285,42 @@ export function renderLocalModel(report: LocalModelReport): string {
     `  coder tool: ${report.coder_enabled ? "enabled" : "DISABLED"} ` +
       `(inference.local_coder_enabled, from ${report.coder_enabled_layer})`,
   );
+  // R8.15 — when the drafter is routed to a declared provider, the endpoint on this
+  // line is that provider's, not `ollama_base_url`. Say which key it came from so the
+  // two cases are never confused: "reachable" against the wrong server is the exact
+  // fabricated fact this workstream is about.
   lines.push(
-    `  endpoint:   ${report.base_url} — ${report.reachable ? "reachable" : "NOT reachable"} ` +
-      `(inference.ollama_base_url, from ${report.base_url_layer})`,
+    report.coder_model_source === "provider"
+      ? `  endpoint:   ${report.coder_endpoint} — ${report.reachable ? "reachable" : "NOT reachable"} ` +
+          `(inference.providers → ${report.coder_provider})`
+      : `  endpoint:   ${report.base_url} — ${report.reachable ? "reachable" : "NOT reachable"} ` +
+          `(inference.ollama_base_url, from ${report.base_url_layer})`,
   );
   lines.push(`  hardware:   tier ${report.tier} (${report.tier_name})`);
   if (report.coder_model !== "") {
     // Say whether the model is actually there. "coder model: X" alone read as a
     // promise that X would run, which is how a never-pulled judge model spent
     // three investigations looking like a prompt bug (task `local-models`).
+    // "pulled" is Ollama's word for it and stays Ollama's word for it; a llama.cpp
+    // server does not pull anything, so the same three states are spelled for the
+    // backend actually in play.
+    const ollamaWords =
+      report.coder_provider === "ollama" || report.coder_model_source === "catalog";
     const state =
       report.coder_model_state === "pulled"
-        ? "pulled"
+        ? ollamaWords
+          ? "pulled"
+          : "available"
         : report.coder_model_state === "not-pulled"
           ? "NOT pulled"
-          : "pulled state unknown";
-    lines.push(`  coder model: ${report.coder_model} — ${state}`);
+          : ollamaWords
+            ? "pulled state unknown"
+            : "availability unknown";
+    const window =
+      report.coder_context_window === undefined
+        ? ""
+        : ` (${report.coder_context_window.toLocaleString("en-US")}-token window)`;
+    lines.push(`  coder model: ${report.coder_model} — ${state}${window}`);
   }
 
   // Say what to do about it, and be specific about WHICH of the two conditions
@@ -282,13 +340,22 @@ export function renderLocalModel(report: LocalModelReport): string {
   if (!report.reachable) {
     lines.push("");
     lines.push(
-      report.remote
-        ? `Nothing answered at ${report.base_url}. Check the other machine is running Ollama ` +
+      report.coder_model_source === "provider"
+        ? `Nothing answered at ${report.coder_endpoint} (provider "${report.coder_provider}"). ` +
+            "Check the server is running and that `base_url` matches the port it listens on — " +
+            "for llama.cpp that is the `--host`/`--port` you launched `llama-server` with, and " +
+            "a LAN box must bind a non-loopback interface with no firewall in the way."
+        : report.remote
+          ? `Nothing answered at ${report.base_url}. Check the other machine is running Ollama ` +
             "and listening on a non-loopback interface (set OLLAMA_HOST=0.0.0.0 there — " +
             "Ollama binds loopback only by default), and that no firewall blocks the port."
-        : "Ollama isn't answering locally — check it with: golem ollama status " +
+          : "Ollama isn't answering locally — check it with: golem ollama status " +
             "(install/pull with: golem ollama setup)",
     );
+  }
+  for (const problem of report.problems) {
+    lines.push("");
+    lines.push(problem);
   }
   return `${lines.join("\n")}\n`;
 }

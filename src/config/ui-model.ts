@@ -278,6 +278,21 @@ export const SETTING_META = {
       "Measured on ~10–40-line TypeScript files; bigger files are declined, not guessed at.",
     restart: "mcp",
   },
+  "inference.providers": {
+    label: "Local model backends",
+    summary: "Your own llama.cpp / LM Studio / Ollama servers and which models serve which role",
+    detail:
+      "Empty means the hardware-tier catalog over `inference.ollama_base_url` — exactly the " +
+      "pre-R8.15 behaviour. Each entry is one OpenAI-compatible server plus its models. A " +
+      "model listing `roles` serves those; one listing neither `roles` nor `embed` is a " +
+      "catch-all for every unclaimed chat role, which is the llama.cpp case of one server " +
+      "with one loaded GGUF. Explicit claims beat catch-alls, and declaration order decides " +
+      "the rest. `api` picks the native surface — `ollama` means /api/tags and `ollama pull` " +
+      "advice, `openai-completions` means /v1/models. `api_key_env` names the env var, never " +
+      "the key.",
+    restart: "mcp",
+    advanced: true,
+  },
 
   // --- compression ----------------------------------------------------------
   "compression.headroom_sidecar": {

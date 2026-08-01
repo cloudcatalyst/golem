@@ -79,7 +79,9 @@ export async function synthesizeWeeklyReport(
         requestTimeoutMs: settings.inference.request_timeout_ms,
       });
       const facts = await detectCapability(createProbeRunner());
-      inference = new OllamaInferenceService(client, facts);
+      inference = new OllamaInferenceService(client, facts, {
+        providers: settings.inference.providers,
+      });
     } catch (err) {
       throw new InitError(
         `local inference unavailable, can't synthesize (${err instanceof Error ? err.message : String(err)})`,

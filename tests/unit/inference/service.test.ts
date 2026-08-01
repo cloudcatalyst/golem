@@ -177,6 +177,124 @@ describe("OllamaInferenceService routing", () => {
   });
 });
 
+describe("OllamaInferenceService — R8.15 provider routing", () => {
+  it("sends the provider's model id, not the tier catalog's", async () => {
+    await start(new Set(["my-loaded-gguf"]));
+    const client = new OllamaClient({ baseUrl });
+    const svc = new OllamaInferenceService(client, facts(HardwareTier.PMid), {
+      providers: [
+        {
+          id: "llamacpp",
+          api: "openai-completions",
+          base_url: baseUrl,
+          models: [{ id: "my-loaded-gguf" }],
+        },
+      ],
+    });
+    try {
+      const res = await svc.chat("drafter", [{ role: "user", content: "hi" }]);
+      expect(res.model).toBe("my-loaded-gguf");
+    } finally {
+      await svc.close();
+      await client.close();
+    }
+  });
+
+  it("falls back to the tier ladder when the routed provider fails", async () => {
+    // The contract's rule is "never crash the pipeline", and `ChatResult.model`
+    // reports what actually ran — so the substitution is visible, not silent.
+    const catalogModel = chatModelFor(HardwareTier.PMid, "drafter");
+    await start(new Set([catalogModel]));
+    const client = new OllamaClient({ baseUrl });
+    const svc = new OllamaInferenceService(client, facts(HardwareTier.PMid), {
+      providers: [
+        {
+          id: "llamacpp",
+          api: "openai-completions",
+          base_url: baseUrl,
+          models: [{ id: "never-loaded" }],
+        },
+      ],
+    });
+    try {
+      const res = await svc.chat("drafter", [{ role: "user", content: "hi" }]);
+      expect(res.model).toBe(catalogModel);
+    } finally {
+      await svc.close();
+      await client.close();
+    }
+  });
+
+  it("reports the ROUTED failure as the cause, not the ladder's", async () => {
+    // "your llama.cpp server refused" is the actionable fact; "qwen2.5:14b is not
+    // pulled" is a symptom of a fallback the user never asked for.
+    await start(new Set());
+    const client = new OllamaClient({ baseUrl });
+    const svc = new OllamaInferenceService(client, facts(HardwareTier.PMid), {
+      providers: [
+        {
+          id: "llamacpp",
+          api: "openai-completions",
+          base_url: baseUrl,
+          models: [{ id: "never-loaded" }],
+        },
+      ],
+    });
+    try {
+      await expect(svc.chat("judge", [{ role: "user", content: "hi" }])).rejects.toMatchObject({
+        cause: expect.objectContaining({ model: "never-loaded" }),
+      });
+    } finally {
+      await svc.close();
+      await client.close();
+    }
+  });
+
+  it("routes embeddings to a declared embedding model, with no tier step-down", async () => {
+    // No ladder here on purpose: a different embedding model produces vectors in a
+    // different space, so a silent substitution corrupts the index rather than
+    // degrading it.
+    await start(new Set(["my-embedder"]));
+    const client = new OllamaClient({ baseUrl });
+    const svc = new OllamaInferenceService(client, facts(HardwareTier.PMid), {
+      providers: [
+        {
+          id: "llamacpp",
+          api: "openai-completions",
+          base_url: baseUrl,
+          models: [{ id: "my-embedder", embed: "both" }],
+        },
+      ],
+    });
+    try {
+      const vectors = await svc.embed(["a", "b"], "text");
+      expect(vectors).toHaveLength(2);
+    } finally {
+      await svc.close();
+      await client.close();
+    }
+  });
+
+  it("reuses the injected client when a provider names the same origin", async () => {
+    // A provider that simply re-declares the Ollama Golem was already pointed at
+    // must not open a second connection pool.
+    await start(new Set(["m"]));
+    const client = new OllamaClient({ baseUrl });
+    const svc = new OllamaInferenceService(client, facts(HardwareTier.PMid), {
+      providers: [{ id: "same", api: "ollama", base_url: `${baseUrl}/`, models: [{ id: "m" }] }],
+      clientFor: () => {
+        throw new Error("must not create a second client for the same origin");
+      },
+    });
+    try {
+      expect((await svc.chat("drafter", [{ role: "user", content: "hi" }])).model).toBe("m");
+    } finally {
+      await svc.close();
+      await client.close();
+    }
+  });
+});
+
 // The frozen contract, backed by a server that has every model the CPU tier
 // asks for (the harness runs at whatever tier we report).
 describe("contract", () => {

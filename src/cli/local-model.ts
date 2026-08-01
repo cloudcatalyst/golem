@@ -74,6 +74,35 @@ export async function probeLocalModel(baseUrl: string, timeoutMs = 800): Promise
   }
 }
 
+/**
+ * R8.15 — the same probe, asked over whichever native surface the endpoint has.
+ *
+ * `probeLocalModel` above is Ollama-shaped (`/api/tags`, and it insists on a
+ * non-empty model list). At a llama.cpp server that path 404s, so a perfectly
+ * healthy backend would be reported unreachable — which is exactly the class of
+ * false "missing" this workstream exists to stop. An OpenAI-compatible endpoint is
+ * asked for `/v1/models` instead, and merely answering counts: llama.cpp with one
+ * GGUF loaded may list an id nobody recognises, and that is still a live server.
+ */
+export async function probeInferenceEndpoint(
+  baseUrl: string,
+  api: "openai-completions" | "ollama",
+  timeoutMs = 800,
+): Promise<boolean> {
+  if (api === "ollama") return probeLocalModel(baseUrl, timeoutMs);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const { modelsUrl } = await import("../inference/openai-models.js");
+    const res = await fetch(modelsUrl(baseUrl), { signal: controller.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function readLocalModelCache(projectDir: string): Promise<LocalModelState | null> {
   try {
     const raw = await readFile(localModelCachePath(projectDir), "utf8");

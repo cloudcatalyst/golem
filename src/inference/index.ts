@@ -4,11 +4,24 @@
  * fallback (D3).
  */
 
-export type { ModelAvailability, PulledState, TierAvailability } from "./availability.js";
+export type {
+  EndpointLister,
+  EndpointPropsReader,
+  EndpointRef,
+  ModelAvailability,
+  ProviderAvailability,
+  PulledState,
+  ResolvedAvailability,
+  ResolvedSlotAvailability,
+  TierAvailability,
+} from "./availability.js";
 export {
   availabilityWarning,
   CHAT_ROLE_SLOTS,
+  listedState,
   matchesPulledName,
+  resolveAvailability,
+  resolvedAvailabilityWarning,
   resolveTierAvailability,
   roleState,
   roleWarning,
@@ -22,6 +35,43 @@ export {
   embedModelFor,
   modelsForTier,
 } from "./catalog.js";
+export type {
+  GgufFile,
+  GgufModel,
+  ModelChoice,
+  ModelPreference,
+  SelectionRequest,
+} from "./gguf-catalog.js";
+export {
+  effectiveParamsB,
+  estimatedKvBytes,
+  estimatedResidentBytes,
+  FLOOR_GGUF_MODEL_ID,
+  GGUF_CATALOG,
+  ggufModel,
+  huggingFaceUrl,
+  modelBytes,
+  rankModels,
+  selectModel,
+} from "./gguf-catalog.js";
+export type {
+  FitVerdict,
+  LlamacppAsset,
+  LlamacppBackend,
+  MachineFacts,
+  ServerPlan,
+  ServerPlanOptions,
+} from "./llamacpp-plan.js";
+export {
+  assetUrl,
+  checkDiskSpace,
+  checkFit,
+  contextForVram,
+  LLAMACPP_RELEASE_TAG,
+  LLAMACPP_RELEASES_URL,
+  planServer,
+  resolveAsset,
+} from "./llamacpp-plan.js";
 export type {
   InstallEnvironment,
   InstallMethodKind,
@@ -57,10 +107,35 @@ export {
   OllamaUnreachableError,
   parsePullProgressLine,
 } from "./ollama-native.js";
+export type { OpenAiModelsClientOptions, ServerProps } from "./openai-models.js";
+export {
+  DEFAULT_MODELS_TIMEOUT_MS,
+  modelsUrl,
+  OpenAiModelsClient,
+  parseModelsResponse,
+  parsePropsResponse,
+  propsUrl,
+} from "./openai-models.js";
 export {
   createProbeRunner,
   DEFAULT_PROBE_TIMEOUT_MS,
 } from "./probe.js";
+export type {
+  EmbedKind,
+  ModelSource,
+  ProviderApi,
+  ProviderEntry,
+  ProviderModelEntry,
+  ResolutionContext,
+  ResolvedModel,
+} from "./providers.js";
+export {
+  CATALOG_PROVIDER_ID,
+  providerEndpoints,
+  resolveChatModel,
+  resolveEmbedModel,
+  validateProviders,
+} from "./providers.js";
 export type { FallbackPolicy, OllamaInferenceOptions } from "./service.js";
 export {
   HaikuFallbackRequired,

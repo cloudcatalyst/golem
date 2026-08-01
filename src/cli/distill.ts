@@ -72,7 +72,9 @@ export async function distillOne(options: DistillOneOptions): Promise<DistillOne
         requestTimeoutMs: settings.inference.request_timeout_ms,
       });
       const facts = await detectCapability(createProbeRunner());
-      inference = new OllamaInferenceService(client, facts);
+      inference = new OllamaInferenceService(client, facts, {
+        providers: settings.inference.providers,
+      });
     } catch (err) {
       throw new InitError(
         `local inference unavailable, can't distill (${err instanceof Error ? err.message : String(err)})`,
