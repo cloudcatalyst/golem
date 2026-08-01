@@ -5052,3 +5052,110 @@ definition, no hook), so the downside is bounded, but "discarding is cheaper tha
 repairing" rests on §93's re-reading share, not an A/B. And the displacement question R8.5
 and R8.6 both left open applies again: whether an agent actually reaches for a checkpoint
 before a risky attempt is a dogfooding observation nobody has made yet.
+
+## §112 — R8.15: the provider table works against a real OpenAI-compatible server; llama.cpp itself is still unverified (2026-08-01)
+
+**What was built.** `inference.providers` — a user-declared table of local backends
+(`src/inference/providers.ts`), resolved ahead of the hardware-tier catalog, with
+per-provider availability (`/api/tags` for Ollama, `/v1/models` otherwise) and a live
+context window read from llama.cpp's `/props`. Wired through `OllamaInferenceService`,
+`golem devices` and `golem local status`.
+
+**Verified live on this machine (RTX 3070 Laptop, 8 GB, P_MID), 2026-08-01.**
+
+1. **Empty is indistinguishable from absent.** With no `inference.providers`, `golem
+   devices` prints the pre-R8.15 output verbatim — same 7 rows, same `3/7 runnable`,
+   same `ollama pull` advice. This was the rule the whole design hangs on and it holds
+   at runtime, not just in tests.
+2. **A declared provider routes and reports.** With
+   `GOLEM_INFERENCE_PROVIDERS='[{"id":"llamacpp-sim","api":"openai-completions",
+   "base_url":"http://localhost:11434/v1","models":[{"id":"qwen2.5-coder:7b",
+   "roles":["drafter"],"context_window":32768}]}]'`, the drafter row moves to
+   `[llamacpp-sim http://localhost:11434/v1]` and is checked over `/v1/models`, while
+   every other role stays on the catalog. `golem local status` reports the endpoint's
+   provenance as `inference.providers → llamacpp-sim` rather than
+   `inference.ollama_base_url` — which matters, because "reachable" against the wrong
+   server is exactly the fabricated fact this workstream exists to remove.
+3. **Pull advice is scoped.** The `ollama pull …` line lists only the Ollama-side
+   misses. Pre-R8.15 that string was unconditional, which at a llama.cpp server sends
+   the reader to fix the wrong machine.
+4. **`/props` stayed silent, correctly.** Ollama has no `/props`, so no window was
+   reported for it — an absent number rather than a substituted default.
+
+**Two states, deliberately asymmetric.** For Ollama an unlisted model is
+`not-pulled`; for any other backend it is `unknown`, never `not-pulled`. llama.cpp
+answers for whichever GGUF it loaded regardless of the id sent, so the declared id is
+the user's handle and not a lookup key — reporting "missing" there would be the same
+invented fact as the `local-models` task's original bug, just failing the other way.
+
+**What is NOT verified, and must not be read as verified.** No llama.cpp server was
+run. Specifically unproven: that `/props` returns `n_ctx` in one of the three shapes
+`parsePropsResponse` accepts on a current build; that `/v1/models` reports what the
+`serves-any-id` reasoning assumes; and the whole `-ngl 99 --n-cpu-moe 999` MoE setup
+(Qwen3.6-35B-A3B on 8 GB VRAM) that motivated the task. The "real OpenAI-compatible
+server" above was Ollama's own `/v1`, which is a genuine second surface but is not
+llama.cpp. **R8.15's gate is therefore unmet** and the task stays open.
+
+## §113 — R8.18: llama.cpp release assets, Qwen3.6 GGUF sizes, and the coder model that does not fit (2026-08-01)
+
+Every number here was read from the live upstream on 2026-08-01, because they decide
+what Golem downloads and whether it will fit. None is estimated.
+
+**llama.cpp — release `b10216`, published 2026-07-31.** Windows assets:
+
+| asset | size |
+|---|---|
+| `llama-b10216-bin-win-cuda-13.3-x64.zip` | 139 MB |
+| `cudart-llama-bin-win-cuda-13.3-x64.zip` | 372 MB |
+| `llama-b10216-bin-win-cuda-12.4-x64.zip` | 238 MB |
+| `cudart-llama-bin-win-cuda-12.4-x64.zip` | 373 MB |
+| `llama-b10216-bin-win-vulkan-x64.zip` | 32 MB |
+| `llama-b10216-bin-win-hip-radeon-x64.zip` | 309 MB |
+| `llama-b10216-bin-win-cpu-x64.zip` | 17 MB |
+
+Two things follow. The **CUDA runtime is a separate asset** and is not optional — a
+CUDA build extracted without it fails to start in a way that reads as a broken binary.
+And **Vulkan is 32 MB with no runtime bundle**, which makes it the better default for a
+tool that must work on machines it has never seen; CUDA is the opt-in for a known
+NVIDIA box. The release API also publishes a **`sha256:` digest per asset**, so
+verification is available and R8.18 requires it.
+
+**`ggml-org/Qwen3.6-35B-A3B-GGUF`** (same org as llama.cpp, so GGUF and server move
+together): `Q4_K_M` 19.02 GB, `Q8_0` 34.37 GB, `mtp-…-Q4_0` 0.99 GB (multi-token
+prediction draft, for speculative decoding), `mmproj-…-Q8_0` 0.57 GB (vision).
+Also verified for the ladder: `ggml-org/Qwen3.6-27B-GGUF` Q4_K_M **17.78 GB** (dense),
+`ggml-org/Qwen3-14B-GGUF` Q4_K_M **8.38 GB** (dense), `ggml-org/Qwen3-1.7B-GGUF` Q4_K_M
+**1.19 GB**.
+
+**There is no official `Qwen/Qwen3.6-*-Coder`.** The official Qwen3.6 line is
+`Qwen/Qwen3.6-35B-A3B` (MoE) and `Qwen/Qwen3.6-27B` (dense). The stable code-specific
+line is `Qwen3-Coder-Next`, and it is large: `unsloth/Qwen3-Coder-Next-GGUF` Q4_K_M is
+**45.20 GB**, UD-IQ2_M **23.25 GB**.
+
+**The finding that changed the plan.** A separate coder model beside the generalist was
+requested and does not fit: 45.20 + 19.02 = 64.2 GB against a 64 GB machine. Every
+alternative is a trade — IQ2 is a real quality loss on code; official
+`Qwen2.5-Coder-32B` (~19.85 GB) is **dense**, so on a small GPU it is *slower* than the
+35B MoE despite being smaller on disk. The property that matters on consumer hardware
+is **active parameters, not file size**: with `--n-cpu-moe` the experts sit in RAM and
+only attention touches VRAM, so a 35B-A3B costs 3B per token. Recorded because the
+intuitive ranking — sort by GB — gets this exactly backwards.
+
+**Two bugs the tests caught in the first implementation**, both worth naming:
+
+1. **The KV-cache estimate was ~1000× too small.** It charged ~140 KiB per *1K tokens*;
+   the real figure is tens of KiB *per token* (`2 × layers × kv_heads × head_dim × 2`).
+   Fit checks were therefore wildly optimistic — a 14B at a 16K context appeared to fit
+   in 9 GB when it needs ~9.4 GB. Now 64 KiB/token, erring high on purpose: an
+   over-estimate costs a smaller quant, an under-estimate costs a swapping machine.
+2. **Ranking on nominal parameters handed the default to whatever was quantised
+   hardest.** `Qwen3-Coder-Next` at IQ2 (80B nominal) beat the 35B-A3B at Q4 on the
+   knowledge-per-active-parameter proxy — while its own catalog note calls that quant
+   "a measurement to run, not a default to assume". Fixed twice over: capability is now
+   discounted by a per-quant factor, and entries carry `proven: false`, which excludes
+   them from automatic recommendation entirely. An unmeasured entry may be *chosen* by
+   name; it must never *win* a default on a proxy score.
+
+**Not yet verified.** No llama.cpp server has been run and no GGUF downloaded. The
+asset names, digests and sizes above are upstream metadata, not a successful install.
+R8.18's gate remains unmet.
