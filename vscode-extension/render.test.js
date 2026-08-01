@@ -70,9 +70,24 @@ test("buildModel exposes the cached account list for the quick-pick", () => {
   assert.deepStrictEqual(m.accounts, accounts);
 });
 
-test("buildModel normalizes non-array accounts to an empty list", () => {
+test("buildModel normalizes an unusable accounts payload to an empty list", () => {
   assert.deepStrictEqual(buildModel({}, {}, null, null).accounts, []);
+  assert.deepStrictEqual(buildModel({}, {}, null, undefined).accounts, []);
   assert.deepStrictEqual(buildModel({}, {}, null, { accounts: [] }).accounts, []);
+  assert.deepStrictEqual(buildModel({}, {}, null, { accounts: "nope" }).accounts, []);
+});
+
+test("buildModel unwraps the AccountsReport object golem account list --json returns", () => {
+  // The bug this pins: `golem account list --json` emits the report OBJECT
+  // (`{active, active_unknown, accounts:[…]}`), not a bare array. Testing only for
+  // an array left the cache permanently empty, so "Switch upstream…" re-ran the
+  // ~2.8s CLI call (it probes every account's credential store) on every open.
+  const accounts = [
+    { id: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", active: false, is_default: true, key_set: false },
+    { id: "openrouter-laguna", provider: "openrouter", base_url: "https://openrouter.ai/api/v1", model: "poolside/laguna-s-2.1:free", active: true, key_set: true },
+  ];
+  const m = buildModel({}, {}, null, { active: "openrouter-laguna", active_unknown: false, accounts });
+  assert.deepStrictEqual(m.accounts, accounts);
 });
 
 test("buildModel surfaces local_model reachability + coder model from status --json", () => {
@@ -484,8 +499,27 @@ test("settingsHtml renders a checkbox, its provenance, and a scope select", () =
   // Three writable scopes → a select with all three.
   assert.match(html, /<select class="scope"/);
   for (const scope of ["project", "local", "user"]) {
-    assert.match(html, new RegExp(`<option value="${scope}">`));
+    assert.match(html, new RegExp(`<option value="${scope}"( selected)?>`));
   }
+  // This control's value is owned by `project`, so that option is pre-selected.
+  assert.match(html, /<option value="project" selected>/);
+});
+
+test("settingsHtml pre-selects the scope that owns the value, not the first one", () => {
+  // The bug this pins: config precedence is default < user < project < local < env,
+  // so a control owned by `local` that defaulted its write to `project` was written
+  // to a layer `local` immediately masked — the row snapped back and the toggle
+  // looked dead (this is what made the local-coder toggle un-disablable).
+  const html = settingsHtml(surfaceFixture([{ ...toggleControl, layer: "local" }]));
+  assert.match(html, /<option value="local" selected>/);
+  assert.match(html, /<option value="project">/);
+});
+
+test("settingsHtml falls back to the first scope when the owning layer is not writable", () => {
+  // `default` and `env` are real provenance layers but not writable scopes; there is
+  // nothing to pre-select, so the browser's first-option default stands.
+  const html = settingsHtml(surfaceFixture([{ ...toggleControl, layer: "default" }]));
+  assert.doesNotMatch(html, / selected>/);
 });
 
 test("settingsHtml omits the scope select when there is only one scope", () => {

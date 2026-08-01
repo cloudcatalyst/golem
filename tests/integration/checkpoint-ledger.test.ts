@@ -13,7 +13,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createCheckpoint,
   dropCheckpoint,
@@ -30,6 +30,13 @@ import { rmTemp } from "../helpers/tmp.js";
 
 const hasGit = commandOnPath("git") !== null;
 const dirs: string[] = [];
+
+// Every test here drives a real `git` through several subprocess round-trips, and
+// process spawn on Windows is slow enough that the 20s default times out under a
+// full-suite run even though the same file passes in isolation. The cost is spawn
+// latency, not the code under test, so raise the ceiling rather than lose the file
+// to flakes.
+vi.setConfig({ testTimeout: 90_000 });
 
 afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, rmTemp)));
