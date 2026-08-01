@@ -562,7 +562,16 @@ async function resolvePort(
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new InitError(`invalid port "${portOpt}"`);
   }
-  return { port, upstream: settings.proxy.upstream_base_url, sliderLevel: settings.slider.level };
+  // R6.2: report where traffic ACTUALLY goes — the resolved active account's base
+  // URL, not the top-level `upstream_base_url`. Reading the legacy leaf here made
+  // `golem proxy status/restart` announce `-> https://api.anthropic.com` while the
+  // proxy was correctly serving an active OpenRouter/OpenAI account, which reads as
+  // a failed `golem account use`. Same resolver the proxy runtime uses.
+  return {
+    port,
+    upstream: resolveUpstreamDisplay(settings.proxy).baseUrl,
+    sliderLevel: settings.slider.level,
+  };
 }
 
 /**

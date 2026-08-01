@@ -83,7 +83,16 @@ function dialsSummary(model) {
 function buildModel(stats, status, update, accounts, surface) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
-  const accountList = Array.isArray(accounts) ? accounts : [];
+  // `golem account list --json` returns the AccountsReport OBJECT
+  // (`{active, active_unknown, accounts:[…]}`), not a bare array. Testing only for
+  // an array left this permanently `[]`, so the "Switch upstream…" quick-pick found
+  // no cache and re-ran the ~2.8s CLI call (it probes every account's credential
+  // store) on every open. Accept either shape.
+  const accountList = Array.isArray(accounts)
+    ? accounts
+    : accounts && Array.isArray(accounts.accounts)
+      ? accounts.accounts
+      : [];
   // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
   // `golem status --json`.update → {available,latest,current}.
   const up =
@@ -322,10 +331,18 @@ function controlRowHtml(control) {
       : control.detail || control.summary || "",
   );
   const scopes = Array.isArray(control.writableScopes) ? control.writableScopes : [];
+  // Pre-select the scope that currently OWNS the value. Config precedence is
+  // default < user < project < local < env, so defaulting to the first option
+  // ("project") wrote a change that a higher `local` layer immediately masked —
+  // the row snapped back on the next refresh and the control looked dead. When the
+  // owning layer isn't writable (`default`, `env`), fall back to the first option.
   const scopeSelect =
     scopes.length > 1
       ? `<select class="scope" data-id="${id}" title="Which settings scope a change is written to">${scopes
-          .map((s) => `<option value="${esc(s)}">${esc(s)}</option>`)
+          .map(
+            (s) =>
+              `<option value="${esc(s)}"${s === control.layer ? " selected" : ""}>${esc(s)}</option>`,
+          )
           .join("")}</select>`
       : "";
 
