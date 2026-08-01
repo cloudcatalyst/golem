@@ -27,6 +27,12 @@
 import { estimateTokens } from "../compression/index.js";
 import type { TokenDelta } from "../interfaces/compression.js";
 import {
+  MAX_PLUGIN_MATCH_FRACTION,
+  MIN_CAPPED_STRING_CHARS,
+  pluginRedactionRules,
+  recordPluginRuleTime,
+} from "./plugin-rules.js";
+import {
   ENTROPY_CANDIDATE_RE,
   ENTROPY_RULE_ID,
   isHighEntropyToken,
@@ -65,7 +71,22 @@ class PlaceholderTable {
   }
 }
 
-function applyRule(text: string, rule: RedactionRule, table: PlaceholderTable): [string, number] {
+/**
+ * Apply one rule. Returns the new text, the number of occurrences replaced, and
+ * the number of INPUT characters those occurrences covered.
+ *
+ * The third figure exists for the R8.11 plugin cap: "how much of this string did
+ * the rule consume" cannot be read off the length change, because a placeholder
+ * is usually longer than the secret it replaces (so a greedy rule can *grow* the
+ * string) and can also be about the same length (so a rule that swallows
+ * everything can leave the length alone). Counting matched input characters is
+ * the only measure that answers the question asked.
+ */
+function applyRule(
+  text: string,
+  rule: RedactionRule,
+  table: PlaceholderTable,
+): [string, number, number] {
   // Redact by the EXACT matched span (whole match, or the captured group at its
   // real index) — never by first-substring replace, which can hit the wrong
   // occurrence and leak the actual secret (T-C3, verification-notes §24). The
@@ -76,6 +97,7 @@ function applyRule(text: string, rule: RedactionRule, table: PlaceholderTable): 
   const re = new RegExp(rule.pattern.source, flags);
 
   let count = 0;
+  let matchedChars = 0;
   let result = "";
   let cursor = 0;
   for (const m of text.matchAll(re)) {
@@ -100,11 +122,12 @@ function applyRule(text: string, rule: RedactionRule, table: PlaceholderTable): 
 
     result += text.slice(cursor, redactStart);
     result += table.placeholderFor(rule.id, target);
+    matchedChars += redactEnd - redactStart;
     cursor = redactEnd;
     count += 1;
   }
   result += text.slice(cursor);
-  return [result, count];
+  return [result, count, matchedChars];
 }
 
 function applyEntropy(text: string, table: PlaceholderTable): [string, number] {
@@ -120,9 +143,49 @@ function applyEntropy(text: string, table: PlaceholderTable): [string, number] {
 }
 
 /**
+ * R8.11 seam A — apply the installed plugin rules (ADR-0004 §2), between the
+ * built-in table and the entropy sweep. Two properties are enforced here:
+ *
+ *  - **Over-redaction cap** (threat 5): if the plugin rules matched more than
+ *    {@link MAX_PLUGIN_MATCH_FRACTION} of a long-enough string's characters,
+ *    their whole contribution is discarded for this string and the built-in
+ *    result stands. Judged from this string alone, so the stage stays pure and
+ *    prefix-stable — no cross-request state can make the same input redact
+ *    differently on a later pass.
+ *  - **Cost measurement** (threat 4): elapsed time per rule is recorded so a
+ *    pathological pattern is at least *visible* in `golem plugin list`. It is
+ *    measured after the fact; Node cannot interrupt a regex mid-run, and the
+ *    ADR accepts that residual risk rather than implying it is closed.
+ *
+ * A no-op when nothing is installed, which is the shipped default.
+ */
+function applyPluginRules(text: string, table: PlaceholderTable): [string, number] {
+  const rules = pluginRedactionRules();
+  if (rules.length === 0) {
+    return [text, 0];
+  }
+  let current = text;
+  let total = 0;
+  let matched = 0;
+  for (const rule of rules) {
+    const started = performance.now();
+    const [next, count, matchedChars] = applyRule(current, rule, table);
+    recordPluginRuleTime(rule.id, performance.now() - started);
+    current = next;
+    total += count;
+    matched += matchedChars;
+  }
+  if (text.length >= MIN_CAPPED_STRING_CHARS && matched > text.length * MAX_PLUGIN_MATCH_FRACTION) {
+    return [text, 0];
+  }
+  return [current, total];
+}
+
+/**
  * Redact one string with a shared placeholder table. Rules run in table
- * order, then the high-entropy sweep runs last so provider-specific rules win
- * the placeholder kind for any string both would match.
+ * order, then the installed plugin rules (R8.11 seam A — appended, never
+ * interleaved), then the high-entropy sweep last, so built-in provider rules
+ * win the placeholder kind for any string more than one rule matches.
  */
 export function redactText(text: string, table: PlaceholderTable): RedactionResult {
   let current = text;
@@ -132,6 +195,9 @@ export function redactText(text: string, table: PlaceholderTable): RedactionResu
     current = next;
     total += count;
   }
+  const [afterPlugins, pluginCount] = applyPluginRules(current, table);
+  current = afterPlugins;
+  total += pluginCount;
   const [afterEntropy, entropyCount] = applyEntropy(current, table);
   return { text: afterEntropy, count: total + entropyCount };
 }

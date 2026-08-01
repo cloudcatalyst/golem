@@ -58,6 +58,7 @@ import type { HardwareTier, InferenceService, Role } from "../interfaces/inferen
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import { fetchRawPage } from "../knowledge/index.js";
+import { activatePlugins } from "../plugins/index.js";
 // NOT imported statically: `../mcp/index.js` pulls the MCP SDK, the single
 // heaviest module in this file's graph (~700ms to load). Only `golem mcp serve`
 // and `golem proxy start` need it, and both reach it through `await import()` at
@@ -667,11 +668,33 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     // persisted === "lexical" | null → leave localAnswerInference undefined so the
     // KB uses the hashing (lexical) embedder, matching the on-disk index.
   }
+  // R8.11 (ADR-0004): resolve the declared plugins from the USER's install before
+  // the proxy accepts anything. Seam A's rule set has to be final before the first
+  // byte is redacted — a rule installed mid-flight would mean two requests in one
+  // process redacting the same prefix differently, which breaks every prompt-cache
+  // hit (§14). Never throws: an absent or broken plugin is a reported no-op.
+  const plugins = await activatePlugins(dir, settings.plugins.entries ?? []);
+  for (const plugin of plugins.result.plugins) {
+    if (plugin.failure !== undefined) {
+      process.stderr.write(
+        `golem proxy: plugin "${plugin.id}" contributed nothing (${plugin.failure}${
+          plugin.detail !== undefined ? `: ${plugin.detail}` : ""
+        })\n`,
+      );
+    }
+  }
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     sliderStore,
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
+    ...(plugins.stages.length > 0 ? { pluginStages: plugins.stages } : {}),
   });
+  const activeRules = plugins.result.plugins.reduce((n, p) => n + p.redactionRules.length, 0);
+  if (activeRules > 0 || plugins.stages.length > 0 || plugins.tools.length > 0) {
+    process.stdout.write(
+      `golem proxy: plugins active — ${activeRules} redaction rule(s), ${plugins.stages.length} stage(s), ${plugins.tools.length} tool(s) (golem plugin list)\n`,
+    );
+  }
   if (semantic !== undefined) {
     process.stdout.write(
       "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
@@ -912,9 +935,15 @@ mcp
               return bridge;
             })()
           : undefined;
+      // R8.11 seam C (ADR-0004): plugin tools the user installed AND granted the
+      // `tool` seam. Activation also installs seam A here, so a plugin redaction
+      // rule protects anything this server writes to disk — an `ingest` or a
+      // `wiki_upsert` runs through the same redaction stage the proxy does.
+      const pluginActivation = await activatePlugins(opts.dir, settings.plugins.entries ?? []);
       await serveStdio({
         compression: mcpCompressionService(opts.dir, telemetry),
         telemetry,
+        ...(pluginActivation.tools.length > 0 ? { pluginTools: pluginActivation.tools } : {}),
         // Local-scope (gitignored) settings file — the same file (and nested
         // slider.level key) the E1 loader and `golem slider` use; the slider is a
         // personal, transient dial kept out of committed settings (Decision 43).
@@ -2010,6 +2039,64 @@ extCmd
       process.stdout.write(
         opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
       );
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+const pluginCmd = program
+  .command("plugin")
+  .description(
+    "In-process plugin seams — resolved from your own install, never fetched (R8.11, ADR-0004)",
+  );
+
+pluginCmd
+  .command("list", { isDefault: true })
+  .alias("status")
+  .description(
+    "Show every declared plugin: what resolved, which seams it was granted, and what it contributed",
+  )
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .option("--verbose", "also show the resolved path on disk", false)
+  .action(async (opts: { dir: string; json: boolean; verbose: boolean }) => {
+    try {
+      const { loadPlugins } = await import("../plugins/index.js");
+      const { renderPlugins } = await import("./plugin.js");
+      const { settings } = await loadConfig({ projectDir: opts.dir });
+      const result = await loadPlugins(opts.dir, settings.plugins.entries ?? []);
+      if (opts.json) {
+        // Functions are not serializable and a plugin's code is not data — report
+        // what each seam CONTRIBUTED, never the callable itself.
+        process.stdout.write(
+          `${JSON.stringify(
+            {
+              plugins: result.plugins.map((plugin) => ({
+                id: plugin.id,
+                specifier: plugin.specifier,
+                pin: plugin.pin ?? null,
+                seams: plugin.seams,
+                name: plugin.name ?? null,
+                version: plugin.version ?? null,
+                resolved_path: plugin.resolvedPath ?? null,
+                failure: plugin.failure ?? null,
+                detail: plugin.detail ?? null,
+                redaction_rules: plugin.redactionRules.map((rule) => ({
+                  id: rule.id,
+                  description: rule.description,
+                })),
+                rejected_rules: plugin.rejectedRules,
+                stage: plugin.stage?.name ?? null,
+                tools: plugin.tools.map((tool) => ({ name: tool.name, title: tool.title })),
+              })),
+            },
+            null,
+            2,
+          )}\n`,
+        );
+        return;
+      }
+      process.stdout.write(renderPlugins(result, { verbose: opts.verbose }));
     } catch (err) {
       fail(err);
     }

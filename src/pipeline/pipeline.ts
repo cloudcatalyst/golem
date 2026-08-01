@@ -34,7 +34,9 @@ import {
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
+import type { PluginStage } from "../interfaces/plugin.js";
 import type { BrevityLevel, SliderPolicy } from "../interfaces/policy.js";
+import { runStageQuarantined } from "../plugins/quarantine.js";
 import {
   type CacheBustComponent,
   CachePrefixObserver,
@@ -238,6 +240,23 @@ export interface GolemPipelineOptions {
   readonly localAnswer?: {
     readonly service: LocalAnswerService;
   };
+  /**
+   * R8.11 seam B (ADR-0004): third-party pipeline stages, resolved from the
+   * user's own install by `src/plugins/load.ts`. Each runs AFTER every built-in
+   * stage, in declaration order, behind {@link runStageQuarantined} — a throw or
+   * a malformed result contributes nothing and the request proceeds.
+   *
+   * Gated **identically to the semantic stage**: `semanticCompression !== "off"`
+   * AND a non-caching upstream. That is what makes ADR-0004 threat 6 true by
+   * construction rather than by review — at slider ≤1, and on any Anthropic-style
+   * caching upstream, no plugin stage runs at all, so the byte-fidelity and
+   * prefix-stability guarantees cannot be reached by plugin code. Absent → no
+   * stage runs (the shipped default).
+   */
+  readonly pluginStages?: readonly {
+    readonly pluginName: string;
+    readonly stage: PluginStage;
+  }[];
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -443,6 +462,42 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
           avoidedUpstreamInputTokens = substituted.tokensBefore - substituted.tokensAfter;
           ccrRefsStored += substituted.substitutions;
           changed = true;
+        }
+      }
+
+      // Stage 4.5 — plugin stages (R8.11 seam B, ADR-0004). Third-party code,
+      // and placed where that is survivable: it sees only already-redacted
+      // content, it runs after every built-in stage, and it is gated by the SAME
+      // rule as the lossy stages above — so at slider ≤1, or against a caching
+      // upstream, this block does not execute and the byte-fidelity guarantee is
+      // untouched by construction. Each stage is quarantined: a throw or a
+      // malformed result is a no-op with a log line, never an error path.
+      if (
+        stages.semanticCompression !== "off" &&
+        options.pluginStages !== undefined &&
+        options.pluginStages.length > 0 &&
+        !effectiveCaching(options)
+      ) {
+        for (const { pluginName, stage } of options.pluginStages) {
+          const before = estimateTokens(JSON.stringify(body));
+          const next = await runStageQuarantined(pluginName, stage, {
+            body,
+            level: policy.level,
+            upstreamBaseUrl: options.upstreamBaseUrl ?? "",
+            log: (message: string) =>
+              process.stderr.write(`golem plugin ${pluginName}: ${message}\n`),
+          });
+          if (next !== null) {
+            body = next;
+            // Attributed per stage rather than pooled, so a plugin's claim is
+            // separable from Golem's own savings in `golem stats` — the same
+            // rule the built-in stages follow.
+            stageSavings[`plugin:${pluginName}:${stage.name}`] = {
+              tokensBefore: before,
+              tokensAfter: estimateTokens(JSON.stringify(body)),
+            };
+            changed = true;
+          }
         }
       }
 

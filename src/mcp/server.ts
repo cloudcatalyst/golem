@@ -49,6 +49,8 @@ import type {
   Hit,
   InferenceService,
   KnowledgeBase,
+  PluginTool,
+  PluginToolArgs,
   SliderLevel,
   WikiPage,
   WikiPageType,
@@ -69,6 +71,7 @@ import {
   MAX_MAP_BUDGET_TOKENS,
 } from "../knowledge/repo-map.js";
 import { rerankHits } from "../knowledge/rerank.js";
+import { pluginLog, runToolQuarantined } from "../plugins/quarantine.js";
 import { recordToolCall, type TelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { extractWikilinks } from "../wiki/frontmatter.js";
 import { type RefineOutcome, refineDraft } from "./coder-refine.js";
@@ -192,6 +195,21 @@ export interface GolemMcpServerDeps {
    * the `stats` tool surfaces a per-tool summary. Omitted for the P0 stubs.
    */
   readonly telemetry?: TelemetryStore;
+  /**
+   * R8.11 seam C (ADR-0004) — MCP tools contributed by plugins the user
+   * installed and granted the `tool` seam. Registered as `<plugin>__<name>`, so
+   * a plugin can neither collide with nor impersonate one of Golem's seven.
+   *
+   * Same permanent-bill logic as {@link codeRoot} / {@link lsp} / {@link
+   * localEditor}, and it is why this seam is off by default: a tool DEFINITION
+   * is billed on every request whether or not it is ever called (§88/§100 — the
+   * whole of Golem's own contribution is 1,130 tokens, and R8.S1 was rejected
+   * over less). Absent → not one byte of schema is added.
+   */
+  readonly pluginTools?: readonly {
+    readonly pluginName: string;
+    readonly tool: PluginTool;
+  }[];
 }
 
 /** In-memory deps for tests and for running standalone before WS-A lands. */
@@ -287,8 +305,48 @@ export function createGolemMcpServer(deps: GolemMcpServerDeps): McpServer {
   });
 
   registerTools(server, deps);
+  registerPluginTools(server, deps);
   registerPrompts(server);
   return server;
+}
+
+/**
+ * R8.11 seam C (ADR-0004) — register the plugin tools the user granted the
+ * `tool` seam. Registered LAST, after Golem's own seven, so a plugin cannot
+ * shadow a built-in even if the SDK were to allow a duplicate name; the
+ * `<plugin>__<name>` namespace makes a collision impossible anyway.
+ *
+ * The declarative {@link PluginToolParam} list is turned into a zod shape here
+ * rather than accepted as one, so a plugin needs neither zod nor the MCP SDK to
+ * satisfy the contract — and so a plugin cannot hand the server a "schema"
+ * that runs its code during validation.
+ */
+function registerPluginTools(server: McpServer, deps: GolemMcpServerDeps): void {
+  const entries = deps.pluginTools ?? [];
+  for (const { pluginName, tool } of entries) {
+    const shape: Record<string, z.ZodTypeAny> = {};
+    for (const param of tool.params ?? []) {
+      const base =
+        param.type === "number" ? z.number() : param.type === "boolean" ? z.boolean() : z.string();
+      const described = base.describe(param.description);
+      shape[param.name] = param.required === true ? described : described.optional();
+    }
+    server.registerTool(
+      `${pluginName}__${tool.name}`,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: shape,
+      },
+      async (args: Record<string, unknown>) => {
+        const outcome = await runToolQuarantined(pluginName, tool, args as PluginToolArgs, {
+          projectDir: deps.projectRootDir ?? process.cwd(),
+          log: (message: string) => pluginLog(pluginName, message),
+        });
+        return outcome.isError ? errorResult(outcome.text) : textResult(outcome.text);
+      },
+    );
+  }
 }
 
 function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {

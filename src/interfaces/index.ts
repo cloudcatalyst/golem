@@ -38,6 +38,23 @@ export type {
 export { DEFAULT_SCOPES, UnknownChunkError } from "./knowledge.js";
 
 export type {
+  GolemPlugin,
+  PluginLoadFailure,
+  PluginPatternFlag,
+  PluginSeam,
+  PluginStage,
+  PluginStageContext,
+  PluginStageResult,
+  PluginTool,
+  PluginToolArgs,
+  PluginToolContext,
+  PluginToolParam,
+  PluginValidatorName,
+  RedactionRuleDescriptor,
+} from "./plugin.js";
+export { PLUGIN_SEAMS } from "./plugin.js";
+
+export type {
   BrevityDial,
   CompressionDial,
   Pinned,

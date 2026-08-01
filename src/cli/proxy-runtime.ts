@@ -13,6 +13,7 @@ import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
+import type { PluginStage } from "../interfaces/plugin.js";
 import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
 import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
@@ -104,6 +105,16 @@ export interface BuildProxyOptions {
    * eligible request.
    */
   readonly suppressLocalAnswer?: boolean;
+  /**
+   * R8.11 seam B (ADR-0004): plugin stages from {@link activatePlugins}, which
+   * the caller runs at startup. Passed in rather than resolved here because
+   * activation is asynchronous and has the side effect of installing seam A's
+   * redaction rules — both of which belong to process start, not to assembly.
+   */
+  readonly pluginStages?: readonly {
+    readonly pluginName: string;
+    readonly stage: PluginStage;
+  }[];
 }
 
 /**
@@ -210,6 +221,13 @@ export function buildProxyFromSettings(
   const assumeCachingUpstream = upstreamAssumesCaching(upstream.provider);
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
+    // R8.11 seam B (ADR-0004). Activation happens in the CALLER, before this
+    // assembler runs: seam A installs a process-global rule set that must be
+    // final before the first byte is redacted, and a startup act does not belong
+    // in a function whose job is to wire objects together. Absent → no stage runs.
+    ...(build.pluginStages !== undefined && build.pluginStages.length > 0
+      ? { pluginStages: build.pluginStages }
+      : {}),
     policy: resolvePolicy,
     projectId: dir,
     upstreamBaseUrl: upstream.baseUrl,

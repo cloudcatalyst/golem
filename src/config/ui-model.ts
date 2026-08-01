@@ -506,6 +506,22 @@ export const SETTING_META = {
       "Off is ADVISORY — one nudge per window that the agent can work past. Only ever " +
       "fires on a fresh rate-limit reading; a stale feed just warns.",
   },
+
+  // --- plugins ---------------------------------------------------------------
+  "plugins.entries": {
+    label: "Plugins",
+    summary: "Third-party seams loaded from your own install (ADR-0004)",
+    detail:
+      "Golem never downloads or installs a plugin — a declared-but-absent one is a no-op " +
+      "with a reason. `seams` is the consent: listing a package grants nothing until you " +
+      "name the seams it may use. Seams `stage` and `tool` run unsandboxed in Golem's " +
+      "process; `redaction` accepts patterns only, never code.",
+    danger:
+      "A stage or tool plugin runs with the full privilege of the Golem process. Only add " +
+      "packages you trust as much as any other dependency.",
+    restart: "proxy",
+    advanced: true,
+  },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
 /** Metadata for one leaf; undefined for an unknown path. */
@@ -556,6 +572,11 @@ export const SECTION_META = {
   },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
   slider: { title: "Savings", summary: "The compression dial", order: 80 },
+  plugins: {
+    title: "Plugins",
+    summary: "Third-party seams resolved from your own install — never fetched (ADR-0004)",
+    order: 90,
+  },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 
 export function sectionMeta(section: string): SectionMeta | undefined {

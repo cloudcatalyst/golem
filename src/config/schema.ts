@@ -439,6 +439,32 @@ export const SETTINGS_LEAVES = {
      */
     enforce: z.boolean(),
   },
+  plugins: {
+    /**
+     * R8.11 (ADR-0004): third-party seams Golem loads **from the user's own
+     * install** — an npm package they installed or a local path. Golem never
+     * downloads, installs, vendors or updates a plugin; a declared-but-absent
+     * plugin is a no-op with a reason, never an error (Decision 53, criterion 3).
+     *
+     * `seams` is the consent: listing a package grants nothing on its own, and
+     * `["redaction"]` grants exactly the redaction seam. `pin` is COMPARED
+     * against the installed version, never fetched — a mismatch contributes
+     * nothing rather than running an unpinned version.
+     *
+     * Empty by default, and an empty list is byte-identical to no plugin support
+     * at all: nothing resolves, nothing imports, no tokens.
+     */
+    entries: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          specifier: z.string().min(1),
+          pin: z.string().min(1).optional(),
+          seams: z.array(z.enum(["redaction", "stage", "tool"])).optional(),
+        }),
+      )
+      .optional(),
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -553,6 +579,19 @@ export interface SnoozeSettings {
   readonly enforce: boolean;
 }
 
+/** R8.11 — one declared plugin (ADR-0004 §3). Identity only; Golem installs nothing. */
+export interface PluginEntrySetting {
+  readonly id: string;
+  readonly specifier: string;
+  readonly pin?: string;
+  readonly seams?: readonly ("redaction" | "stage" | "tool")[];
+}
+
+/** R8.11 — the plugin registry. Empty by default. */
+export interface PluginsSettings {
+  readonly entries?: readonly PluginEntrySetting[];
+}
+
 export interface GolemSettings {
   readonly slider: SliderSettings;
   readonly proxy: ProxySettings;
@@ -564,6 +603,7 @@ export interface GolemSettings {
   readonly ui: UiSettings;
   readonly models: ModelsSettings;
   readonly snooze: SnoozeSettings;
+  readonly plugins: PluginsSettings;
 }
 
 /**
@@ -644,6 +684,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   snooze: {
     enforce: true,
   },
+  // R8.11: no plugins. An empty registry resolves nothing, imports nothing and
+  // costs nothing — the default is byte-identical to having no plugin support.
+  plugins: {},
 });
 
 /** Recursively freeze an object graph (arrays included). */
