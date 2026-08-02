@@ -371,7 +371,7 @@ function pushEnvAction(
 }
 
 /** The `.mcp.json` entry init installs (verification-notes §9 schema). */
-function golemMcpEntry(): JsonObject {
+export function golemMcpEntry(): JsonObject {
   return {
     type: "stdio",
     command: "golem",
