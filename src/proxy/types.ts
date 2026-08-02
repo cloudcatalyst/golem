@@ -161,27 +161,6 @@ export interface ProxyServerOptions {
    * response stays a raw byte pipe (byte-faithful hard rule). Default: none.
    */
   readonly translateUpstream?: UpstreamTranslator;
-  /**
-   * R6.1 case (b): optional context-window gate for translating providers.
-   *
-   * When set, the proxy checks the outgoing request's estimated token count
-   * against the upstream model's real context window BEFORE dispatching. If the
-   * request would exceed ~90% of the window, the proxy returns a synthetic
-   * Anthropic `context_length_exceeded` error instead of forwarding — prompting
-   * Claude Code to compact/truncate the conversation rather than letting the
-   * upstream reject mid-stream or silently truncate.
-   *
-   * This exists because Claude Code tracks its context against the `claude-*`
-   * model name (~200K), but a translating provider's model may have a much
-   * smaller window (e.g. 131K for poolside/laguna-s-2.1:free). See
-   * `upstream-context-window.ts` for the cache + fetch logic.
-   *
-   * Absent → no check, byte-faithful forwarding unchanged (the default).
-   */
-  readonly checkContextWindow?: () => Promise<{
-    shouldReject: (requestBody: Buffer | null) => boolean;
-    contextWindow: number | null;
-  }>;
 }
 
 /**
@@ -238,27 +217,6 @@ export interface ProxyConfig {
     headers: Record<string, string | string[]>,
   ) => Record<string, string | string[]>;
   readonly translateUpstream?: UpstreamTranslator;
-  /**
-   * R6.1 case (b): optional context-window gate for translating providers.
-   *
-   * When set, the proxy checks the outgoing request's estimated token count
-   * against the upstream model's real context window BEFORE dispatching. If the
-   * request would exceed ~90% of the window, the proxy returns a synthetic
-   * Anthropic `context_length_exceeded` error instead of forwarding — prompting
-   * Claude Code to compact/truncate the conversation rather than letting the
-   * upstream reject or silently truncate mid-stream.
-   *
-   * This exists because Claude Code tracks its context against the `claude-*`
-   * model name (~200K), but a translating provider's model may have a much
-   * smaller window (e.g. 131K for poolside/laguna-s-2.1:free). See
-   * `upstream-context-window.ts` for the cache + fetch logic.
-   *
-   * Absent → no check, byte-faithful forwarding unchanged (the default).
-   */
-  readonly checkContextWindow?: () => Promise<{
-    shouldReject: (requestBody: Buffer | null) => boolean;
-    contextWindow: number | null;
-  }>;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -278,9 +236,6 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
       : {}),
     ...(options.translateUpstream !== undefined
       ? { translateUpstream: options.translateUpstream }
-      : {}),
-    ...(options.checkContextWindow !== undefined
-      ? { checkContextWindow: options.checkContextWindow }
       : {}),
   };
 }
