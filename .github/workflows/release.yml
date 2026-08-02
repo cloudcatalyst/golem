@@ -1,7 +1,7 @@
 name: Release
 
 # Cuts a release when a vX.Y.Z tag is pushed (spec Decision 41d):
-#   1. verify        — the same gate as CI, plus a tag↔package.json version check
+#   1. resolve       — resolve the tag and check it matches package.json (no CI re-run; ci.yml gates main)
 #   2. binaries      — cross-compile all standalone targets with Bun (one host)
 #   3. release       — create/update the GitHub Release and attach the binaries
 #   4. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
@@ -25,15 +25,19 @@ permissions:
   contents: write # create Releases and upload assets
 
 jobs:
-  verify:
-    name: Verify + resolve tag
+  # Lean gate: resolve the tag and guard it against package.json — NOT a CI
+  # re-run (lint/typecheck/test already gate `main` in ci.yml). The version
+  # check must precede the binary build so mismatched binaries are never
+  # attached under a tag. `node` is preinstalled on the runner (no setup-node).
+  resolve:
+    name: Resolve tag
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve tag
+      - name: Resolve tag + check it matches package.json
         id: resolve
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -42,43 +46,16 @@ jobs:
             TAG="${{ github.ref_name }}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Releasing tag: $TAG"
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
-
-      - name: Install
-        run: npm ci
-
-      - name: Tag matches package.json version
-        run: |
           PKG="v$(node -p "require('./package.json').version")"
-          TAG="${{ steps.resolve.outputs.tag }}"
           if [ "$PKG" != "$TAG" ]; then
             echo "::error::tag $TAG does not match package.json version $PKG — run 'npm run release' before tagging"
             exit 1
           fi
-
-      - name: Lint + format
-        run: npm run lint
-
-      - name: Type check (strict)
-        run: npm run typecheck
-
-      - name: Tests
-        run: npm test
-
-      - name: Build
-        run: npm run build
-
-      - name: Wiki lint
-        run: node dist/cli/main.js wiki check
+          echo "Releasing $TAG"
 
   binaries:
     name: Standalone binaries (Bun)
-    needs: verify
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,7 +85,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [verify, binaries]
+    needs: [resolve, binaries]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -120,7 +97,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ needs.verify.outputs.tag }}
+          TAG: ${{ needs.resolve.outputs.tag }}
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists — uploading assets (clobber)."
@@ -132,7 +109,7 @@ jobs:
 
   npm-publish:
     name: Publish to npm (optional)
-    needs: verify
+    needs: resolve
     runs-on: ubuntu-latest
     # Job-level env so the step `if` below can read it (a step can't reliably
     # read its own env, and secrets aren't visible in `if`). Empty when the
@@ -160,7 +137,7 @@ jobs:
 
   vscode-publish:
     name: Publish VS Code extension (optional)
-    needs: verify
+    needs: resolve
     runs-on: ubuntu-latest
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}
