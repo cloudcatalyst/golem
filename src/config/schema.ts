@@ -162,16 +162,22 @@ export const SETTINGS_LEAVES = {
      */
     local_editor_enabled: z.boolean(),
     /** R8.15: user-declared provider table for local-model role routing. */
-    providers: z.array(z.object({
-      id: z.string(),
-      api: z.enum(["openai-completions", "openai-embeddings", "openai", "ollama", "anthropic"]),
-      base_url: z.string(),
-      models: z.array(z.object({
-        id: z.string(),
-        roles: z.array(z.string()).optional(),
-        context_window: z.number().int().positive().optional(),
-      })),
-    })).default([]),
+    providers: z
+      .array(
+        z.object({
+          id: z.string(),
+          api: z.enum(["openai-completions", "openai-embeddings", "openai", "ollama", "anthropic"]),
+          base_url: z.string(),
+          models: z.array(
+            z.object({
+              id: z.string(),
+              roles: z.array(z.string()).optional(),
+              context_window: z.number().int().positive().optional(),
+            }),
+          ),
+        }),
+      )
+      .default([]),
   },
   compression: {
     /**

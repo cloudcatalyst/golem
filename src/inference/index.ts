@@ -61,10 +61,15 @@ export {
   createProbeRunner,
   DEFAULT_PROBE_TIMEOUT_MS,
 } from "./probe.js";
+export type {
+  ProbeApi,
+  ProviderEntry,
+  ProviderModelEntry,
+  ResolvedChatModel,
+} from "./providers.js";
+export { probeInferenceEndpoint, resolveChatModel } from "./providers.js";
 export type { FallbackPolicy, OllamaInferenceOptions } from "./service.js";
 export {
   HaikuFallbackRequired,
   OllamaInferenceService,
 } from "./service.js";
-export type { ProbeApi, ProviderEntry, ProviderModelEntry, ResolvedChatModel } from "./providers.js";
-export { probeInferenceEndpoint, resolveChatModel } from "./providers.js";
