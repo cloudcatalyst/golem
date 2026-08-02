@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import {
   applyControl,
   type Control,
@@ -56,8 +57,52 @@ beforeEach(async () => {
   base = await mkdtemp(path.join(os.tmpdir(), "golem-controls-test-"));
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
+  // Write init markers so setSliderLevel sees an initialized project and
+  // skips golemInit (which throws on a CI runner without Claude Code).
   await mkdir(path.join(projectDir, ".golem"), { recursive: true });
-  await writeFile(projectFile(), "{}\n", "utf8");
+  const port = defaultProjectPort(projectDir);
+  await writeFile(projectFile(), JSON.stringify({ proxy: { port } }), "utf8");
+  await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+  await writeFile(
+    path.join(projectDir, ".claude", "settings.json"),
+    JSON.stringify({ env: { ANTHROPIC_BASE_URL: `http://localhost:${port}` } }),
+    "utf8",
+  );
+  await writeFile(
+    path.join(projectDir, ".mcp.json"),
+    JSON.stringify({
+      mcpServers: {
+        golem: { type: "stdio", command: "golem", args: ["mcp", "serve"], timeout: 60_000 },
+      },
+    }),
+    "utf8",
+  );
+  const SKILL_NAMES = [
+    "slider",
+    "stats",
+    "expand",
+    "bypass",
+    "research",
+    "wiki-ingest",
+    "develop",
+    "plan",
+    "verify",
+    "ship",
+    "promote",
+    "upstream",
+    "debrief",
+    "park",
+    "triage",
+    "cache-health",
+    "context-hygiene",
+    "fresh-eyes",
+    "checkpoint",
+  ];
+  for (const s of SKILL_NAMES) {
+    const dir = path.join(projectDir, ".claude", "skills", "golem", s);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "SKILL.md"), `# golem ${s}\n`, "utf8");
+  }
 });
 
 afterEach(async () => {
@@ -235,7 +280,8 @@ describe("applyControl", () => {
       applyControl("setting:proxy.port", "not-a-port", "project", OPTS()),
     ).rejects.toThrow(/number/i);
     // The file is untouched — a rejected write must not half-apply.
-    expect(await readFile(projectFile(), "utf8")).toBe("{}\n");
+    const onDisk = JSON.parse(await readFile(projectFile(), "utf8")) as Record<string, unknown>;
+    expect(typeof onDisk.proxy).toBe("object");
   });
 
   it("rejects unknown ids and unknown families", async () => {
