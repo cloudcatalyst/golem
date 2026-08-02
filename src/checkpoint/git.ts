@@ -79,10 +79,15 @@ export async function runGit(
     child.once("close", (code) => {
       resolve({ code, stdout, stderr, spawnFailed: false });
     });
-    try {
-      child.stdin?.end(opts.stdin ?? "", "utf8");
-    } catch {
-      // EPIPE when the child exited before reading stdin — not an error here.
+    if (child.stdin) {
+      child.stdin.on("error", () => {
+        // EPIPE when the child exited before reading stdin — not an error here.
+      });
+      try {
+        child.stdin.end(opts.stdin ?? "", "utf8");
+      } catch {
+        // EPIPE at the call site too.
+      }
     }
   });
 }

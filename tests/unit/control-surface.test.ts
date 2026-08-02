@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { golemMcpEntry } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import {
   applyControl,
@@ -70,11 +71,7 @@ beforeEach(async () => {
   );
   await writeFile(
     path.join(projectDir, ".mcp.json"),
-    JSON.stringify({
-      mcpServers: {
-        golem: { type: "stdio", command: "golem", args: ["mcp", "serve"], timeout: 60_000 },
-      },
-    }),
+    JSON.stringify({ mcpServers: { golem: golemMcpEntry() } }),
     "utf8",
   );
   const SKILL_NAMES = [
