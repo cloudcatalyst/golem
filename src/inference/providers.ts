@@ -24,7 +24,12 @@ import { chatModelFor } from "./catalog.js";
  * - `"ollama"` → Ollama native at `/api/tags`.
  * - `"anthropic"` → Anthropic Messages at `/v1/messages`.
  */
-export type ProbeApi = "openai-completions" | "openai-embeddings" | "openai" | "ollama" | "anthropic";
+export type ProbeApi =
+  | "openai-completions"
+  | "openai-embeddings"
+  | "openai"
+  | "ollama"
+  | "anthropic";
 
 /**
  * One model entry under a provider's `models` list.
@@ -85,9 +90,7 @@ export function resolveChatModel(
           model: model.id,
           baseUrl: provider.base_url,
           api: provider.api,
-          ...(model.context_window !== undefined
-            ? { contextWindow: model.context_window }
-            : {}),
+          ...(model.context_window !== undefined ? { contextWindow: model.context_window } : {}),
         };
       }
     }
@@ -122,11 +125,7 @@ export async function probeInferenceEndpoint(
   try {
     const origin = baseUrl.replace(/\/+$/, "");
     const path =
-      api === "ollama"
-        ? "/api/tags"
-        : api === "anthropic"
-          ? "/v1/messages"
-          : "/v1/models";
+      api === "ollama" ? "/api/tags" : api === "anthropic" ? "/v1/messages" : "/v1/models";
     const url = `${origin}${path}`;
     const method = api === "anthropic" ? "HEAD" : "GET";
     const res = await fetch(url, { signal: controller.signal, method });

@@ -322,7 +322,7 @@ export async function runEditArm(opts: EditArmOptions): Promise<EditRun> {
     deterministic,
     lenientMatches: scored.filter((o) => o.matchedBy === "exact-then-trimmed").length,
     parseUnavailable: scored.filter(
-      (o) => o.applied && o.reason !== null && o.reason.includes("syntax check was unavailable"),
+      (o) => o.applied && o.reason?.includes("syntax check was unavailable"),
     ).length,
     meanReplyTokens: scored.length === 0 ? 0 : Math.round(replyTokenTotal / scored.length),
     outcomes,
