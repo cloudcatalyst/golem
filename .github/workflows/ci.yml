@@ -6,14 +6,17 @@ on:
   pull_request:
 
 jobs:
+  # Ubuntu-only to conserve Actions minutes on this private repo (macOS bills at
+  # 10x, Windows at 2x). Cross-OS coverage now comes from local Windows dev + the
+  # release workflow's Bun cross-compile — NOT a full CI matrix. To spot-check
+  # macOS/Windows, temporarily add them back to `os` below, or run locally.
   test:
-    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    name: ubuntu / node ${{ matrix.node }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ["22", "24"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
