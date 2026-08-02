@@ -27,8 +27,11 @@ import { servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { type DialInfo, getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
-import { type LocalModelInfo, probeAndCacheLocalModelInfo } from "./local-model.js";
-import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
+import {
+  type LocalModelInfo,
+  type ProviderEntry as LocalProviderEntry,
+  probeAndCacheLocalModelInfo,
+} from "./local-model.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 
 /** Decision 52 — one dial's state in the JSON report. */

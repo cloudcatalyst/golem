@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 // (`localModelInfoCached`, `golemDirExists`) sit on the `golem statusline` path,
 // which Claude Code runs on every prompt. See verification-notes §86.
 import type { ProviderEntry } from "../inference/providers.js";
+
 export type { ProviderEntry }; // re-export for status.ts / statusline.ts
 
 export interface LocalModelState {

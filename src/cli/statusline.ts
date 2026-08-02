@@ -27,7 +27,6 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
-import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
 import {
   resolveUpstreamDisplay,
@@ -41,6 +40,7 @@ import { openTelemetryStore } from "../telemetry/index.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 // `../version.js`, not `../index.js` (which also re-exports every interface).
 import { VERSION } from "../version.js";
+import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 // `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
