@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 // (`localModelInfoCached`, `golemDirExists`) sit on the `golem statusline` path,
 // which Claude Code runs on every prompt. See verification-notes §86.
 import type { ProviderEntry } from "../inference/providers.js";
+export type { ProviderEntry }; // re-export for status.ts / statusline.ts
 
 export interface LocalModelState {
   readonly reachable: boolean;
@@ -162,9 +163,8 @@ export async function probeAndCacheLocalModelInfo(
   providers?: readonly ProviderEntry[],
 ): Promise<LocalModelInfo> {
   if (providers !== undefined && providers.length > 0) {
-    const { resolveChatModel, detectCapability, createProbeRunner } = await import(
-      "../inference/index.js"
-    );
+    const { resolveChatModel, detectCapability, createProbeRunner, probeInferenceEndpoint } =
+      await import("../inference/index.js");
     const facts = await detectCapability(createProbeRunner());
     const routed = resolveChatModel("drafter", {
       providers,
@@ -173,7 +173,7 @@ export async function probeAndCacheLocalModelInfo(
     });
     const coderModel = routed.model;
     // R8.15 — probe the endpoint that actually serves the drafter, not blindly
-    // the Ollama URL. `probeInferenceEndpoint` is OpenAI-aware (`/v1/models`),
+    // the Ollama URL. probeInferenceEndpoint is OpenAI-aware (`/v1/models`),
     // so a llama.cpp server with a loaded GGUF answers instead of 404ing.
     const reachable = await probeInferenceEndpoint(routed.baseUrl, routed.api);
     if (reachable) {

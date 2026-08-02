@@ -66,3 +66,5 @@ export {
   HaikuFallbackRequired,
   OllamaInferenceService,
 } from "./service.js";
+export type { ProbeApi, ProviderEntry, ProviderModelEntry, ResolvedChatModel } from "./providers.js";
+export { probeInferenceEndpoint, resolveChatModel } from "./providers.js";

@@ -164,8 +164,8 @@ export const SETTINGS_LEAVES = {
     /** R8.15: user-declared provider table for local-model role routing. */
     providers: z.array(z.object({
       id: z.string(),
-      api: z.string(),
-      base_url: z.string().url(),
+      api: z.enum(["openai-completions", "openai-embeddings", "openai", "ollama", "anthropic"]),
+      base_url: z.string(),
       models: z.array(z.object({
         id: z.string(),
         roles: z.array(z.string()).optional(),
@@ -613,6 +613,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
     local_editor_enabled: false,
+    providers: [],
   },
   compression: {
     headroom_sidecar: false,

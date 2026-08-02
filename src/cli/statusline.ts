@@ -27,7 +27,7 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
-import type { ProviderEntry } from "../inference/providers.js";
+import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
 import {
   resolveUpstreamDisplay,
@@ -297,7 +297,7 @@ export async function collectGolemState(
     localReachable?: (
       dir: string,
       baseUrl: string,
-      providers?: readonly ProviderEntry[],
+      providers?: readonly LocalProviderEntry[],
     ) => Promise<LocalModelInfo>;
   } = {},
 ): Promise<GolemState> {
@@ -306,7 +306,7 @@ export async function collectGolemState(
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
   let coderEnabled = true;
-  let providers: readonly ProviderEntry[] | undefined;
+  let providers: readonly LocalProviderEntry[] | undefined;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
   let activeAccount: string | null = null;
@@ -322,7 +322,7 @@ export async function collectGolemState(
         : settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
     coderEnabled = settings.inference.local_coder_enabled;
-    providers = settings.inference.providers;
+    providers = settings.inference.providers as readonly LocalProviderEntry[];
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
