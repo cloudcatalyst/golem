@@ -33,6 +33,7 @@ import {
   type ProxyServerOptions,
   resolveProxyConfig,
 } from "./types.js";
+import { CONTEXT_LENGTH_EXCEEDED_BODY } from "./upstream-context-window.js";
 import { UsageSniffer } from "./usage-sniffer.js";
 
 /**
@@ -54,6 +55,14 @@ function readBody(req: IncomingMessage): Promise<Buffer | null> {
     });
     req.on("error", reject);
   });
+}
+
+/** Match `/v1/messages` or `/anthropic/v1/messages` as the path tail. */
+const MESSAGES_PATH_RE = /\/(?:v1\/)?messages(?:\?.*)?$/;
+
+/** True when this is an Anthropic Messages API POST (the chat/completion endpoint). */
+function isMessagesRequest(req: { method: string; url: string }): boolean {
+  return req.method.toUpperCase() === "POST" && MESSAGES_PATH_RE.test(req.url);
 }
 
 export class GolemProxy {
@@ -185,6 +194,27 @@ export class GolemProxy {
       translateStreaming = translated.stream;
       requestPath = translated.path ?? translate.path;
       requestHeaders = { ...upstreamHeaders, "content-type": "application/json" };
+    }
+
+    // R6.1 case (b): context-window gate — before dispatching to a translating
+    // upstream, check that the (compressed + translated) request body won't
+    // exceed the upstream model's real context window. Claude Code tracks context
+    // against the `claude-*` model it sent (~200K), but the upstream model may
+    // have a smaller window (e.g. 131K for laguna). A simulated
+    // `context_length_exceeded` error prompts Claude Code to compact/truncate
+    // instead of letting the upstream reject mid-stream or truncate silently.
+    // Fail-open: an unknown window never rejects.
+    const checkContextWindow = this.config.checkContextWindow;
+    if (checkContextWindow !== undefined && isMessagesRequest(forward)) {
+      const check = await checkContextWindow();
+      if (check.shouldReject(requestBody)) {
+        res.writeHead(400, {
+          "content-type": "application/json",
+          "anthropic-dangerously-transient": "true",
+        });
+        res.end(CONTEXT_LENGTH_EXCEEDED_BODY);
+        return;
+      }
     }
 
     let upstream: Dispatcher.ResponseData;
