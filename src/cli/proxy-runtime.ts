@@ -40,7 +40,6 @@ import {
 } from "../providers/index.js";
 import type { UpstreamTranslator } from "../proxy/index.js";
 import {
-  buildContextWindowCheck,
   GolemProxy,
   parseLimitPrediction,
   writeContextLedger,
@@ -355,12 +354,6 @@ export function buildProxyFromSettings(
     pipeline,
     ...(mapUpstreamHeaders !== undefined ? { mapUpstreamHeaders } : {}),
     ...(translateUpstream !== undefined ? { translateUpstream } : {}),
-    ...(isTranslatingProvider(upstreamProvider) && upstreamModel !== undefined
-      ? {
-          checkContextWindow: () =>
-            buildContextWindowCheck(dir, upstreamModel, upstreamBase, upstreamApiKey),
-        }
-      : {}),
     onPipelineError: (err) => {
       process.stderr.write(
         `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
