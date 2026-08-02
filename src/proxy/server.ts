@@ -56,14 +56,6 @@ function readBody(req: IncomingMessage): Promise<Buffer | null> {
   });
 }
 
-/** Match `/v1/messages` or `/anthropic/v1/messages` as the path tail. */
-const MESSAGES_PATH_RE = /\/(?:v1\/)?messages(?:\?.*)?$/;
-
-/** True when this is an Anthropic Messages API POST (the chat/completion endpoint). */
-function isMessagesRequest(req: { method: string; url: string }): boolean {
-  return req.method.toUpperCase() === "POST" && MESSAGES_PATH_RE.test(req.url);
-}
-
 export class GolemProxy {
   readonly config: ProxyConfig;
   private readonly server: Server;
