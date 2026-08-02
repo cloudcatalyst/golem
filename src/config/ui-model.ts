@@ -278,6 +278,15 @@ export const SETTING_META = {
       "Measured on ~10–40-line TypeScript files; bigger files are declined, not guessed at.",
     restart: "mcp",
   },
+  "inference.providers": {
+    label: "Local model providers",
+    summary: "Provider table for role routing (coder/drafter/judge)",
+    detail:
+      "Each entry maps one endpoint + one or more models to a role. " +
+      "The first model whose roles array includes the requested role wins. " +
+      "Absent → Ollama + tier-catalog defaults.",
+    advanced: true,
+  },
 
   // --- compression ----------------------------------------------------------
   "compression.headroom_sidecar": {
