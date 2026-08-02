@@ -17,13 +17,14 @@ import { dirname, join } from "node:path";
 // `resolveCoderModel` needs it, while the cache READERS in this file
 // (`localModelInfoCached`, `golemDirExists`) sit on the `golem statusline` path,
 // which Claude Code runs on every prompt. See verification-notes §86.
+import type { ProviderEntry } from "../inference/providers.js";
 
 export interface LocalModelState {
   readonly reachable: boolean;
   /**
-   * The concrete local model the `coder`/`drafter` role runs at this machine's
-   * hardware tier (e.g. `qwen2.5-coder:7b`), when the local model is reachable.
-   * Absent when unreachable or not yet resolved.
+   * The concrete local model the `coder`/`drafter` role runs — resolved through
+   * the R8.15 provider table when declared, otherwise the tier catalog default
+   * (e.g. `qwen2.5-coder:7b`). Absent when unreachable or not yet resolved.
    */
   readonly coderModel?: string;
   readonly ts: string;
@@ -86,17 +87,29 @@ export async function readLocalModelCache(projectDir: string): Promise<LocalMode
 }
 
 /**
- * The concrete model the `coder`/`drafter` role runs at this machine's hardware
- * tier (e.g. `qwen2.5-coder:7b`). `detectCapability` never throws and degrades
- * to the CPU tier, so this always resolves; `""` only if the probe path itself
+ * The concrete model the `coder`/`drafter` role runs, resolved through the R8.15
+ * provider table when one is declared — falling back to the tier catalog only
+ * when no provider claims it. `detectCapability` never throws and degrades to
+ * the CPU tier, so this always resolves; `""` only if the probe path itself
  * fails unexpectedly (guarded so callers never see a throw).
  */
-export async function resolveCoderModel(): Promise<string> {
+export async function resolveCoderModel(
+  providers?: readonly ProviderEntry[],
+  baseUrl?: string,
+): Promise<string> {
   try {
-    const { chatModelFor, createProbeRunner, detectCapability } = await import(
+    const { chatModelFor, createProbeRunner, detectCapability, resolveChatModel } = await import(
       "../inference/index.js"
     );
     const facts = await detectCapability(createProbeRunner());
+    if (providers !== undefined && baseUrl !== undefined) {
+      const routed = resolveChatModel("drafter", {
+        providers,
+        tier: facts.tier,
+        ollamaBaseUrl: baseUrl,
+      });
+      return routed.model;
+    }
     return chatModelFor(facts.tier, "drafter");
   } catch {
     return "";
@@ -138,18 +151,42 @@ export function localCacheFresh(
 }
 
 /**
- * Live probe that also refreshes the cache — for surfaces that can afford a
- * network call (`golem status`, the dashboard). Never throws.
- */
-/**
  * Live probe (reachability + coder model) that also refreshes the cache — for
  * surfaces that can afford a network call (`golem status`, the dashboard). The
- * coder model is resolved only when the local model is reachable. Never throws.
+ * coder model is resolved through the R8.15 provider table when one is passed;
+ * otherwise the tier catalog is used as before. Never throws.
  */
 export async function probeAndCacheLocalModelInfo(
   projectDir: string,
   baseUrl: string,
+  providers?: readonly ProviderEntry[],
 ): Promise<LocalModelInfo> {
+  if (providers !== undefined && providers.length > 0) {
+    const { resolveChatModel, detectCapability, createProbeRunner } = await import(
+      "../inference/index.js"
+    );
+    const facts = await detectCapability(createProbeRunner());
+    const routed = resolveChatModel("drafter", {
+      providers,
+      tier: facts.tier,
+      ollamaBaseUrl: baseUrl,
+    });
+    const coderModel = routed.model;
+    // R8.15 — probe the endpoint that actually serves the drafter, not blindly
+    // the Ollama URL. `probeInferenceEndpoint` is OpenAI-aware (`/v1/models`),
+    // so a llama.cpp server with a loaded GGUF answers instead of 404ing.
+    const reachable = await probeInferenceEndpoint(routed.baseUrl, routed.api);
+    if (reachable) {
+      await writeLocalModelCache(projectDir, reachable, coderModel);
+      return { reachable, coderModel };
+    }
+    // The provider endpoint is unreachable — still cache the negative, and
+    // fall through to the Ollama probe so a separate Ollama backend is not
+    // silently hidden.
+    await writeLocalModelCache(projectDir, false, undefined);
+  }
+  // No provider table (or resolution failed) — fall back to the Ollama-shaped
+  // probe + catalog resolution, preserving pre-R8.15 behaviour.
   const reachable = await probeLocalModel(baseUrl);
   const coderModel = reachable ? await resolveCoderModel() : "";
   await writeLocalModelCache(projectDir, reachable, coderModel);
@@ -159,8 +196,9 @@ export async function probeAndCacheLocalModelInfo(
 export async function probeAndCacheLocalModel(
   projectDir: string,
   baseUrl: string,
+  providers?: readonly ProviderEntry[],
 ): Promise<boolean> {
-  return (await probeAndCacheLocalModelInfo(projectDir, baseUrl)).reachable;
+  return (await probeAndCacheLocalModelInfo(projectDir, baseUrl, providers)).reachable;
 }
 
 /**
@@ -170,6 +208,7 @@ export async function probeAndCacheLocalModel(
 export async function localModelInfoCached(
   projectDir: string,
   baseUrl: string,
+  providers?: readonly ProviderEntry[],
 ): Promise<LocalModelInfo> {
   const cached = await readLocalModelCache(projectDir);
   if (cached && localCacheFresh(cached)) {
@@ -178,7 +217,7 @@ export async function localModelInfoCached(
       ...(cached.coderModel !== undefined ? { coderModel: cached.coderModel } : {}),
     };
   }
-  return probeAndCacheLocalModelInfo(projectDir, baseUrl);
+  return probeAndCacheLocalModelInfo(projectDir, baseUrl, providers);
 }
 
 /**
@@ -188,6 +227,7 @@ export async function localModelInfoCached(
 export async function localModelReachableCached(
   projectDir: string,
   baseUrl: string,
+  providers?: readonly ProviderEntry[],
 ): Promise<boolean> {
-  return (await localModelInfoCached(projectDir, baseUrl)).reachable;
+  return (await localModelInfoCached(projectDir, baseUrl, providers)).reachable;
 }

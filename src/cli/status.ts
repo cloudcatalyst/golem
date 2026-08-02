@@ -246,9 +246,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // BOTH and say which of them the slider is actually driving.
       getDialInfo("brevity", sliderOpts),
       getDialInfo("compression", sliderOpts),
-      localProbe(projectDir, settings.inference.ollama_base_url).catch(
-        (): LocalModelInfo => ({ reachable: false }),
-      ),
+      localProbe(
+        projectDir,
+        settings.inference.ollama_base_url,
+        settings.inference.providers,
+      ).catch((): LocalModelInfo => ({ reachable: false })),
       servedModelFor(projectDir, upstream.accountId).catch(() => null),
     ]);
 
