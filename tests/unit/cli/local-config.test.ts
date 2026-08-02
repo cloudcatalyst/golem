@@ -63,6 +63,7 @@ describe("collectLocalModel", () => {
   it("reports the defaults: coder enabled, localhost, with provenance", async () => {
     const report = await collectLocalModel({
       projectDir: dir,
+      userDir: dir,
       probe: async () => true,
       detect,
       listModels,
@@ -83,6 +84,7 @@ describe("collectLocalModel", () => {
     it("is not-pulled when the endpoint answers but lacks the model", async () => {
       const report = await collectLocalModel({
         projectDir: dir,
+        userDir: dir,
         probe: async () => true,
         detect,
         listModels: pulled(["bge-m3:latest"]),
@@ -96,6 +98,7 @@ describe("collectLocalModel", () => {
     it("is unknown — never not-pulled — when the endpoint cannot be listed", async () => {
       const report = await collectLocalModel({
         projectDir: dir,
+        userDir: dir,
         probe: async () => false,
         detect,
         listModels: () => Promise.reject(new Error("ECONNREFUSED")),
@@ -109,6 +112,7 @@ describe("collectLocalModel", () => {
     it("matches an untagged catalog id against the endpoint's tagged name", async () => {
       const report = await collectLocalModel({
         projectDir: dir,
+        userDir: dir,
         probe: async () => true,
         detect: async () => ({ tier: 2 as const, coderModel: "bge-m3" }),
         listModels: pulled(["bge-m3:latest"]),
@@ -126,6 +130,7 @@ describe("collectLocalModel", () => {
     await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
     const report = await collectLocalModel({
       projectDir: dir,
+      userDir: dir,
       probe: async () => true,
       detect,
       listModels,
@@ -138,6 +143,7 @@ describe("collectLocalModel", () => {
   it("is not active when nothing answers, even if the coder tool is enabled", async () => {
     const report = await collectLocalModel({
       projectDir: dir,
+      userDir: dir,
       probe: async () => false,
       detect,
       listModels,
@@ -154,6 +160,7 @@ describe("collectLocalModel", () => {
     const probed: string[] = [];
     const report = await collectLocalModel({
       projectDir: dir,
+      userDir: dir,
       probe: async (url) => {
         probed.push(url);
         return true;
@@ -168,6 +175,7 @@ describe("collectLocalModel", () => {
   it("survives a detection failure rather than throwing out of a status command", async () => {
     const report = await collectLocalModel({
       projectDir: dir,
+      userDir: dir,
       probe: async () => false,
       detect: async () => {
         throw new Error("no probe runner here");
@@ -185,13 +193,13 @@ describe("collectLocalModel", () => {
 describe("setLocalCoderEnabled", () => {
   it("writes the setting and it is readable back through the loader", async () => {
     await setLocalCoderEnabled(false, "project", { projectDir: dir });
-    expect((await loadConfig({ projectDir: dir })).settings.inference.local_coder_enabled).toBe(
-      false,
-    );
+    expect(
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.local_coder_enabled,
+    ).toBe(false);
     await setLocalCoderEnabled(true, "project", { projectDir: dir });
-    expect((await loadConfig({ projectDir: dir })).settings.inference.local_coder_enabled).toBe(
-      true,
-    );
+    expect(
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.local_coder_enabled,
+    ).toBe(true);
   });
 
   it("honours the requested scope", async () => {
@@ -211,9 +219,9 @@ describe("setLocalBaseUrl", () => {
     });
     expect(result.reachable).toBe(true);
     expect(result.remote).toBe(true);
-    expect((await loadConfig({ projectDir: dir })).settings.inference.ollama_base_url).toBe(
-      "http://gpubox.lan:11434",
-    );
+    expect(
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.ollama_base_url,
+    ).toBe("http://gpubox.lan:11434");
   });
 
   /**
@@ -226,9 +234,9 @@ describe("setLocalBaseUrl", () => {
       probeFn: async () => false,
     });
     expect(result.reachable).toBe(false);
-    expect((await loadConfig({ projectDir: dir })).settings.inference.ollama_base_url).toBe(
-      "http://gpubox.lan:11434",
-    );
+    expect(
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.ollama_base_url,
+    ).toBe("http://gpubox.lan:11434");
   });
 
   it("skips the probe when asked, reporting an unknown verdict", async () => {
@@ -250,9 +258,9 @@ describe("setLocalBaseUrl", () => {
       setLocalBaseUrl("not a url at all", "project", { projectDir: dir, probe: false }),
     ).rejects.toThrow(/not a URL/);
     // Unchanged.
-    expect((await loadConfig({ projectDir: dir })).settings.inference.ollama_base_url).toBe(
-      "http://localhost:11434",
-    );
+    expect(
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.ollama_base_url,
+    ).toBe("http://localhost:11434");
   });
 
   /**
@@ -276,7 +284,13 @@ describe("rendering", () => {
   it("says WHY the local model is inactive, and how to fix it", async () => {
     await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => true, detect, listModels }),
+      await collectLocalModel({
+        projectDir: dir,
+        userDir: dir,
+        probe: async () => true,
+        detect,
+        listModels,
+      }),
     );
     expect(out).toContain("not active");
     expect(out).toContain("DISABLED");
@@ -288,14 +302,26 @@ describe("rendering", () => {
       projectDir: dir,
     });
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => false, detect, listModels }),
+      await collectLocalModel({
+        projectDir: dir,
+        userDir: dir,
+        probe: async () => false,
+        detect,
+        listModels,
+      }),
     );
     expect(out).toContain("OLLAMA_HOST=0.0.0.0");
   });
 
   it("points at `golem ollama status` when the LOCAL endpoint is unreachable", async () => {
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => false, detect, listModels }),
+      await collectLocalModel({
+        projectDir: dir,
+        userDir: dir,
+        probe: async () => false,
+        detect,
+        listModels,
+      }),
     );
     expect(out).toContain("golem ollama status");
     expect(out).not.toContain("OLLAMA_HOST");
@@ -303,7 +329,13 @@ describe("rendering", () => {
 
   it("reports an active local model without remediation noise", async () => {
     const out = renderLocalModel(
-      await collectLocalModel({ projectDir: dir, probe: async () => true, detect, listModels }),
+      await collectLocalModel({
+        projectDir: dir,
+        userDir: dir,
+        probe: async () => true,
+        detect,
+        listModels,
+      }),
     );
     expect(out).toContain("ACTIVE");
     expect(out).not.toContain("golem local enable");

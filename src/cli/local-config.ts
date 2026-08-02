@@ -114,6 +114,7 @@ export interface LocalModelReport {
 
 export interface LocalModelOptions {
   readonly projectDir: string;
+  /** User config dir override — lets tests isolate from the real ~/.golem. */
   readonly userDir?: string;
   /** Test seam: override the reachability probe. */
   readonly probe?: (baseUrl: string) => Promise<boolean>;

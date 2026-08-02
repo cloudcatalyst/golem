@@ -27,6 +27,7 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
+import type { ProviderEntry } from "../inference/providers.js";
 import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
 import {
   resolveUpstreamDisplay,
@@ -292,13 +293,20 @@ export function renderStatusLine(
 /** Read Golem-side state (config + telemetry) for `dir`. Never throws. */
 export async function collectGolemState(
   dir: string,
-  opts: { localReachable?: (dir: string, baseUrl: string) => Promise<LocalModelInfo> } = {},
+  opts: {
+    localReachable?: (
+      dir: string,
+      baseUrl: string,
+      providers?: readonly ProviderEntry[],
+    ) => Promise<LocalModelInfo>;
+  } = {},
 ): Promise<GolemState> {
   let sliderLevel = 1;
   let brevity = "off";
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
   let coderEnabled = true;
+  let providers: readonly ProviderEntry[] | undefined;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
   let activeAccount: string | null = null;
@@ -314,6 +322,7 @@ export async function collectGolemState(
         : settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
     coderEnabled = settings.inference.local_coder_enabled;
+    providers = settings.inference.providers;
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
@@ -360,7 +369,7 @@ export async function collectGolemState(
   if (await golemDirExists(dir)) {
     try {
       const probe = opts.localReachable ?? localModelInfoCached;
-      const info = await probe(dir, ollamaBaseUrl);
+      const info = await probe(dir, ollamaBaseUrl, providers);
       state = {
         ...state,
         localModelReachable: info.reachable,

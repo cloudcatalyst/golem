@@ -174,7 +174,10 @@ describe("loadConfig precedence", () => {
     it("returns null when no ancestor has .golem/settings.json", async () => {
       const orphan = path.join(base, "no-golem-here");
       await mkdir(orphan, { recursive: true });
-      expect(findProjectDir(orphan)).toBeNull();
+      // Cap the walk at `base` so the test doesn't find a real .golem/ in the
+      // developer's home directory (common on Windows, where os.tmpdir() nests
+      // under C:\Users\<name>).
+      expect(findProjectDir(orphan, base)).toBeNull();
     });
 
     it("returns the deepest matching project (closest ancestor)", async () => {

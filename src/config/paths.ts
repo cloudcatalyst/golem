@@ -35,16 +35,23 @@ export interface SettingsFilePaths {
 /**
  * Walk up from `startDir` looking for a `.golem/settings.json` marker.
  * Returns the directory that contains the `.golem/` folder, or `null` when no
- * ancestor is a Golem project. Sync and bounded (stops at the filesystem root).
+ * ancestor is a Golem project.
+ *
+ * `rootDir` caps how far up the tree the walk goes — the search stops (returning
+ * `null`) at `rootDir`'s parent. This keeps tests isolated from the developer's
+ * real home-directory `.golem/`: on Windows the system temp dir nests under the
+ * user home, so an uncapped walk would otherwise find it.
  */
-export function findProjectDir(startDir: string = process.cwd()): string | null {
+export function findProjectDir(startDir: string = process.cwd(), rootDir?: string): string | null {
   let dir = path.resolve(startDir);
+  const root = rootDir !== undefined ? path.resolve(rootDir) : undefined;
   while (true) {
     if (existsSync(path.join(dir, PROJECT_DIR_NAME, SETTINGS_FILE))) {
       return dir;
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
+    if (root !== undefined && parent === root) return null;
     dir = parent;
   }
 }
