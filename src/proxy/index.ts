@@ -64,13 +64,4 @@ export {
   resolveProxyConfig,
   type UpstreamTranslator,
 } from "./types.js";
-export {
-  buildContextWindowCheck,
-  CONTEXT_LENGTH_EXCEEDED_BODY,
-  CONTEXT_WINDOW_CACHE_TTL_MS,
-  estimateRequestBodyTokens,
-  fetchContextWindow,
-  readCachedContextWindow,
-  writeCachedContextWindow,
-} from "./upstream-context-window.js";
 export { UsageSniffer } from "./usage-sniffer.js";
