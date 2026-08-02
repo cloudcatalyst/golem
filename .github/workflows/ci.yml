@@ -3,7 +3,6 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
 
 jobs:
   # Ubuntu-only to conserve Actions minutes on this private repo (macOS bills at
