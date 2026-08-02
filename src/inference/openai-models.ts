@@ -79,19 +79,28 @@ export function parseModelsResponse(body: unknown): readonly string[] {
 /**
  * Pure — pull the live context window out of a llama.cpp `/props` body.
  *
- * llama.cpp has moved this field around across versions, so all three known spellings
- * are accepted. Nothing is inferred: an unrecognised body yields `{}`, and the caller
- * reports the window as unknown rather than substituting a plausible number.
+ * llama.cpp has moved this field around across versions (§114), so the search is now an
+ * ordered scan over every spelling this build has seen:
+ *
+ * - `body.n_ctx` — top level (older builds).
+ * - `body.default_generation_settings.n_ctx` — nested one level.
+ * - `body.default_generation_settings.params.n_ctx` — b10216 nests it a **third** level.
+ *
+ * Top level wins because on a server running several slots the nested value is the
+ * PER-SLOT window, and a caller budgeting a request wants the server-wide one — so the
+ * scan order is deliberate, not arbitrary. Nothing is inferred: an unrecognised body
+ * yields `{}`, and the caller reports the window as unknown rather than substituting a
+ * plausible number.
  */
 export function parsePropsResponse(body: unknown): ServerProps {
   if (!isRecord(body)) return {};
   const settings = isRecord(body.default_generation_settings)
     ? body.default_generation_settings
     : undefined;
-  // Top level first: on a server running several slots, `default_generation_settings.n_ctx`
-  // is the PER-SLOT window, which is not what a caller budgeting a request wants.
+  const params = isRecord(settings?.params) ? settings.params : undefined;
+  // Order is deliberate: top-level → settings → params, stopping at the first hit.
   let contextWindow: number | undefined;
-  for (const c of [body.n_ctx, settings?.n_ctx]) {
+  for (const c of [body.n_ctx, settings?.n_ctx, params?.n_ctx]) {
     if (typeof c === "number" && Number.isInteger(c) && c > 0) {
       contextWindow = c;
       break;

@@ -293,6 +293,33 @@ export const SETTING_META = {
     restart: "mcp",
     advanced: true,
   },
+  "inference.llamacpp_models_dir": {
+    label: "Model weights directory",
+    summary: "Where `golem llamacpp` stores GGUF files",
+    detail:
+      "Defaults to `~/.golem/models`, which is often the wrong volume — a 20 GB GGUF needs " +
+      "room the home disk may not have. `golem llamacpp setup --models-dir <path>` records " +
+      "the choice here, and setup checks free space on that volume before it starts.",
+    advanced: true,
+  },
+  "inference.llamacpp_model": {
+    label: "Local llama.cpp model",
+    summary: "The curated catalog id `golem llamacpp` last set up",
+    detail:
+      "There is deliberately no default: a 64 GB workstation and a 16 GB laptop want " +
+      "different weights for the same request. `golem llamacpp models` lists the ladder " +
+      "with each entry's fit against this machine, and `setup` records what you chose so " +
+      "`start` needs no arguments.",
+    advanced: true,
+  },
+  "inference.llamacpp_port": {
+    label: "llama.cpp server port",
+    summary: "Port for Golem's llama-server (default 11435)",
+    detail:
+      "Next door to Ollama's 11434 rather than llama.cpp's own 8080, which every other dev " +
+      "server on the machine also wants.",
+    advanced: true,
+  },
 
   // --- compression ----------------------------------------------------------
   "compression.headroom_sidecar": {

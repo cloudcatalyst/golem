@@ -17,6 +17,7 @@ import {
   type MachineFacts,
   planServer,
   resolveAsset,
+  verifyAssetName,
 } from "../../../src/inference/llamacpp-plan.js";
 
 const GB = 1024 ** 3;
@@ -90,6 +91,69 @@ describe("resolveAsset", () => {
     const url = assetUrl("llama-x-bin-win-cuda-13.3-x64.zip");
     expect(url).toContain(`/download/${LLAMACPP_RELEASE_TAG}/`);
     expect(url).not.toContain("latest");
+  });
+
+  // The §114 corrections. Every one of these was WRONG before the live run: the old
+  // table derived Linux names from the Windows ones, and upstream does not name them
+  // that way. These are the regression tests for names that do not exist.
+  it("does NOT ask for a Linux CUDA build — upstream publishes none", () => {
+    const asset = resolveAsset({ ...THIS_BOX, platform: "linux" });
+    expect(asset.name).not.toContain("cuda");
+    expect(asset.backend).toBe("vulkan");
+    // And it says why, because "where is my CUDA build?" is the obvious question.
+    expect(asset.note).toContain("no Linux CUDA build");
+  });
+
+  it("names the Linux CPU asset without a -cpu- infix", () => {
+    const asset = resolveAsset({ ...NO_NVIDIA, platform: "linux", vramBytes: 0 });
+    expect(asset.name).toBe(`llama-${LLAMACPP_RELEASE_TAG}-bin-ubuntu-x64.tar.gz`);
+    expect(asset.name).not.toContain("-cpu-");
+  });
+
+  it("uses the versioned ROCm tarball for AMD on Linux", () => {
+    const asset = resolveAsset({ ...NO_NVIDIA, platform: "linux", amdGpu: true });
+    expect(asset.backend).toBe("hip");
+    expect(asset.name).toBe(`llama-${LLAMACPP_RELEASE_TAG}-bin-ubuntu-rocm-7.2-x64.tar.gz`);
+  });
+
+  it("calls macOS metal, because Metal is compiled in rather than a separate asset", () => {
+    expect(resolveAsset({ ...THIS_BOX, platform: "darwin", arch: "arm64" })).toEqual({
+      backend: "metal",
+      name: `llama-${LLAMACPP_RELEASE_TAG}-bin-macos-arm64.tar.gz`,
+    });
+  });
+
+  it("keeps arm64 Windows on the CPU build — there is no arm64 CUDA asset", () => {
+    const asset = resolveAsset({ ...THIS_BOX, arch: "arm64" });
+    expect(asset.name).toBe(`llama-${LLAMACPP_RELEASE_TAG}-bin-win-cpu-arm64.zip`);
+  });
+});
+
+describe("verifyAssetName", () => {
+  const available = [
+    `llama-${LLAMACPP_RELEASE_TAG}-bin-win-cuda-13.3-x64.zip`,
+    "cudart-llama-bin-win-cuda-13.3-x64.zip",
+    `llama-${LLAMACPP_RELEASE_TAG}-bin-ubuntu-vulkan-x64.tar.gz`,
+  ];
+
+  it("passes when the asset and its runtime are both published", () => {
+    expect(verifyAssetName(resolveAsset(THIS_BOX), available)).toEqual({ ok: true });
+  });
+
+  it("fails with the available names when a guessed name is not there", () => {
+    const check = verifyAssetName(
+      { backend: "cuda-13.3", name: "llama-b1-bin-ubuntu-cuda-13.3-x64.tar.gz" },
+      available,
+    );
+    expect(check.ok).toBe(false);
+    // The whole point: a legible message that names alternatives, not a 404 mid-download.
+    expect(check.problem).toContain("ubuntu-vulkan");
+  });
+
+  it("catches a missing CUDA runtime bundle as well as a missing binary", () => {
+    const check = verifyAssetName(resolveAsset(THIS_BOX), [available[0] as string]);
+    expect(check.ok).toBe(false);
+    expect(check.problem).toContain("cudart");
   });
 });
 

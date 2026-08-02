@@ -5159,3 +5159,110 @@ intuitive ranking — sort by GB — gets this exactly backwards.
 **Not yet verified.** No llama.cpp server has been run and no GGUF downloaded. The
 asset names, digests and sizes above are upstream metadata, not a successful install.
 R8.18's gate remains unmet.
+
+## §114 — R8.18 shipped: llama.cpp installs and runs, and three of the four things that broke were platform lies (2026-08-01)
+
+Closes §113's "not yet verified" note. `golem llamacpp setup` was built and run **live**
+on this machine (Windows 11, RTX 3070 Laptop 8 GB, driver 596.21, 64 GB RAM with ~33 GB
+free, C: 23.6 GB free / D: 2.5 TB free). Everything below is measured or read from an
+upstream API, not inferred.
+
+### Upstream facts confirmed by calling the APIs
+
+- **GitHub's release API publishes `digest: "sha256:<hex>"` per asset.** Confirmed on
+  `b10216`: `llama-b10216-bin-win-cuda-13.3-x64.zip` = 146,505,995 bytes, digest
+  `d6743bc4…`; `cudart-llama-bin-win-cuda-13.3-x64.zip` = 391,443,627 bytes (12.4) /
+  390,970,417 (13.3). So verification needs no hardcoded digest table — the pin is the
+  *tag*, and the digest comes with the listing.
+- **Hugging Face's `/api/models/<repo>/tree/main` publishes `lfs.oid`, which is the
+  file's sha256, plus the exact size.** `ggml-org/Qwen3.6-35B-A3B-GGUF`:
+  `Qwen3.6-35B-A3B-Q4_K_M.gguf` = **20,419,565,568 bytes** (oid `671e47e0…`),
+  `mtp-…-Q4_0.gguf` = 1,060,038,432 (oid `606fca33…`), `mmproj-…-Q8_0.gguf` =
+  614,194,304, `Q8_0` = 36,903,139,328, `BF16` = 69,376,637,248. The catalog's rounded
+  GiB figures are right for *planning* and must never be used as expected byte counts —
+  the publisher is the authority, and the code now asks it.
+
+### The bug the release listing exposed: there is no Linux CUDA build
+
+`b10216` publishes **25 assets and not one `ubuntu-cuda-*`**. The shipped planner
+derived Linux names from the Windows ones, so on Linux + NVIDIA it would have requested
+`llama-b10216-bin-ubuntu-cuda-13.3-x64.tar.gz` — a name that does not exist. The Linux
+CPU asset is also **`…-bin-ubuntu-x64.tar.gz` with no `-cpu-` infix**, which the same
+derivation got wrong. Both fixed; on Linux the GPU answer is **Vulkan regardless of
+vendor** (`…-bin-ubuntu-vulkan-x64.tar.gz`, 31 MB), AMD gets
+`…-bin-ubuntu-rocm-7.2-x64.tar.gz`, and macOS is labelled `metal` because Metal is
+compiled into the tarball rather than being a separate asset.
+
+**The general lesson, and it is not about llama.cpp:** asset naming is *per-platform
+data*, not a pattern. Golem now checks the resolved name against the live release listing
+before downloading anything (`verifyAssetName`) and fails with the available names — the
+difference between "Golem is broken" and "pick one of these". The old unit tests passed
+throughout, because they asserted the shape of names rather than their existence.
+
+### Two environment lies, both about `tar`
+
+1. **The 3-second probe runner killed the extraction.** `ProbeRunner` exists for
+   short-lived status probes (`nvidia-smi`); unpacking 140 MB — never mind the 373 MB
+   CUDA bundle — takes tens of seconds, so the first live run failed at 100% download
+   with a "could not extract" message. Extraction moved to `InstallCommandRunner`
+   (10-minute budget, the same seam `golem ollama setup` uses). *Choosing the wrong
+   runner is invisible until the input is big enough.*
+2. **`tar` is not one program, and bsdtar reads `C:\` as a hostname.** Two distinct
+   failures: `tar: Cannot connect to C: resolve failed` (libarchive parses
+   `-f C:\path\x.zip` as `host:path`, and has no `--force-local`), then
+   `tar: This does not look like a tar archive` — because a Windows shell with Git on its
+   PATH resolves plain `tar` to **GNU tar**, which cannot read zip at all. Fixed by
+   running from the archive's directory with a bare filename, and by naming
+   `%SystemRoot%\System32\tar.exe` (bsdtar) explicitly, with plain `tar` and PowerShell
+   `Expand-Archive` as ordered fallbacks. `RunInstallCommandOptions` gained `cwd` for it.
+
+### What now works, measured
+
+- `golem llamacpp models` ranks the ladder against **measured free RAM** on this box and
+  recommends `qwen3.6-35b-a3b-q4` — "35B total but only 3B active per token (MoE);
+  21.0 GB resident of 28.7 GB usable" — while marking `qwen3.6-35b-a3b-q8` TOO BIG and
+  never recommending a `proven: false` entry.
+- Downloads are resumable and verified: an interrupted 20 GB fetch resumed with
+  `Range: bytes=<n>-`, a server that ignores the range restarts rather than appending
+  (which would corrupt silently), a digest mismatch **deletes** the partial, and progress
+  is published to a sidecar JSON file that a *different process* reads — used repeatedly
+  during this batch to watch the transfer from another terminal.
+- The install is per-release-tag (`~/.golem/llamacpp/b10216/`), the CUDA runtime extracts
+  **into the same directory** as `llama-server.exe` (it is not optional; without it the
+  process dies in a way that reads like a broken binary), and the server is spawned
+  detached with its log on disk because a first load of a 20 GB MoE prints exactly the
+  offload diagnostics that answer "why is this slow?".
+
+### Live gate results
+
+- **Throughput:** 400-token completion on the running Qwen3.6-35B-A3B-MoE (Q4_K_M) with
+  CUDA 13.3, 8 GB VRAM, `-ngl 99 --n-cpu-moe 999 --flash-attn on`: **15.7 tok/s end-to-end
+  (prompt eval included)** — 49 prompt tokens / 400 completion tokens in 25.5s. The gate
+  that set this task ("a slower number is a result, not a failure") intended exactly this:
+  MoEs are not fast on first load, and the honest alternative is to hide that fact. Whether
+  the MTP draft model moves the needle is still open — it is loaded and the server reports
+  it, but speculative decoding only pays at higher load and a single 400-token probe cannot
+  show it.
+- **Server state:** loaded and listening; CUDA offload active; 5 GB working set (weights
+  are mmap'd, not resident); the CPU-only equivalent starts in seconds while the CUDA path
+  adds the GPU init window.
+- **`/props` parsing:** this build nests `n_ctx` three levels deep —
+  `default_generation_settings.params.n_ctx` — none of the older forms appear. The parser
+  now scans top-level → `settings` → `settings.params`, and an unrecognised body is
+  `undefined` rather than a guessed default.
+
+### §115 — the draft-flag segfault (verified 2026-08-02)
+
+Passing an MTP draft file to `--model-draft` with llama.cpp's **default** speculative
+type segfaults the server at load (exit `0xC0000005`, verified twice on `b10216`). A
+crash, not an error — the kind of failure that reads as a broken build until the flag is
+isolated. Fix: `--spec-type draft-mtp` alongside `--model-draft`. Golem now gates the
+draft file on a `specType` field (`src/inference/gguf-catalog.ts`), and `planServer`
+**only emits the `--model-draft` flag when a spec type travels with it** — a draft file
+without one is fetched but never passed, because the failure mode of guessing is a crash
+rather than a warning.
+
+**The general lesson again:** an upstream default is not a safe default, and a crash is not
+a graceful degradation. Both `planServer` and the catalog now treat the spec type as part
+of the file's identity, the same shape `providers.ts` chose for catch-alls vs explicit
+claims — "never invent a fact."

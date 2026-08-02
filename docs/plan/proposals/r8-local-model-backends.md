@@ -22,20 +22,23 @@ than from the little-coder question:
 3. *"fit for purpose, and fit for hardware… not just for me, but for any developer"* →
    the catalog stopped having a default and grew a selector.
 
-## Where it stands (2026-08-01)
+## Where it stands (updated 2026-08-01, after R8.18 landed)
 
 | task | state | one line |
 |---|---|---|
 | **R8.15** | `running` — code complete, gate unmet | provider table; llama.cpp/LM Studio addressable. §112 |
-| **R8.16** | queued, blocked on R8.15 | little-coder as a spawned ext; **ADR-0005 first** |
-| **R8.17** | queued | small-model robustness in Golem's own local path |
-| **R8.18** | queued — planning half built | `golem llamacpp`; the I/O half is unwritten. §113 |
-| **R8.19** | queued, blocked | the routing fabric; **ADR-0005 first** |
+| **R8.16** | queued, blocked | little-coder as a spawned ext; **ADR-0005 must be ACCEPTED first** |
+| **R8.17** | queued — **priority 1** | small-model robustness in Golem's own local path |
+| **R8.18** | **shipped** | `golem llamacpp` installs, verifies, runs and wires up. §114 |
+| **R8.19** | queued, blocked | the routing fabric; **ADR-0005 must be ACCEPTED first** |
+| **R8.20** | **new** | local-only operation, visibly and enforceably (Decision 56 goal 7) |
 | **21e** | re-scoped | 21e-a unblocked into R8.19; 21e-b stays out |
 
-Two ADRs are owed and neither is written: **ADR-0005** covers R8.19's routing/consent
-question (and R8.16 depends on the same reasoning about a spawned harness's egress).
-Nothing in R8.16 or R8.19 may be built before it.
+**ADR-0005 is now drafted** (`docs/decisions/ADR-0005-model-routing-and-lanes.md`,
+status **PROPOSED**, 2026-08-01) and is the single gate on R8.16 and R8.19 — accepting it
+is a user act. **Spec Decision 56** records the product reframe those tasks now serve: no
+default model, two nameable lanes, llama.cpp first-class, and operating with no upstream a
+supported end state.
 
 ---
 

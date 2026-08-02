@@ -32,6 +32,17 @@
 
 import type { Role } from "../interfaces/inference.js";
 
+/**
+ * llama.cpp's `--spec-type` — *how* a draft file is used for speculative decoding.
+ *
+ * Not cosmetic and not optional: passing an MTP head to `--model-draft` while the type
+ * defaults to simple drafting **segfaults the server at load** (§114). Only the values
+ * Golem has verified are listed; `--spec-type` accepts more (`draft-eagle3`,
+ * `draft-dflash`, the `ngram-*` family) and each needs its own verification before a
+ * catalog entry may claim it.
+ */
+export type SpecDraftType = "draft-mtp";
+
 /** One downloadable file within a model entry. */
 export interface GgufFile {
   /** Path within the Hugging Face repo. */
@@ -43,6 +54,12 @@ export interface GgufFile {
    * it the model is text-only and rejects images with a 4xx.
    */
   readonly kind: "weights" | "draft" | "mmproj";
+  /**
+   * For `kind: "draft"`, the `--spec-type` that knows how to use this file. **A draft
+   * file without one is downloaded but never passed to the server**, because the
+   * failure mode of guessing is a crash rather than a warning.
+   */
+  readonly specType?: SpecDraftType;
 }
 
 /** What a caller is optimising for. The "fit for purpose" half. */
@@ -160,7 +177,7 @@ export const GGUF_CATALOG: readonly GgufModel[] = Object.freeze([
     quant: "Q4_K_M",
     files: [
       { path: "Qwen3.6-27B-Q4_K_M.gguf", bytes: gb(17.78), kind: "weights" },
-      { path: "mtp-Qwen3.6-27B-Q4_0.gguf", bytes: gb(1.56), kind: "draft" },
+      { path: "mtp-Qwen3.6-27B-Q4_0.gguf", bytes: gb(1.56), kind: "draft", specType: "draft-mtp" },
     ],
     moe: false,
     paramsB: 27,
@@ -180,7 +197,12 @@ export const GGUF_CATALOG: readonly GgufModel[] = Object.freeze([
     quant: "Q4_K_M",
     files: [
       { path: "Qwen3.6-35B-A3B-Q4_K_M.gguf", bytes: gb(19.02), kind: "weights" },
-      { path: "mtp-Qwen3.6-35B-A3B-Q4_0.gguf", bytes: gb(0.99), kind: "draft" },
+      {
+        path: "mtp-Qwen3.6-35B-A3B-Q4_0.gguf",
+        bytes: gb(0.99),
+        kind: "draft",
+        specType: "draft-mtp",
+      },
     ],
     moe: true,
     paramsB: 35,
@@ -200,7 +222,12 @@ export const GGUF_CATALOG: readonly GgufModel[] = Object.freeze([
     quant: "Q4_K_M",
     files: [
       { path: "Qwen3.6-35B-A3B-Q4_K_M.gguf", bytes: gb(19.02), kind: "weights" },
-      { path: "mtp-Qwen3.6-35B-A3B-Q4_0.gguf", bytes: gb(0.99), kind: "draft" },
+      {
+        path: "mtp-Qwen3.6-35B-A3B-Q4_0.gguf",
+        bytes: gb(0.99),
+        kind: "draft",
+        specType: "draft-mtp",
+      },
       { path: "mmproj-Qwen3.6-35B-A3B-Q8_0.gguf", bytes: gb(0.57), kind: "mmproj" },
     ],
     moe: true,
@@ -218,7 +245,12 @@ export const GGUF_CATALOG: readonly GgufModel[] = Object.freeze([
     quant: "Q8_0",
     files: [
       { path: "Qwen3.6-35B-A3B-Q8_0.gguf", bytes: gb(34.37), kind: "weights" },
-      { path: "mtp-Qwen3.6-35B-A3B-Q8_0.gguf", bytes: gb(1.85), kind: "draft" },
+      {
+        path: "mtp-Qwen3.6-35B-A3B-Q8_0.gguf",
+        bytes: gb(1.85),
+        kind: "draft",
+        specType: "draft-mtp",
+      },
     ],
     moe: true,
     paramsB: 35,

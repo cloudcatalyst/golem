@@ -27,7 +27,7 @@ brief.
 carries the goal, the design source, the files, the gate, and the out-of-scope list —
 no roadmap reading required.
 
-## The organising intent (Decision 36)
+## The organising intent (Decision 36, extended by Decision 56)
 
 Everything is sorted by one criterion: does it serve the working pattern that inspired
 the wiki-first pivot (Decision 28 — the "LLM Wiki / developer's second brain" article)?
@@ -43,36 +43,49 @@ the wiki-first pivot (Decision 28 — the "LLM Wiki / developer's second brain" 
 Goal 2 is largely shipped (WS-W W1–W4); goals 1 and 3 landed in R4; R5 followed. See
 [`SHIPPED.md`](SHIPPED.md).
 
-## Where we are (validated 2026-07-30)
+**Decision 56 (2026-08-01) sharpened goal 3 into the current spine.** "A local
+co-developer" was scoped as one `coder` tool on one tier-chosen model. It is now a
+**model fabric**: two nameable lanes (the *thinker* a conversation plans with, the
+*coder harness* that executes), no default model, llama.cpp first-class, and operating
+with **no upstream at all** a supported, visible end state. The extensibility seams are
+therefore the roadmap rather than decoration — the provider table (R8.15), the plugin
+seams (R8.11/ADR-0004), exts (Decision 53), and the routing fabric (R8.19).
 
-- **Baseline green:** `tsc --noEmit`, `biome check`, `npm run verify:deps` and
-  `vitest run` all pass locally, and `golem wiki check` reports 0 issues. **CI is
-  billing-blocked** (GitHub Actions refuses to start jobs) — recent PRs merged on green
-  *local* runs; unblocking it is a USER account step.
-- **R8a (context economy) is shipped, and its own instruments redirected it four
-  times** — §93 (98.4% cache hit rate → bust prevention is a guard rail, not a lever),
-  §94 (R8.2 already existed), §95 (the `tools` block is 18.8k; Bash is the biggest tool
-  consumer), §97 (Grep/Glob have no measured traffic), §100 (**93.9% of the tools block
-  is not Golem's** → R8.S1 rejected, the tools-block line closed).
-- **R8.5 shipped, and its gate said YES** — the first item in that line an instrument
-  *approved* rather than redirected. `golem bench map` measured retrieval accuracy
-  **28.6% → 50.0% (+21.4 points) for +57 tokens per call** against a plain path list
-  (§101). What is still unmeasured is **displacement**: whether the model then skips
-  the read (the R8 memo's open question 3) — that needs live traffic.
-- **R8.6 shipped (2026-07-31), and the discipline held** — the LSP bridge is four
-  **modes of the `code` tool**, not four new tools: **+333 definition tokens when
-  enabled, zero when off**, versus the ~250–320-token envelope four separate tools
-  would each pay (§109). Absence of a language server is a no-op on every path, proven
-  against a fake server so Golem depends on none. It inherits R8.5's open question —
-  displacement is still unmeasured for both.
-- **R8.7 shipped (2026-07-31), and its harness overturned the design it was given.** The
-  task assumed search/replace; the gate measured **33.3%** semantic for it (half the
-  replies were not even in that format) and **33.3%** for `udiff` (100% compliance, half
-  the hunks unmatchable), against **whole-file 91.7% semantic / 100% apply** (§110). So
-  `coder`'s `edit` mode ships whole-file only, **opt-in** — +313 definition tokens when on,
-  byte-identical to R8.6 when off — because the fixture-scale saving (~30 output tokens per
-  edit) does not repay that bill; the claim is explicitly conditional on larger edits, and
-  where the crossover sits is unmeasured. It inherits the same open displacement question.
+## Priorities (set 2026-08-01, Decision 56)
+
+The open work has one ordering, and it is not "by task number":
+
+| # | line | what it unlocks | items |
+|---|---|---|---|
+| **1** | **A local path worth using** | larger MoE models on ordinary hardware, so local output is a substitute rather than a consolation | **R8.18** (shipped this batch), **R8.17** (small-model robustness) |
+| **2** | **The decision that gates the fabric** | ADR-0005 is drafted and **PROPOSED**; accepting it is a user act and it unblocks two L-size tasks at once | **ADR-0005** → **R8.19**, **R8.16** |
+| **3** | **Lanes, then the no-upstream mode** | naming any model for either lane per request, then pinning both locally with a guarantee | **R8.19** → **R8.20** |
+| **4** | **Everything else already queued** | independent of the above; pick by size | R8.14, R8.S3, P3a |
+
+Blocked-on-hardware and blocked-on-credentials items (R1.6, R2.6, R6.1-live, R7.3,
+R7.5, R7.6-infra, R6.3, R5.5-scoring) are **owner: user** and stay visible below rather
+than being reordered — an agent cannot advance them.
+
+## Where we are (validated 2026-08-01)
+
+- **Baseline green locally:** `tsc --noEmit`, `biome check`, `npm run format:check` and
+  `vitest run` pass, and `golem wiki check` reports 0 issues. **CI is billing-blocked**
+  (GitHub Actions refuses to start jobs) — recent PRs merged on green *local* runs;
+  unblocking it is a USER account step.
+- **R8a (context economy) shipped, and its own instruments redirected it four times** —
+  §93 (98.4% cache hit rate → bust prevention is a guard rail, not a lever), §94 (R8.2
+  already existed), §95 (the `tools` block is 18.8k), §97 (Grep/Glob have no measured
+  traffic), §100 (**93.9% of the tools block is not Golem's** → R8.S1 rejected).
+- **The local-model line is where the work is.** R8.15 shipped the provider table;
+  R8.18 shipped `golem llamacpp` and put a real 35B-A3B MoE on this machine (§114);
+  R8.11 shipped the three plugin seams under ADR-0004. What remains in that line is
+  robustness (R8.17), the ADR (0005) and the two tasks behind it.
+- **R8.5 / R8.6 / R8.7 shipped with their gates honoured** — repo map **28.6% → 50.0%**
+  retrieval for +57 tokens (§101); the LSP bridge as four *modes* of `code` at +333
+  definition tokens only when enabled (§109); the local editor **whole-file only**,
+  opt-in, because the harness measured search/replace at 33.3% and overturned the design
+  it was given (§110). All three inherit one open question: **displacement** — whether
+  the model then skips the read — which needs live traffic.
 - **R8.13 closed (§104).** The cache-prefix verdict was wrong ~98% of the time because
   `cache_control` — a breakpoint *marker*, not content — was in the fingerprint;
   0% → 73% append after the fix.
@@ -86,7 +99,7 @@ Goal 2 is largely shipped (WS-W W1–W4); goals 1 and 3 landed in R4; R5 followe
 
 <!-- golem:task-index:begin -->
 
-_Generated by `golem task index` from `docs/plan/tasks/` — 5 ready, 12 blocked, 13 done. Edit the task documents, not this table._
+_Generated by `golem task index` from `docs/plan/tasks/` — 5 ready, 13 blocked, 13 done. Edit the task documents, not this table._
 
 ### Ready to pick up
 
@@ -111,9 +124,10 @@ _Generated by `golem task index` from `docs/plan/tasks/` — 5 ready, 12 blocked
 | [R7.3](tasks/R7.3.md) | Smoke-test the Bun standalone binaries on each OS | user | S | — | needs Bun plus macOS and Linux hardware; CI is billing-blocked so it cannot run there either |
 | [R7.5](tasks/R7.5.md) | First npm publish + VS Code Marketplace publish + tag | user | M | R7.3 | outward, credentialed act — only the user can publish |
 | [R7.6-infra](tasks/R7.6-infra.md) | Stand up the golem.run host and confirm the UA-sniffing install map | user | S | — | outward infra act — DNS, TLS and a server the user controls |
-| [R8.16](tasks/R8.16.md) | little-coder as a spawned sub-agent harness — coder's agent mode (ADR first) | agent | L | R8.15 | ADR-0005 accepted BEFORE any spawn code. Then — a spawned harness cannot reach a cloud provider, cannot be enabled by accident, and its absence is a described no-op with `coder`'s definition byte-identical to R8.15's. |
+| [R8.16](tasks/R8.16.md) | little-coder as a spawned sub-agent harness — coder's agent mode (ADR first) | agent | L | R8.15 | needs ADR-0005 accepted (drafted 2026-08-01, PROPOSED) before any spawn code |
 | [R8.18](tasks/R8.18.md) | golem llamacpp — install the server, fetch a curated GGUF, wire it into the provider table | agent | L | R8.15 | On a clean machine, `golem llamacpp setup` gets from nothing to a running llama-server with a curated model, an `inference.providers` entry that resolves, and `golem devices` reporting the live `/props` window — with every byte fetched from upstream at a pinned version, under explicit consent, and resumable. |
-| [R8.19](tasks/R8.19.md) | The routing fabric — name any model, local or upstream, for either lane, per request | agent | L | R8.15 | needs ADR-0005 (routing + ToS + credential reach) before any code |
+| [R8.19](tasks/R8.19.md) | The routing fabric — name any model, local or upstream, for either lane, per request | agent | L | R8.15 | needs ADR-0005 ACCEPTED (drafted 2026-08-01, status PROPOSED — user acceptance is the only remaining blocker) |
+| [R8.20](tasks/R8.20.md) | Local-only operation — no upstream, visibly, with the trade stated | agent | M | R8.19 | With local-only on, no request leaves the machine — provable by a proxy that refuses rather than forwards — and every surface that could answer "am I spending money right now?" says so without being asked. Turning it on states what it costs (slower, pre-planning) instead of implying parity. |
 
 ### Closed
 

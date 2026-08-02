@@ -30,12 +30,13 @@ export const LLAMACPP_RELEASES_URL = "https://github.com/ggml-org/llama.cpp/rele
 /**
  * Which compute backend an asset is built for.
  *
- * `cuda-13.3` / `cuda-12.4` are fastest on NVIDIA but need a separate ~372 MB CUDA
- * runtime bundle. `vulkan` is 32 MB, needs no runtime, and works on NVIDIA, AMD and
- * Intel alike — a far better default for a tool that must work on machines it has
- * never seen. `cpu` is the floor that always works.
+ * `cuda-13.3` / `cuda-12.4` are fastest on NVIDIA but need a separate ~373 MB CUDA
+ * runtime bundle, and upstream publishes them **for Windows only**. `vulkan` is 33 MB,
+ * needs no runtime, and works on NVIDIA, AMD and Intel alike — which is why it is the
+ * GPU answer on Linux regardless of vendor. `metal` is built into the macOS tarballs
+ * rather than being a separate asset. `cpu` is the floor that always works.
  */
-export type LlamacppBackend = "cuda-13.3" | "cuda-12.4" | "vulkan" | "hip" | "cpu";
+export type LlamacppBackend = "cuda-13.3" | "cuda-12.4" | "vulkan" | "hip" | "metal" | "cpu";
 
 export interface LlamacppAsset {
   readonly backend: LlamacppBackend;
@@ -43,6 +44,11 @@ export interface LlamacppAsset {
   readonly name: string;
   /** A second asset that must be extracted alongside it (the CUDA runtime). */
   readonly runtimeName?: string;
+  /**
+   * Why this asset and not a faster one, when the answer is surprising. Present only
+   * where a user would otherwise reasonably ask "where is my CUDA build?".
+   */
+  readonly note?: string;
 }
 
 /** What the planner knows about the machine. All of it measured elsewhere. */
@@ -72,45 +78,108 @@ export interface MachineFacts {
 const CUDA_13_MIN_DRIVER_MAJOR = 580;
 
 /**
+ * The ROCm version baked into the Linux AMD asset name. It moves with the release, so
+ * it is pinned beside the tag rather than derived — and `verifyAssetName` catches it
+ * the moment a bump makes it wrong, instead of the download 404ing.
+ */
+const LINUX_ROCM_VERSION = "7.2";
+
+/**
  * PURE — the release asset for this machine.
  *
- * Windows and Linux get real choices; macOS has its own arm64 tarball and no CUDA at
- * all. An unrecognised platform falls to `cpu`, which is slow but never wrong.
+ * The naming is **not** symmetric across platforms, and guessing cost this task a bug
+ * (verification-notes §114): at `b10216` upstream publishes **no Linux CUDA build at
+ * all**, and the Linux CPU asset has no `-cpu-` infix (`…-bin-ubuntu-x64.tar.gz`).
+ * So an NVIDIA machine on Linux gets **Vulkan** — slower than CUDA, but it exists and
+ * it works, which beats a name that resolves to nothing. Windows keeps the CUDA path.
+ *
+ * An unrecognised platform falls to the Linux CPU tarball, which is slow but never
+ * wrong. Every name here is checked against the live release list before anything is
+ * downloaded — see {@link verifyAssetName}.
  */
 export function resolveAsset(facts: MachineFacts, tag = LLAMACPP_RELEASE_TAG): LlamacppAsset {
-  const osPart = facts.platform === "win32" ? "win" : facts.platform === "linux" ? "ubuntu" : null;
+  const arch = facts.arch === "arm64" ? "arm64" : "x64";
 
   if (facts.platform === "darwin") {
-    // Metal is built into the macOS builds; there is no separate backend to choose.
-    return {
-      backend: "cpu",
-      name: `llama-${tag}-bin-macos-${facts.arch === "arm64" ? "arm64" : "x64"}.tar.gz`,
-    };
-  }
-  if (osPart === null) {
-    return { backend: "cpu", name: `llama-${tag}-bin-win-cpu-x64.zip` };
+    // Metal is compiled into the macOS tarballs; there is no separate asset to pick.
+    return { backend: "metal", name: `llama-${tag}-bin-macos-${arch}.tar.gz` };
   }
 
-  const ext = facts.platform === "win32" ? "zip" : "tar.gz";
+  if (facts.platform === "win32") {
+    if (facts.nvidiaDriverMajor !== undefined && facts.vramBytes > 0 && arch === "x64") {
+      const cuda = facts.nvidiaDriverMajor >= CUDA_13_MIN_DRIVER_MAJOR ? "13.3" : "12.4";
+      return {
+        backend: cuda === "13.3" ? "cuda-13.3" : "cuda-12.4",
+        name: `llama-${tag}-bin-win-cuda-${cuda}-x64.zip`,
+        // The CUDA runtime ships separately and is NOT optional — the server will not
+        // start without it, and that failure reads as "the binary is broken".
+        runtimeName: `cudart-llama-bin-win-cuda-${cuda}-x64.zip`,
+      };
+    }
+    if (facts.amdGpu === true && arch === "x64") {
+      return { backend: "hip", name: `llama-${tag}-bin-win-hip-radeon-x64.zip` };
+    }
+    if (facts.vramBytes > 0 && arch === "x64") {
+      return { backend: "vulkan", name: `llama-${tag}-bin-win-vulkan-x64.zip` };
+    }
+    return { backend: "cpu", name: `llama-${tag}-bin-win-cpu-${arch}.zip` };
+  }
 
-  if (facts.nvidiaDriverMajor !== undefined && facts.vramBytes > 0) {
-    const cuda = facts.nvidiaDriverMajor >= CUDA_13_MIN_DRIVER_MAJOR ? "13.3" : "12.4";
-    return {
-      backend: cuda === "13.3" ? "cuda-13.3" : "cuda-12.4",
-      name: `llama-${tag}-bin-${osPart}-cuda-${cuda}-x64.${ext}`,
-      // The CUDA runtime ships separately and is NOT optional — the server will not
-      // start without it, and that failure reads as "the binary is broken".
-      runtimeName: `cudart-llama-bin-${osPart}-cuda-${cuda}-x64.${ext}`,
-    };
+  if (facts.platform === "linux") {
+    if (facts.amdGpu === true && arch === "x64") {
+      return {
+        backend: "hip",
+        name: `llama-${tag}-bin-ubuntu-rocm-${LINUX_ROCM_VERSION}-x64.tar.gz`,
+      };
+    }
+    if (facts.vramBytes > 0) {
+      return {
+        backend: "vulkan",
+        name: `llama-${tag}-bin-ubuntu-vulkan-${arch}.tar.gz`,
+        ...(facts.nvidiaDriverMajor !== undefined
+          ? {
+              note:
+                "Upstream publishes no Linux CUDA build for this release, so Vulkan is " +
+                "the GPU path on Linux even on NVIDIA. It is slower than CUDA and it is " +
+                "what exists; build from source if you need CUDA on Linux.",
+            }
+          : {}),
+      };
+    }
+    return { backend: "cpu", name: `llama-${tag}-bin-ubuntu-${arch}.tar.gz` };
   }
-  if (facts.amdGpu === true && facts.platform === "win32") {
-    return { backend: "hip", name: `llama-${tag}-bin-win-hip-radeon-x64.${ext}` };
-  }
-  if (facts.vramBytes > 0) {
-    // Any other GPU: Vulkan, which is tiny and vendor-neutral.
-    return { backend: "vulkan", name: `llama-${tag}-bin-${osPart}-vulkan-x64.${ext}` };
-  }
-  return { backend: "cpu", name: `llama-${tag}-bin-${osPart}-cpu-x64.${ext}` };
+
+  return {
+    backend: "cpu",
+    name: `llama-${tag}-bin-ubuntu-x64.tar.gz`,
+    note: `Unrecognised platform "${facts.platform}" — falling back to the Linux CPU build.`,
+  };
+}
+
+/**
+ * PURE — is the name we resolved actually in the release?
+ *
+ * A guessed asset name is a guess, and upstream renames assets between releases (the
+ * §114 finding). Checking against the live list turns a 404 mid-download into one
+ * legible message that names the alternatives, which is the difference between "Golem
+ * is broken" and "pick one of these".
+ */
+export function verifyAssetName(
+  asset: LlamacppAsset,
+  available: readonly string[],
+): { readonly ok: boolean; readonly problem?: string } {
+  const missing = [
+    asset.name,
+    ...(asset.runtimeName === undefined ? [] : [asset.runtimeName]),
+  ].filter((n) => !available.includes(n));
+  if (missing.length === 0) return { ok: true };
+  return {
+    ok: false,
+    problem:
+      `llama.cpp release ${LLAMACPP_RELEASE_TAG} has no asset named ${missing.join(" or ")}. ` +
+      `Golem pins one release deliberately, so this means the asset naming changed upstream. ` +
+      `Available builds: ${available.filter((n) => n.startsWith("llama-") || n.startsWith("cudart-")).join(", ")}`,
+  };
 }
 
 /** Download URL for a named release asset at a pinned tag. */
@@ -243,6 +312,15 @@ export interface ServerPlanOptions {
   readonly contextTokens?: number;
   /** Bind address. Loopback unless the user is deliberately serving a LAN. */
   readonly host?: string;
+  /**
+   * The id the server should answer to on `/v1/models` and accept as `model`.
+   *
+   * Without it llama.cpp names the model after whatever file it loaded, which is a
+   * path — so the provider entry Golem writes would have to hardcode a filename and
+   * would break the moment the file moved. Passing the catalog id makes the two sides
+   * agree by construction.
+   */
+  readonly alias?: string;
 }
 
 /**
@@ -289,10 +367,21 @@ export function planServer(opts: ServerPlanOptions): ServerPlan {
   const mmprojPath = mmproj === undefined ? undefined : filePaths[mmproj.path];
   if (mmprojPath !== undefined) args.push("--mmproj", mmprojPath);
 
+  // A draft model needs BOTH the file and the speculation *type*, and getting that
+  // wrong is not a graceful failure: `--model-draft <mtp file>` with the default
+  // `--spec-type` segfaults llama-server at load (exit 0xC0000005, verified on b10216 —
+  // §114). Qwen's MTP head is not a standalone draft model; `draft-mtp` is the mode
+  // that knows how to use it. So the type travels with the file, and a file whose type
+  // Golem does not know is **not passed at all** — a model that loads without
+  // speculative decoding beats one that crashes with it.
   const draft = model.files.find((f) => f.kind === "draft");
   const draftPath = draft === undefined ? undefined : filePaths[draft.path];
-  if (draftPath !== undefined) args.push("--model-draft", draftPath);
+  const specType = draft?.specType;
+  if (draftPath !== undefined && specType !== undefined) {
+    args.push("--model-draft", draftPath, "--spec-type", specType);
+  }
 
+  if (opts.alias !== undefined) args.push("--alias", opts.alias);
   args.push("--host", opts.host ?? "127.0.0.1", "--port", String(opts.port));
   // `--jinja` makes llama.cpp use the GGUF's own chat template, which is what turns
   // the model's native tool-call syntax into parsed `tool_calls`. Without it, tool

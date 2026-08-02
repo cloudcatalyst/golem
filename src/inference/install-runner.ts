@@ -27,6 +27,16 @@ export type OutputSink = (chunk: string, stream: "stdout" | "stderr") => void;
 export interface RunInstallCommandOptions {
   readonly onOutput?: OutputSink;
   readonly timeoutMs?: number;
+  /**
+   * Working directory for the child.
+   *
+   * Added for R8.18's archive extraction, where it is load-bearing rather than
+   * cosmetic: bsdtar reads a Windows `-f C:\path\x.zip` as a *remote host* named `C`
+   * ("Cannot connect to C: resolve failed"), and libarchive has no `--force-local`.
+   * Running from the archive's own directory and passing a bare filename is the
+   * portable way to avoid the colon entirely.
+   */
+  readonly cwd?: string;
 }
 
 export type InstallCommandRunner = (
@@ -51,7 +61,11 @@ export function createInstallCommandRunner(): InstallCommandRunner {
       try {
         // shell:false, argument array — installers may pop a UAC/GUI prompt,
         // so (unlike probe.ts) the window is not force-hidden.
-        child = spawn(cmd.command, [...cmd.args], { shell: false, windowsHide: false });
+        child = spawn(cmd.command, [...cmd.args], {
+          shell: false,
+          windowsHide: false,
+          ...(opts.cwd !== undefined ? { cwd: opts.cwd } : {}),
+        });
       } catch {
         done({ ok: false, code: null });
         return;

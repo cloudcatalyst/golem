@@ -222,6 +222,30 @@ export const SETTINGS_LEAVES = {
         }),
       )
       .optional(),
+    /**
+     * R8.18 — where `golem llamacpp` puts model weights.
+     *
+     * A setting rather than a constant because the default (`~/.golem/models`) is on
+     * the home volume, and a 20 GB GGUF frequently does not belong there: the machine
+     * this was built on has 23.6 GB free on `C:` and 2.5 TB on `D:`. `setup` records
+     * whatever was used so `start` and `status` find the same files.
+     */
+    llamacpp_models_dir: z.string().min(1).optional(),
+    /**
+     * R8.18 — the curated catalog id (`src/inference/gguf-catalog.ts`) last set up.
+     *
+     * Deliberately **not** defaulted: there is no default model, because a 64 GB
+     * workstation and a 16 GB laptop want different weights for the same request. It is
+     * a record of a choice the user made, which is what lets `golem llamacpp start`
+     * work with no arguments.
+     */
+    llamacpp_model: z.string().min(1).optional(),
+    /**
+     * Port for Golem's `llama-server`. Defaults to 11435 — next door to Ollama's 11434
+     * rather than llama.cpp's own 8080, which every other dev server on the machine
+     * also wants.
+     */
+    llamacpp_port: z.number().int().positive().optional(),
   },
   compression: {
     /**
@@ -578,6 +602,12 @@ export interface InferenceSettings {
   readonly local_editor_enabled: boolean;
   /** R8.15 — the user's own backends; absent/empty means "the tier catalog, over Ollama". */
   readonly providers?: readonly ProviderEntry[];
+  /** R8.18 — where `golem llamacpp` keeps GGUF weights. */
+  readonly llamacpp_models_dir?: string;
+  /** R8.18 — the curated catalog id last set up. No default, by design. */
+  readonly llamacpp_model?: string;
+  /** R8.18 — port for Golem's `llama-server`; 11435 when unset. */
+  readonly llamacpp_port?: number;
 }
 
 export interface CompressionSettings {

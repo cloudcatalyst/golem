@@ -132,6 +132,18 @@ import { distillNoteCapture } from "./distill-note.js";
 import { collectExt, renderExt } from "./ext.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "./init.js";
 import {
+  collectLlamacppStatus,
+  collectModels,
+  LlamacppRefusedError,
+  renderLlamacppStatus,
+  renderModels,
+  renderSetupOutcome,
+  renderStartOutcome,
+  runLlamacppSetup,
+  runLlamacppStart,
+  runLlamacppStop,
+} from "./llamacpp.js";
+import {
   collectLocalModel,
   renderLocalCoderWrite,
   renderLocalModel,
@@ -3625,6 +3637,141 @@ ollamaCmd
         process.stderr.write(`golem: ${err.message}\n`);
         process.exit(2);
       }
+      fail(err);
+    }
+  });
+
+/**
+ * R8.18 — `golem llamacpp`. The second command allowed to install software (Decision
+ * 26's rules apply verbatim: never automatic, never imported by `golem init`, always
+ * consented) and the first to download tens of GB, which is why every fetch is
+ * resumable and sha256-verified.
+ */
+const llamacppCmd = program
+  .command("llamacpp")
+  .description("Install and run a local llama.cpp server for larger (MoE) local models");
+
+llamacppCmd
+  .command("models")
+  .description("List the curated GGUF ladder with each entry's fit against THIS machine")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--prefer <mode>", "speed | balanced | quality", "balanced")
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; prefer: string; json: boolean }) => {
+    try {
+      const prefer =
+        opts.prefer === "speed" || opts.prefer === "quality" ? opts.prefer : "balanced";
+      const report = await collectModels({ projectDir: opts.dir, prefer });
+      process.stdout.write(renderModels(report, opts.json));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+llamacppCmd
+  .command("status")
+  .description("Show whether llama.cpp is installed, running, and what /props reports")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--json", "machine-readable output", false)
+  .action(async (opts: { dir: string; json: boolean }) => {
+    try {
+      const report = await collectLlamacppStatus({ projectDir: opts.dir });
+      process.stdout.write(renderLlamacppStatus(report, opts.json));
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+llamacppCmd
+  .command("setup")
+  .description("Download the pinned llama.cpp build + a curated model, start it, wire it up")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--model <id>", "catalog id; omitted means 'recommend one for this machine'")
+  .option("--prefer <mode>", "speed | balanced | quality (when no --model is given)", "balanced")
+  .option("--models-dir <path>", "where to store weights (checked for free space first)")
+  .option("--port <n>", "port for llama-server", (v: string) => Number.parseInt(v, 10))
+  .option("--context <n>", "context window override", (v: string) => Number.parseInt(v, 10))
+  .option("--no-draft", "skip the speculative-decoding draft model (~1 GB)")
+  .option("--no-start", "download and install only")
+  .option("--scope <scope>", "settings scope to record the choice in (user|project)", "user")
+  .option("--yes", "skip the confirmation prompt", false)
+  .action(
+    async (opts: {
+      dir: string;
+      model?: string;
+      prefer: string;
+      modelsDir?: string;
+      port?: number;
+      context?: number;
+      draft: boolean;
+      start: boolean;
+      scope: string;
+      yes: boolean;
+    }) => {
+      try {
+        const outcome = await runLlamacppSetup({
+          projectDir: opts.dir,
+          yes: opts.yes,
+          ...(opts.model !== undefined ? { modelId: opts.model } : {}),
+          prefer: opts.prefer === "speed" || opts.prefer === "quality" ? opts.prefer : "balanced",
+          ...(opts.modelsDir !== undefined ? { modelsDir: opts.modelsDir } : {}),
+          ...(opts.port !== undefined && Number.isFinite(opts.port) ? { port: opts.port } : {}),
+          ...(opts.context !== undefined && Number.isFinite(opts.context)
+            ? { contextTokens: opts.context }
+            : {}),
+          ...(opts.draft === false ? { noDraft: true } : {}),
+          ...(opts.start === false ? { noStart: true } : {}),
+          scope: opts.scope === "project" ? "project" : "user",
+          onLine: (line) => process.stdout.write(`${line}\n`),
+        });
+        process.stdout.write(renderSetupOutcome(outcome));
+        if (outcome.kind === "refused") process.exit(2);
+      } catch (err) {
+        if (err instanceof LlamacppRefusedError) {
+          process.stderr.write(`golem: ${err.message}\n`);
+          process.exit(2);
+        }
+        fail(err);
+      }
+    },
+  );
+
+llamacppCmd
+  .command("start")
+  .description("Start llama-server with the configured (or named) model")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .option("--model <id>", "catalog id (default: the one setup recorded)")
+  .option("--port <n>", "port for llama-server", (v: string) => Number.parseInt(v, 10))
+  .option("--context <n>", "context window override", (v: string) => Number.parseInt(v, 10))
+  .action(async (opts: { dir: string; model?: string; port?: number; context?: number }) => {
+    try {
+      const outcome = await runLlamacppStart({
+        projectDir: opts.dir,
+        ...(opts.model !== undefined ? { modelId: opts.model } : {}),
+        ...(opts.port !== undefined && Number.isFinite(opts.port) ? { port: opts.port } : {}),
+        ...(opts.context !== undefined && Number.isFinite(opts.context)
+          ? { contextTokens: opts.context }
+          : {}),
+        onLine: (line) => process.stdout.write(`${line}\n`),
+      });
+      process.stdout.write(renderStartOutcome(outcome));
+      if (outcome.kind === "refused") process.exit(2);
+    } catch (err) {
+      fail(err);
+    }
+  });
+
+llamacppCmd
+  .command("stop")
+  .description("Stop the llama-server Golem started")
+  .option("--dir <path>", "project directory", DEFAULT_DIR)
+  .action(async (opts: { dir: string }) => {
+    try {
+      const pid = await runLlamacppStop({ projectDir: opts.dir });
+      process.stdout.write(
+        pid === null ? "No llama-server was running.\n" : `Stopped llama-server (pid ${pid}).\n`,
+      );
+    } catch (err) {
       fail(err);
     }
   });
