@@ -161,6 +161,17 @@ export const SETTINGS_LEAVES = {
      * deliberately. When it is off, the schema is byte-identical to R8.6's.
      */
     local_editor_enabled: z.boolean(),
+    /** R8.15: user-declared provider table for local-model role routing. */
+    providers: z.array(z.object({
+      id: z.string(),
+      api: z.enum(["openai-completions", "openai-embeddings", "openai", "ollama", "anthropic"]),
+      base_url: z.string(),
+      models: z.array(z.object({
+        id: z.string(),
+        roles: z.array(z.string()).optional(),
+        context_window: z.number().int().positive().optional(),
+      })),
+    })).default([]),
   },
   compression: {
     /**
@@ -489,6 +500,17 @@ export interface InferenceSettings {
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
   readonly local_editor_enabled: boolean;
+  /** R8.15: user-declared provider table for local-model role routing. */
+  readonly providers: readonly {
+    readonly id: string;
+    readonly api: string;
+    readonly base_url: string;
+    readonly models: readonly {
+      readonly id: string;
+      readonly roles?: readonly string[];
+      readonly context_window?: number;
+    }[];
+  }[];
 }
 
 export interface CompressionSettings {
@@ -591,6 +613,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
     local_editor_enabled: false,
+    providers: [],
   },
   compression: {
     headroom_sidecar: false,
