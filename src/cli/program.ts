@@ -3,10 +3,8 @@
  * Extracted from a 3618-line file (R8.27).
  */
 import { Command } from "commander";
-import { findProjectDir, loadConfig } from "../config/index.js";
-import { buildHookCommand, defaultRevalidate } from "../hooks/index.js";
+import { findProjectDir } from "../config/index.js";
 import { VERSION } from "../index.js";
-import { fetchRawPage } from "../knowledge/index.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -14,7 +12,7 @@ const program = new Command();
 
 program
   .name("golem")
-  .description("Golem \u2014 universal pre-LLM processing layer (golem.run)")
+  .description("Golem — universal pre-LLM processing layer (golem.run)")
   .version(VERSION);
 
 program.addHelpText(
@@ -55,43 +53,6 @@ register_autonomy(program);
 register_prompt_guidance(program);
 register_config(program);
 register_local_ollama(program);
-
-program.addCommand(
-  buildHookCommand({
-    buildKnowledge: async (projectDir) => {
-      try {
-        return (await import("./build-knowledge.js"))
-          .buildKnowledgeStack({ projectDir })
-          .then((s) => s.knowledge);
-      } catch {
-        return null;
-      }
-    },
-    revalidate: defaultRevalidate,
-    revalidateEnabled: async (projectDir) => {
-      try {
-        return (await loadConfig({ projectDir })).settings.knowledge.webcache_revalidate;
-      } catch {
-        return false;
-      }
-    },
-    skeletonEnabled: async (projectDir) => {
-      try {
-        return (await loadConfig({ projectDir })).settings.knowledge.read_skeleton_enabled;
-      } catch {
-        return true;
-      }
-    },
-    fetchRaw: fetchRawPage,
-    fetchRawEnabled: async (projectDir) => {
-      try {
-        return (await loadConfig({ projectDir })).settings.knowledge.webcache_fetch_raw;
-      } catch {
-        return true;
-      }
-    },
-  }),
-);
 
 export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
   await program.parseAsync([...argv]);

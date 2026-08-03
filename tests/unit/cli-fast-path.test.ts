@@ -82,18 +82,21 @@ describe("the fast path's safety boundary", () => {
     }
   });
 
-  it("is not undercut by a PostToolUseOptions injection in program.ts", async () => {
+  it("is not undercut by a PostToolUseOptions injection in the hook command", async () => {
     // The fast path calls runPostToolUseHook with `{}` (plus --max-inline-chars),
     // which is only equivalent because buildHookCommand receives no
     // PostToolUseOptions field. If one is added, handle it in fast-path.ts too.
-    const code = await source("src/cli/program.ts");
+    // The buildHookCommand call lives in src/cli/commands/prompt-guidance.ts
+    // (registered by program.ts).
+    const code = await source("src/cli/commands/prompt-guidance.ts");
     const call = /buildHookCommand\(\{([\s\S]*?)\n\s*\}\)/.exec(code);
-    expect(call, "buildHookCommand({...}) call not found in program.ts").not.toBeNull();
+    expect(call, "buildHookCommand({...}) call not found in prompt-guidance.ts").not.toBeNull();
     const body = call?.[1] ?? "";
     for (const field of ["redact:", "maxInlineChars:", "projectDir:"]) {
-      expect(body, `program.ts now injects ${field} — fast-path.ts must pass it too`).not.toContain(
-        field,
-      );
+      expect(
+        body,
+        `the hook command now injects ${field} — fast-path.ts must pass it too`,
+      ).not.toContain(field);
     }
   });
 
