@@ -46,6 +46,7 @@ import {
   writeLimitState,
   writeServedModel,
 } from "../proxy/index.js";
+import { SessionTreeRecorder, writeSessionTree } from "../session/session-tree.js";
 import {
   recordAvoidedUpstream,
   recordPipelineEvent,
@@ -208,6 +209,8 @@ export function buildProxyFromSettings(
   // R6.1 case (a): the selected provider governs the semantic stage's caching
   // assumption (verification-notes §73). undefined for `anthropic` → URL heuristic.
   const assumeCachingUpstream = upstreamAssumesCaching(upstream.provider);
+  // R8.S3 — session tree recorder. Observe-only, fire-and-forget, never fails.
+  const sessionRecorder = new SessionTreeRecorder();
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: resolvePolicy,
@@ -215,6 +218,7 @@ export function buildProxyFromSettings(
     upstreamBaseUrl: upstream.baseUrl,
     forceSemanticOnCaching,
     ...(assumeCachingUpstream !== undefined ? { assumeCachingUpstream } : {}),
+    sessionRecorder,
     contextSubstitution: {
       ccrStore,
       lookup: async () => {
@@ -231,6 +235,9 @@ export function buildProxyFromSettings(
       if (event.contextLedger !== undefined) {
         void writeContextLedger(dir, event.contextLedger, nowIso).catch(() => {});
       }
+      // R8.S3 — persist the session tree after every request.
+      const tree = sessionRecorder.snapshot();
+      if (tree.conversations.length > 0) void writeSessionTree(dir, tree).catch(() => {});
       if (event.avoidedUpstreamInputTokens > 0 || event.avoidedUpstreamOutputTokens > 0) {
         void recordAvoidedUpstream(
           telemetry,

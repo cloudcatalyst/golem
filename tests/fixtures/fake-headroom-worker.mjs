@@ -24,6 +24,43 @@ const mode = process.env.FAKE_MODE ?? "ok";
 if (mode === "slowstart") {
   // Simulate a worker that binds but never announces — exercises startup timeout.
   setTimeout(() => {}, 60_000);
+} else if (mode === "die_after_healthy") {
+  // Start healthy, then exit after a brief delay — tests respawn backoff (R8.30).
+  const server = createServer((req, res) => {
+    if (req.method === "GET" && req.url === "/health") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({ ok: true, headroom: "fake", pid: process.pid, supported_config: [] }),
+      );
+      return;
+    }
+    if (req.method === "POST" && req.url === "/compress") {
+      const chunks = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const messages = Array.isArray(body.messages) ? body.messages : [];
+        const out = messages.slice(1);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            messages: out,
+            tokens_before: 1000,
+            tokens_after: 900,
+            tokens_saved: 100,
+            transforms_applied: [],
+          }),
+        );
+      });
+      return;
+    }
+    res.writeHead(404).end();
+  });
+  server.listen(wantPort, "127.0.0.1", () => {
+    process.stdout.write(`GOLEM_HEADROOM_LISTENING ${server.address().port}\n`);
+  });
+  // Die after 300ms — the worker was healthy, then crashed.
+  setTimeout(() => process.exit(1), 300);
 } else {
   const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/health") {

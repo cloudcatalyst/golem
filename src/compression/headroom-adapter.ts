@@ -56,6 +56,8 @@ interface WorkerProcessOptions {
   readonly startupTimeoutMs: number;
   readonly requestTimeoutMs: number;
   readonly log: (message: string) => void;
+  /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000. */
+  readonly backoffBaseMs?: number;
 }
 
 /**
@@ -77,6 +79,14 @@ class HeadroomWorkerProcess {
   #child: ChildProcessByStdio<null, Readable, Readable> | null = null;
   #port: number | null = null;
   #startPromise: Promise<boolean> | null = null;
+  /** Next-spawn timestamp — backs off after an unexpected worker death (R8.30). */
+  #nextSpawnAt: number = 0;
+  /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000 (1s). */
+  readonly #backoffBaseMs: number;
+  /** Consecutive spawn failures since last successful start. */
+  #spawnAttempts: number = 0;
+  /** True during an explicit stop(), so the exit handler skips backoff. */
+  #stopping: boolean = false;
 
   constructor(options: WorkerProcessOptions) {
     this.#command = options.command;
@@ -87,6 +97,7 @@ class HeadroomWorkerProcess {
     this.#startupTimeoutMs = options.startupTimeoutMs;
     this.#requestTimeoutMs = options.requestTimeoutMs;
     this.#log = options.log;
+    this.#backoffBaseMs = options.backoffBaseMs ?? 1000;
   }
 
   /** True once the worker is listening and health-checked. */
@@ -98,9 +109,26 @@ class HeadroomWorkerProcess {
    * Spawn the worker and wait until it is listening + healthy. Idempotent and
    * memoized; resolves `false` (never throws) if the worker cannot come up, so
    * callers can degrade gracefully.
+   *
+   * R8.30: after an unexpected worker death, the next spawn is delayed by an
+   * exponential backoff (base → 2× → 4×, capped at 30s) instead of retrying in a
+   * tight loop. A flaky Python environment then produces at most one spawn
+   * attempt per backoff window instead of a burst of log noise.
    */
   start(): Promise<boolean> {
     if (this.#startPromise !== null) return this.#startPromise;
+    this.#stopping = false;
+    const wait = this.#nextSpawnAt - Date.now();
+    if (wait > 0) {
+      this.#log(`worker respawn backing off for ${Math.round(wait)}ms`);
+      this.#startPromise = new Promise<boolean>((resolve) =>
+        setTimeout(() => {
+          this.#startPromise = null;
+          resolve(this.start());
+        }, wait),
+      );
+      return this.#startPromise;
+    }
     this.#startPromise = this.#startInner().catch((err: unknown) => {
       this.#log(`failed to start: ${err instanceof Error ? err.message : String(err)}`);
       this.stop(); // kill a half-started worker so it can't linger orphaned
@@ -124,6 +152,16 @@ class HeadroomWorkerProcess {
     child.once("exit", (code) => {
       if (this.#port === null) {
         this.#log(`worker exited before listening (code ${code}). stderr: ${stderrTail.trim()}`);
+      } else {
+        // Unexpected death — set backoff so the next start() doesn't retry in a tight loop.
+        if (!this.#stopping) {
+          this.#spawnAttempts++;
+          const delay = Math.min(this.#backoffBaseMs * 2 ** (this.#spawnAttempts - 1), 30_000);
+          this.#nextSpawnAt = Date.now() + delay;
+          this.#log(
+            `worker died unexpectedly (code ${code}) — respawn delayed ${delay}ms (attempt ${this.#spawnAttempts})`,
+          );
+        }
       }
       this.#cleanup();
     });
@@ -133,7 +171,13 @@ class HeadroomWorkerProcess {
       // Startup timeout: the process may still be alive (e.g. a slow first
       // package download) — kill it or it lingers orphaned. Its exit event
       // then runs #cleanup, so a later request may retry a fresh start.
-      this.#log("worker did not announce a listening port in time");
+      // R8.30: surface the stderr tail so a "uv couldn't find Python 3.13"
+      // style failure is actionable, not a generic timeout message.
+      this.#log(
+        stderrTail.trim()
+          ? `startup timeout — stderr tail: ${stderrTail.trim()}`
+          : "startup timeout (no stderr captured)",
+      );
       try {
         child.kill();
       } catch {
@@ -156,6 +200,9 @@ class HeadroomWorkerProcess {
       this.#cleanup();
       return false;
     }
+    // Successful start: reset the respawn backoff (R8.30).
+    this.#spawnAttempts = 0;
+    this.#nextSpawnAt = 0;
     this.#log(`worker ready on ${this.#host}:${port}`);
     return true;
   }
@@ -254,6 +301,7 @@ class HeadroomWorkerProcess {
 
   /** Stop the worker (best-effort). */
   stop(): void {
+    this.#stopping = true;
     if (this.#child !== null) {
       try {
         this.#child.kill();
@@ -300,6 +348,8 @@ export interface HeadroomSidecarOptions {
   readonly config?: Readonly<Record<string, unknown>>;
   /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
   readonly log?: (message: string) => void;
+  /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000 (1s). */
+  readonly backoffBaseMs?: number;
 }
 
 function defaultWorkerPath(): string {
@@ -335,6 +385,7 @@ export class HeadroomSidecar implements SemanticCompressor {
       startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       log,
+      ...(options.backoffBaseMs !== undefined && { backoffBaseMs: options.backoffBaseMs }),
     });
     this.#model = options.model ?? DEFAULT_MODEL;
     this.#config =
