@@ -117,4 +117,14 @@ describe("classifyBash", () => {
     expect(classifyBash("ls; rm -rf build")).toBe("destructive");
     expect(classifyBash("git status && git push")).toBe("outward");
   });
+  it("does not flag danger tokens that appear only inside quoted literals (R8.21)", () => {
+    // A quoted filename argument is data, not a command — the danger patterns
+    // must not fire on it.
+    expect(classifyBash("ls 'git push.sh'")).not.toBe("outward");
+    expect(classifyBash("cat 'rm -rf notes.txt'")).not.toBe("destructive");
+    expect(classifyBash('grep "git reset --hard" log.txt')).not.toBe("destructive");
+    // An unquoted danger token still escalates even with quotes elsewhere.
+    expect(classifyBash('echo "safe" && git push origin main')).toBe("outward");
+    expect(classifyBash("rm -rf 'quoted arg'")).toBe("destructive");
+  });
 });

@@ -37,6 +37,41 @@ describe("sniffRequestModel", () => {
     );
     expect(sniffRequestModel(body)).toBe("claude-opus-4-8");
   });
+
+  it("does not return a model key nested inside a tool description or function definition (R8.19)", () => {
+    // The "model" key inside a tool definition must not shadow the top-level one.
+    const body = Buffer.from(
+      JSON.stringify({
+        model: "claude-sonnet-5",
+        tools: [
+          {
+            name: "search",
+            description: "Search using model: gpt-4 for ranking",
+            input_schema: { type: "object" },
+          },
+        ],
+        messages: [],
+      }),
+    );
+    expect(sniffRequestModel(body)).toBe("claude-sonnet-5");
+  });
+
+  it("returns undefined when the only model key is inside a nested object", () => {
+    // No top-level model field — the only "model" is inside a nested tool/function.
+    const body = Buffer.from(
+      JSON.stringify({
+        tools: [
+          {
+            name: "search",
+            description: "Uses model: gpt-4",
+            input_schema: { type: "object" },
+          },
+        ],
+        messages: [],
+      }),
+    );
+    expect(sniffRequestModel(body)).toBeUndefined();
+  });
 });
 
 describe("stripVendorPrefix", () => {

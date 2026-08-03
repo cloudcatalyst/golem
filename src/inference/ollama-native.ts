@@ -70,6 +70,15 @@ export function parsePullProgressLine(line: string): PullProgressEvent | null {
   };
 }
 
+/**
+ * How long a `/api/pull` request may take to produce its first byte. Pulling a
+ * multi-GB model can take a while to even begin streaming on a busy or LAN
+ * Ollama instance, and the model download itself is bounded only by
+ * `bodyTimeout: 0` (streaming). 30s is generous for the headers phase while
+ * still failing fast on a genuinely dead daemon.
+ */
+const PULL_HEADERS_TIMEOUT_MS = 30_000;
+
 export class OllamaNativeClient {
   readonly #baseUrl: string;
   readonly #timeoutMs: number;
@@ -137,7 +146,10 @@ export class OllamaNativeClient {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name: modelName, stream: true }),
-        headersTimeout: this.#timeoutMs,
+        // The general request timeout is too tight for a pull's headers phase —
+        // a busy or LAN Ollama can take >5s to begin streaming. See
+        // PULL_HEADERS_TIMEOUT_MS.
+        headersTimeout: PULL_HEADERS_TIMEOUT_MS,
         bodyTimeout: 0, // pulling a multi-GB model can take a long time
         ...(signal ? { signal } : {}),
       });

@@ -45,6 +45,9 @@ interface OpenAIChunk {
 /** The currently-open Anthropic content block. */
 type Current = null | { kind: "thinking" } | { kind: "text" } | { kind: "tool"; oaiIndex: number };
 
+/** Maximum SSE line length to buffer. Lines longer than this are truncated. */
+const MAX_SSE_LINE_BYTES = 1_048_576; // 1 MB
+
 export class OpenAIChatSSETranslator extends Transform {
   #buf = "";
   #started = false;
@@ -74,6 +77,13 @@ export class OpenAIChatSSETranslator extends Transform {
 
   override _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
     this.#buf += chunk.toString("utf8");
+    // Cap the buffer at MAX_SSE_LINE_BYTES — if a line is longer than that,
+    // discard the excess to avoid unbounded memory growth from a slow or
+    // malicious upstream (R8.18). The line is already corrupted for our
+    // purposes; dropping it is safer than accumulating.
+    if (this.#buf.length > MAX_SSE_LINE_BYTES) {
+      this.#buf = "";
+    }
     let nl = this.#buf.indexOf("\n");
     while (nl !== -1) {
       const line = this.#buf.slice(0, nl).trimEnd();

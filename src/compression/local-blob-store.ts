@@ -8,13 +8,23 @@
  * write-temp-then-rename with a Windows-safe fallback (Windows may refuse to
  * rename over an existing file).
  *
+ * **Content-addressed contract (load-bearing, R8.16):** keys are caller-chosen
+ * content hashes, so `put` of an existing key must mean the caller is writing
+ * the SAME bytes again. The store therefore treats "the target already exists
+ * after a failed rename" as success and discards its own temp file — a
+ * concurrent writer of the same key never deletes the winner's data. This
+ * makes concurrent `put`s of one key converge to a single stored blob. If a
+ * caller ever routes DIFFERENT content to the same key, the first write wins
+ * and the second is silently dropped — by design for a content-addressed
+ * store, but the assumption must never be violated.
+ *
  * S3-compatible backends are a drop-in swap behind the same interface
  * (spec Decision 12) — nothing in the CCR layer knows about directories.
  */
 
 import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { BlobStore } from "../interfaces/storage.js";
 import { BlobNotFoundError } from "../interfaces/storage.js";
@@ -54,7 +64,22 @@ export class LocalDirBlobStore implements BlobStore {
     try {
       await rename(tmp, target);
     } catch (err) {
-      // Windows can refuse to rename over an existing file (EPERM/EEXIST).
+      // Content-addressed contract: same key = same content. If the target
+      // already exists (another writer won the race), treat it as success
+      // and discard our temp file — never delete the winner's data (R8.16).
+      // Only retry the delete+rename when the target genuinely does not
+      // exist (the original error was a cross-device link or permission
+      // issue, not a conflict).
+      try {
+        const st = await stat(target);
+        if (st.isFile()) {
+          // target exists → content-addressed, same bytes → discard tmp
+          await rm(tmp, { force: true });
+          return;
+        }
+      } catch {
+        // target does not exist → retry the old Windows-safe fallback
+      }
       try {
         await rm(target, { force: true });
         await rename(tmp, target);

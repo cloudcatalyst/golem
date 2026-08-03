@@ -23,28 +23,67 @@
  * an Anthropic messages request, and a conversation body can be multi-MB. We
  * deliberately do NOT `JSON.parse` the whole body (wasteful on the hot path, and
  * a truncated slice would not parse at all); a bounded regex over the head is
- * enough to read one top-level string field.
+ * enough to read one top-level string field, with a lightweight depth check to
+ * reject any `"model"` key that appears inside a nested object (e.g. a tool
+ * description or function definition).
  */
 const SNIFF_CAP_BYTES = 64 * 1024;
 
-/** `"model": "<value>"` with JSON whitespace; `[^"\\]` keeps it to a simple (unescaped) id. */
-const MODEL_FIELD_RE = /"model"\s*:\s*"([^"\\]+)"/;
+/**
+ * `"model": "<value>"` with JSON whitespace; `[^"\\]` keeps it to a simple
+ * (unescaped) id. Used with `exec()` in a loop over the head — each match is
+ * verified against the nesting depth before being accepted.
+ */
+const MODEL_FIELD_RE = /"model"\s*:\s*"([^"\\]+)"/g;
+
+/**
+ * Walk `text` from position 0 to `upTo` tracking JSON object nesting depth,
+ * ignoring string contents. Returns true when the depth at `upTo` is 1 (inside
+ * the root object but not inside any nested object), which is where a
+ * top-level `model` key lives. Bounded by `upTo`, so it's O(prefix) per
+ * candidate match, and matches near the start of the body are cheap.
+ */
+function isTopLevelKey(text: string, upTo: number): boolean {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < upTo; i++) {
+    const c = text[i];
+    if (c === "\\" && inString) {
+      i += 1; // skip escaped char
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") depth++;
+    if (c === "}") depth--;
+  }
+  return depth === 1;
+}
 
 /**
  * Extract the string `model` field from the head of a JSON request body, or
  * `undefined` when the body is null or carries no such field. Never throws — a
  * malformed body simply yields `undefined` (observe-only; the forwarded bytes
- * are untouched). Model ids are simple identifiers, so a plain regex over the
- * decoded head is sufficient and cannot be fooled by a `"model"` value nested
- * deep in the messages (that would be past the head cap and, in practice, not a
- * top-level key).
+ * are untouched). Only matches a `"model"` key at the top level of the JSON
+ * object, so a `"model"` value inside a tool description or function definition
+ * is correctly ignored.
  */
 export function sniffRequestModel(body: Buffer | null): string | undefined {
   if (body === null || body.length === 0) return undefined;
   const head = body.length > SNIFF_CAP_BYTES ? body.subarray(0, SNIFF_CAP_BYTES) : body;
-  const match = MODEL_FIELD_RE.exec(head.toString("utf8"));
-  const model = match?.[1];
-  return model !== undefined && model !== "" ? model : undefined;
+  const text = head.toString("utf8");
+  MODEL_FIELD_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  for (match = MODEL_FIELD_RE.exec(text); match !== null; match = MODEL_FIELD_RE.exec(text)) {
+    if (isTopLevelKey(text, match.index)) {
+      const model = match[1];
+      return model !== undefined && model !== "" ? model : undefined;
+    }
+  }
+  return undefined;
 }
 
 /**

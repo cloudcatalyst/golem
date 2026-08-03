@@ -329,7 +329,11 @@ function registerTools(server: McpServer, deps: GolemMcpServerDeps): void {
               "full output is still needed.",
           );
         }
-        throw error;
+        return errorResult(
+          `Failed to retrieve content for ref "${ref_id}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     },
   );

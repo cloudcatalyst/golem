@@ -39,7 +39,15 @@ import { estimateTokens } from "./tokens.js";
 /** Contents shorter than this are never substitution candidates — a marker would not pay for itself. */
 export const DEFAULT_MIN_SUBSTITUTION_CHARS = 512;
 
-/** sha256(text) -> a short human-readable label (e.g. the source URL), or undefined on a miss. */
+/**
+ * sha256(text) -> a short human-readable label (e.g. the source URL), or undefined on a miss.
+ *
+ * **Must be deterministic:** the same hash MUST always produce the same label.
+ * This function is called across multiple requests, and varying labels produce
+ * different marker text that breaks prompt-cache prefix stability
+ * (verification-notes §14). Build the lookup from a stable snapshot, not a
+ * live/mutable cache that grows between calls.
+ */
 export type KnownContentLookup = (hash: string) => string | undefined;
 
 function sha256Hex(text: string): string {
