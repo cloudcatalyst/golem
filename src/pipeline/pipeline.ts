@@ -156,6 +156,15 @@ export interface GolemPipelineOptions {
   /** Optional sink for per-request telemetry; defaults to a no-op. */
   readonly onEvent?: (event: PipelineEvent) => void;
   /**
+   * R8.S3 — optional session-tree recorder. Called once per non-bypassed
+   * Messages request, after the body is parsed but before any transforms.
+   * Observe-only: never affects the request, never throws on error.
+   * The recorder stamps its own timestamps — the pipeline is clock-free.
+   */
+  readonly sessionRecorder?: {
+    observe(body: Readonly<Record<string, unknown>>): void;
+  };
+  /**
    * OPTIONAL semantic compressor (slider ≥3). When present and the policy's
    * `semanticCompression` is not "off", it runs after lossless compression.
    * It is lossy and fails open — a null result skips the stage. Provided by the
@@ -283,6 +292,15 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       }
       if (!isRecord(parsed)) {
         return request;
+      }
+
+      // R8.S3 — observe for session tree (fire-and-forget, never affects the request).
+      if (options.sessionRecorder !== undefined) {
+        try {
+          options.sessionRecorder.observe(parsed);
+        } catch {
+          // observe-only — never fail a request over a session-tree write
+        }
       }
 
       const policy = await options.policy();

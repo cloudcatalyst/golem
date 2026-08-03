@@ -107,6 +107,42 @@ describe("HeadroomSidecar (fake worker)", () => {
     expect(await sc.start()).toBe(false);
     expect(sc.isRunning()).toBe(false);
   });
+
+  it("backs off on unexpected worker death and does not respawn immediately (R8.30)", async () => {
+    // Use a short backoff base (100ms) so the test is fast but the delay is measurable.
+    const sc = track(
+      new HeadroomSidecar({
+        command: process.execPath,
+        launchArgs: [],
+        workerPath: FAKE_WORKER,
+        startupTimeoutMs: 8000,
+        requestTimeoutMs: 5000,
+        log: () => {},
+        backoffBaseMs: 500,
+      }),
+    );
+    // Apply the fake-worker mode to this process so the child inherits it.
+    applyEnv({ FAKE_MODE: "die_after_healthy" });
+
+    // Start the worker — it should succeed.
+    expect(await sc.start()).toBe(true);
+    expect(sc.isRunning()).toBe(true);
+
+    // The fake worker dies after 300ms. Wait for it to exit.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(sc.isRunning()).toBe(false);
+
+    // The exit handler armed a 500ms backoff from death time (~300ms ago).
+    // A start() issued now must NOT respawn immediately — it should wait out
+    // the remaining backoff (~200ms) before spawning again.
+    const t0 = Date.now();
+    expect(await sc.start()).toBe(true);
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeGreaterThanOrEqual(100); // waited out most of the backoff
+
+    // And after a successful restart, the worker is running again.
+    expect(sc.isRunning()).toBe(true);
+  });
 });
 
 /**
