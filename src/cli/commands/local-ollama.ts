@@ -7,7 +7,7 @@ function fail(err: unknown): never {
   process.stderr.write("golem: " + (err instanceof Error ? err.message : String(err)) + "\n");
   process.exit(2);
 }
-async function buildInferenceForDir(dir) {
+async function buildInferenceForDir(dir: string) {
   try {
     const { loadConfig } = await import("../../config/index.js");
     const { createProbeRunner, detectCapability, OllamaClient, OllamaInferenceService } = await import("../../inference/index.js");
