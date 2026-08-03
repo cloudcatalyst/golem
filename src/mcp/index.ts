@@ -11,17 +11,19 @@
  * with task B3 once WS-C/WS-D implementations exist.
  */
 
+export type { GolemMcpServerDeps } from "./deps.js";
+export type { Grounding, HitAssemblyDeps } from "./search.js";
 export type { GolemHttpServerHandle, ServeHttpOptions } from "./serve.js";
 export { serveHttp, serveStdio } from "./serve.js";
-export type { GolemMcpServerDeps, Grounding, HitAssemblyDeps } from "./server.js";
 export {
   boostWikiHits,
   createGolemMcpServer,
   createStandaloneDeps,
-  GOLEM_MCP_SERVER_NAME,
-  GOLEM_MCP_SERVER_VERSION,
   gatherGrounding,
+  graphFirstWikiHits,
+  pageToHit,
 } from "./server.js";
+export { GOLEM_MCP_SERVER_NAME, GOLEM_MCP_SERVER_VERSION } from "./shared.js";
 export type { SliderStore } from "./slider-store.js";
 export {
   DEFAULT_SLIDER_LEVEL,
