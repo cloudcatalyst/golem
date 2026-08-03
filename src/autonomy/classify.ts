@@ -149,13 +149,56 @@ function stripOutputWrapper(cmd: string): string {
   return cmd;
 }
 
+/**
+ * Blank out characters inside single-quoted or double-quoted regions, leaving a
+ * string of the same length where every quoted char is a space. The danger
+ * patterns then match only UNQUOTED text, so a filename argument like
+ * `ls 'git push.sh'` no longer false-positives on `\bgit\s+push\b` (R8.21).
+ *
+ * Deliberately conservative: a double-quoted region can still contain `$(...)`
+ * command substitution, so after blanking we keep the composition check on the
+ * ORIGINAL string — quoted or not, a `$(...)` or `;` stays a reason to gate the
+ * command. Blanking is only used to suppress the specific false positive of a
+ * danger token appearing as a quoted literal argument.
+ */
+function blankQuoted(cmd: string): string {
+  const out = cmd.split("");
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < out.length; i++) {
+    const c = out[i];
+    if (quote === null) {
+      if (c === "'" || c === '"') {
+        quote = c;
+        out[i] = " ";
+      }
+    } else if (c === quote) {
+      quote = null;
+      out[i] = " ";
+    } else if (c === "\\" && quote === '"') {
+      // escaped char inside double quotes: blank both the backslash and the
+      // escaped char so it cannot end the quote early or smuggle a token out
+      out[i] = " ";
+      if (i + 1 < out.length) out[i + 1] = " ";
+      i += 1;
+    } else {
+      out[i] = " ";
+    }
+  }
+  return out.join("");
+}
+
 /** Classify a Bash command string. Escalate-only: outward/destructive win over safe. */
 export function classifyBash(command: string): ActionClass {
   const cmd = command.trim();
-  // Danger first, on the ORIGINAL string. These patterns are word-boundary
-  // anchored, so a wrapper prefix cannot hide `git push` or `rm -rf` from them.
-  if (OUTWARD_BASH.some((re) => re.test(cmd))) return "outward";
-  if (DESTRUCTIVE_BASH.some((re) => re.test(cmd))) return "destructive";
+  // Danger first, against the quote-blanked form. A danger token inside a quoted
+  // literal (e.g. `ls 'git push.sh'`) is DATA, not a command — and because the
+  // quote chars are non-word, `\bgit\s+push\b` matches even inside quotes on the
+  // raw string (R8.21). Blanking quotes makes the boundary check honest: an
+  // unquoted `git push` or `rm -rf` survives blanking unchanged and still
+  // escalates; the same tokens as a quoted argument do not.
+  const unquoted = blankQuoted(cmd);
+  if (OUTWARD_BASH.some((re) => re.test(unquoted))) return "outward";
+  if (DESTRUCTIVE_BASH.some((re) => re.test(unquoted))) return "destructive";
   // Composition (redirection, chaining, pipes, substitution) can hide a write
   // or a second command behind a safe leading token — never classify it read.
   if (SHELL_COMPOSITION_RE.test(cmd)) return "unknown";

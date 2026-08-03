@@ -323,9 +323,11 @@ function isPathLikeToken(token: string): boolean {
  *   the pattern rules above.
  * - path-like candidates ({@link isPathLikeToken}): repo paths and versioned
  *   filenames/ADR names (§49).
- * - tokens missing any of lowercase/uppercase/digit: long identifiers,
- *   camelCase names, and shouted constants lack one of the three classes;
- *   real random secrets essentially never do at 32+ chars.
+ * - tokens with fewer than 2 of 3 character classes (lowercase, uppercase,
+ *   digit): long identifiers, camelCase names, and shouted constants each
+ *   lack at least one of the three while real random secrets at 32+ chars
+ *   almost always have at least two. Base32 secrets (uppercase + digits,
+ *   no lowercase) are now caught by the 2-of-3 rule.
  */
 export function isHighEntropyToken(token: string): boolean {
   if (INTEGRITY_HASH_RE.test(token)) {
@@ -338,7 +340,13 @@ export function isHighEntropyToken(token: string): boolean {
   if (isPathLikeToken(token)) {
     return false;
   }
-  if (!/[a-z]/.test(token) || !/[A-Z]/.test(token) || !/[0-9]/.test(token)) {
+  // Require at least 2 of 3 character classes (catches base64 with all three,
+  // and base32 secrets which use only uppercase + digits, no lowercase).
+  const hasLower = /[a-z]/.test(token);
+  const hasUpper = /[A-Z]/.test(token);
+  const hasDigit = /[0-9]/.test(token);
+  const classCount = (hasLower ? 1 : 0) + (hasUpper ? 1 : 0) + (hasDigit ? 1 : 0);
+  if (classCount < 2) {
     return false;
   }
   return shannonEntropy(token) >= ENTROPY_THRESHOLD_BITS;

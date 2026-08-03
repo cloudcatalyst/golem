@@ -193,8 +193,9 @@ export interface TelemetryEvent {
   /** R4.3: for `coder`, the local model that produced the draft. kind: "tool" only. */
   readonly toolModel?: string;
   /**
-   * R8.1: cacheable-prefix verdict for this request — `"first"`, `"append"`, or
-   * `"bust"`. Set on pipeline events only; absent on other kinds and on events
+   * R8.1: cacheable-prefix verdict for this request — `"first"`, `"append"`,
+   * `"bust"`, or `"uncertain"` (see CachePrefixVerdict in cache-prefix.ts).
+   * Set on pipeline events only; absent on other kinds and on events
    * written before this field existed (parse absent as "unknown", NOT as a hit —
    * an unobserved request is not evidence of anything).
    */

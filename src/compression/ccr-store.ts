@@ -29,6 +29,8 @@ export type CcrEnvelope = z.infer<typeof envelopeSchema>;
 
 export class CcrStore {
   readonly #blobs: BlobStore;
+  /** In-flight putIfAbsent promises, keyed by refId — serializes concurrent writes (R8.22). */
+  readonly #putLocks = new Map<string, Promise<boolean>>();
 
   constructor(blobs: BlobStore) {
     this.#blobs = blobs;
@@ -38,8 +40,24 @@ export class CcrStore {
    * Persist an original under its content hash. Content-addressed, so an
    * existing blob is already byte-identical — skip the write.
    * Returns true when a new blob was actually stored.
+   *
+   * Thread-safe: concurrent calls with the same refId share one in-flight write.
+   * The second caller awaits the first's result and returns the same value
+   * rather than writing a duplicate blob (R8.22).
    */
   async putIfAbsent(refId: string, envelope: CcrEnvelope): Promise<boolean> {
+    const existing = this.#putLocks.get(refId);
+    if (existing !== undefined) return existing;
+    const promise = this.#doPut(refId, envelope);
+    this.#putLocks.set(refId, promise);
+    try {
+      return await promise;
+    } finally {
+      this.#putLocks.delete(refId);
+    }
+  }
+
+  async #doPut(refId: string, envelope: CcrEnvelope): Promise<boolean> {
     if (await this.#blobs.exists(refId)) {
       return false;
     }

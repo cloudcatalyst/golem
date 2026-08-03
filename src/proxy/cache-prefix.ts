@@ -62,7 +62,15 @@ export type CachePrefixVerdict =
   /** Prefix components unchanged and `messages` only grew: the cache should hit. */
   | "append"
   /** An earlier byte changed: the cached prefix is invalidated from that point. */
-  | "bust";
+  | "bust"
+  /**
+   * The lookback-window heuristic could not classify with confidence — the prefix
+   * comparison itself is clean, but the appended-block count is close to the
+   * lookback boundary or the breakpoint count makes the prediction unreliable.
+   * Consumers should treat this as "unknown" and prefer the billed
+   * `cache_read_input_tokens` measurement over the verdict.
+   */
+  | "uncertain";
 
 /** Which cacheable component changed, when the verdict is `bust`. */
 export type CacheBustComponent =

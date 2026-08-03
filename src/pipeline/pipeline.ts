@@ -245,7 +245,7 @@ export interface GolemPipelineOptions {
 // `/v1/messages`, and Azure Foundry / OpenRouter-style `/anthropic/v1/messages`
 // (Decision 22). End-anchored so it excludes sub-resources like
 // `/v1/messages/batches` (different body shape). Query string allowed.
-const MESSAGES_PATH_RE = /\/(?:v1\/)?messages(?:\?.*)?$/;
+const MESSAGES_PATH_RE = /^\/(?:[a-z0-9-]+\/)?v1\/messages(?:\?.*)?$/;
 
 function isMessagesRequest(request: ProxyRequest): boolean {
   return request.method.toUpperCase() === "POST" && MESSAGES_PATH_RE.test(request.url);
