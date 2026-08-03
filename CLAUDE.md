@@ -46,4 +46,13 @@ TypeScript strict, ESM, Node ≥ 22. npm, Biome lint + format. Zod at external b
 Claim tasks by ID in PR title. Don't modify files owned by another workstream. Blocked? Write the question in verification-notes and pick up another task.
 
 ## Batch close-out
-Run `/golem/ship` after the last task in a batch: verify green, rebuild + restart, tidy planning docs, write debrief, retire batch brief, commit + PR.
+Run `/golem/ship` after the last task in a batch. Checklist:
+
+- [ ] Verify green: `tsc --noEmit`, `biome check`, `npm run verify:deps`, `vitest run`
+- [ ] Rebuild + restart proxy/CLI
+- [ ] Add **SHIPPED.md** entry (releases table)
+- [ ] Write **wiki debrief** under `docs/wiki/debriefs/` (outcome, key lessons, sources, tags)
+- [ ] Commit close-out docs alongside the work
+- [ ] `golem task done <id> --note "shipped"`
+- [ ] `golem task index --write` → regenerate ROADMAP.md
+- [ ] Retire batch brief, commit + PR
