@@ -87,7 +87,7 @@ describe("the fast path's safety boundary", () => {
     // which is only equivalent because buildHookCommand receives no
     // PostToolUseOptions field. If one is added, handle it in fast-path.ts too.
     const code = await source("src/cli/program.ts");
-    const call = /buildHookCommand\(\{([\s\S]*?)\n\s*\}\)\);/.exec(code);
+    const call = /buildHookCommand\(\{([\s\S]*?)\n\s*\}\)/.exec(code);
     expect(call, "buildHookCommand({...}) call not found in program.ts").not.toBeNull();
     const body = call?.[1] ?? "";
     for (const field of ["redact:", "maxInlineChars:", "projectDir:"]) {

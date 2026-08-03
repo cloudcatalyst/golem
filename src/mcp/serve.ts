@@ -17,8 +17,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { createGolemMcpServer } from "./server.js";
 import type { GolemMcpServerDeps } from "./deps.js";
+import { createGolemMcpServer } from "./server.js";
 
 /** Connect the server to stdio and keep serving until the transport closes. */
 export async function serveStdio(deps: GolemMcpServerDeps): Promise<void> {
