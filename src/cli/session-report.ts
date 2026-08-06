@@ -42,6 +42,13 @@ export interface SessionStateReport {
     readonly running: boolean | null;
     /** Short upstream label the proxy fronts (anthropic / foundry / host). */
     readonly upstream: string;
+    /**
+     * Decision 56: what is listening is the redaction-only bypass shim, not the
+     * pipeline. `running` stays true — it IS serving — so a renderer that only
+     * reads `running` degrades to the old (merely incomplete) display rather
+     * than an incorrect one.
+     */
+    readonly bypass?: boolean;
   };
   readonly slider: {
     readonly level: number;
@@ -105,6 +112,7 @@ export const sessionStateReportSchema = z.object({
   proxy: z.object({
     running: z.boolean().nullable(),
     upstream: z.string(),
+    bypass: z.boolean().optional(),
   }),
   slider: z.object({
     level: z.number(),
@@ -167,6 +175,7 @@ export async function collectSessionStateReport(
     proxy: {
       running: golem?.proxyRunning ?? null,
       upstream: golem?.upstreamLabel ?? upstreamLabel("https://api.anthropic.com"),
+      ...(golem?.proxyBypass === true ? { bypass: true } : {}),
     },
     slider: { level, name, redaction_off: level === 0 },
     local_model: { reachable: golem?.localModelReachable ?? null },

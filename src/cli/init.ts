@@ -55,6 +55,16 @@ import {
 } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
+// Decision 56: the env keys and the "is this wiring ours?" guard live in one
+// place, shared with `golem proxy unwire`/`wire`.
+import {
+  ENV_BASE_URL,
+  ENV_FOUNDRY_BASE_URL,
+  ENV_TOOL_SEARCH,
+  ENV_USE_FOUNDRY,
+  proxyBaseUrl,
+  removeGolemEnv,
+} from "./proxy-wiring.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** External-state checks, injectable for tests. */
@@ -158,10 +168,6 @@ export interface InitReport {
 export class InitError extends Error {}
 
 const DEFAULT_PROXY_PORT = 4653;
-const ENV_BASE_URL = "ANTHROPIC_BASE_URL";
-const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
-const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
-const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 const MCP_SERVER_KEY = "golem";
 /**
  * Pre-approve Golem's own MCP tools so they don't prompt on first use. Uses the
@@ -248,10 +254,6 @@ const VSCODE_WATCHER_EXCLUDE_DIRS = [
   "**/.golem/distill/**",
 ] as const;
 const VSCODE_WATCHER_EXCLUDE_KEY = "files.watcherExclude";
-
-function proxyBaseUrl(port: number): string {
-  return `http://localhost:${port}`;
-}
 
 /** Where this package's bundled VS Code extension lives (dist/cli/init.js -> ../../vscode-extension). */
 function defaultVscodeSourceDir(): string {
@@ -946,21 +948,9 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   const env = settings?.env;
   if (settings && typeof env === "object" && env !== null && !Array.isArray(env)) {
     const envObj = env as JsonObject;
-    let changed = false;
-    if (envObj[ENV_BASE_URL] === baseUrl) {
-      delete envObj[ENV_BASE_URL];
-      changed = true;
-    }
-    // Foundry env (only if it points at our proxy).
-    if (envObj[ENV_FOUNDRY_BASE_URL] === `${baseUrl}/anthropic`) {
-      delete envObj[ENV_FOUNDRY_BASE_URL];
-      if (envObj[ENV_USE_FOUNDRY] === "true") delete envObj[ENV_USE_FOUNDRY];
-      changed = true;
-    }
-    if (ENV_TOOL_SEARCH in envObj && envObj[ENV_TOOL_SEARCH] === "true") {
-      delete envObj[ENV_TOOL_SEARCH];
-      changed = true;
-    }
+    // Ownership-guarded: removes ANTHROPIC_BASE_URL / the Foundry pair /
+    // ENABLE_TOOL_SEARCH only where they hold OUR values (proxy-wiring.ts).
+    const changed = removeGolemEnv(envObj, baseUrl);
     if (Object.keys(envObj).length === 0) delete settings.env;
     if (changed) {
       actions.push({

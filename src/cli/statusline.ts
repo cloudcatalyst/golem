@@ -91,6 +91,12 @@ export interface GolemState {
   readonly blocked?: boolean;
   /** Whether the Golem proxy is actually running (pid-file check), if known. */
   readonly proxyRunning?: boolean;
+  /**
+   * Decision 56: the listener is the redaction-only bypass shim rather than the
+   * pipeline. Distinct from `proxyRunning: false` — traffic still flows and is
+   * still redacted, so "off" would be a lie.
+   */
+  readonly proxyBypass?: boolean;
   /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known and enabled. */
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
@@ -252,18 +258,23 @@ export function renderStatusLine(
   // hollow dim hexagon when it is off. Unknown (undefined) is treated as active
   // so we never falsely signal "off"; only a confirmed-dead proxy is hollow.
   const active = golem.proxyRunning !== false;
-  const brand = active ? green("⬢ Golem") : dim("⬡ Golem");
+  // Decision 56: the bypass shim IS listening and IS redacting, so it is neither
+  // "running" nor "off". A hollow-but-green hexagon says carrying traffic,
+  // pipeline off — the two states used to collapse into one misleading label.
+  const bypass = golem.proxyBypass === true;
+  const brand = bypass ? green("⬡ Golem") : active ? green("⬢ Golem") : dim("⬡ Golem");
   // "Passthrough" whenever Golem isn't transforming traffic: the proxy is down,
-  // or it's running at level 0 (full bypass, Decision 30). Both read the same —
-  // traffic passes straight through to the upstream, untransformed.
-  const passthrough = !active || golem.sliderLevel === 0;
+  // it's the bypass shim, or it's running at level 0 (full bypass, Decision 30).
+  const passthrough = !active || bypass || golem.sliderLevel === 0;
   // §103: name the level that is RUNNING, not the one that was set. The nominal
   // level still gets said — as a badge below — but it must not be the headline
   // when the pipeline is doing something else.
   const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
-  const label = passthrough
-    ? "Passthrough"
-    : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
+  const label = bypass
+    ? "Bypass"
+    : passthrough
+      ? "Passthrough"
+      : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
 
   // Brand · Level → destination. The destination names each backend with its
   // own model id verbatim (`local (qwen2.5-coder:7b) + anthropic
@@ -276,7 +287,10 @@ export function renderStatusLine(
   // wherever Golem's state is — otherwise a terse assistant looks like a model
   // regression rather than a dial someone set. Shown only when active, so the
   // default (off) costs no width.
-  if (golem.brevity !== undefined && golem.brevity !== "off") {
+  // Decision 56: the bypass shim runs no brevity stage, so showing the CONFIGURED
+  // dial here would advertise an output transform that is not happening — the
+  // same class of dishonesty as labelling a served port "off".
+  if (golem.brevity !== undefined && golem.brevity !== "off" && !bypass) {
     parts.push(yellow(`✂ ${golem.brevity}`));
   }
   // The set-but-inert level, said explicitly so the difference is visible rather
@@ -404,7 +418,12 @@ export async function collectGolemState(
   // network probe (the status line runs on every turn).
   try {
     const pid = await readProxyPid(dir);
-    state = { ...state, proxyRunning: pid !== null && isProcessAlive(pid.pid) };
+    const running = pid !== null && isProcessAlive(pid.pid);
+    state = {
+      ...state,
+      proxyRunning: running,
+      ...(running && pid?.shim === true ? { proxyBypass: true } : {}),
+    };
   } catch {
     // pid file unreadable — leave proxyRunning unknown
   }

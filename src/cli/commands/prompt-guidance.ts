@@ -260,10 +260,20 @@ export default function register(program: Command): void {
         } catch {
           /* no/!json payload */
         }
-        if ((await readProxyDesired(cwd)) !== "running") return;
+        // Decision 56: `bypass` is restored too. A project left with the
+        // pipeline off is still WIRED to its port, so reopening it without the
+        // shim would recreate the dead-socket defect this state exists to avoid.
+        const desired = await readProxyDesired(cwd);
+        if (desired !== "running" && desired !== "bypass") return;
         const { settings } = await loadConfig({ projectDir: cwd });
         if ((await proxyStatus(cwd, settings.proxy.port)).running) return;
-        await startDetached(cwd, settings.proxy.port, process.argv[1] ?? "");
+        await startDetached(
+          cwd,
+          settings.proxy.port,
+          process.argv[1] ?? "",
+          {},
+          desired === "bypass" ? { shim: true } : {},
+        );
       } catch {
         /* fail-safe */
       }

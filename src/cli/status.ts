@@ -32,6 +32,7 @@ import {
   type ProviderEntry as LocalProviderEntry,
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
+import { readProxyPid } from "./proxy-daemon.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 
 /** Decision 52 — one dial's state in the JSON report. */
@@ -72,6 +73,12 @@ export interface StatusReport {
     readonly port: number;
     readonly url: string;
     readonly reachable: boolean;
+    /**
+     * Decision 56: reachable, but what answers is the redaction-only bypass shim
+     * rather than the pipeline. Optional so a renderer that predates this field
+     * degrades to "reachable" — incomplete, never wrong.
+     */
+    readonly bypass?: boolean;
   };
   /**
    * The active upstream's non-secret identity (R6.2 display): the account /
@@ -241,7 +248,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const upstream = resolveUpstreamDisplay(settings.proxy);
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
-  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
+  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel, pidInfo] =
     await Promise.all([
       golemInitStatus(projectDir, settings.proxy.port),
       probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
@@ -256,6 +263,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         settings.inference.providers as readonly LocalProviderEntry[],
       ).catch((): LocalModelInfo => ({ reachable: false })),
       servedModelFor(projectDir, upstream.accountId).catch(() => null),
+      // Decision 56: a network probe cannot tell the bypass shim from the full
+      // pipeline — both accept connections. The pid file is the only honest
+      // source, so read it alongside the probe.
+      readProxyPid(projectDir).catch(() => null),
     ]);
 
   // Update status from the cached check only (no network — never hang status).
@@ -309,6 +320,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       port: settings.proxy.port,
       url: `http://localhost:${settings.proxy.port}`,
       reachable,
+      ...(reachable && pidInfo?.shim === true ? { bypass: true } : {}),
     },
     upstream: {
       provider: upstream.provider,
@@ -494,7 +506,13 @@ export function renderStatus(report: StatusReport): string {
   lines.push("");
 
   lines.push(
-    `Proxy: ${report.proxy.url} — ${report.proxy.reachable ? "reachable" : "not running (start with `golem proxy`)"}`,
+    `Proxy: ${report.proxy.url} — ${
+      report.proxy.bypass === true
+        ? "BYPASS shim (pipeline off, redaction on; restore with `golem proxy start --detach`)"
+        : report.proxy.reachable
+          ? "reachable"
+          : "not running (start with `golem proxy`)"
+    }`,
   );
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
   const slider = report.slider;

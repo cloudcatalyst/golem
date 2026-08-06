@@ -173,8 +173,24 @@ knows Headroom is `src/compression/headroom-adapter.ts` (CLAUDE.md rule).
 
 ## Escape hatch
 
-If stable ever misbehaves: remove `ANTHROPIC_BASE_URL` from
-`.claude/settings.json` and reopen the editor → straight back to the direct API.
-The proxy also honors an `x-golem-bypass` header for per-request passthrough,
-and fails open (a pipeline error forwards the original request unchanged rather
-than breaking the session).
+Three of them, in increasing order of how far they take Golem out of the path
+(spec Decision 56):
+
+1. **`golem proxy stop`** — turns the *pipeline* off while keeping the port
+   served by a redaction-only shim. Nothing to reload, and nothing edited: the
+   wiring stays, so Claude Code never notices. Restore with
+   `golem proxy start --detach`. In the VS Code panel this is the Stop button.
+2. **`golem proxy unwire`** — removes `ANTHROPIC_BASE_URL` (and
+   `ENABLE_TOOL_SEARCH`) from `.claude/settings.json` → straight back to the
+   direct API. **Reload the window afterwards**: Claude Code does *not* hot-reload
+   `env` (verification-notes §13/§112), which is exactly why `stop` no longer
+   relies on this. `golem proxy wire` puts it back. In VS Code: *"Go direct
+   (unwire Golem)"*. A base URL Golem does not own is left untouched.
+3. **`golem proxy stop --hard`** — releases the port too. Only useful when you
+   want the process gone; a still-wired Claude Code will fail to connect until it
+   is unwired or the proxy restarts, and the command warns when that is the case.
+
+Per-request: the proxy honors an `x-golem-bypass` header for pure passthrough —
+note that this, like slider level 0, is a **full** bypass with redaction OFF (the
+shim above keeps redaction on). The pipeline also fails open: an error forwards
+the original request unchanged rather than breaking the session.
