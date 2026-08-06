@@ -58,6 +58,9 @@ function formatVendorModelStatus(modelId, defaultVendor = "anthropic") {
  * status bar and the hover summary so they never disagree.
  */
 function levelLabel(model) {
+  // Decision 56: the bypass shim is serving and redacting, so it is neither
+  // "stopped" nor a level-0 passthrough — it gets its own label.
+  if (model.proxyBypass) return "Bypass";
   if (!model.proxyReachable || model.slider === 0) return "Passthrough";
   return model.sliderName ? cap(model.sliderName) : `L${model.slider}`;
 }
@@ -68,6 +71,9 @@ function levelLabel(model) {
  * "pinned" is always spelled out.
  */
 function dialsSummary(model) {
+  // Decision 56: in bypass neither dial is in force. Say so rather than
+  // reporting the configuration as though it were running.
+  if (model.proxyBypass) return "pipeline off (bypass) — redaction only";
   const brevity = `brevity ${model.brevity || "off"}${model.brevityPinned ? " (pinned)" : " (auto)"}`;
   const compression = model.compressionLevel
     ? `compression ${model.compressionLevel}${model.compressionPinned ? " (pinned)" : " (auto)"}`
@@ -181,6 +187,9 @@ function buildModel(stats, status, update, accounts, surface) {
     defaultModel,
     lastServedModel,
     proxyReachable: !!(st.proxy && st.proxy.reachable),
+    // Decision 56: reachable, but the redaction-only shim is answering rather
+    // than the pipeline. Absent on an older CLI → false, i.e. the pre-56 display.
+    proxyBypass: !!(st.proxy && st.proxy.bypass),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
     // `inference.local_coder_enabled`. Absent on an older CLI → assume enabled,
     // matching the CLI statusline's fail-open reading of the same setting.
@@ -250,14 +259,22 @@ function buildModel(stats, status, update, accounts, surface) {
  * known (a plain Anthropic passthrough stays `→ anthropic`).
  */
 function statusBarText(model) {
-  const glyph = model.proxyReachable ? "⬢" : "⬡";
+  // Filled = pipeline carrying traffic; hollow = either bypass (serving, inert)
+  // or down. The label beside it says which (Decision 56).
+  const glyph = model.proxyReachable && !model.proxyBypass ? "⬢" : "⬡";
   // The update nudge shows regardless of proxy state — it's about the install,
   // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
   const badge = model.updateAvailable ? " $(arrow-up)" : "";
   // Decision 52: brevity is visible in the status bar whenever it is on, for the
   // same reason the CLI status line shows it — it changes the model's own output
   // style, and that must always be traceable to a dial the user can see.
-  const brevity = model.brevity && model.brevity !== "off" ? ` · ✂ ${model.brevity}` : "";
+  // Decision 56: not while the bypass shim is serving — it runs no brevity
+  // stage, so the configured dial would advertise a transform that is not
+  // happening.
+  const brevity =
+    model.brevity && model.brevity !== "off" && !model.proxyBypass
+      ? ` · ✂ ${model.brevity}`
+      : "";
   return `${glyph} Golem · ${levelLabel(model)} → ${destinationLabel(model)}${brevity}${badge}`;
 }
 
@@ -458,12 +475,12 @@ function renderHtml(model, nonce) {
 
   <h2>Status</h2>
   <div class="row"><span>Proxy</span><span>
-    <span class="${model.proxyReachable ? "ok" : "warn"}">${
-      model.proxyReachable ? "running" : "stopped"
+    <span class="${model.proxyBypass ? "warn" : model.proxyReachable ? "ok" : "warn"}">${
+      model.proxyBypass ? "bypass — pipeline off" : model.proxyReachable ? "running" : "stopped"
     }</span>
-    <button class="toggle" id="proxyToggle" data-running="${model.proxyReachable ? "1" : "0"}">${
-      model.proxyReachable ? "Stop" : "Start"
-    }</button>
+    <button class="toggle" id="proxyToggle" data-running="${
+      model.proxyReachable && !model.proxyBypass ? "1" : "0"
+    }">${model.proxyReachable && !model.proxyBypass ? "Stop" : "Start"}</button>
   </span></div>
   <div class="row"><span>Upstream</span><span class="pill">${esc(
     model.upstreamLabel,

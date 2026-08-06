@@ -245,11 +245,62 @@ async function applySlider(level) {
   await refresh();
 }
 
-/** Start (detached) or stop the proxy in the workspace, then refresh. */
+/**
+ * Start (detached) or stop the proxy in the workspace, then refresh.
+ *
+ * Decision 56: "stop" means *pipeline off* — the CLI leaves a redaction-only
+ * shim bound to the port, because Claude Code's `ANTHROPIC_BASE_URL` cannot be
+ * un-set without a window reload, so releasing the port would break every
+ * request until the user reloaded. Taking Golem out of the path entirely is
+ * `unwireProxy` below, which is a separate, explicit action.
+ */
 async function setProxy(running) {
   const verb = running ? ["proxy", "start", "--detach"] : ["proxy", "stop"];
   await golemText([...verb, "--dir", cwd()]);
   await refresh();
+}
+
+/**
+ * Remove Golem from `.claude/settings.json` so Claude Code talks straight to the
+ * API. Confirmed first (it edits a git-tracked file), and followed by the reload
+ * offer that actually makes it take effect — `env` is not hot-reloaded, so
+ * reporting success without the reload would leave the user proxied and puzzled.
+ */
+async function unwireProxy() {
+  const choice = await vscode.window.showWarningMessage(
+    "Take Golem out of Claude Code's path? This edits .claude/settings.json and needs a window reload to take effect.",
+    { modal: true },
+    "Unwire",
+  );
+  if (choice !== "Unwire") return;
+  const out = await golemText(["proxy", "unwire", "--dir", cwd()]);
+  await refresh();
+  if (typeof out === "string" && /left ANTHROPIC_BASE_URL/.test(out)) {
+    vscode.window.showInformationMessage(
+      "Golem: another gateway owns ANTHROPIC_BASE_URL — left it alone.",
+    );
+    return;
+  }
+  const reload = await vscode.window.showInformationMessage(
+    "Golem: unwired. Reload the window for Claude Code to talk direct.",
+    "Reload window",
+  );
+  if (reload === "Reload window") {
+    await vscode.commands.executeCommand("workbench.action.reloadWindow");
+  }
+}
+
+/** Point Claude Code back at the local proxy, then offer the reload it needs. */
+async function wireProxy() {
+  await golemText(["proxy", "wire", "--dir", cwd()]);
+  await refresh();
+  const reload = await vscode.window.showInformationMessage(
+    "Golem: wired to the local proxy. Reload the window for it to take effect.",
+    "Reload window",
+  );
+  if (reload === "Reload window") {
+    await vscode.commands.executeCommand("workbench.action.reloadWindow");
+  }
 }
 
 /**
@@ -357,7 +408,13 @@ function activate(context) {
     vscode.commands.registerCommand("golem.showPanel", () =>
       vscode.commands.executeCommand("golem.panel.focus"),
     ),
-    vscode.commands.registerCommand("golem.toggleProxy", () => setProxy(!lastModel?.proxyReachable)),
+    // In bypass the port IS reachable but the pipeline is off, so the toggle's
+    // job there is to restore it, not to "stop" an already-stopped pipeline.
+    vscode.commands.registerCommand("golem.toggleProxy", () =>
+      setProxy(lastModel?.proxyBypass === true ? true : !lastModel?.proxyReachable),
+    ),
+    vscode.commands.registerCommand("golem.unwireProxy", unwireProxy),
+    vscode.commands.registerCommand("golem.wireProxy", wireProxy),
     vscode.commands.registerCommand("golem.update", runUpdate),
     vscode.commands.registerCommand("golem.setAccount", pickAccount),
     // The Settings section lives in the panel, so "Configure" just focuses it.
@@ -378,12 +435,25 @@ function activate(context) {
     }),
     vscode.commands.registerCommand("golem.menu", async () => {
       const running = lastModel?.proxyReachable ?? false;
+      // Decision 56: three states, not two. `bypass` is serving-but-inert, so the
+      // menu must offer "restore pipeline" rather than a Start/Stop toggle that
+      // reads as already-stopped.
+      const bypass = lastModel?.proxyBypass === true;
       const items = [
         { label: "$(arrow-both) Set slider level…", action: "slider" },
         { label: "$(account) Switch upstream…", action: "account" },
         {
-          label: running ? "$(primitive-square) Stop proxy" : "$(play) Start proxy",
+          label: bypass
+            ? "$(play) Restore pipeline"
+            : running
+              ? "$(primitive-square) Stop pipeline (keep port served)"
+              : "$(play) Start proxy",
           action: "proxy",
+        },
+        {
+          label: "$(debug-disconnect) Go direct (unwire Golem)…",
+          description: "edits .claude/settings.json · needs a window reload",
+          action: "unwire",
         },
         { label: "$(window) Open panel", action: "panel" },
       ];
@@ -394,10 +464,13 @@ function activate(context) {
         });
       }
       const pick = await vscode.window.showQuickPick(items, {
-        placeHolder: `Golem — proxy ${running ? "running" : "stopped"}`,
+        placeHolder: `Golem — proxy ${bypass ? "bypass (pipeline off)" : running ? "running" : "stopped"}`,
       });
       if (!pick) return;
-      if (pick.action === "proxy") await setProxy(!running);
+      // In bypass the proxy IS reachable, so `!running` would stop it again;
+      // restoring the pipeline is a start.
+      if (pick.action === "proxy") await setProxy(bypass ? true : !running);
+      else if (pick.action === "unwire") await unwireProxy();
       else if (pick.action === "slider") await vscode.commands.executeCommand("golem.setSlider");
       else if (pick.action === "account") await vscode.commands.executeCommand("golem.setAccount");
       else if (pick.action === "panel") await vscode.commands.executeCommand("golem.showPanel");

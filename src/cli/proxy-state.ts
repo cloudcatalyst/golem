@@ -9,7 +9,18 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type ProxyDesired = "running" | "stopped";
+/**
+ * Decision 56: `"stopped"` no longer means "no listener". Stopping the pipeline
+ * leaves a redaction-only **shim** bound to the project port, so Claude Code —
+ * whose `ANTHROPIC_BASE_URL` cannot be un-set without a window reload
+ * (verification-notes §112b) — never dials a dead socket.
+ *
+ * - `running` — the full pipeline.
+ * - `bypass`  — pipeline off, shim serving (what `golem proxy stop` now records).
+ * - `stopped` — nothing listening. Reachable only via `golem proxy stop --hard`,
+ *   and the one state in which a wired Claude Code will fail to connect.
+ */
+export type ProxyDesired = "running" | "bypass" | "stopped";
 
 export function proxyStatePath(projectDir: string): string {
   return path.join(projectDir, ".golem", "state", "proxy.json");
@@ -21,7 +32,7 @@ export async function readProxyDesired(projectDir: string): Promise<ProxyDesired
     const j: unknown = JSON.parse(await readFile(proxyStatePath(projectDir), "utf8"));
     if (typeof j === "object" && j !== null) {
       const d = (j as Record<string, unknown>).desired;
-      if (d === "running" || d === "stopped") return d;
+      if (d === "running" || d === "bypass" || d === "stopped") return d;
     }
     return null;
   } catch {
