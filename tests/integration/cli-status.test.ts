@@ -6,7 +6,7 @@
  * (against a real ephemeral HTTP server and an unused port).
  */
 
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -67,6 +67,57 @@ describe("collectStatus", () => {
     expect(report.slider.layer).toBe("default");
     expect(report.config["slider.level"]).toEqual({ value: 1, layer: "default" });
     expect(report.config["proxy.port"]).toEqual({ value: 4653, layer: "default" });
+  });
+
+  /**
+   * R8.32 — status now READS `.claude/settings.json` to answer "is Golem in the
+   * request path?". The obvious next step is to have it repair what it finds,
+   * and that is exactly the mistake R8.31 avoided by keeping `start`/`stop` out
+   * of this file. Pinned, because a fix that edits on read would still pass
+   * every other assertion here.
+   */
+  it("never writes .claude/settings.json — reporting the gap must not repair it", async () => {
+    await golemInit({ projectDir, probe: passingProbe });
+    const settingsPath = join(projectDir, ".claude", "settings.json");
+    const before = await readFile(settingsPath, "utf8");
+
+    // The defect state: wiring removed while the daemon would report healthy.
+    const parsed = JSON.parse(before) as { env?: Record<string, unknown> };
+    delete parsed.env;
+    const unwired = JSON.stringify(parsed, null, 2);
+    await writeFile(settingsPath, unwired, "utf8");
+
+    const report = await collectStatus({
+      projectDir,
+      version: VERSION,
+      userDir,
+      probeTimeoutMs: 200,
+    });
+
+    expect(report.proxy.wiring).toBe("none");
+    expect(report.proxy.in_path).toBe(false);
+    expect(await readFile(settingsPath, "utf8")).toBe(unwired);
+  });
+
+  it("distinguishes a foreign ANTHROPIC_BASE_URL from no wiring at all", async () => {
+    await golemInit({ projectDir, probe: passingProbe });
+    const settingsPath = join(projectDir, ".claude", "settings.json");
+    const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      env?: Record<string, unknown>;
+    };
+    parsed.env = { ...parsed.env, ANTHROPIC_BASE_URL: "http://localhost:9999" };
+    await writeFile(settingsPath, JSON.stringify(parsed, null, 2), "utf8");
+
+    const report = await collectStatus({
+      projectDir,
+      version: VERSION,
+      userDir,
+      probeTimeoutMs: 200,
+    });
+
+    expect(report.proxy.wiring).toBe("foreign");
+    expect(report.proxy.wiring_base_url).toBe("http://localhost:9999");
+    expect(report.proxy.in_path).toBe(false);
   });
 
   it("reports an initialized project and local-layer provenance", async () => {
@@ -238,6 +289,65 @@ describe("renderStatus", () => {
     local_model: { reachable: false, coder_enabled: true, base_url: "http://localhost:11434" },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
   };
+
+  /**
+   * R8.32 — a reachable proxy nothing is wired to. `reachable` stays true (the
+   * daemon really is up), so the honesty has to come from `in_path`.
+   */
+  describe("running but not in the request path (R8.32)", () => {
+    const unwiredReport: StatusReport = {
+      ...healthyReport,
+      initialized: { ...healthyReport.initialized, overall: false, claude_settings: false },
+      proxy: {
+        port: 4653,
+        url: "http://localhost:4653",
+        reachable: true,
+        wiring: "none",
+        wiring_base_url: null,
+        in_path: false,
+      },
+    };
+
+    it("says so on the proxy line, not just in the checkbox 6 lines above", () => {
+      const output = renderStatus(unwiredReport);
+      const proxyLine = output.indexOf("Proxy: http://localhost:4653");
+      const warning = output.indexOf("NOT in the request path");
+      expect(warning).toBeGreaterThan(proxyLine);
+      // Adjacent to the proxy line, where the eye lands — the whole defect was
+      // that the reader had to correlate two distant lines themselves.
+      expect(output.slice(proxyLine, warning)).not.toContain("\n\n");
+    });
+
+    it("names `golem proxy wire`, not the far heavier `golem init`", () => {
+      const output = renderStatus(unwiredReport);
+      expect(output).toContain("golem proxy wire");
+      expect(output).toContain("reload the window");
+    });
+
+    it("reports a foreign gateway without offering to overwrite it", () => {
+      const output = renderStatus({
+        ...unwiredReport,
+        proxy: {
+          ...unwiredReport.proxy,
+          wiring: "foreign",
+          wiring_base_url: "http://localhost:9999",
+        },
+      });
+      expect(output).toContain("http://localhost:9999");
+      expect(output).toContain("another gateway owns it");
+      expect(output).not.toContain("golem proxy wire");
+    });
+
+    it("stays quiet on the healthy path", () => {
+      expect(
+        renderStatus({ ...healthyReport, proxy: { ...healthyReport.proxy, in_path: true } }),
+      ).not.toContain("NOT in the request path");
+    });
+
+    it("stays quiet when the proxy is down — that is R8.31's case, not this one", () => {
+      expect(renderStatus(unhealthyReport)).not.toContain("NOT in the request path");
+    });
+  });
 
   it("renders an all-healthy report with [ok] checkboxes, reachable proxy, and no warnings section", () => {
     const output = renderStatus(healthyReport);

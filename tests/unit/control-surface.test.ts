@@ -116,6 +116,30 @@ describe("collectControlSurface", () => {
     expect(ids(surface)).toEqual(expect.arrayContaining(["runtime:slider", "runtime:proxy"]));
   });
 
+  /**
+   * R8.32 — the VS Code toggle read `proxy.running`, so it showed a healthy
+   * daemon while Claude Code bypassed it entirely. A pid file naming this (very
+   * much alive) process is enough to reach the running branch without starting
+   * anything; the temp project has no wiring, which is the defect state.
+   */
+  it("reports a running proxy that Claude Code is not wired to", async () => {
+    await writeFile(
+      path.join(projectDir, ".golem", "proxy.pid"),
+      JSON.stringify({
+        pid: process.pid,
+        port: defaultProjectPort(projectDir),
+        ts: "2026-08-06T00:00:00.000Z",
+      }),
+      "utf8",
+    );
+    // The defect state: drop the wiring beforeEach installed, leaving a healthy
+    // daemon with nothing pointed at it.
+    await writeFile(path.join(projectDir, ".claude", "settings.json"), JSON.stringify({}), "utf8");
+    const proxy = find(await collectControlSurface(OPTS()), "runtime:proxy");
+    expect(proxy.summary).toContain("NOT in the request path");
+    expect(proxy.detail).toContain("golem proxy wire");
+  });
+
   it("omits the header by default, so the panel's first paint stays cheap", async () => {
     const surface = await collectControlSurface(OPTS());
     expect(surface.header).toBeNull();

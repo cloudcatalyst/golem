@@ -36,6 +36,7 @@ import {
   readWiringState,
   unwireProxyEnv,
   wireProxyEnv,
+  wiringGap,
 } from "../proxy-wiring.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
@@ -368,15 +369,26 @@ export default function register(program: Command): void {
       try {
         const { port, upstream } = await resolvePort(opts.dir);
         const st = await proxyStatus(opts.dir, port);
+        const ourBaseUrl = proxyBaseUrl(port);
+        const wiring = await readWiringState(opts.dir, ourBaseUrl);
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify({ ...st, upstream })}\n`);
+          // R8.32: `running` alone was never the question a caller is asking —
+          // `in_path` is. Both are reported so the two can disagree visibly.
+          process.stdout.write(
+            `${JSON.stringify({
+              ...st,
+              upstream,
+              wiring: wiring.owner,
+              wiring_base_url: wiring.baseUrl,
+              in_path: st.running && wiring.owner === "golem",
+            })}\n`,
+          );
           return;
         }
         if (!st.running) {
           // Decision 56: a dead port with live wiring is the defect — say so here
           // rather than leaving the user to discover it as a failed request.
           process.stdout.write("golem proxy: not running\n");
-          const wiring = await readWiringState(opts.dir, proxyBaseUrl(port));
           if (wiring.owner === "golem") {
             process.stdout.write(
               `  ⚠ Claude Code is wired to ${wiring.baseUrl} and nothing is listening there.\n    \`golem proxy start --detach\` restores the pipeline; \`golem proxy unwire\` sends it direct.\n`,
@@ -389,6 +401,15 @@ export default function register(program: Command): void {
             ? `golem proxy: BYPASS shim${st.pid ? ` (pid ${st.pid})` : ""} on port ${st.port ?? port} -> ${upstream}\n  pipeline off; redaction still on. \`golem proxy start --detach\` restores it.\n`
             : `golem proxy: running${st.pid ? ` (pid ${st.pid})` : ""} on port ${st.port ?? port} -> ${upstream}\n`,
         );
+        // R8.32: the daemon being up says nothing about whether traffic reaches
+        // it. Reported after the pid line so the contradiction is impossible to
+        // miss — a bare "running" here is exactly what hid the defect.
+        const gap = wiringGap(wiring, ourBaseUrl);
+        if (gap !== null) {
+          process.stdout.write(
+            `  ⚠ ${gap.problem}\n${gap.remedy === null ? "" : `    ${gap.remedy}\n`}`,
+          );
+        }
       } catch (err) {
         _fail(err);
       }

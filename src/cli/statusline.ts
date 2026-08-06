@@ -43,6 +43,7 @@ import { VERSION } from "../version.js";
 import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
+import { proxyBaseUrl, readWiringState } from "./proxy-wiring.js";
 // `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
 // write path (~426ms) and all that's wanted here is a lookup table.
 import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
@@ -97,6 +98,15 @@ export interface GolemState {
    * still redacted, so "off" would be a lie.
    */
   readonly proxyBypass?: boolean;
+  /**
+   * R8.32 — whether Claude Code is actually POINTED at the proxy
+   * (`.claude/settings.json` `env.ANTHROPIC_BASE_URL`). Independent of
+   * `proxyRunning`: the daemon can be up and healthy while the client talks
+   * straight to the upstream, which is the one state this line used to render
+   * as a confident green ⬢. Unknown (undefined) is treated as wired, so an
+   * unreadable settings file never invents an alarm.
+   */
+  readonly proxyInPath?: boolean;
   /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known and enabled. */
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
@@ -262,19 +272,34 @@ export function renderStatusLine(
   // "running" nor "off". A hollow-but-green hexagon says carrying traffic,
   // pipeline off — the two states used to collapse into one misleading label.
   const bypass = golem.proxyBypass === true;
-  const brand = bypass ? green("⬡ Golem") : active ? green("⬢ Golem") : dim("⬡ Golem");
+  // R8.32: a running daemon nothing is pointed at. This outranks every other
+  // state below — a green ⬢ beside "Aggressive" while traffic went straight to
+  // the upstream is the most confident lie this line can tell, and it told it
+  // from the pid file alone. Yellow, not dim: "off" is a resting state the user
+  // chose, this is a misconfiguration they almost certainly did not.
+  const unwired = golem.proxyInPath === false;
+  const brand = unwired
+    ? yellow("⬡ Golem")
+    : bypass
+      ? green("⬡ Golem")
+      : active
+        ? green("⬢ Golem")
+        : dim("⬡ Golem");
   // "Passthrough" whenever Golem isn't transforming traffic: the proxy is down,
-  // it's the bypass shim, or it's running at level 0 (full bypass, Decision 30).
-  const passthrough = !active || bypass || golem.sliderLevel === 0;
+  // it's unwired, it's the bypass shim, or it's running at level 0 (full
+  // bypass, Decision 30).
+  const passthrough = !active || bypass || unwired || golem.sliderLevel === 0;
   // §103: name the level that is RUNNING, not the one that was set. The nominal
   // level still gets said — as a badge below — but it must not be the headline
   // when the pipeline is doing something else.
   const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
-  const label = bypass
-    ? "Bypass"
-    : passthrough
-      ? "Passthrough"
-      : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
+  const label = unwired
+    ? "Unwired"
+    : bypass
+      ? "Bypass"
+      : passthrough
+        ? "Passthrough"
+        : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
 
   // Brand · Level → destination. The destination names each backend with its
   // own model id verbatim (`local (qwen2.5-coder:7b) + anthropic
@@ -290,7 +315,10 @@ export function renderStatusLine(
   // Decision 56: the bypass shim runs no brevity stage, so showing the CONFIGURED
   // dial here would advertise an output transform that is not happening — the
   // same class of dishonesty as labelling a served port "off".
-  if (golem.brevity !== undefined && golem.brevity !== "off" && !bypass) {
+  // R8.32: same reasoning as the shim — an unwired proxy runs no brevity stage,
+  // so advertising the configured dial would describe a transform that is not
+  // happening.
+  if (golem.brevity !== undefined && golem.brevity !== "off" && !bypass && !unwired) {
     parts.push(yellow(`✂ ${golem.brevity}`));
   }
   // The set-but-inert level, said explicitly so the difference is visible rather
@@ -325,9 +353,11 @@ export async function collectGolemState(
   let model: string | undefined;
   let activeAccount: string | null = null;
   let effectiveLevel: number | undefined;
+  let proxyPort: number | undefined;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     sliderLevel = settings.slider.level;
+    proxyPort = settings.proxy.port;
     // Resolved here rather than imported from dials.ts: the status line runs on
     // every prompt, and this is a two-field lookup on settings we already have.
     brevity =
@@ -424,6 +454,15 @@ export async function collectGolemState(
       proxyRunning: running,
       ...(running && pid?.shim === true ? { proxyBypass: true } : {}),
     };
+    // R8.32 — the pid file only proves a daemon exists. Ask the other half of
+    // the question: is Claude Code pointed at it? One small local JSON read, on
+    // the same footing as the pid read above, so the 2s refresh stays cheap.
+    // Only when running: a stopped proxy with live wiring is R8.31's case and
+    // already renders as inactive.
+    if (running && proxyPort !== undefined) {
+      const wiring = await readWiringState(dir, proxyBaseUrl(proxyPort));
+      state = { ...state, proxyInPath: wiring.owner === "golem" };
+    }
   } catch {
     // pid file unreadable — leave proxyRunning unknown
   }
