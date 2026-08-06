@@ -2,7 +2,7 @@
   "name": "golem-vscode",
   "displayName": "Golem",
   "description": "Live Golem token-savings dashboard: compression stats, slider, and proxy status in a VS Code panel.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "golem-run",
   "engines": {
     "vscode": "^1.80.0"
