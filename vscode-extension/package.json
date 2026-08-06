@@ -52,7 +52,15 @@
       },
       {
         "command": "golem.toggleProxy",
-        "title": "Golem: Start/Stop Proxy"
+        "title": "Golem: Start/Stop Proxy Pipeline"
+      },
+      {
+        "command": "golem.unwireProxy",
+        "title": "Golem: Go Direct (Unwire Golem from Claude Code)"
+      },
+      {
+        "command": "golem.wireProxy",
+        "title": "Golem: Wire Claude Code Back to the Golem Proxy"
       },
       {
         "command": "golem.update",

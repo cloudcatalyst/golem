@@ -38,6 +38,13 @@ export interface ProxyPidInfo {
   readonly pid: number;
   readonly port: number;
   readonly ts: string;
+  /**
+   * Decision 56: this listener is the redaction-only bypass shim, not the
+   * pipeline. Recorded here because the pid file is the "what is running right
+   * now" truth — every display that used to print "proxy off" needs to tell the
+   * two apart, and inferring it from the desired-state file would drift.
+   */
+  readonly shim?: boolean;
 }
 
 export function proxyPidPath(projectDir: string): string {
@@ -50,7 +57,12 @@ export async function readProxyPid(projectDir: string): Promise<ProxyPidInfo | n
     if (typeof j !== "object" || j === null) return null;
     const o = j as Record<string, unknown>;
     if (typeof o.pid !== "number" || typeof o.port !== "number") return null;
-    return { pid: o.pid, port: o.port, ts: typeof o.ts === "string" ? o.ts : "" };
+    return {
+      pid: o.pid,
+      port: o.port,
+      ts: typeof o.ts === "string" ? o.ts : "",
+      ...(o.shim === true ? { shim: true } : {}),
+    };
   } catch {
     return null;
   }
@@ -118,6 +130,12 @@ export interface ProxyStatus {
   readonly pid?: number;
   readonly port?: number;
   readonly source: "pidfile" | "port" | "none";
+  /**
+   * Decision 56: what is listening is the bypass shim (pipeline off, redaction
+   * on). Only knowable from the pid file — a bare port probe cannot tell the two
+   * apart, so this is absent when `source` is `"port"`.
+   */
+  readonly shim?: boolean;
 }
 
 /**
@@ -160,7 +178,13 @@ export async function proxyStatus(
 ): Promise<ProxyStatus> {
   const info = await readProxyPid(projectDir);
   if (info && aliveFn(info.pid)) {
-    return { running: true, pid: info.pid, port: info.port, source: "pidfile" };
+    return {
+      running: true,
+      pid: info.pid,
+      port: info.port,
+      source: "pidfile",
+      ...(info.shim === true ? { shim: true } : {}),
+    };
   }
   if (await portInUse(port)) return { running: true, port, source: "port" };
   return { running: false, source: "none" };
@@ -198,8 +222,13 @@ export async function startDetached(
   port: number,
   scriptPath: string,
   env: Readonly<Record<string, string>> = {},
+  opts: { readonly shim?: boolean } = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
+  // Decision 56: the bypass shim is the same daemon with the pipeline pinned to
+  // level 1 — one flag, not a second executable, so the pid file, port
+  // resolution and credential injection all stay single-sourced.
+  if (opts.shim === true) args.push("--shim");
   const child = spawn(process.execPath, [scriptPath, ...args], {
     detached: true,
     stdio: "ignore",

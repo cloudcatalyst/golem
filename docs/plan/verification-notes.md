@@ -5052,3 +5052,47 @@ definition, no hook), so the downside is bounded, but "discarding is cheaper tha
 repairing" rests on §93's re-reading share, not an A/B. And the displacement question R8.5
 and R8.6 both left open applies again: whether an agent actually reaches for a checkpoint
 before a risky attempt is a dogfooding observation nobody has made yet.
+
+## §112 — `proxy stop` leaves Claude Code wired to a dead port, and `settings.json` `env` is NOT hot-reloaded (2026-08-06)
+
+Found by dogfooding: the user stopped the proxy from the VS Code UI and observed that
+the Anthropic base URL was not removed. Traced and confirmed; the finding has two halves,
+and the second is what makes the obvious fix insufficient.
+
+**(a) Nothing in the stop path touches the wiring.** `setProxy(false)` in
+`vscode-extension/extension.js` runs `golem proxy stop --dir <cwd>` and nothing else. The
+`stop` action in `src/cli/commands/proxy.ts` does exactly two things —
+`writeProxyDesired(dir, "stopped", …)` and `stopProxy(dir)` (kill the pid). No surface in
+that path reads or writes `.claude/settings.json`. So `ANTHROPIC_BASE_URL` keeps pointing
+at `http://localhost:<port>` after the listener is gone, and every subsequent Claude Code
+request fails with connection-refused. Not a regression — the behaviour was never designed.
+§46 added the VS Code toggle and only ever specified the process lifecycle.
+
+**(b) Unwiring alone cannot rescue the running session.** `ANTHROPIC_BASE_URL` reaches
+Claude Code through `.claude/settings.json` → `"env"`. §13 (settings hierarchy, live docs
+2026-07-03) enumerates what hot-reloads: `permissions`, `hooks`, `apiKeyHelper`. `env` is
+**not** in that set, and `model`/`outputStyle` are explicitly called out as needing a
+restart. Golem's own `docs/wiki/concepts/Dogfooding Golem.md` escape hatch independently
+says to remove the var *"and reopen the editor"*. Both point the same way: deleting the key
+on `stop` fixes the **next** session and leaves the current one broken. Any design that
+stops at "delete the key" therefore does not solve the reported symptom.
+
+**(c) The naive shim would breach a hard rule.** The seamless fix is to keep the port
+served by a forward-only listener. The tempting implementation is the existing pure-
+passthrough path (`BYPASS_HEADER` = `x-golem-bypass`, `src/proxy/types.ts`, or slider
+level 0), and it is wrong: that path forwards untouched, which means **redaction off**.
+CLAUDE.md permits level 0 as the single redaction-off exception precisely on the condition
+that it is never the default and always surfaced loudly, and `src/cli/skills.ts` already
+tells agents to "prefer level 1 (redaction on, byte-faithful) unless a true full bypass is
+intended". A Stop button that silently routed unredacted prompts upstream would make the
+redaction-off path reachable from a click that says nothing about redaction. The shim must
+serve at level-1 semantics.
+
+**(d) The unwire guard already exists — reuse it.** `src/cli/init.ts` deletes
+`ANTHROPIC_BASE_URL` only when it equals Golem's own computed base URL (the
+`env[ENV_BASE_URL] === baseUrl` test, used at both the Foundry-switch and `uninit` sites),
+and `init` refuses outright when a *foreign* base URL is present. That ownership check is
+exactly what a `proxy unwire` needs, and re-deriving it would be how a third-party
+gateway's wiring eventually gets clobbered.
+
+Recorded as spec Decision 56 and task R8.31.
