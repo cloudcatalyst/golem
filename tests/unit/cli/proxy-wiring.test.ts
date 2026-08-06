@@ -21,6 +21,7 @@ import {
   removeGolemEnv,
   unwireProxyEnv,
   wireProxyEnv,
+  wiringGap,
 } from "../../../src/cli/proxy-wiring.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
@@ -192,5 +193,46 @@ describe("readWiringState", () => {
 
     await writeClaudeSettings({ env: { [ENV_BASE_URL]: FOREIGN } });
     expect(await readWiringState(projectDir, OURS)).toEqual({ owner: "foreign", baseUrl: FOREIGN });
+  });
+});
+
+/**
+ * R8.32 — the running-but-unwired gap. Every status surface routes its wording
+ * through `wiringGap`, so these assertions are the contract the four surfaces
+ * inherit rather than four separate strings that drift apart.
+ */
+describe("wiringGap", () => {
+  it("is silent when the wiring points at us — no false alarm on the healthy path", () => {
+    expect(wiringGap({ owner: "golem", baseUrl: OURS }, OURS)).toBeNull();
+  });
+
+  it("names the bypass and offers `golem proxy wire` when nothing is wired", () => {
+    const gap = wiringGap({ owner: "none", baseUrl: null }, OURS);
+    expect(gap).not.toBeNull();
+    // The user's actual exposure, stated plainly — this is the whole point of
+    // the task: requests succeed, so nothing else tells them.
+    expect(gap?.problem).toContain("NOT in the request path");
+    expect(gap?.problem).toContain("no redaction");
+    expect(gap?.remedy).toContain("golem proxy wire");
+    expect(gap?.remedy).toContain(OURS);
+    // `env` is not hot-reloaded (§112b) — a remedy that omits this leaves the
+    // user believing the fix took effect in the running window.
+    expect(gap?.remedy).toContain("reload");
+  });
+
+  it("reports a foreign gateway but offers NO remedy — it is not ours to change", () => {
+    const gap = wiringGap({ owner: "foreign", baseUrl: FOREIGN }, OURS);
+    expect(gap?.problem).toContain(FOREIGN);
+    expect(gap?.problem).toContain("NOT in the request path");
+    // The ownership rule forbids touching it, so suggesting `wire` here would be
+    // advice to clobber another gateway's config.
+    expect(gap?.remedy).toBeNull();
+    expect(gap?.problem).not.toContain("golem proxy wire");
+  });
+
+  it("distinguishes foreign from none — different situations, different advice", () => {
+    const none = wiringGap({ owner: "none", baseUrl: null }, OURS);
+    const foreign = wiringGap({ owner: "foreign", baseUrl: FOREIGN }, OURS);
+    expect(none?.problem).not.toBe(foreign?.problem);
   });
 });

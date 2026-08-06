@@ -33,6 +33,7 @@ import {
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
 import { readProxyPid } from "./proxy-daemon.js";
+import { proxyBaseUrl, readWiringState, type WiringState } from "./proxy-wiring.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 
 /** Decision 52 — one dial's state in the JSON report. */
@@ -79,6 +80,19 @@ export interface StatusReport {
      * degrades to "reachable" — incomplete, never wrong.
      */
     readonly bypass?: boolean;
+    /**
+     * R8.32 — who owns `.claude/settings.json`'s `ANTHROPIC_BASE_URL`:
+     * `"golem"` (us), `"foreign"` (another gateway — never touched), `"none"`.
+     */
+    readonly wiring?: "golem" | "foreign" | "none";
+    /** The base URL actually wired, whoever owns it. Null when there is none. */
+    readonly wiring_base_url?: string | null;
+    /**
+     * R8.32 — the question `reachable` was mistaken for: is Golem actually
+     * carrying this project's traffic? `reachable && wiring === "golem"`.
+     * A reachable proxy with no wiring pointing at it serves nothing.
+     */
+    readonly in_path?: boolean;
   };
   /**
    * The active upstream's non-secret identity (R6.2 display): the account /
@@ -269,6 +283,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       readProxyPid(projectDir).catch(() => null),
     ]);
 
+  // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
+  // wiring at all" from "another gateway owns it" — and those have different
+  // remedies (the second one is not ours to fix). Read the owner properly.
+  const wiring = await readWiringState(projectDir, proxyBaseUrl(settings.proxy.port)).catch(
+    (): WiringState => ({ owner: "none", baseUrl: null }),
+  );
+
   // Update status from the cached check only (no network — never hang status).
   // Recompute "available" against the version we're actually running.
   const cachedUpdate = await readCachedUpdateCheck(path.join(projectDir, ".golem", "state"));
@@ -321,6 +342,9 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       url: `http://localhost:${settings.proxy.port}`,
       reachable,
       ...(reachable && pidInfo?.shim === true ? { bypass: true } : {}),
+      wiring: wiring.owner,
+      wiring_base_url: wiring.baseUrl,
+      in_path: reachable && wiring.owner === "golem",
     },
     upstream: {
       provider: upstream.provider,
@@ -514,6 +538,22 @@ export function renderStatus(report: StatusReport): string {
           : "not running (start with `golem proxy`)"
     }`,
   );
+  // R8.32: the `[--] .claude/settings.json` checkbox above and this "reachable"
+  // line could contradict each other two lines apart, and the reader was left to
+  // notice. Say it here, attached to the proxy line the eye actually lands on.
+  if (report.proxy.reachable && report.proxy.in_path === false) {
+    const foreign = report.proxy.wiring === "foreign";
+    lines.push(
+      `  ⚠ NOT in the request path — ${
+        foreign
+          ? `Claude Code is wired to ${report.proxy.wiring_base_url} (another gateway owns it; Golem will not change that)`
+          : "Claude Code has no ANTHROPIC_BASE_URL and talks to the upstream directly"
+      }.`,
+    );
+    // `golem init` is what the checkbox above recommends, and it is far heavier
+    // than restoring one env key.
+    if (!foreign) lines.push("    Fix: `golem proxy wire` (then reload the window).");
+  }
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
   const slider = report.slider;
   const ec = report.effective_compression;

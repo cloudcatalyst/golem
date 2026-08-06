@@ -110,6 +110,46 @@ export async function readWiringState(projectDir: string, baseUrl: string): Prom
   return { owner: current === baseUrl ? "golem" : "foreign", baseUrl: current };
 }
 
+/**
+ * Why a *running* proxy is nonetheless not carrying this project's traffic.
+ * `problem` states it; `remedy` is null when the fix is not Golem's to make.
+ */
+export interface WiringGap {
+  readonly problem: string;
+  readonly remedy: string | null;
+}
+
+/**
+ * R8.32 — describe the gap between "the port is served" and "Claude Code uses
+ * it", or `null` when the wiring does point at us.
+ *
+ * The mirror image of the R8.31 dead-port warning, and strictly worse. There,
+ * live wiring pointed at a port nothing served, and the next request failed
+ * loudly. Here the port IS served and the wiring is absent, so requests
+ * **succeed** while bypassing redaction, compression and telemetry entirely.
+ * Nothing fails, so nothing tells the user — which is why every status surface
+ * has to ask, and why they all ask through this one function rather than
+ * re-deriving the wording (four near-identical strings drift, and the drift is
+ * always in the direction of reassurance).
+ *
+ * `foreign` gets a different answer from `none` on purpose: another gateway
+ * owning the project's traffic is the human's decision, and the ownership rule
+ * above forbids touching it — so `golem proxy wire` is NOT offered there.
+ */
+export function wiringGap(state: WiringState, ourBaseUrl: string): WiringGap | null {
+  if (state.owner === "golem") return null;
+  if (state.owner === "foreign") {
+    return {
+      problem: `Claude Code is wired to ${state.baseUrl} — another proxy or gateway owns this project's traffic, so Golem is NOT in the request path.`,
+      remedy: null,
+    };
+  }
+  return {
+    problem: `Claude Code has no ${ENV_BASE_URL} — it talks to the upstream DIRECTLY, so Golem is NOT in the request path (no redaction, no compression, no telemetry).`,
+    remedy: `\`golem proxy wire\` points it at ${ourBaseUrl} (needs a window reload).`,
+  };
+}
+
 export interface UnwireResult {
   /** Did the file change? False when already unwired, or when the wiring is foreign. */
   readonly changed: boolean;

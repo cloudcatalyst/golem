@@ -99,6 +99,52 @@ describe("isBlockedFresh (stale 'waiting' self-heals)", () => {
   });
 });
 
+/**
+ * R8.32 — the statusline was the worst offender: it derived "active" from the
+ * pid file alone, so a running daemon nothing was wired to rendered as a
+ * confident green ⬢ beside "Aggressive" while every request went straight to
+ * the upstream unredacted.
+ */
+describe("renderStatusLine — unwired proxy (R8.32)", () => {
+  const unwired = {
+    sliderLevel: 3,
+    upstreamLabel: "anthropic",
+    brevity: "full" as const,
+    proxyRunning: true,
+    proxyInPath: false,
+  };
+
+  it("does not claim a compression level when Golem is not in the path", () => {
+    const line = renderStatusLine({}, unwired);
+    expect(line).toContain("Unwired");
+    // The exact lie this task exists to kill.
+    expect(line).not.toContain("Aggressive");
+    expect(line).not.toContain("⬢");
+  });
+
+  it("suppresses the brevity badge — no transform is running to advertise", () => {
+    expect(renderStatusLine({}, unwired)).not.toContain("brevity");
+  });
+
+  it("still renders normally when the proxy is running AND wired", () => {
+    const line = renderStatusLine({}, { ...unwired, proxyInPath: true });
+    expect(line).toContain("⬢ Golem · Aggressive");
+    expect(line).not.toContain("Unwired");
+  });
+
+  it("treats unknown wiring as wired — an unreadable settings file is not an alarm", () => {
+    const { proxyInPath, ...unknown } = unwired;
+    void proxyInPath;
+    expect(renderStatusLine({}, unknown)).not.toContain("Unwired");
+  });
+
+  it("distinguishes unwired from a stopped proxy — different states, different fixes", () => {
+    const stopped = renderStatusLine({}, { ...unwired, proxyRunning: false, proxyInPath: true });
+    expect(stopped).not.toContain("Unwired");
+    expect(renderStatusLine({}, unwired)).not.toBe(stopped);
+  });
+});
+
 describe("renderStatusLine", () => {
   it("renders the core one-liner without color: brand · level → destination", () => {
     const line = renderStatusLine(

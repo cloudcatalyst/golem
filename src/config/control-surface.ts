@@ -33,6 +33,7 @@
 import path from "node:path";
 import { getConfig, listConfig, setConfig, unsetConfig } from "../cli/config.js";
 import { proxyStatus, startDetached, stopProxy } from "../cli/proxy-daemon.js";
+import { proxyBaseUrl, readWiringState, type WiringState, wiringGap } from "../cli/proxy-wiring.js";
 // `./slider-read.js`, not `./slider.js`: the write path imports cli/init.js and
 // costs ~530ms to load, and collecting the surface only needs to READ the level.
 // `setSliderLevel` is imported lazily in applyRuntime. (verification-notes §86)
@@ -425,16 +426,24 @@ async function runtimeControlGroup(shared: {
     advanced: false,
   };
 
+  // R8.32: "running" described the daemon, not the product. A proxy nothing is
+  // wired to serves no traffic, so the toggle read `running` while redaction,
+  // compression and telemetry were all being bypassed. Same read the CLI does.
+  const wiring = await readWiringState(shared.projectDir, proxyBaseUrl(settings.proxy.port)).catch(
+    (): WiringState => ({ owner: "none", baseUrl: null }),
+  );
+  const gap = proxy.running ? wiringGap(wiring, proxyBaseUrl(settings.proxy.port)) : null;
   const proxyControl: Control = {
     id: "runtime:proxy",
     family: "runtime",
     label: "Proxy daemon",
     summary: proxy.running
-      ? `running on port ${proxy.port ?? settings.proxy.port}${proxy.pid !== undefined ? ` (pid ${proxy.pid})` : ""}`
+      ? `${gap === null ? "running" : "running but NOT in the request path"} on port ${proxy.port ?? settings.proxy.port}${proxy.pid !== undefined ? ` (pid ${proxy.pid})` : ""}`
       : `not running (port ${settings.proxy.port})`,
     detail:
       "Claude Code talks to this local proxy. Starting it detaches the daemon; stopping it " +
-      "sends traffic nowhere until it is started again.",
+      "sends traffic nowhere until it is started again." +
+      (gap === null ? "" : `\n\n⚠ ${gap.problem}${gap.remedy === null ? "" : ` ${gap.remedy}`}`),
     kind: "toggle",
     value: proxy.running,
     layer: "runtime",
