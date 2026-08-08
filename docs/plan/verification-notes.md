@@ -5096,3 +5096,40 @@ exactly what a `proxy unwire` needs, and re-deriving it would be how a third-par
 gateway's wiring eventually gets clobbered.
 
 Recorded as spec Decision 56 and task R8.31.
+
+## §113 — SessionStart has five sources, not two; the auto-start matcher missed three (2026-08-08)
+
+Source: https://code.claude.com/docs/en/hooks.md (fetched 2026-08-08).
+
+Found by dogfooding: after a PC restart the user opened VS Code with the Claude Code
+panel visible and the proxy was not running. Corrects the matcher recorded in §47.
+
+**(a) The documented `source` set is wider than the matcher.** The live matcher table
+gives `SessionStart` five values — `startup`, `resume`, `clear`, `compact`, `fork`. §47
+wired `startup|resume`, which was the known set at the time; `fork` postdates it. So a
+session begun by `/clear`, by a compaction, or with `--fork-session` did not run
+`golem hook session-start`, and a proxy left down stayed down through it. Widened to
+`startup|resume|clear|compact|fork` in `SESSION_START_MATCHER`
+(`src/hooks/settings-writer.ts`) and in this project's `.claude/settings.json`. No test
+pinned the old literal.
+
+**(b) Auto-start is session-scoped, and that is not the same as project-open.** The hook
+itself is healthy — invoked directly with a `{cwd, source}` payload it exits 0 in ~2.7s,
+far inside its 15s timeout, and `startDetached` unrefs a detached child that would
+survive the timeout anyway. Desired state was `running`, so the `desired=stopped` no-op
+path was not taken either. The evidence is a 15-minute hole: boot 19:13:01, proxy pid up
+19:28:11, telemetry resuming 19:28:59. The docs say hooks fire in IDE extensions the same
+as anywhere ("sessions in the terminal, IDE extensions, the Desktop app, and Claude Code
+on the web all fire the same hook events") but do **not** specify whether an IDE panel
+creates a session at panel-open or at first message. Opening the panel does not by itself
+start a CLI process, so the leading explanation is that no session existed to fire the
+hook. Unproven from outside — the hook's no-op path is fail-safe and silent, so it leaves
+no trace to distinguish "did not fire" from "fired and returned early".
+
+**(c) Golem installs no OS-level autostart, by design.** No Task Scheduler entry, no Run
+key, no Startup-folder shortcut, no service anywhere in the repo. The proxy is a detached
+`node` process and a reboot kills it; §47's recovery is on project open, not on logon.
+User decision 2026-08-08: leave that as-is. The practical consequence, worth stating
+because it is not obvious from §47, is that after a reboot the proxy returns on the first
+*message*, not when the editor or panel opens. `golem proxy start --detach` or the VS Code
+status-bar toggle closes the gap manually.
