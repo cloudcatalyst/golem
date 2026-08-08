@@ -51,6 +51,23 @@ export {
   type OpenAIChatRequest,
   openAIChatToAnthropic,
 } from "./openai-translate.js";
+export {
+  accountsReferencedByTargets,
+  defaultTargetId,
+  defaultTrustFor,
+  listTargets,
+  type ResolvedTarget,
+  resolveDefaultTargetId,
+  resolveTarget,
+  TARGET_TRUST_LEVELS,
+  type TargetEntry,
+  type TargetLookup,
+  type TargetOrigin,
+  type TargetRegistrySettings,
+  type TargetTrust,
+  type TargetWarning,
+  targetWarnings,
+} from "./targets.js";
 
 /**
  * Upstreams Golem can front.

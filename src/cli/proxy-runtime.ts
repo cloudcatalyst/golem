@@ -28,12 +28,15 @@ import {
   geminiToAnthropic,
   isGeminiProvider,
   isTranslatingProvider,
+  listTargets,
   makeAuthMapper,
   openAIChatToAnthropic,
   preservesVendorPrefix,
   resolveActiveUpstream,
   resolveAuthScheme,
+  resolveDefaultTargetId,
   sniffRequestModel,
+  targetWarnings,
   type UpstreamProvider,
   upstreamAssumesCaching,
   upstreamChatCompletionsPath,
@@ -242,6 +245,22 @@ export function buildProxyFromSettings(
     process.env,
   );
   if (accountWarning !== undefined) process.stderr.write(`golem proxy: ${accountWarning}\n`);
+  // R9.1: warn for EVERY misconfigured target, not just the one being served.
+  // A broken target that is not yet routed to is still broken, and the point of
+  // a registry is finding that out before a request depends on it. The registry
+  // is inert here — this changes what is printed, never what is served.
+  for (const w of targetWarnings(settings.proxy)) {
+    process.stderr.write(`golem proxy: target "${w.targetId}": ${w.message}\n`);
+  }
+  // A default_target naming an id in neither registry fails closed downstream
+  // (R9.2); say so at startup rather than on the first request that needs it.
+  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
+  if (!listTargets(settings.proxy).some((t) => t.id === defaultTargetId)) {
+    process.stderr.write(
+      `golem proxy: default target "${defaultTargetId}" is in neither proxy.targets nor ` +
+        "proxy.accounts — no substitute will be used.\n",
+    );
+  }
   // R6.1 case (a): the selected provider governs the semantic stage's caching
   // assumption (verification-notes §73). undefined for `anthropic` → URL heuristic.
   const assumeCachingUpstream = upstreamAssumesCaching(upstream.provider);

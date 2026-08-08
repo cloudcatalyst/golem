@@ -33,7 +33,11 @@ import {
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import { PromptCancelled, promptSecret } from "../credentials/prompt.js";
-import { doubledVersionSegment, isTranslatingProvider } from "../providers/index.js";
+import {
+  accountsReferencedByTargets,
+  doubledVersionSegment,
+  isTranslatingProvider,
+} from "../providers/index.js";
 import { clearServedModel } from "../proxy/index.js";
 import { InitError } from "./init.js";
 
@@ -587,7 +591,19 @@ export async function removeAccount(
  * Returns `{}` when nothing resolves — the proxy then forwards the client's own
  * auth as it always has, so this never breaks a keyless/inherit setup.
  *
- * Never logs the secret; the caller passes the map straight to spawn.
+ * **R9.1 — this resolves N credentials, not 1.** Every account referenced by a
+ * target in `proxy.targets` (or derived from `proxy.accounts`) gets its key
+ * injected under its own `perAccountEnvVar`, because with a target registry the
+ * proxy may need any of them, not only the active one. No new secret mechanism
+ * was required: `perAccountEnvVar` was already designed per-account (Decision
+ * 47), and the CLI still owns resolution and injects at spawn.
+ *
+ * The accepted cost is a **wider blast radius**: the daemon's environment now
+ * carries N credentials where it carried one. The keys are still never settings
+ * and never on disk in plaintext, but a proxy compromise now exposes more. That
+ * is recorded here deliberately rather than discovered later.
+ *
+ * Never logs a secret; the caller passes the map straight to spawn.
  */
 export async function credentialEnvForProxy(
   projectDir: string,
@@ -600,11 +616,25 @@ export async function credentialEnvForProxy(
   // The default top-level config is in force when nothing is selected or the
   // selection names the default id; its credential rides the plain var.
   const onDefault = selected === null || selected === defaultId;
-  const storeId = onDefault ? DEFAULT_STORE_ID : selected;
+  const activeStoreId = onDefault ? DEFAULT_STORE_ID : selected;
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
-  const hit = await store.resolve(storeId);
-  if (hit === null) return {};
-  return { [envVarForAccount(storeId)]: hit.secret };
+
+  // The active account first — unchanged behaviour, so a single-upstream setup
+  // spawns exactly as it did before this task.
+  const out: Record<string, string> = {};
+  const active = await store.resolve(activeStoreId);
+  if (active !== null) out[envVarForAccount(activeStoreId)] = active.secret;
+
+  // Then every account some target references. A missing credential is skipped
+  // silently here, not thrown: an unkeyed target must not stop the proxy from
+  // starting for the targets that ARE keyed. `golem target list` reports it.
+  for (const accountId of accountsReferencedByTargets(settings.proxy)) {
+    const varName = envVarForAccount(accountId);
+    if (out[varName] !== undefined) continue;
+    const hit = await store.resolve(accountId);
+    if (hit !== null) out[varName] = hit.secret;
+  }
+  return out;
 }
 
 /** Human-readable rendering of {@link AccountsReport}. */
