@@ -25,8 +25,17 @@
 
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
-import type { UpstreamAccount, UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
-import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
+import type {
+  TargetEntry,
+  UpstreamAccount,
+  UpstreamAuthScheme,
+  UpstreamProvider,
+} from "../providers/index.js";
+import {
+  TARGET_TRUST_LEVELS,
+  UPSTREAM_AUTH_SCHEMES,
+  UPSTREAM_PROVIDERS,
+} from "../providers/index.js";
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
@@ -123,6 +132,47 @@ export const SETTINGS_LEAVES = {
      * account — ADR-0003 fail-closed). Switch it with `golem account use <id>`.
      */
     active_account: z.string().min(1).optional(),
+    /**
+     * R9.1 (proposal `multi-target-routing.md`): the target registry — one table
+     * for every model Golem can reach, local or upstream. A local model is just
+     * a target whose provider is `ollama`.
+     *
+     * A target is **entirely non-secret**: it answers *which endpoint + model*,
+     * and points at a `proxy.accounts` id for *whose credential*. Several targets
+     * may share one account (one key backing several model ids), which is why the
+     * two registries are separate. There is deliberately no key field — a secret
+     * here would be a plaintext secret in settings, which ADR-0003 invariant 1
+     * forbids.
+     *
+     * `trust` (`vendor | local | lan | third-party`) is stored and surfaced in
+     * R9.1 and consumed as a redaction floor in R9.3, where a target may only
+     * ever RAISE the floor. Omitted → {@link defaultTrustFor}, which errs toward
+     * more redaction.
+     *
+     * Inert in R9.1: nothing routes on this yet (R9.2/R9.3 consume it). Entries
+     * in `proxy.accounts` already appear in `golem target list` without being
+     * restated here.
+     */
+    targets: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          provider: z.enum(UPSTREAM_PROVIDERS),
+          base_url: z.string().url(),
+          model: z.string().min(1).optional(),
+          account: z.string().min(1).optional(),
+          auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
+          trust: z.enum(TARGET_TRUST_LEVELS).optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * R9.1: which target serves a request that names none. Supersedes
+     * {@link active_account} (spec Decision 21d), which is still read when this
+     * is unset — that fallback IS the migration shim, so an existing config keeps
+     * working untouched. Unknown id → fail-closed (no silent substitution).
+     */
+    default_target: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
@@ -497,6 +547,8 @@ export interface ProxySettings {
   readonly map_reasoning_to_thinking: boolean;
   readonly accounts?: readonly UpstreamAccount[];
   readonly active_account?: string;
+  readonly targets?: readonly TargetEntry[];
+  readonly default_target?: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
 }

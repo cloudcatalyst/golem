@@ -5133,3 +5133,97 @@ User decision 2026-08-08: leave that as-is. The practical consequence, worth sta
 because it is not obvious from §47, is that after a reboot the proxy returns on the first
 *message*, not when the editor or panel opens. `golem proxy start --detach` or the VS Code
 status-bar toggle closes the gap manually.
+
+---
+
+## §114 — Claude Code passes ANY model string through behind a custom `ANTHROPIC_BASE_URL` — virtual model ids are viable (2026-08-08)
+
+**Why this was checked.** `docs/plan/proposals/multi-target-routing.md` makes a
+*virtual model id* (`model: "golem/coder"`) the primary way to select a routing
+target — level 1 of its precedence chain, and the mechanism that lets a sub-agent
+branch onto its own model with zero new Golem machinery. The whole UX rested on
+an unverified assumption: that Claude Code forwards an arbitrary, non-`claude-*`
+model string instead of rejecting or normalizing it. Task 21e's Phase 1 was
+gated on this answer.
+
+**Doc host moved.** `docs.claude.com/en/docs/claude-code/*` now 301s to
+`code.claude.com/docs/en/*`. CLAUDE.md's "Verify, don't assume" section still
+names the old host; it redirects, so nothing is broken, but new fetches should
+go straight to `code.claude.com/docs/en/`. The full page index is at
+`code.claude.com/docs/llms.txt`.
+
+### The finding — verification PASSES
+
+From **Model configuration** (`/docs/en/model-config`), verbatim:
+
+> Claude Code rejects an unrecognized string with `Model "<name>" is not a
+> recognized model id.` and the session keeps its current model, instead of
+> saving the string and failing on the next request.
+>
+> **The check runs only on the Anthropic API. On Amazon Bedrock, Google Cloud's
+> Agent Platform, Microsoft Foundry, Claude Platform on AWS, and behind an LLM
+> gateway or a custom `ANTHROPIC_BASE_URL`, your provider or gateway defines the
+> model names, so Claude Code passes any string through without checking it.**
+> The check also doesn't cover the `--model` flag, the `ANTHROPIC_MODEL`
+> environment variable, or the `model` setting […]
+
+Golem **is** a custom `ANTHROPIC_BASE_URL`, so the recognition check is disabled
+by construction. This is the same base-URL-conditional behaviour class as §12
+(tool search disabled on a non-first-party base URL) — Claude Code repeatedly
+keys behaviour off whether it is talking to the first-party API.
+
+Corroborating, from the same page: a "model name" is explicitly
+provider-defined — *"Amazon Bedrock: an inference profile ARN; Microsoft
+Foundry: a deployment name; Google Cloud's Agent Platform: a version name"*.
+Claude Code already forwards opaque strings it cannot validate against any
+Claude allowlist, so a `golem/*` id is not a special case.
+
+**Sub-agent frontmatter accepts full ids.** From **Create custom subagents**
+(`/docs/en/sub-agents`), the frontmatter table:
+
+> `model` — Model to use: `sonnet`, `opus`, `haiku`, `fable`, a full model ID
+> (for example, `claude-opus-5`), or `inherit`. Defaults to `inherit`
+
+So `model: golem/coder` in a sub-agent definition is a documented shape (a full
+model ID), and the recognition check that might have rejected it does not run
+behind our base URL.
+
+**Already empirically true in-repo.** `sniffRequestModel`
+(`src/providers/model-display.ts`) reads the client's model id back out of the
+request body for R8.8 cost attribution, and R6.1's byte-faithful path forwards
+it. The model field demonstrably arrives at the proxy today.
+
+### Caveats that must be carried into the design
+
+1. **Anthropic does not support this.** From **Other LLM gateways**
+   (`/docs/en/llm-gateway`), verbatim: *"Anthropic doesn't endorse, maintain, or
+   audit third-party gateway products, and doesn't support routing Claude Code
+   to non-Claude models through any gateway."* Unsupported, not prohibited —
+   and Golem already sits here (R6.1 case (b) translates to OpenRouter / Ollama /
+   Gemini). Worth stating plainly in user-facing docs rather than implying
+   blessing.
+2. **Retirement warnings still fire on sub-agent frontmatter.** The
+   retirement/remap warning *"also covers a `model` set in subagent
+   frontmatter"* — a separate check from the recognition check. A `golem/*` id
+   should not trip it (it matches no retirement schedule), but a startup notice
+   naming an unknown model would be confusing; worth an empirical check.
+3. **`availableModels` can restrict selection.** An org allowlist could exclude
+   virtual ids. Only relevant to managed/enterprise settings, but it is a
+   documented way for this mechanism to be switched off outside Golem's control.
+4. **`--model` / `ANTHROPIC_MODEL` / the `model` setting are unchecked even on
+   the Anthropic API**, but a bad value there surfaces as *"There's an issue
+   with the selected model"* on the first request rather than at set time. Golem
+   must therefore produce a clear proxy error for an unknown `golem/*` target,
+   because Claude Code will not catch it.
+5. **Slash in the id is unverified.** `golem/coder` contains `/`. Nothing in the
+   docs forbids it and OpenRouter ids (`vendor/model`) prove slashes survive the
+   wire, but Claude Code's own handling of a slashed id was not empirically
+   tested. **Residual check before shipping:** run one real request with
+   `model: golem/coder` and confirm the string reaches `sniffRequestModel`
+   intact. If it does not, fall back to a flat id (`golem-coder`).
+
+### Consequence
+
+21e Phase 1's gate is **cleared on the documentation**, subject to caveat 5's
+one-request empirical confirmation. The virtual-model-id UX stands, and the
+fallback (hook-injected `x-golem-target` header) is not needed.
