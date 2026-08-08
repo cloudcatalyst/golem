@@ -163,6 +163,7 @@ export const SETTINGS_LEAVES = {
           account: z.string().min(1).optional(),
           auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
           trust: z.enum(TARGET_TRUST_LEVELS).optional(),
+          agent_selectable: z.boolean().optional(),
         }),
       )
       .optional(),
