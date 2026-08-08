@@ -300,6 +300,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
         editEnabled: deps.localEditor === true,
       },
       tel,
+      deps.targetDispatcher,
     );
   }
 

@@ -69,6 +69,21 @@ export interface TargetEntry {
   readonly auth_scheme?: UpstreamAuthScheme;
   /** Omit to take {@link defaultTrustFor}, which errs toward MORE redaction. */
   readonly trust?: TargetTrust;
+  /**
+   * R9.3 — whether the triggering conversation may pick this target for a
+   * `coder` draft. **Default true.**
+   *
+   * Selectable-by-default is the right polarity because declaring a target is
+   * already a deliberate act; requiring a second opt-in on each one is ceremony
+   * without safety. Setting this false opts ONE target out, for the case that
+   * actually matters: an expensive target (your main vendor account) you want
+   * reachable by an explicit route but never picked for a draft.
+   *
+   * The real guardrail is not this flag — it is that a selection can never reach
+   * anything the user did not declare, and that every non-local dispatch is
+   * redacted at the target's trust floor.
+   */
+  readonly agent_selectable?: boolean;
 }
 
 /** Where a row in the resolved registry came from. */
