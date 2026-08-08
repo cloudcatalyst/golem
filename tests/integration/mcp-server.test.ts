@@ -184,6 +184,35 @@ describe("golem MCP server (in-memory transport)", () => {
       expect(statsResult.structuredContent).toMatchObject({ slider_level: 3 });
     });
 
+    // R8.33 — the security boundary: no sequence of tool calls may reach a
+    // state where redaction is off. Level 0 stays a supported setting, but it
+    // is CLI-only (`golem slider 0`), mirroring ADR-0002 threat item 4.
+    it("refuses level 0 and leaves the persisted level untouched", async () => {
+      const deps = createStandaloneDeps();
+      await deps.sliderStore.set(2);
+      const client = await connectInMemory(deps);
+
+      const result = await client.callTool({ name: "level", arguments: { level: 0 } });
+
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toContain("golem slider 0");
+      // The refusal must land BEFORE the write, not as a warning after it.
+      await expect(deps.sliderStore.get()).resolves.toBe(2);
+    });
+
+    it("still reports a level 0 set out-of-band via the CLI", async () => {
+      const deps = createStandaloneDeps();
+      await deps.sliderStore.set(0); // as `golem slider 0` would
+      const client = await connectInMemory(deps);
+
+      const statsResult = await client.callTool({ name: "stats", arguments: {} });
+      expect(statsResult.isError).toBeFalsy();
+      expect(statsResult.structuredContent).toMatchObject({
+        slider_level: 0,
+        slider_level_name: "passthrough",
+      });
+    });
+
     it.each([
       -1, 6, 2.5,
     ])("maps out-of-range level %s to an InvalidParams error result", async (level) => {
