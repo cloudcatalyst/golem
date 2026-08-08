@@ -131,8 +131,12 @@ export const WEB_FETCH_MATCHER = "WebFetch";
 
 /** SessionStart hook: auto-start the proxy on project open if it was running (§47). */
 export const SESSION_START_COMMAND = "golem hook session-start";
-/** Fire on a new session and on resume (project (re)open). */
-export const SESSION_START_MATCHER = "startup|resume";
+/**
+ * Fire on every documented SessionStart source. `startup`/`resume` cover a
+ * project (re)open; `clear`/`compact`/`fork` are still new sessions against the
+ * same project, and a proxy left down would stay down through them.
+ */
+export const SESSION_START_MATCHER = "startup|resume|clear|compact|fork";
 
 /**
  * Remove Golem hook objects from a PostToolUse entry list, preserving foreign
