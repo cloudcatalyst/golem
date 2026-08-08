@@ -19,11 +19,16 @@ import {
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import type { SliderLevel } from "../interfaces/policy.js";
-import { resolveUpstreamDisplay, upstreamAssumesCaching } from "../providers/index.js";
+import {
+  listTargets,
+  resolveDefaultTargetId,
+  resolveUpstreamDisplay,
+  upstreamAssumesCaching,
+} from "../providers/index.js";
 // Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
 // which imports `undici` (~270ms), and both of these only read a JSON file.
 import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
-import { servedModelFor } from "../proxy/served-model.js";
+import { readServedModel, servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { type DialInfo, getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
@@ -118,6 +123,28 @@ export interface StatusReport {
     /** When that model was served (ISO), if known. */
     readonly last_served_at?: string | null;
   };
+  /**
+   * R9.2 — one row per configured target, present only when the registry holds
+   * more than the synthetic default (i.e. when the proxy is actually routing).
+   *
+   * The spec's 21e correctness rail is that **the responding model is always
+   * visible**. With N targets served concurrently, a single `upstream` block
+   * cannot satisfy that: it reports one model while others are serving. These
+   * rows say which target served what, and when.
+   */
+  readonly targets?: readonly {
+    readonly id: string;
+    readonly provider: string;
+    readonly base_url: string;
+    readonly model: string | null;
+    readonly trust: string;
+    readonly account: string | null;
+    /** True for the target that serves requests naming none. */
+    readonly is_default: boolean;
+    /** What this target last actually served, if it has served anything. */
+    readonly last_served_model?: string;
+    readonly last_served_at?: string;
+  }[];
   readonly slider: {
     readonly level: number;
     readonly name: string;
@@ -191,6 +218,19 @@ export interface StatusReport {
     readonly stale: boolean;
     /** Whether the snooze auto-park is ENFORCING (persistent deny) vs advisory. */
     readonly enforced: boolean;
+    /**
+     * R9.2 — the target whose response carried these headers, when routing is on.
+     * A prediction is a statement about ONE target, never about "the limit".
+     */
+    readonly source_target?: string | null;
+    /**
+     * R9.2 — configured targets that have never produced rate-limit headers, so
+     * this reading says NOTHING about them. Only some providers emit
+     * `anthropic-ratelimit-unified-*` at all; without naming them, one target's
+     * utilization silently reads as coverage for all of them, and the auto-park
+     * is blind for every target on this list.
+     */
+    readonly unmonitored_targets?: readonly string[];
   };
   readonly warnings: readonly string[];
 }
@@ -283,6 +323,26 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       readProxyPid(projectDir).catch(() => null),
     ]);
 
+  // R9.2: per-target rows, each carrying what that target last served. Read from
+  // the same snapshot the proxy writes, so status never has to reach the daemon.
+  const allServed = await readServedModel(projectDir).catch(() => null);
+  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
+  const targetRows = listTargets(settings.proxy).map((t) => {
+    const seen = allServed?.targets?.[t.id];
+    return {
+      id: t.id,
+      provider: t.provider,
+      base_url: t.baseUrl,
+      model: t.model ?? null,
+      trust: t.trust,
+      account: t.accountId,
+      is_default: t.id === defaultTargetId,
+      ...(seen !== undefined
+        ? { last_served_model: seen.model, last_served_at: seen.servedAtIso }
+        : {}),
+    };
+  });
+
   // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
   // wiring at all" from "another gateway owns it" — and those have different
   // remedies (the second one is not ours to fix). Read the owner properly.
@@ -299,8 +359,27 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // blind) — surfaced both as a field and, when stale, a warning.
   const nowMs = options.now?.() ?? Date.now();
   const limitState = await (options.readLimit ?? readLimitState)(projectDir).catch(() => null);
-  const limits =
+  const baseLimits =
     limitState === null ? undefined : buildLimits(limitState, nowMs, settings.snooze.enforce);
+  // R9.2: name the target this reading came from, and every target it says
+  // nothing about. Without that, one target's utilization reads as coverage for
+  // all of them — and the auto-park is blind for the rest without saying so.
+  const limits =
+    baseLimits === undefined
+      ? undefined
+      : {
+          ...baseLimits,
+          ...(limitState?.targetId !== undefined && limitState.targetId !== null
+            ? { source_target: limitState.targetId }
+            : {}),
+          ...(targetRows.length > 1
+            ? {
+                unmonitored_targets: targetRows
+                  .filter((t) => t.id !== limitState?.targetId)
+                  .map((t) => t.id),
+              }
+            : {}),
+        };
 
   // §103: what the compression dial will ACTUALLY do on this upstream. The dial —
   // not the slider — is the input-side level the pipeline reads (Decision 52), and
@@ -355,6 +434,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         ? { last_served_model: servedModel.model, last_served_at: servedModel.servedAtIso }
         : {}),
     },
+    // R9.2: only when the proxy is actually serving more than one target —
+    // otherwise the `upstream` block above already answers the question and a
+    // one-row table would be noise.
+    ...(targetRows.length > 1 ? { targets: targetRows } : {}),
     slider: sliderJson(slider),
     dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
     effective_compression: effectiveCompressionJson(effective),
@@ -555,6 +638,20 @@ export function renderStatus(report: StatusReport): string {
     if (!foreign) lines.push("    Fix: `golem proxy wire` (then reload the window).");
   }
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
+  // R9.2: with many targets in play, one Upstream line is not the whole truth —
+  // the responding model must be visible per target (21e correctness rail).
+  if (report.targets !== undefined) {
+    lines.push(`Targets: ${report.targets.length} configured`);
+    for (const t of report.targets) {
+      const mark = t.is_default ? "*" : " ";
+      const model = t.model ?? "(client's own id)";
+      const served =
+        t.last_served_model !== undefined
+          ? ` — last served ${t.last_served_model}`
+          : " — nothing served yet";
+      lines.push(`  ${mark} ${t.id} (${t.provider}, trust=${t.trust}) ${model}${served}`);
+    }
+  }
   const slider = report.slider;
   const ec = report.effective_compression;
   // §103: the LABEL carries the truth. A warning line under a headline that still
