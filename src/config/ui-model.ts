@@ -286,13 +286,14 @@ export const SETTING_META = {
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
     restart: "mcp",
   },
-  "inference.coder_target": {
-    label: "Default coder target",
-    summary: "Which target `coder` drafts on when a call names none",
+  "inference.worker_targets": {
+    label: "Worker targets",
+    summary: "Which target each tool worker (coder, …) drafts on by default",
     detail:
-      "Unset means the local model, exactly as before. A non-local target is redacted at " +
-      "its trust floor on every dispatch. An unknown id fails closed — it never falls back " +
-      "to the local model. See `golem target list`.",
+      "Keyed by worker name. A worker with no entry uses the local model, exactly as before. " +
+      "A non-local target is redacted at its trust floor on every dispatch, and an unknown " +
+      "target id fails closed — it never falls back to the local model. See `golem target list`.",
+    kind: "opaque",
     restart: "mcp",
   },
   "inference.local_editor_enabled": {

@@ -277,6 +277,7 @@ export function registerCoderTool(
             ? await dispatcher.dispatch({
                 role: "drafter",
                 prompt,
+                worker: "coder",
                 ...(target !== undefined ? { targetId: target } : {}),
               })
             : null;

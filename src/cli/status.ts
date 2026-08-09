@@ -18,6 +18,7 @@ import {
 } from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
+import { isKnownWorker, KNOWN_WORKERS, unknownWorkerWarnings } from "../inference/workers.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import {
   listTargets,
@@ -189,16 +190,19 @@ export interface StatusReport {
     readonly coder_model?: string;
     /** Whether `inference.local_coder_enabled` is true (default). */
     readonly coder_enabled: boolean;
-    /** R9.4 — `inference.coder_target`, when set. */
-    readonly coder_target?: string;
     /**
-     * R9.4 — the model behind {@link coder_target}. Absent when the target is
-     * unset OR does not resolve; {@link coder_target_unknown} tells those apart,
-     * because a target naming nothing is a misconfiguration, not a default.
+     * R9.4 — one row per tool worker that has a configured target, so surfaces
+     * can render N workers without knowing their names. A worker with no entry
+     * is absent here and uses the local model.
      */
-    readonly coder_target_model?: string;
-    /** True when `inference.coder_target` names an id that is in no registry. */
-    readonly coder_target_unknown?: boolean;
+    readonly workers?: readonly {
+      readonly worker: string;
+      readonly target: string;
+      /** The target's model. Absent when the target does not resolve. */
+      readonly model?: string;
+      /** True when `target` names an id in no registry — the worker fails closed. */
+      readonly target_unknown?: boolean;
+    }[];
     /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
@@ -353,12 +357,21 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     };
   });
 
-  // R9.4: which target `coder` drafts on by default. An id that resolves to
-  // nothing is a misconfiguration worth naming, not something to paper over —
-  // `coder` fails closed on it rather than quietly using the local model.
-  const coderTarget = settings.inference.coder_target;
-  const coderTargetRow =
-    coderTarget !== undefined ? targetRows.find((t) => t.id === coderTarget) : undefined;
+  // R9.4: which target each tool worker drafts on by default. A target id that
+  // resolves to nothing is a misconfiguration worth naming, not something to
+  // paper over — the worker fails closed on it rather than quietly using the
+  // local model. Built generically so a new worker needs no change here.
+  const workerRows = Object.entries(settings.inference.worker_targets)
+    .filter(([worker]) => isKnownWorker(worker))
+    .map(([worker, target]) => {
+      const row = targetRows.find((t) => t.id === target);
+      return {
+        worker,
+        target,
+        ...(row?.model != null ? { model: row.model } : {}),
+        ...(row === undefined ? { target_unknown: true } : {}),
+      };
+    });
 
   // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
   // wiring at all" from "another gateway owns it" — and those have different
@@ -463,11 +476,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       reachable: localInfo.reachable,
       coder_enabled: settings.inference.local_coder_enabled,
       ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
-      ...(coderTarget !== undefined ? { coder_target: coderTarget } : {}),
-      ...(coderTargetRow?.model != null ? { coder_target_model: coderTargetRow.model } : {}),
-      ...(coderTarget !== undefined && coderTargetRow === undefined
-        ? { coder_target_unknown: true }
-        : {}),
+      ...(workerRows.length > 0 ? { workers: workerRows } : {}),
       base_url: settings.inference.ollama_base_url,
     },
     ...(cachedUpdate !== null
@@ -488,6 +497,9 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           ? [...warnings, REDACTION_OFF_WARNING]
           : warnings),
       ...(limits?.stale ? [LIMIT_STALE_WARNING] : []),
+      // R9.4: a `worker_targets` key naming no worker would otherwise be silently
+      // ignored — the failure mode the map shape trades per-key schema docs for.
+      ...unknownWorkerWarnings(settings.inference.worker_targets),
     ],
   };
 }
@@ -718,43 +730,40 @@ export function renderStatus(report: StatusReport): string {
   // backend" and "we know which model it runs" are different facts, and only the
   // first decides whether to show the role at all.
   //
-  // A configured-but-unresolvable target means `coder` throws on EVERY dispatch
-  // (it fails closed rather than substituting), so there is no coder backend at
-  // all. Falling back to the local model here would name a model that will never
-  // run, attributed to a target that does not exist — the exact dishonesty the
-  // warning below is about.
-  const coderTargetBroken = report.local_model.coder_target_unknown === true;
-  const coderModel = coderTargetBroken
-    ? undefined
-    : (report.local_model.coder_target_model ??
-      (report.local_model.reachable ? (report.local_model.coder_model ?? "local") : undefined));
-  if (!report.local_model.coder_enabled) {
-    lines.push("Inference: chat only (local coder disabled)");
-  } else if (coderTargetBroken) {
-    lines.push(
-      `Inference: chat only — coder_target "${report.local_model.coder_target}" does not resolve, ` +
-        "so `coder` fails closed",
-    );
-  } else if (coderModel === undefined) {
-    lines.push("Inference: chat only (no coder backend available)");
-  } else if (chatModel != null && coderModel === chatModel) {
-    // One model doing both jobs — say so once rather than twice.
-    lines.push(`Inference: one model for chat and coder · ${coderModel}`);
-  } else {
-    const via =
-      report.local_model.coder_target !== undefined
-        ? ` (target ${report.local_model.coder_target})`
-        : " (local)";
-    lines.push(
-      `Inference: coder ${coderModel}${via} · chat ${chatModel ?? report.upstream.provider}`,
-    );
-  }
-  if (report.local_model.coder_target_unknown === true) {
-    lines.push(
-      `  ⚠ inference.coder_target "${report.local_model.coder_target}" is in neither ` +
-        "proxy.targets nor proxy.accounts — `coder` will fail closed rather than " +
-        "silently drafting somewhere else. Fix it or unset it: golem target list",
-    );
+  // Rendered generically over N workers so a new one needs no change here.
+  lines.push(`Inference: chat ${chatModel ?? report.upstream.provider}`);
+  const workers = report.local_model.workers ?? [];
+  const localModel = report.local_model.coder_model ?? "local";
+  for (const worker of KNOWN_WORKERS) {
+    // Only `coder` has an enabled flag today; a future worker without one is
+    // simply always offered.
+    if (worker === "coder" && !report.local_model.coder_enabled) {
+      lines.push("  coder: disabled (inference.local_coder_enabled)");
+      continue;
+    }
+    const configured = workers.find((w) => w.worker === worker);
+    if (configured === undefined) {
+      // No configured target → the local model, which has to actually be up.
+      lines.push(
+        report.local_model.reachable
+          ? `  ${worker}: ${localModel} (local)`
+          : `  ${worker}: unavailable — no target configured and the local model is not reachable`,
+      );
+      continue;
+    }
+    // A target that resolves to nothing means the worker throws on EVERY
+    // dispatch. Naming its model would advertise something that can never run.
+    if (configured.target_unknown === true) {
+      lines.push(
+        `  ${worker}: FAILS CLOSED — target "${configured.target}" is in neither proxy.targets ` +
+          "nor proxy.accounts, and it will not fall back to the local model. " +
+          "Fix it or unset it: golem target list",
+      );
+      continue;
+    }
+    const model = configured.model ?? configured.target;
+    const same = chatModel != null && model === chatModel ? " — same model as chat" : "";
+    lines.push(`  ${worker}: ${model} (target ${configured.target})${same}`);
   }
   if (report.update !== undefined) {
     lines.push(

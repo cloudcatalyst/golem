@@ -193,7 +193,11 @@ describe("the local path is unchanged", () => {
     const { fetchImpl, sent } = captureFetch({});
     const dispatcher = createTargetDispatcher({ inference, settings: REMOTE, fetchImpl, env: {} });
 
-    const result = await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      worker: "coder",
+    });
 
     expect(result.targetId).toBeNull();
     expect(result.model).toBe("qwen2.5-coder:7b");
@@ -289,10 +293,14 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       settings: REMOTE,
       fetchImpl,
       env: {},
-      defaultTargetId: "cheap",
+      workerTargets: { coder: "cheap" },
     });
 
-    const result = await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      worker: "coder",
+    });
 
     expect(result.targetId).toBe("cheap");
     expect(inference.calls).toHaveLength(0);
@@ -322,12 +330,13 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       },
       fetchImpl,
       env: {},
-      defaultTargetId: "cheap",
+      workerTargets: { coder: "cheap" },
     });
 
     const result = await dispatcher.dispatch({
       role: "drafter",
       prompt: "hi",
+      worker: "coder",
       targetId: "vendor",
     });
     expect(result.targetId).toBe("vendor");
@@ -344,12 +353,12 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       settings: REMOTE,
       fetchImpl,
       env: {},
-      defaultTargetId: "ghost",
+      workerTargets: { coder: "ghost" },
     });
 
-    await expect(dispatcher.dispatch({ role: "drafter", prompt: "hi" })).rejects.toThrow(
-      /unknown target "ghost"/,
-    );
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(/unknown target "ghost"/);
     expect(sent).toHaveLength(0);
     expect(inference.calls).toHaveLength(0);
   });
@@ -357,7 +366,7 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
   it("keeps the local path when no default is configured", async () => {
     const inference = stubInference();
     const dispatcher = createTargetDispatcher({ inference, settings: REMOTE, env: {} });
-    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi" });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
     expect(result.targetId).toBeNull();
     expect(inference.calls).toHaveLength(1);
   });

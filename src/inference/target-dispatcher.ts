@@ -47,6 +47,7 @@ import {
   type TargetTrust,
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
+import { workerTarget } from "./workers.js";
 
 /** Hosts for which `trust: "local"` is believable — context never leaves the machine. */
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -55,8 +56,14 @@ export interface DispatchRequest {
   /** The role to use when this resolves to the local tiered service. */
   readonly role: Role;
   readonly prompt: string;
-  /** A target id from the registry. Omitted → the local `InferenceService`. */
+  /** A target id from the registry. Omitted → this worker's configured default. */
   readonly targetId?: string | undefined;
+  /**
+   * R9.4 — which tool worker is dispatching (`coder`, and more to come). Selects
+   * the `inference.worker_targets` entry that applies when no `targetId` is
+   * given. Omitted → no worker default, i.e. the local tiered service.
+   */
+  readonly worker?: string | undefined;
 }
 
 export interface DispatchResult {
@@ -134,13 +141,14 @@ export interface TargetDispatcherOptions {
     readonly reason: string;
   }) => void;
   /**
-   * R9.4 — `inference.coder_target`: the target used when a dispatch names
-   * none. Unset → the local tiered service, exactly as before.
+   * R9.4 — `inference.worker_targets`: worker name → target id. The dispatch's
+   * {@link DispatchRequest.worker} picks the entry. A worker with no entry uses
+   * the local tiered service, exactly as before.
    *
    * Applied as a *default*, never as an override: an explicit `targetId` on the
    * request always wins.
    */
-  readonly defaultTargetId?: string | undefined;
+  readonly workerTargets?: Readonly<Record<string, string>> | undefined;
   /** Per-request timeout for a remote dispatch. */
   readonly timeoutMs?: number;
 }
@@ -259,12 +267,14 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
     async dispatch(request: DispatchRequest): Promise<DispatchResult> {
       const messages: readonly ChatMessage[] = [{ role: "user", content: request.prompt }];
 
-      // R9.4: an explicit target always wins; `inference.coder_target` fills in
-      // when the call names none.
+      // R9.4: an explicit target always wins; this worker's
+      // `inference.worker_targets` entry fills in when the call names none.
       const named =
         request.targetId !== undefined && request.targetId !== ""
           ? request.targetId
-          : (options.defaultTargetId ?? undefined);
+          : request.worker !== undefined
+            ? workerTarget(options.workerTargets, request.worker)
+            : undefined;
 
       // No target at all → exactly today's behaviour, through the frozen contract.
       if (named === undefined || named === "") {

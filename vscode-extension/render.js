@@ -214,13 +214,14 @@ function buildModel(stats, status, update, accounts, surface) {
     // Wins over localCoderModel: a configured target is what `coder` will
     // actually draft on, local or not. Absent on an older CLI → null, i.e. the
     // pre-R9.4 local-only display.
-    coderTargetModel:
-      st.local_model && typeof st.local_model.coder_target_model === "string"
-        ? st.local_model.coder_target_model
-        : null,
-    // `inference.coder_target` names an id in no registry → coder fails closed,
-    // so there is no coder backend to advertise at all.
-    coderTargetUnknown: !!(st.local_model && st.local_model.coder_target_unknown === true),
+    // R9.4 — one row per tool worker with a configured target. A row whose
+    // target does not resolve carries no `model`: that worker fails closed on
+    // every dispatch, so naming a model would advertise something that can
+    // never run. Absent on an older CLI → [], i.e. the local-only display.
+    workers:
+      st.local_model && Array.isArray(st.local_model.workers)
+        ? st.local_model.workers
+        : [{ worker: "coder" }],
     // The local (Ollama) base URL for the hover summary's `Local:` line — from
     // the status `local_model` block, falling back to the config value.
     localBaseUrl:
@@ -298,10 +299,12 @@ function statusBarText(model) {
  * pins that they agree.
  */
 const ROLE_MARKS = {
-  /** The model `coder` drafts on. */
-  coder: "✎",
   /** The model the conversation itself runs on. */
   chat: "◆",
+  /** The model `coder` drafts on. */
+  coder: "✎",
+  /** Fallback for a worker with no glyph of its own yet. */
+  worker: "✦",
 };
 
 /**
@@ -311,16 +314,21 @@ const ROLE_MARKS = {
  * reachable. It must NOT fall back to the chat model: claiming a coder backend
  * that cannot serve a draft is the R8.32 failure in miniature.
  */
-function coderModelLabel(model) {
-  if (model.localCoderEnabled === false) return null;
-  // A target that resolves to nothing means `coder` fails closed on every
-  // dispatch — no backend at all. Falling through to the local model would
-  // advertise a model that can never run.
-  if (model.coderTargetUnknown) return null;
-  // A configured target answers regardless of whether Ollama is up.
-  if (model.coderTargetModel) return model.coderTargetModel;
-  if (!model.localModelActive) return null;
-  return model.localCoderModel || "local";
+function workerModels(model) {
+  const localModel = model.localModelActive ? model.localCoderModel || "local" : null;
+  // No `workers` at all (a hand-built model, or an older CLI) → the implicit
+  // coder-on-the-local-model row, which is the pre-R9.4 behaviour.
+  const rows = model.workers && model.workers.length > 0 ? model.workers : [{ worker: "coder" }];
+  return rows.map((w) => {
+    // A configured target that resolves carries its own model; one that does not
+    // carries none, and the worker is then omitted rather than advertised.
+    if (w.target) return { worker: w.worker, model: w.model || null };
+    // No configured target → the local model, which has to actually be up.
+    if (model.localCoderEnabled === false && w.worker === "coder") {
+      return { worker: w.worker, model: null };
+    }
+    return { worker: w.worker, model: localModel };
+  });
 }
 
 /**
@@ -341,13 +349,13 @@ function destinationLabel(model) {
   // built in buildModel; it already incorporates the last-served or configured
   // model and matches the CLI's `golem status` output.
   const chatSeg = `${ROLE_MARKS.chat} ${model.upstreamDisplay || model.upstreamLabel || "upstream"}`;
-  const coderModel = coderModelLabel(model);
-  if (!coderModel) return chatSeg;
-  // Same model on both ends → one segment. Compare the raw ids, not the
-  // vendor-formatted labels, so `anthropic (x)` and `x` still match.
+  // Compare the raw ids, not the vendor-formatted labels, so `anthropic (x)`
+  // and `x` still match.
   const chatModel = model.lastServedModel || model.model || model.defaultModel;
-  if (chatModel && coderModel === chatModel) return chatSeg;
-  return `${ROLE_MARKS.coder} ${coderModel} · ${chatSeg}`;
+  const diverging = workerModels(model)
+    .filter((w) => w.model && w.model !== chatModel)
+    .map((w) => `${ROLE_MARKS[w.worker] || ROLE_MARKS.worker} ${w.model}`);
+  return diverging.length === 0 ? chatSeg : `${diverging.join(" · ")} · ${chatSeg}`;
 }
 
 function esc(s) {
