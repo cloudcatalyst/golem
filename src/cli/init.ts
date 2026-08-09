@@ -54,6 +54,12 @@ import {
   writeStatusLine,
 } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
+import {
+  classifyManaged,
+  ownedDetail,
+  rememberManaged,
+  removeManagedState,
+} from "./managed-files.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
@@ -150,7 +156,18 @@ export interface InitOptions {
   readonly probe?: InitProbe;
 }
 
-export type ActionKind = "create" | "modify" | "skip" | "remove";
+export type ActionKind =
+  | "create"
+  | "modify"
+  | "skip"
+  | "remove"
+  /**
+   * R9.5 — Golem has newer content for a managed file, but the file has been
+   * edited since Golem wrote it (or Golem has no record of writing it), so it
+   * was left alone. Distinct from `modify` on purpose: "refreshing stale text"
+   * and "replacing your edit" must not render the same.
+   */
+  | "conflict";
 
 export interface InitAction {
   readonly kind: ActionKind;
@@ -650,18 +667,34 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     } catch {
       existing = null;
     }
-    if (existing === content) {
+    // R9.5: "differs from what Golem ships" cannot tell a stale file from an
+    // edited one. Ask the provenance record which it is — an edited skill is
+    // reported and kept, not silently replaced.
+    const disposition = await classifyManaged(projectDir, skillPath, content, existing);
+    if (disposition === "current") {
       actions.push({ kind: "skip", path: rel(projectDir, skillPath), detail: "up to date" });
       continue;
     }
+    if (disposition === "owned") {
+      actions.push({
+        kind: "conflict",
+        path: rel(projectDir, skillPath),
+        detail: ownedDetail(`/golem/${name} skill`),
+      });
+      continue;
+    }
     actions.push({
-      kind: existing === null ? "create" : "modify",
+      kind: disposition === "absent" ? "create" : "modify",
       path: rel(projectDir, skillPath),
-      detail: `/golem/${name} skill`,
+      detail:
+        disposition === "absent"
+          ? `/golem/${name} skill`
+          : `/golem/${name} skill — refreshed (unmodified since Golem wrote it)`,
     });
     if (!dryRun) {
       await mkdir(path.dirname(skillPath), { recursive: true });
       await writeFile(skillPath, content, "utf8");
+      await rememberManaged(projectDir, skillPath, content);
     }
   }
 
@@ -1026,6 +1059,10 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   // (`.claude/rules/golem-*.md`, both scopes) and the seed sentinel.
   actions.push(await removePostToolUseHook({ projectDir, dryRun }));
   actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
+  // R9.5: the managed-file provenance record is something init added, so uninit
+  // takes it away. Silent — it is internal bookkeeping under .golem/state/, and
+  // the files it described have their own removal actions above.
+  if (!dryRun) await removeManagedState(projectDir);
 
   // 5. Remove the status line + blocked-state event hooks.
   actions.push(await removeStatusLine({ projectDir, dryRun }));

@@ -197,11 +197,16 @@ describe("seedDefaultGuidance (seed-once)", () => {
     await removeGuidanceRule(projectDir, "wiki-kb-first", "both");
     expect(await exists(guidanceRulePath(projectDir, "wiki-kb-first", "project"))).toBe(false);
 
-    // Re-seeding is a no-op (sentinel present) — the disable sticks.
+    // R9.5: re-seeding is no longer a blanket no-op — it refreshes rules that
+    // are still present. What must not change is the disable sticking: the
+    // deleted rule is reported as disabled and is NOT re-created.
     const again = await seedDefaultGuidance(projectDir);
-    expect(again).toHaveLength(1);
-    expect(again[0]?.kind).toBe("skip");
+    const disabled = again.find((a) => a.path.endsWith("golem-wiki-kb-first.md"));
+    expect(disabled?.kind).toBe("skip");
+    expect(disabled?.detail).toMatch(/disabled — not re-seeded/);
     expect(await exists(guidanceRulePath(projectDir, "wiki-kb-first", "project"))).toBe(false);
+    // ...while a rule the user kept is left in place (already current here).
+    expect(await exists(guidanceRulePath(projectDir, "local-coder", "project"))).toBe(true);
   });
 
   it("dry-run writes nothing", async () => {

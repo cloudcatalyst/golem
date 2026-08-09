@@ -5380,3 +5380,42 @@ report `proxy.default_target = "openrouter-qwen3" — project (…/settings.json
 `golem status` prints the rename warning naming the file and the key to edit; and
 `config set proxy.active_account …` writes `default_target` and says so. `writeSetting`
 resolves retired keys too, so no write path can put a renamed key back into a file.
+
+## §118 — R9.5: the two managed-file bugs were one missing question (2026-08-09)
+
+Skills were overwritten on any difference; guidance was never rewritten at all.
+They read as opposite bugs and are the same one: both surfaces asked *does this
+file differ from what Golem ships?* — which cannot separate "Golem's text moved
+on" from "the user edited it". Each picked an answer and was therefore wrong half
+the time. Recording the hash of what Golem last wrote adds the missing question,
+and both behaviours fall out of it: **stale** (matches what Golem wrote, so
+refreshing loses nothing) vs **owned** (does not, so it is the user's).
+
+**No record means owned — the deliberate direction.** A project initialized
+before this mechanism has no hashes, so its drifted files classify as owned and
+are kept with a note rather than refreshed. The alternative (refresh when
+unsure) is the original data-loss bug wearing a new mechanism: Golem cannot prove
+it wrote that content, so it must not discard it. The record self-heals, since
+every write from here on records a hash. A corrupt or unreadable record degrades
+the same way — to *keep the user's file*, never to overwrite it.
+
+**The sentinel kept its real job.** `.golem/state/guidance.json` `{seeded:true}`
+existed so `golem guidance disable` survives a re-init, and that is still exactly
+what it does — but "don't undo the user's choice" and "never refresh the text"
+had been the same mechanism, and only the first was ever intended. Seeding now
+asks per rule: still present → refresh it if unmodified; absent → leave it absent
+and say "disabled — not re-seeded". A refresh that resurrected a disabled rule
+would be a worse bug than the one being fixed, so that case has its own test.
+
+**`conflict` is a new ActionKind, not a `modify` variant.** The brief's
+requirement — "'refreshing stale text' and 'replacing your edit' cannot both
+render as `modify`" — is a vocabulary problem, not a message problem: any shared
+kind loses the distinction wherever actions are rendered generically (the two
+`padEnd` renderers, the VS Code panel, `--dry-run`). The detail text carries the
+instruction, because a refusal with no way forward is just an unexplained stop.
+
+**Verified live** (built CLI, temp project): `golem init`, append a line to
+`.claude/skills/golem/ship/SKILL.md`, `golem init` again → reports
+`conflict .claude/skills/golem/ship/SKILL.md — … kept your version …` and the
+edit is still on disk. Before this change the same sequence silently destroyed
+it, reporting only `modify`.

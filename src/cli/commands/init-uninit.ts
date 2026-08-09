@@ -20,7 +20,7 @@ function _fail(err: unknown): never {
 
 function printReport(report: InitReport): void {
   for (const action of report.actions) {
-    process.stdout.write(`  ${action.kind.padEnd(6)} ${action.path} — ${action.detail}\n`);
+    process.stdout.write(`  ${action.kind.padEnd(8)} ${action.path} — ${action.detail}\n`);
   }
   if (report.dryRun) process.stdout.write("dry run: nothing was written.\n");
 }

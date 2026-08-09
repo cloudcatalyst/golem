@@ -16,6 +16,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
+import { classifyManaged, ownedDetail, rememberManaged } from "../cli/managed-files.js";
 import { loadConfig } from "../config/index.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
@@ -353,14 +354,28 @@ export async function writeGuidanceRule(
       detail: `${feature.name} rule already present`,
     };
   }
+  // R9.5: an edited rule is the user's. Golem reports that it has newer text
+  // and leaves the file alone rather than overwriting their words.
+  const disposition = await classifyManaged(projectDir, file, body, existing);
+  if (disposition === "owned") {
+    return {
+      kind: "conflict",
+      path: rel(projectDir, file),
+      detail: ownedDetail(`${scope} guidance: ${feature.name}`),
+    };
+  }
   if (!dryRun) {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, body, "utf8");
+    await rememberManaged(projectDir, file, body);
   }
   return {
     kind: existing === null ? "create" : "modify",
     path: rel(projectDir, file),
-    detail: `${scope} guidance: ${feature.name}`,
+    detail:
+      existing === null
+        ? `${scope} guidance: ${feature.name}`
+        : `${scope} guidance: ${feature.name} — refreshed (unmodified since Golem wrote it)`,
   };
 }
 
@@ -419,13 +434,23 @@ export async function seedDefaultGuidance(
   projectDir: string,
   dryRun = false,
 ): Promise<InitAction[]> {
-  if (await alreadySeeded(projectDir)) {
-    return [
-      { kind: "skip", path: ".claude/rules/", detail: "guidance already seeded (user-owned)" },
-    ];
-  }
+  const seeded = await alreadySeeded(projectDir);
   const actions: InitAction[] = [];
   for (const f of GUIDANCE_FEATURES.filter((g) => g.seededByDefault)) {
+    // R9.5: the sentinel keeps its real job — a rule the user turned off with
+    // `golem guidance disable` (i.e. deleted) is NOT re-created on a later init.
+    // But "don't undo the user's choice" and "never refresh the text" used to be
+    // the same mechanism, and only the first was ever intended. So once seeded,
+    // a rule that is still PRESENT is refreshed (when unmodified) and one that is
+    // ABSENT is left absent.
+    if (seeded && !(await guidanceRuleExists(projectDir, f.name, "project"))) {
+      actions.push({
+        kind: "skip",
+        path: rel(projectDir, guidanceRulePath(projectDir, f.name, "project")),
+        detail: `${f.name} is disabled — not re-seeded`,
+      });
+      continue;
+    }
     actions.push(await writeGuidanceRule(projectDir, f, "project", dryRun));
   }
   if (!dryRun) {
