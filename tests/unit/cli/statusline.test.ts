@@ -196,7 +196,7 @@ describe("renderStatusLine", () => {
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localCoderEnabled: true,
-        coderTargetModel: "claude-opus-5[1m]",
+        workers: [{ worker: "coder", model: "claude-opus-5[1m]" }],
         proxyRunning: true,
       },
     );
@@ -214,7 +214,7 @@ describe("renderStatusLine", () => {
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: false,
-        coderTargetModel: "openai/gpt-oss-20b:free",
+        workers: [{ worker: "coder", model: "openai/gpt-oss-20b:free" }],
         proxyRunning: true,
       },
     );
@@ -234,7 +234,7 @@ describe("renderStatusLine", () => {
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
         localCoderModel: "qwen2.5-coder:7b",
-        coderTargetUnknown: true,
+        workers: [{ worker: "coder" }],
         proxyRunning: true,
       },
     );
@@ -609,6 +609,9 @@ describe("collectGolemState", () => {
       proxyRunning: false,
       localCoderEnabled: true,
       localModelReachable: false,
+      // R9.4: one row per known worker. Unreachable local model and no
+      // configured target → no model, so the line names no worker at all.
+      workers: [{ worker: "coder" }],
     });
   });
 });

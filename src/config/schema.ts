@@ -199,22 +199,30 @@ export const SETTINGS_LEAVES = {
      */
     local_coder_enabled: z.boolean(),
     /**
-     * R9.4 — which `proxy.targets` id `coder` drafts on when a call names no
-     * target. Unset (the default) → the local tiered model, exactly as before,
-     * so this changes nothing until it is set.
+     * R9.4 — which `proxy.targets` id each **tool worker** defaults to, keyed by
+     * worker name (`{ coder = "openrouter-qwen3" }`). A worker with no entry
+     * uses the local tiered model, exactly as before, so this changes nothing
+     * until it is set.
      *
      * The point of the setting is that "the default coder model" becomes a real,
      * settable thing rather than permanently-local: after R9.3 a draft can run
      * on any declared target, and a status line that always says "local" would
      * be describing a constraint that no longer exists.
      *
-     * Fail-closed like every other target reference: an unknown id is an error
-     * naming what is configured, never a silent fall back to the local model —
-     * that would send the draft somewhere the user did not choose while
-     * reporting success. A non-local default is redacted at its trust floor on
+     * **A map, not one leaf per worker.** More workers are expected (a `writer`
+     * for documents, and so on); a scalar each would grow a schema leaf, a
+     * UI-model entry, a status field and two status-surface branches per worker,
+     * while a map grows by one line of config. The cost is that a key naming no
+     * worker would be silently ignored, so keys are validated against
+     * `KNOWN_WORKERS` and reported — see `inference/workers.ts`.
+     *
+     * Fail-closed like every other target reference: an unknown TARGET id is an
+     * error naming what is configured, never a silent fall back to the local
+     * model — that would send the work somewhere the user did not choose while
+     * reporting success. A non-local target is redacted at its trust floor on
      * every dispatch (R9.3), so setting this never weakens redaction.
      */
-    coder_target: z.string().min(1).optional(),
+    worker_targets: z.record(z.string().min(1), z.string().min(1)).default({}),
     /**
      * OPT-IN (R8.7, default **false**): offer `coder`'s `edit` mode — the local
      * model rewrites one small file, Golem validates the result (syntax must
@@ -575,7 +583,8 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
-  readonly coder_target?: string;
+  /** R9.4: worker name → target id (see `inference/workers.ts`). */
+  readonly worker_targets: Readonly<Record<string, string>>;
   readonly local_editor_enabled: boolean;
   /** R8.15: user-declared provider table for local-model role routing. */
   readonly providers: readonly {
@@ -689,6 +698,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
+    worker_targets: {},
     local_editor_enabled: false,
     providers: [],
   },
