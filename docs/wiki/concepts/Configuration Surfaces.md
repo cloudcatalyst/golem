@@ -4,7 +4,7 @@ type: concept
 tags: [config, settings, tui, vscode, control-surface, toggle, ui]
 sources: [src/config/ui-model.ts, src/config/control-surface.ts, src/config/schema.ts, src/tui/, vscode-extension/render.js]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-08-09
 ---
 
 # Configuration Surfaces
@@ -205,6 +205,41 @@ settings scopes don't map onto user/project/local.
 `ui.pet` · `ui.pet_color` · `ui.color` (`auto`/`always`/`never`) · `ui.advanced`.
 Additive, so `GOLEM_UI_*` env overrides and `golem config set ui.pet false` came
 for free.
+
+## Object-valued settings and shell quoting (R9.9, 2026-08-09)
+
+`golem config set` coerces the raw CLI string to the leaf's schema type: booleans
+(`true/false/1/0/yes/no/on/off`), numbers, arrays (JSON, or comma-separated), and —
+since R9.9 — **objects** (`z.record` / `z.object` leaves, parsed as JSON).
+
+Before R9.9 the object branch was missing, so the string reached zod untouched and
+failed with `Expected object, received string`. `compression.headroom_config` — the
+Decision 53(h) passthrough bag — was therefore settable only by hand-editing
+`.golem/settings.local.json`, which is exactly what `golem config` exists to avoid.
+
+Semantics match the scalar and array paths: **set replaces the whole object**, it does
+not deep-merge. `{}` clears it; `golem config unset <key>` removes it so lower layers
+apply again. Errors name the cause — `invalid JSON for "<key>": …` for a parse failure,
+`expects a JSON object, got array` for valid JSON of the wrong shape — rather than the
+downstream zod symptom.
+
+**Quoting differs per shell**, and a lost quoting fight looks like a JSON parse error:
+
+| Shell | Invocation |
+|---|---|
+| PowerShell 7+ | `golem config set compression.headroom_config '{"protect_recent":6}' --scope local` |
+| cmd.exe | `golem config set compression.headroom_config "{""protect_recent"":6}" --scope local` |
+| bash / zsh | `golem config set compression.headroom_config '{"protect_recent":6}' --scope local` |
+
+The escape hatch avoids the fight entirely — the value comes from a file, or stdin:
+
+```
+golem config set compression.headroom_config --value-file ./headroom.json --scope local
+golem config set compression.headroom_config --value-file -   # value on stdin
+```
+
+Passing both a positional value and `--value-file` is an error, not a silent
+preference for one of them.
 
 ## The `models` settings section (R8.8, 2026-07-31)
 

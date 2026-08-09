@@ -5,10 +5,11 @@
  * temp project dir and using a separate user dir.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import {
   getConfig,
   listConfig,
@@ -17,11 +18,14 @@ import {
   renderConfigList,
   renderConfigSet,
   renderConfigUnset,
+  resolveSetValue,
   setConfig,
   unsetConfig,
 } from "../../../src/cli/config.js";
 import { ConfigError } from "../../../src/config/errors.js";
 import { writeSetting } from "../../../src/config/index.js";
+import { allLeafPaths, leafSchema } from "../../../src/config/schema.js";
+import { unwrapSchema } from "../../../src/config/ui-model.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
 describe("config engine", () => {
@@ -102,6 +106,113 @@ describe("config engine", () => {
     it("rejects invalid booleans", () => {
       expect(() => parseConfigValue("inference.local_coder_enabled", "maybe")).toThrow(ConfigError);
     });
+
+    // R9.9 — object-valued leaves were unreachable from the CLI: the raw string
+    // went to zod untouched and failed with "Expected object, received string".
+    it("parses a JSON object for a record leaf", () => {
+      expect(parseConfigValue("compression.headroom_config", '{"protect_recent":6}')).toEqual({
+        protect_recent: 6,
+      });
+    });
+
+    it("parses nested JSON for a record leaf", () => {
+      expect(
+        parseConfigValue(
+          "compression.headroom_config",
+          '{"smart_crusher":{"lossless_only":true},"protect_recent":6}',
+        ),
+      ).toEqual({ smart_crusher: { lossless_only: true }, protect_recent: 6 });
+    });
+
+    it("accepts an empty object to clear a record leaf", () => {
+      expect(parseConfigValue("compression.headroom_config", "{}")).toEqual({});
+    });
+
+    it("names the cause when the JSON is malformed, not the zod symptom", () => {
+      expect(() => parseConfigValue("compression.headroom_config", "{protect_recent:6}")).toThrow(
+        /invalid JSON for "compression\.headroom_config"/,
+      );
+      // and it points at the quoting escape hatch
+      expect(() => parseConfigValue("compression.headroom_config", "{protect_recent:6}")).toThrow(
+        /--value-file/,
+      );
+    });
+
+    it("rejects valid JSON of the wrong shape", () => {
+      expect(() => parseConfigValue("compression.headroom_config", "[1,2]")).toThrow(
+        /expects a JSON object, got array/,
+      );
+      expect(() => parseConfigValue("compression.headroom_config", "null")).toThrow(
+        /expects a JSON object, got null/,
+      );
+    });
+
+    // The gate: not special-cased to headroom_config — every object/record leaf
+    // in the schema must be settable from the CLI.
+    it("every object-valued leaf in the schema is settable", () => {
+      const objectLeaves: string[] = [];
+      for (const leafPath of allLeafPaths()) {
+        const [section, key] = leafPath.split(".", 2) as [string, string];
+        const leaf = leafSchema(section, key);
+        if (leaf === undefined) continue;
+        const target = unwrapSchema(leaf);
+        if (target instanceof z.ZodRecord || target instanceof z.ZodObject) {
+          objectLeaves.push(leafPath);
+        }
+      }
+      // If this is empty the test is vacuous — the schema has at least
+      // compression.headroom_config and inference.worker_targets.
+      expect(objectLeaves).toContain("compression.headroom_config");
+      expect(objectLeaves.length).toBeGreaterThan(0);
+      for (const leafPath of objectLeaves) {
+        expect(parseConfigValue(leafPath, "{}"), leafPath).toEqual({});
+      }
+    });
+  });
+
+  describe("resolveSetValue", () => {
+    it("returns the positional value when given", async () => {
+      await expect(resolveSetValue("hello", undefined)).resolves.toBe("hello");
+    });
+
+    it("reads --value-file and trims it", async () => {
+      const file = path.join(projectDir, "value.json");
+      await mkdir(projectDir, { recursive: true });
+      await writeFile(file, '{"protect_recent":6}\n', "utf8");
+      await expect(resolveSetValue(undefined, file)).resolves.toBe('{"protect_recent":6}');
+    });
+
+    it("strips a UTF-8 BOM, which Windows editors add and JSON.parse rejects", async () => {
+      const file = path.join(projectDir, "bom.json");
+      await mkdir(projectDir, { recursive: true });
+      // Built at runtime, not a literal: an invisible BOM lost in an edit
+      // would leave this test passing while proving nothing.
+      const withBom = `${String.fromCharCode(0xfeff)}{"protect_recent":6}\n`;
+      expect(withBom.charCodeAt(0)).toBe(0xfeff);
+      await writeFile(file, withBom, "utf8");
+      const raw = await resolveSetValue(undefined, file);
+      expect(raw).toBe('{"protect_recent":6}');
+      expect(parseConfigValue("compression.headroom_config", raw)).toEqual({ protect_recent: 6 });
+    });
+
+    it("reads stdin for --value-file -", async () => {
+      await expect(
+        resolveSetValue(undefined, "-", { readStdin: async () => ' {"a":1} \n' }),
+      ).resolves.toBe('{"a":1}');
+    });
+
+    it("refuses both sources at once rather than silently preferring one", async () => {
+      await expect(resolveSetValue("x", "/tmp/f")).rejects.toBeInstanceOf(ConfigError);
+    });
+
+    it("refuses neither source", async () => {
+      await expect(resolveSetValue(undefined, undefined)).rejects.toThrow(/--value-file/);
+    });
+
+    it("names the file it could not read", async () => {
+      const missing = path.join(projectDir, "nope.json");
+      await expect(resolveSetValue(undefined, missing)).rejects.toThrow(/cannot read --value-file/);
+    });
   });
 
   describe("setConfig", () => {
@@ -124,6 +235,33 @@ describe("config engine", () => {
       await expect(setConfig("project", "slider.level", "99", opts())).rejects.toBeInstanceOf(
         ConfigError,
       );
+    });
+
+    // R9.9 — the motivating case from the task: this used to fail with
+    // "Expected object, received string" and could only be done by hand-editing.
+    it("writes an object-valued leaf and reports it as not overridden", async () => {
+      const result = await setConfig(
+        "local",
+        "compression.headroom_config",
+        '{"protect_recent":6}',
+        opts(),
+      );
+      expect(result.value).toEqual({ protect_recent: 6 });
+      expect(result.effective.value).toEqual({ protect_recent: 6 });
+      expect(result.effective.layer).toBe("local");
+      // Structural compare: a reference compare called every object write "overridden".
+      expect(result.overriddenBy).toBeUndefined();
+    });
+
+    it("replaces the whole object rather than merging", async () => {
+      await setConfig("local", "compression.headroom_config", '{"protect_recent":6}', opts());
+      const result = await setConfig(
+        "local",
+        "compression.headroom_config",
+        '{"target_ratio":0.5}',
+        opts(),
+      );
+      expect(result.effective.value).toEqual({ target_ratio: 0.5 });
     });
   });
 

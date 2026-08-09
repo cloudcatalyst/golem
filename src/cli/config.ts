@@ -7,6 +7,7 @@
  * report the effective value after the write in case a higher layer overrides.
  */
 
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { ConfigError } from "../config/errors.js";
 import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js";
@@ -88,6 +89,61 @@ export async function getConfig(key: string, options: ConfigReadOptions): Promis
   };
 }
 
+/**
+ * R9.9 — resolve `golem config set`'s value argument: the positional `<value>`,
+ * or `--value-file <path>` (with `-` meaning stdin).
+ *
+ * The escape hatch exists because JSON on the command line is a shell fight:
+ * PowerShell, cmd and POSIX shells each quote embedded `"` differently, and a
+ * user who loses that fight gets a JSON parse error rather than a setting.
+ * Exactly one source must be given — silently preferring one over the other
+ * would write a value the user did not intend.
+ */
+export async function resolveSetValue(
+  value: string | undefined,
+  valueFile: string | undefined,
+  io: {
+    readonly readFile?: (p: string) => Promise<string>;
+    readonly readStdin?: () => Promise<string>;
+  } = {},
+): Promise<string> {
+  if (value !== undefined && valueFile !== undefined) {
+    throw new ConfigError("pass either <value> or --value-file, not both");
+  }
+  if (value !== undefined) return value;
+  if (valueFile === undefined) {
+    throw new ConfigError(
+      "missing value: pass it as an argument, or use --value-file <path> (or --value-file - for stdin)",
+    );
+  }
+  if (valueFile === "-") {
+    const readStdin = io.readStdin ?? defaultReadStdin;
+    return stripBom(await readStdin()).trim();
+  }
+  const read = io.readFile ?? ((p: string) => readFile(p, "utf8"));
+  try {
+    return stripBom(await read(valueFile)).trim();
+  } catch (err) {
+    throw new ConfigError(
+      `cannot read --value-file ${valueFile}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** A UTF-8 BOM — what Windows editors and `Out-File -Encoding utf8BOM` leave behind — is not JSON. */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+async function defaultReadStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new ConfigError("--value-file - expects the value on stdin, but stdin is a terminal");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Parse and validate a raw CLI string into the schema type for `key`. */
 export function parseConfigValue(key: string, raw: string): unknown {
   const leaf = leafForKey(key);
@@ -120,14 +176,7 @@ export function parseConfigValue(key: string, raw: string): unknown {
   if (target instanceof z.ZodArray) {
     const trimmed = raw.trim();
     if (trimmed.startsWith("[")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch (err) {
-        throw new ConfigError(
-          `"${key}" expects a JSON array, got "${raw}" (${err instanceof Error ? err.message : String(err)})`,
-          { key },
-        );
-      }
+      return parseJsonValue(key, trimmed, "array");
     }
     return trimmed
       .split(",")
@@ -135,8 +184,73 @@ export function parseConfigValue(key: string, raw: string): unknown {
       .filter((item) => item !== "");
   }
 
+  // R9.9: object-valued leaves (`z.record`, `z.object`) are JSON. Without this
+  // branch the raw string reached zod untouched and failed with "Expected
+  // object, received string" — a symptom that hid the cause, and left
+  // `compression.headroom_config` settable only by hand-editing the file.
+  if (target instanceof z.ZodRecord || target instanceof z.ZodObject) {
+    return parseJsonValue(key, raw.trim(), "object");
+  }
+
   // Strings and URLs: pass through and let zod validate in writeSetting.
   return raw;
+}
+
+/**
+ * Parse `raw` as JSON for a leaf that expects `expected` ("object" | "array"),
+ * failing with a message that names the *cause* (bad JSON, or valid JSON of the
+ * wrong shape) rather than the downstream zod symptom.
+ */
+function parseJsonValue(key: string, raw: string, expected: "object" | "array"): unknown {
+  if (raw === "") {
+    throw new ConfigError(
+      `"${key}" expects a JSON ${expected}, got an empty value` +
+        ` (pass ${expected === "object" ? "{}" : "[]"} to clear it, or \`golem config unset ${key}\`)`,
+      { key },
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ConfigError(
+      `invalid JSON for "${key}": ${err instanceof Error ? err.message : String(err)}` +
+        ` — got ${JSON.stringify(raw)}.` +
+        ` If your shell is eating the quotes, use \`--value-file <path>\` or \`--value-file -\` (stdin).`,
+      { key },
+    );
+  }
+  if (jsonShapeOf(parsed) !== expected) {
+    throw new ConfigError(
+      `"${key}" expects a JSON ${expected}, got ${jsonShapeOf(parsed)}: ${JSON.stringify(parsed)}`,
+      { key },
+    );
+  }
+  return parsed;
+}
+
+/** Structural equality over JSON-shaped settings values (scalars, arrays, objects). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameValue(item, b[index]));
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (k) =>
+      Object.hasOwn(b as Record<string, unknown>, k) &&
+      sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+  );
+}
+
+function jsonShapeOf(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 /** Write `value` to `scope`, then return the effective value (which may be overridden). */
@@ -153,7 +267,10 @@ export async function setConfig(
     ...(options.userDir !== undefined && { userDir: options.userDir }),
   });
   const effective = await getConfig(key, options);
-  const overridden = effective.layer !== scope || effective.value !== value;
+  // Structural, not reference, comparison: an object- or array-valued leaf read
+  // back through the loader is a different object every time, so `!==` reported
+  // every such write as overridden by a layer that had not overridden anything.
+  const overridden = effective.layer !== scope || !sameValue(effective.value, value);
   return {
     key,
     value,

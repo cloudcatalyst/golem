@@ -15,6 +15,7 @@ import {
   renderConfigList,
   renderConfigSet,
   renderConfigUnset,
+  resolveSetValue,
   setConfig,
   unsetConfig,
 } from "../config.js";
@@ -75,8 +76,9 @@ export default function register(program: Command): void {
     .description("Write a setting to a scope (project, local, or user)")
     .argument("<key>", "dotted section.key")
     .argument(
-      "<value>",
-      "new value (booleans: true/false/1/0/yes/no/on/off; arrays: JSON or comma-separated)",
+      "[value]",
+      "new value (booleans: true/false/1/0/yes/no/on/off; arrays: JSON or comma-separated; " +
+        "objects: JSON). Omit it and pass --value-file instead when your shell mangles quotes.",
     )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option(
@@ -84,12 +86,22 @@ export default function register(program: Command): void {
       "settings scope: project (default, committed), local (gitignored), user (~/.golem)",
       "project",
     )
+    .option(
+      "--value-file <path>",
+      'read the value from a file, or from stdin when <path> is "-" ' +
+        "(the quoting-proof way to write a JSON object)",
+    )
     .option("--json", "machine-readable output", false)
     .action(
-      async (key: string, value: string, opts: { dir: string; scope: string; json: boolean }) => {
+      async (
+        key: string,
+        value: string | undefined,
+        opts: { dir: string; scope: string; json: boolean; valueFile?: string },
+      ) => {
         try {
           const scope = parseConfigScope(opts.scope);
-          const result = await setConfig(scope, key, value, { projectDir: opts.dir });
+          const raw = await resolveSetValue(value, opts.valueFile);
+          const result = await setConfig(scope, key, raw, { projectDir: opts.dir });
           process.stdout.write(
             opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigSet(result),
           );
