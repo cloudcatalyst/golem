@@ -5267,3 +5267,76 @@ green. It is documented and legal, but it re-introduces exactly what Decision 42
 removed — WebFetch would run, including its **internal summarization model call** (which
 transits the proxy, see §the Decision 42 note). That is a real cost traded for a UI
 colour, so it needs measuring rather than assuming. Written up as **R9.7**.
+
+## §116 — R9.8: `lossless_only` is unreachable by ANY config, and the daemon was discarding every warning (2026-08-09)
+
+Measured directly against the pinned package (`uv run --python 3.13 --with
+headroom-ai==0.30.0`), not from docs. Four findings, three of them contradicting
+what R9.8 was written to assume.
+
+**1. `CompressConfig` is eight flat fields, and that is the whole reachable surface.**
+Confirmed by introspection: `compress_user_messages` (False), `compress_system_messages`
+(True), `protect_recent` (4), `protect_analysis_context` (True), `target_ratio` (None),
+`min_tokens_to_compress` (250), `kompress_model` (None), `savings_profile` (None).
+`headroom.compress()` forwards seven of them to `pipeline.apply()`; `savings_profile` is
+applied earlier via `apply_agent_savings_profile`. There is no `smart_crusher`,
+`lossless_only` or `read_lifecycle` field anywhere on it.
+
+**2. The nested config R9.8 proposed to reach does not work — and it is not a passthrough
+problem.** `HeadroomConfig` *does* carry `smart_crusher: SmartCrusherConfig`, and
+`SmartCrusherConfig.lossless_only` *does* exist (default False). But Headroom's default
+pipeline builds the router with **no config at all** — `transforms/pipeline.py`:
+
+```python
+transforms.append(ContentRouter())      # ← no config argument
+```
+
+so `HeadroomConfig.smart_crusher` is held by the pipeline and never handed to anything.
+Measured on a 400-row tool result, `mode="aggressive"`:
+
+| route | tokens saved | `<<ccr:…>>` markers |
+|---|---|---|
+| stock pipeline | 19,181 | **37** |
+| `HeadroomConfig(smart_crusher=SmartCrusherConfig(lossless_only=True))` | 19,181 | **37** |
+| `ContentRouter(ContentRouterConfig(lossless=True))` | 15,740 | **0** |
+
+`HEADROOM_LOSSLESS_ONLY` exists but is read only in `proxy/server.py` — Headroom's own
+proxy, which Golem does not run. **The reach point is the transform instance, not a
+config object.** Golem therefore swaps the ContentRouter inside a real default pipeline
+rather than rebuilding the transform list, so an upstream release that adds a transform
+keeps it; if no ContentRouter is found the option is reported, never silently dropped.
+
+`ContentRouterConfig.lossless` is the right switch rather than
+`smart_crusher_lossless_only`: it *also* sets `ccr_inject_marker = False`, so the
+marker-free promise holds on every path, not just the crusher's.
+
+**3. Headroom already protects Read/Glob/Grep/Write/Edit — when the tool name resolves.**
+`DEFAULT_EXCLUDE_TOOLS` covers exactly those five. The same payload routed
+`router:excluded:lossless_json` (0 markers) under tool name `Read` and
+`router:tool_result:smart_crusher` (37 markers) under `Bash`. Golem forwards the whole
+message array including the assistant `tool_use` blocks, so the exclusion does apply —
+the marker exposure is **Bash, WebFetch and MCP tool output**, not Read.
+
+**4. `compress_user_messages` is INERT on the shipped install.** R9.8 flagged Golem's
+level-3 preset setting it True against Headroom's "skip them for coding agents" default.
+Measured both ways on identical input: same 7,984 tokens saved, user prose byte-identical
+(8,160B), tool_result byte-identical (37,979B). The prose-compressing Kompress stage
+needs `[ml]`/torch, which the default install deliberately omits (§35), and tool_result
+blocks are routed by ContentRouter regardless of the flag. **The preset is not the lever
+it appeared to be** — the router is. Left as-is, documented rather than flipped.
+
+**5. The daemon was throwing away every proxy diagnostic.** `startDetached` spawned with
+`stdio: "ignore"` (`src/cli/proxy-daemon.ts`), so in the mode people actually run the
+proxy in, the adapter's "this Headroom ignored …" warning — and the target-misconfig and
+missing-credential warnings beside it — reached nobody. This repo's own
+`.golem/settings.local.json` carries `headroom_config.plugins`, which was filtered out
+and never applied; the warning existed and was invisible. The daemon now appends
+stdout/stderr to `.golem/proxy.log` (front-truncated at 1 MB, falling back to `"ignore"`
+if it cannot be opened), and `golem status` reports the path. A diagnostic nobody can
+find is the same as no diagnostic.
+
+**Decision taken (2026-08-09):** marker-free is Golem's **default** wherever the semantic
+stage runs — 82% of the saving kept, zero markers — overridable per-request with
+`headroom_config: {"lossless_only": false}`. The flagship client is a coding agent doing
+exact-match edits, and a marker in a tool result is precisely what makes the model's view
+of a file differ from its bytes on disk.

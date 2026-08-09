@@ -38,7 +38,7 @@ import {
   type ProviderEntry as LocalProviderEntry,
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
-import { readProxyPid } from "./proxy-daemon.js";
+import { proxyLogPath, readProxyPid } from "./proxy-daemon.js";
 import { proxyBaseUrl, readWiringState, type WiringState } from "./proxy-wiring.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 
@@ -99,6 +99,12 @@ export interface StatusReport {
      * A reachable proxy with no wiring pointing at it serves nothing.
      */
     readonly in_path?: boolean;
+    /**
+     * R9.8 — file the detached daemon's stdout/stderr are appended to. Optional
+     * so an older renderer degrades rather than breaks. Before R9.8 the daemon
+     * spawned with `stdio: "ignore"` and every proxy diagnostic was discarded.
+     */
+    readonly log?: string;
   };
   /**
    * The active upstream's non-secret identity (R6.2 display): the account /
@@ -454,6 +460,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       wiring: wiring.owner,
       wiring_base_url: wiring.baseUrl,
       in_path: reachable && wiring.owner === "golem",
+      // R9.8: a detached daemon's warnings used to go to `stdio: "ignore"`.
+      // They now land here, so name the file — a diagnostic nobody can find is
+      // the same as no diagnostic.
+      log: proxyLogPath(projectDir),
     },
     upstream: {
       provider: upstream.provider,
