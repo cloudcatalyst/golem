@@ -19,9 +19,12 @@
  * Code — it is a `deny`. This is accepted deliberately, not unfixed: the only
  * green alternative is `updatedInput` + `allow` pointing at a loopback endpoint,
  * and WebFetch forces http→https and validates the certificate, so that endpoint
- * is unreachable without installing a Golem-generated CA into Claude Code's trust
- * store — and it re-adds an uncached summarizer call per fetch. Measured and
- * declined in verification-notes §120; the serve text says so out loud instead.
+ * needs a cert Claude Code trusts, and it re-adds an uncached summarizer call per
+ * fetch. Measured and declined in verification-notes §120; the serve text says so
+ * out loud instead. §121 corrects the cert half — a `CA:FALSE` leaf in
+ * NODE_EXTRA_CA_CERTS suffices (no CA, no signing power) — so the standing reasons
+ * are the per-fetch summarizer cost, the fidelity loss, and that the wiring is
+ * silently inert in cloud/Desktop-managed sessions. Opt-in candidate: R9.12.
  */
 
 import { createHash } from "node:crypto";

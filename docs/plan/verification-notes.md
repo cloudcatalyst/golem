@@ -5540,3 +5540,74 @@ and recorded in the module docstring so the next reader does not re-derive §115
 **If Claude Code ever gains a PreToolUse output-substitution field, this becomes a one-line
 change and should be revisited.** Until then the red dot is the documented price of skipping
 both a network fetch and an LLM call.
+
+## §121 — CORRECTION to §120: the loopback cert needs no CA, and the real blockers are scope holes, not trust (2026-08-09)
+
+§120 declined the loopback design partly on *"it needs a Golem CA in Claude Code's
+process-wide trust, covering `api.anthropic.com`"*. **That reason is wrong and is
+withdrawn.** Prompted by the user asking whether the cert could be handled at install
+time. Measured, not reasoned:
+
+### What was measured
+
+**1. A self-signed `CA:FALSE` LEAF works as a trust anchor.** First attempt proved
+nothing — `openssl req -x509` emits `CA:TRUE` by default, so the "self-signed cert"
+tested in §120 was a CA. Regenerated with `basicConstraints=critical,CA:FALSE`
+(+`keyUsage`, `extendedKeyUsage=serverAuth`, SAN `DNS:localhost,IP:127.0.0.1`):
+
+| client env | result |
+|---|---|
+| none (control) | `FAIL DEPTH_ZERO_SELF_SIGNED_CERT` |
+| `NODE_EXTRA_CA_CERTS=<the leaf itself>` | **`OK`** — TLS validated |
+| same env, fetching `https://example.com` | **`OK 200`** — the public store still works |
+
+So `NODE_EXTRA_CA_CERTS` **appends to** the default store rather than replacing it, and
+the anchor can be the leaf itself. **There is no CA to install and therefore no signing
+capability to steal**: a `CA:FALSE` cert cannot mint a cert for any other host, so the
+"could MITM api.anthropic.com" blast radius does not exist. Residual risk is only that
+someone who can read the key can impersonate `127.0.0.1:<port>` to Claude Code — and
+anyone with that access can already write the web cache and the KB, which are served
+into context anyway. Incremental risk over the status quo: small.
+
+**2. Claude Code documents the variable** (`code.claude.com/docs/en/network-config.md`,
+fetched 2026-08-09): `NODE_EXTRA_CA_CERTS` under "Custom CA certificates", *"All
+environment variables shown on this page can also be configured in `settings.json`"*,
+read **once at startup** (so a restart is required — consistent with §112), and
+verifiable: `claude --debug` logs `CA certs: Appended extra certificates from
+NODE_EXTRA_CA_CERTS (<path>)`, and `/status` shows an **Additional CA cert(s)** row.
+
+### The blockers that actually remain
+
+**A. Settings-scope holes make the wiring unreliable exactly where Golem writes it.**
+Same doc: in **cloud sessions** Claude Code *ignores* `NODE_EXTRA_CA_CERTS` from a
+settings `env` block outright; and in **Claude Desktop app-managed sessions** it reads
+it only from managed settings and `~/.claude/settings.json`, explicitly **ignoring a
+repository's own settings files** — which is precisely where `golem init` writes its
+wiring. So a project-scope install silently does nothing in those sessions.
+
+**B. A failed rewrite is worse than a red dot.** Today's failure mode is "works, looks
+red". If the hook rewrites to loopback in a session where the cert is not trusted, the
+fetch **actually fails**. Any build must therefore keep deny-and-serve as the fallback
+and only rewrite once it has positive evidence the endpoint was reachable (e.g. a latch
+recording that a real WebFetch arrived at the endpoint), rather than assuming.
+
+**C. `NODE_EXTRA_CA_CERTS` is a single path, and someone else may own it.** A user
+behind a corporate TLS-inspection proxy already has it set. Golem must not clobber it;
+concatenating their bundle with ours creates a copy that goes stale when theirs rotates.
+Safest posture: set it only when unset, otherwise print instructions.
+
+**D. §120 reasons 2 and 3 are untouched.** The summarizer still runs per fetch
+(measured: 551 in / 9 out for 1.2 KB, uncached), and it can only be bounded by serving a
+*capped* page from the endpoint — at which point the model receives WebFetch's
+**prompt-specific summary of a truncated page** instead of today's prompt-independent
+raw text. That is Decision 42's thesis in reverse, and it is a fidelity regression paid
+for with tokens, to buy a colour.
+
+### Verdict
+
+Install-time cert handling is **feasible and much cheaper than §120 claimed** — a leaf,
+a settings `env` line and a restart. It is **not** suitable as a default, because of A
+(silently inert in two session types), B (converts a cosmetic problem into a real
+failure) and D (tokens + fidelity). It is a reasonable **opt-in** for users who want the
+green dot and mostly fetch small pages. Filed as R9.12 rather than built, because the
+default stays as shipped in R9.7.
