@@ -14,6 +14,7 @@ import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js
 import { migrationFrom, type SettingMigration } from "../config/migrations.js";
 import { allLeafPaths, leafSchema } from "../config/schema.js";
 import { unwrapSchema } from "../config/ui-model.js";
+import { deleteRetiredKey } from "../config/write-setting.js";
 
 export interface ConfigReadOptions {
   readonly projectDir: string;
@@ -152,7 +153,10 @@ async function defaultReadStdin(): Promise<string> {
 }
 
 /** Parse and validate a raw CLI string into the schema type for `key`. */
-export function parseConfigValue(key: string, raw: string): unknown {
+export function parseConfigValue(requestedKey: string, raw: string): unknown {
+  // R9.6: resolve here too, so every entry point into the config engine accepts
+  // a retired name rather than only the two that happen to call resolveSettingKey.
+  const key = resolveSettingKey(requestedKey).key;
   const leaf = leafForKey(key);
   if (leaf === undefined) {
     throw new ConfigError(
@@ -276,6 +280,16 @@ export async function setConfig(
     projectDir: options.projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
   });
+  // R9.6/R9.10: having written the live key, drop the retired one from the SAME
+  // file. Leaving both would hand the user a dead duplicate and a warning about
+  // the pair on every load — a worse outcome than the rename they just asked to
+  // follow. Other scopes are untouched: this only cleans up what it just wrote.
+  if (renamedFrom !== undefined) {
+    await deleteRetiredKey(scope, renamedFrom.from, {
+      projectDir: options.projectDir,
+      ...(options.userDir !== undefined && { userDir: options.userDir }),
+    });
+  }
   const effective = await getConfig(key, options);
   // Structural, not reference, comparison: an object- or array-valued leaf read
   // back through the loader is a different object every time, so `!==` reported

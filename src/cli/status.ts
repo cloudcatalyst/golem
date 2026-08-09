@@ -192,26 +192,37 @@ export interface StatusReport {
    */
   readonly local_model: {
     readonly reachable: boolean;
-    /** The `coder`/`drafter` model (e.g. `qwen2.5-coder:7b`) when reachable. */
-    readonly coder_model?: string;
-    /** Whether `inference.local_coder_enabled` is true (default). */
-    readonly coder_enabled: boolean;
     /**
-     * R9.4 — one row per tool worker that has a configured target, so surfaces
-     * can render N workers without knowing their names. A worker with no entry
-     * is absent here and uses the local model.
+     * The model local tiered inference would use (e.g. `qwen2.5-coder:7b`) when
+     * reachable. R9.10: this is the LOCAL runtime's model, which is only what
+     * `coder` reaches when no worker target is configured — see `workers`.
      */
-    readonly workers?: readonly {
-      readonly worker: string;
-      readonly target: string;
-      /** The target's model. Absent when the target does not resolve. */
-      readonly model?: string;
-      /** True when `target` names an id in no registry — the worker fails closed. */
-      readonly target_unknown?: boolean;
-    }[];
+    readonly coder_model?: string;
+    /** Whether `inference.coder_enabled` is true (default). */
+    readonly coder_enabled: boolean;
     /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
+  /**
+   * R9.4/R9.10 — one row per tool worker that has a configured target.
+   *
+   * **Top-level, not under `local_model`.** A worker routes to any target since
+   * R9.3, so reporting `claude-sonnet-5` inside a block called `local_model` was
+   * a contradiction in one object. Absent when no worker has a target, in which
+   * case every worker uses local tiered inference and `local_model` is the whole
+   * story. Optional so a renderer that predates the move degrades rather than
+   * breaks.
+   */
+  readonly workers?: readonly {
+    readonly worker: string;
+    readonly target: string;
+    /** The target's model. Absent when the target does not resolve. */
+    readonly model?: string;
+    /** True when `target` names an id in no registry — the worker fails closed. */
+    readonly target_unknown?: boolean;
+    /** R9.10: false when this worker's target is not local — the honest bit. */
+    readonly local?: boolean;
+  }[];
   /**
    * Update status, from the LAST cached `golem update --check` (read-only, no
    * network here — status must never hang). Absent until a check has run.
@@ -376,6 +387,9 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         target,
         ...(row?.model != null ? { model: row.model } : {}),
         ...(row === undefined ? { target_unknown: true } : {}),
+        // R9.10: say plainly whether this worker is actually running locally,
+        // rather than leaving every surface to infer it from the trust level.
+        ...(row !== undefined ? { local: row.trust === "local" } : {}),
       };
     });
 
@@ -484,11 +498,12 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     config,
     local_model: {
       reachable: localInfo.reachable,
-      coder_enabled: settings.inference.local_coder_enabled,
+      coder_enabled: settings.inference.coder_enabled,
       ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
-      ...(workerRows.length > 0 ? { workers: workerRows } : {}),
       base_url: settings.inference.ollama_base_url,
     },
+    // R9.10: top-level, because a worker's target need not be local.
+    ...(workerRows.length > 0 ? { workers: workerRows } : {}),
     ...(cachedUpdate !== null
       ? {
           update: {
@@ -742,13 +757,13 @@ export function renderStatus(report: StatusReport): string {
   //
   // Rendered generically over N workers so a new one needs no change here.
   lines.push(`Inference: chat ${chatModel ?? report.upstream.provider}`);
-  const workers = report.local_model.workers ?? [];
+  const workers = report.workers ?? [];
   const localModel = report.local_model.coder_model ?? "local";
   for (const worker of KNOWN_WORKERS) {
     // Only `coder` has an enabled flag today; a future worker without one is
     // simply always offered.
     if (worker === "coder" && !report.local_model.coder_enabled) {
-      lines.push("  coder: disabled (inference.local_coder_enabled)");
+      lines.push("  coder: disabled (inference.coder_enabled)");
       continue;
     }
     const configured = workers.find((w) => w.worker === worker);

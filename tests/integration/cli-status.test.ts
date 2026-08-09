@@ -422,9 +422,10 @@ describe("renderStatus", () => {
       local_model: {
         reachable: false,
         coder_enabled: true,
-        workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
         base_url: "http://localhost:11434",
       },
+      // R9.10: workers are top-level — a worker's target need not be local.
+      workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
     });
     // An unresolvable default must be called out, not papered over: `coder`
     // fails closed on it rather than quietly drafting on the local model.
@@ -441,9 +442,9 @@ describe("renderStatus", () => {
         reachable: true,
         coder_enabled: true,
         coder_model: "qwen2.5-coder:7b",
-        workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
         base_url: "http://localhost:11434",
       },
+      workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
     });
     expect(output).toContain('coder: FAILS CLOSED — target "ghost"');
     expect(output).not.toContain("coder qwen2.5-coder:7b");
@@ -459,7 +460,7 @@ describe("renderStatus", () => {
         base_url: "http://localhost:11434",
       },
     });
-    expect(output).toContain("coder: disabled (inference.local_coder_enabled)");
+    expect(output).toContain("coder: disabled (inference.coder_enabled)");
     expect(output).not.toContain("coder qwen");
   });
 

@@ -5419,3 +5419,48 @@ instruction, because a refusal with no way forward is just an unexplained stop.
 `conflict .claude/skills/golem/ship/SKILL.md — … kept your version …` and the
 edit is still on disk. Before this change the same sequence silently destroyed
 it, reporting only `modify`.
+
+## §119 — R9.10: the rename was the easy half; `config set` was leaving a dead key behind (2026-08-09)
+
+`inference.local_coder_enabled` → `inference.coder_enabled`, registered in R9.6's
+migration table. The rename itself was mechanical. Two things were not.
+
+**1. `golem config set` on a retired key left the file holding BOTH names.**
+R9.6 made `set` write the live key and report the redirect, which is right — but
+`writeSetting` only ever adds. So a user following the deprecation notice ended up
+with `local_coder_enabled` *and* `coder_enabled` in one file, the loader's
+shadowed-key warning firing on every load, and no way out but a hand edit. Found
+by running the migration on this repo's own `.golem/settings.json`. `setConfig`
+now deletes the retired key from **the same scope's file** after writing the live
+one, via a `deleteRetiredKey` helper that deliberately bypasses migration
+resolution — `writeSetting` resolves retired names, so using it to delete one
+would have deleted the replacement instead. Other scopes are untouched: cleaning
+up a file the command did not write would be overreach.
+
+**2. `local_model.workers` had to move, not just be renamed.** The gate says
+`golem status --json` must never report a non-local model under a `local_model`
+key. With `coder` pointed at a vendor target this repo was emitting exactly that
+— `local_model.workers[0].model = "claude-sonnet-5"` beside
+`local_model.coder_model = "qwen2.5-coder:7b"`. Workers are now top-level with a
+`local` boolean per row; `local_model` keeps only what is genuinely the local
+backend. The VS Code renderer reads the new key and falls back to the old one, so
+a stale extension degrades rather than breaks.
+
+`golem local status` gained a line naming any worker that does NOT run on that
+backend, because "Local model: ACTIVE" above a worker table pointing at
+api.anthropic.com is a true sentence arranged to mislead.
+
+**Verified live on this repo, which was the honest test case**: `.golem/settings.json`
+still held `local_coder_enabled` after the rename, and `golem status` reported
+`coder_enabled: true` (migration carried it) with a warning naming the file and
+the key to edit; `golem local status` printed
+``note: `coder` runs on target "sonnet-5", NOT on this backend``; `local_model`
+no longer contained `claude-sonnet-5`; and `config set` on the old name left the
+file holding only `coder_enabled`, after which the warning was gone.
+
+**Sequencing paid off exactly as predicted.** R9.6 supplied the migration, so no
+existing config broke. R9.5 supplied managed-file refresh, so the rewritten
+`local-coder` guidance rationale — which previously said "leaves the paid model's
+tokens", the inverse of the truth once `coder` points at a vendor model — actually
+reaches projects that already ran `golem init`. Doing R9.10 first would have
+demonstrated both bugs instead of fixing them.

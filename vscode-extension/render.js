@@ -191,7 +191,7 @@ function buildModel(stats, status, update, accounts, surface) {
     // than the pipeline. Absent on an older CLI → false, i.e. the pre-56 display.
     proxyBypass: !!(st.proxy && st.proxy.bypass),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
-    // `inference.local_coder_enabled`. Absent on an older CLI → assume enabled,
+    // `inference.coder_enabled`. Absent on an older CLI → assume enabled,
     // matching the CLI statusline's fail-open reading of the same setting.
     localCoderEnabled:
       st.local_model && typeof st.local_model.coder_enabled === "boolean"
@@ -219,7 +219,9 @@ function buildModel(stats, status, update, accounts, surface) {
     // every dispatch, so naming a model would advertise something that can
     // never run. Absent on an older CLI → [], i.e. the local-only display.
     workers:
-      st.local_model && Array.isArray(st.local_model.workers)
+      Array.isArray(st.workers)
+        ? st.workers
+        : st.local_model && Array.isArray(st.local_model.workers)
         ? st.local_model.workers
         : [{ worker: "coder" }],
     // The local (Ollama) base URL for the hover summary's `Local:` line — from

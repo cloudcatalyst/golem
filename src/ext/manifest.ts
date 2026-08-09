@@ -159,7 +159,7 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
     detect: { kind: "command", command: "ollama" },
     install:
       "https://ollama.com/download — or point Golem at a LAN box with `golem local url <url>`.",
-    enabledBy: "inference.local_coder_enabled",
+    enabledBy: "inference.coder_enabled",
     adapter: "src/inference/",
     degrade:
       "Local drafting/judging is unavailable; every request goes upstream. `golem devices` reports it.",

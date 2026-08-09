@@ -274,7 +274,7 @@ export const SETTING_META = {
       "model load plus a grounded draft can legitimately take a minute-plus.",
     advanced: true,
   },
-  "inference.local_coder_enabled": {
+  "inference.coder_enabled": {
     label: "Local coder tool",
     summary: "Offer the `coder` MCP tool so Claude drafts code on the local model",
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",

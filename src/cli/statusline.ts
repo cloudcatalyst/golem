@@ -113,7 +113,7 @@ export interface GolemState {
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
   readonly localCoderModel?: string;
-  /** Whether the `coder` MCP tool is enabled (`inference.local_coder_enabled`). */
+  /** Whether the `coder` MCP tool is enabled (`inference.coder_enabled`). */
   readonly localCoderEnabled?: boolean;
   /**
    * R9.4 — the model behind `inference.coder_target`, when that is set and
@@ -432,7 +432,7 @@ export async function collectGolemState(
         ? resolveBrevity(settings.slider.level, "auto")
         : settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
-    coderEnabled = settings.inference.local_coder_enabled;
+    coderEnabled = settings.inference.coder_enabled;
     providers = settings.inference.providers as readonly LocalProviderEntry[];
     // R9.4: `coder` may default to any declared target. Resolve it from settings
     // already in hand — no extra I/O on a per-prompt surface. An unknown id

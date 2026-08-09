@@ -44,6 +44,13 @@ export const SETTING_MIGRATIONS: readonly SettingMigration[] = [
     to: "proxy.default_target",
     since: "R9.1",
   },
+  {
+    // R9.10: a worker routes to any target, so naming the switch for where the
+    // model runs described a constraint that stopped existing in R9.3/R9.4.
+    from: "inference.local_coder_enabled",
+    to: "inference.coder_enabled",
+    since: "R9.10",
+  },
 ];
 
 /** Section of a dotted path, or the whole string when it has no dot. */

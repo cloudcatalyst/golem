@@ -7,7 +7,7 @@
  * FILE names rather than the one the value landed on.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -155,5 +155,40 @@ describe("golem config set on a retired key", () => {
     const { settings, warnings } = await loadConfig({ projectDir, userDir });
     expect(settings.proxy.default_target).toBe("openrouter-qwen3");
     expect(warnings.filter((w) => w.includes("active_account"))).toHaveLength(0);
+  });
+});
+
+describe("golem config set cleans up after itself (R9.6/R9.10)", () => {
+  it("drops the retired key from the file it just wrote the live one to", async () => {
+    // A file from before the rename, holding only the old key.
+    await writeJson(localFile(), { proxy: { active_account: "openrouter-qwen3" } });
+
+    await setConfig("local", "proxy.active_account", "openrouter-laguna", {
+      projectDir,
+      userDir,
+    });
+
+    const raw = JSON.parse(await readFile(localFile(), "utf8")) as {
+      proxy: Record<string, unknown>;
+    };
+    expect(raw.proxy.default_target).toBe("openrouter-laguna");
+    // Leaving both would hand the user a dead duplicate and a shadowed-key
+    // warning on every load — worse than the rename they just followed.
+    expect(raw.proxy.active_account).toBeUndefined();
+
+    const { warnings } = await loadConfig({ projectDir, userDir });
+    expect(warnings.filter((w) => w.includes("active_account"))).toHaveLength(0);
+  });
+
+  it("leaves other scopes alone — it only cleans the file it wrote", async () => {
+    await writeJson(userFile(), { proxy: { active_account: "openrouter-qwen3" } });
+    await setConfig("local", "proxy.active_account", "openrouter-laguna", {
+      projectDir,
+      userDir,
+    });
+    const raw = JSON.parse(await readFile(userFile(), "utf8")) as {
+      proxy: Record<string, unknown>;
+    };
+    expect(raw.proxy.active_account).toBe("openrouter-qwen3");
   });
 });

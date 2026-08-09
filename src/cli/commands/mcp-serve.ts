@@ -91,10 +91,10 @@ export default function register(program: Command): void {
         }
         const telemetry = openTelemetryStore(opts.dir);
         const coderInference =
-          settings.inference.local_coder_enabled && inference !== undefined ? inference : undefined;
-        if (settings.inference.local_coder_enabled === false) {
+          settings.inference.coder_enabled && inference !== undefined ? inference : undefined;
+        if (settings.inference.coder_enabled === false) {
           process.stderr.write(
-            "golem mcp serve: local coder disabled by inference.local_coder_enabled\n",
+            "golem mcp serve: local coder disabled by inference.coder_enabled\n",
           );
         }
         const { JsonFileSliderStore, serveStdio } = await import("../../mcp/index.js");

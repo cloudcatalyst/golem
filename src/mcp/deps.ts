@@ -43,7 +43,7 @@ export interface GolemMcpServerDeps {
    * WS-D tiered inference (task B3). When present, the `coder` tool
    * is registered, letting Claude offload a task to a local model (the
    * "drafter" role). Omitted when local inference is unavailable or when
-   * `inference.local_coder_enabled` is false.
+   * `inference.coder_enabled` is false.
    */
   readonly coder?: InferenceService;
   /**
