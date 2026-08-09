@@ -5227,3 +5227,43 @@ it. The model field demonstrably arrives at the proxy today.
 21e Phase 1's gate is **cleared on the documentation**, subject to caveat 5's
 one-request empirical confirmation. The virtual-model-id UX stands, and the
 fallback (hook-injected `x-golem-target` header) is not needed.
+
+## §115 — the cache-serve red dot is Claude Code reporting a *denied* tool call, and PreToolUse still has no output substitution (2026-08-09)
+
+Reported by the user: *"a webfetch which is serviced by golem works, but shows a red
+dot in claude code."*
+
+**Not a bug in the hook — it is the mechanism.** `runWebFetchPre` serves a cached (or
+self-fetched raw) page by returning `permissionDecision: "deny"` with the content in
+`permissionDecisionReason`. Claude Code renders a denied tool call as an error, so the
+call goes red even though the content was delivered and the fetch was correctly skipped.
+Reproduced live in this session: the WebFetch of the hooks doc returned inside an
+`<error>` wrapper, prefixed `✓ Golem served this URL from the knowledge base`.
+
+**Re-verified the PreToolUse output contract against live docs** (`code.claude.com/docs/en/hooks.md`,
+fetched 2026-08-09) because §44's "no output-substitution field" finding predates several
+hook changes. It still holds. PreToolUse decision control has exactly four fields:
+
+| field | meaning (verbatim, abridged) |
+|---|---|
+| `permissionDecision` | `allow` / `deny` / `ask` / `defer` |
+| `permissionDecisionReason` | for `"deny"`, **shown to Claude**; for `allow`/`ask`, shown to the user but not Claude; for `defer`, ignored |
+| `updatedInput` | modifies the tool's **input** before execution; replaces the entire input object |
+| `additionalContext` | string added to Claude's context **alongside the tool result** |
+
+There is still **no** `updatedToolOutput` (that is PostToolUse only), no `toolResult`, no
+synthetic-result field. So "return content without running the tool" has exactly one
+expression: `deny` + reason. The red dot is the price.
+
+The event list has grown since §8 — `PermissionRequest`, `PermissionDenied`,
+`PostToolUseFailure`, `PostToolBatch`, `UserPromptExpansion`, `MessageDisplay`,
+`InstructionsLoaded`, `TaskCreated`/`TaskCompleted`, `TeammateIdle` now exist. None of
+them substitutes a PreToolUse result; `PermissionDenied` fires on *auto-mode classifier*
+denials, not hook denials, so it is not a relabelling hook.
+
+**The one untested escape** is `updatedInput` + `allow`: rewrite `tool_input.url` to a
+loopback URL Golem serves the cached page from, so WebFetch succeeds normally and renders
+green. It is documented and legal, but it re-introduces exactly what Decision 42 Option A
+removed — WebFetch would run, including its **internal summarization model call** (which
+transits the proxy, see §the Decision 42 note). That is a real cost traded for a UI
+colour, so it needs measuring rather than assuming. Written up as **R9.7**.
