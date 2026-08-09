@@ -27,8 +27,10 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
+import { isKnownWorker, KNOWN_WORKERS } from "../inference/workers.js";
 import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
 import {
+  listTargets,
   resolveUpstreamDisplay,
   type UpstreamProvider,
   upstreamAssumesCaching,
@@ -113,6 +115,18 @@ export interface GolemState {
   readonly localCoderModel?: string;
   /** Whether the `coder` MCP tool is enabled (`inference.local_coder_enabled`). */
   readonly localCoderEnabled?: boolean;
+  /**
+   * R9.4 — the model behind `inference.coder_target`, when that is set and
+   * resolves. Wins over {@link localCoderModel}: a configured target is what
+   * `coder` will actually draft on, local or not.
+   */
+  /**
+   * R9.4 — the model each tool worker will actually use, resolved. A worker
+   * whose target does not resolve carries no `model` and is omitted from the
+   * line: it fails closed on every dispatch, so naming a model would advertise
+   * something that can never run.
+   */
+  readonly workers?: readonly { readonly worker: string; readonly model?: string }[];
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
 }
@@ -209,24 +223,76 @@ function upstreamModelLabel(golem: GolemState): string | undefined {
 }
 
 /**
- * The one-liner destination, e.g.
- * `local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])`. Each backend
- * carries its own `(model)` parenthetical — the model id verbatim. The
- * `local (…)` segment is present only when a local model is reachable
- * (Decision 30 — Golem is then a local+upstream hybrid at any level); when the
- * local model is up but its id is unknown it degrades to a bare `local`. Model
- * parentheticals are omitted when the model isn't known.
+ * R9.4 — the role markers on the destination segment.
+ *
+ * **Placeholders: pick the final glyphs here.** They are deliberately the only
+ * place either surface names a symbol, so changing them is one edit — but there
+ * is a SECOND copy in `vscode-extension/render.js` (`ROLE_MARKS`), because the
+ * extension is plain JS and shares no module with the CLI. Change both together;
+ * a test pins that they agree.
+ *
+ * Keep them single-width. The status line is rendered every turn in a terminal
+ * of unknown width, and a double-width glyph misaligns everything after it.
+ */
+export const ROLE_MARKS = {
+  /** The model the conversation itself runs on. */
+  chat: "◆",
+  /** The model `coder` drafts on. */
+  coder: "✎",
+  /** Fallback for a worker with no glyph of its own yet. */
+  worker: "✦",
+} as const;
+
+/** The glyph for a worker, falling back to the generic worker mark. */
+function workerMark(worker: string): string {
+  return (ROLE_MARKS as Record<string, string>)[worker] ?? ROLE_MARKS.worker;
+}
+
+/**
+ * The worker rows to render. `collectGolemState` supplies these; a state built
+ * without them (a direct caller, or a pre-R9.4 shape) falls back to the implicit
+ * "coder runs on the local model" row, which is the behaviour that predates
+ * worker targets.
+ */
+function workerRows(golem: GolemState): readonly { worker: string; model?: string }[] {
+  if (golem.workers !== undefined) return golem.workers;
+  if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return [];
+  const model =
+    golem.localCoderModel !== undefined && golem.localCoderModel !== ""
+      ? golem.localCoderModel
+      : "local";
+  return [{ worker: "coder", model }];
+}
+
+/**
+ * The one-liner destination, naming the chat model plus **only the workers whose
+ * model differs from it** (R9.1–R9.4):
+ *
+ *   `✎ qwen3-14b · ◆ claude-opus-5[1m]`
+ *   `◆ claude-opus-5[1m]`            ← every worker on the chat model
+ *
+ * Showing a worker that agrees with chat costs width and tells the reader
+ * nothing; the interesting fact is always a *divergence*. This is also what
+ * keeps the line bounded as workers are added — with one glyph each, the line
+ * only grows when the user has actually pointed a worker somewhere else.
+ *
+ * The old shape (`local (…) + anthropic (…)`) hard-coded the assumption this
+ * work removed — that drafting is local and only the upstream is a real choice.
+ * Model ids stay verbatim (Decision 49): never a prettified family name. When
+ * the chat model is unknown the segment degrades to the upstream label alone,
+ * which is still true.
+ *
+ * A worker whose target does not resolve is **omitted**, not shown: it fails
+ * closed on every dispatch, so naming its model would advertise something that
+ * can never run (the R8.32 failure in miniature). `golem status` reports it.
  */
 export function destinationLabel(golem: GolemState): string {
-  const upstreamModel = upstreamModelLabel(golem);
-  const upstreamSeg =
-    upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
-  if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return upstreamSeg;
-  const localSeg =
-    golem.localCoderModel !== undefined && golem.localCoderModel !== ""
-      ? `local (${golem.localCoderModel})`
-      : "local";
-  return `${localSeg} + ${upstreamSeg}`;
+  const chatModel = upstreamModelLabel(golem);
+  const chatSeg = `${ROLE_MARKS.chat} ${chatModel ?? golem.upstreamLabel}`;
+  const diverging = workerRows(golem)
+    .filter((w) => w.model !== undefined && w.model !== "" && w.model !== chatModel)
+    .map((w) => `${workerMark(w.worker)} ${w.model}`);
+  return diverging.length === 0 ? chatSeg : `${diverging.join(" · ")} · ${chatSeg}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -351,6 +417,7 @@ export async function collectGolemState(
   let providers: readonly LocalProviderEntry[] | undefined;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
+  let workerTargetModels: readonly { worker: string; model?: string }[] = [];
   let activeAccount: string | null = null;
   let effectiveLevel: number | undefined;
   let proxyPort: number | undefined;
@@ -367,6 +434,21 @@ export async function collectGolemState(
     ollamaBaseUrl = settings.inference.ollama_base_url;
     coderEnabled = settings.inference.local_coder_enabled;
     providers = settings.inference.providers as readonly LocalProviderEntry[];
+    // R9.4: `coder` may default to any declared target. Resolve it from settings
+    // already in hand — no extra I/O on a per-prompt surface. An unknown id
+    // resolves to nothing and the line falls back to the local model rather than
+    // naming a target that does not exist; `golem status` is where the
+    // misconfiguration is reported properly.
+    // Resolved from settings already in hand — no extra I/O on a per-prompt
+    // surface. A target that does not resolve yields no model, so the worker is
+    // omitted from the line rather than advertised.
+    const configured = settings.inference.worker_targets;
+    workerTargetModels = Object.keys(configured)
+      .filter((worker) => isKnownWorker(worker))
+      .map((worker) => {
+        const hit = listTargets(settings.proxy).find((t) => t.id === configured[worker]);
+        return { worker, ...(hit?.model !== undefined ? { model: hit.model } : {}) };
+      });
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
@@ -477,6 +559,11 @@ export async function collectGolemState(
   } catch {
     // no session state
   }
+  // R9.4: assemble the per-worker models AFTER the local probe, since a worker
+  // with no configured target falls back to the local model — which has to
+  // actually be reachable to be worth naming.
+  state = { ...state, workers: resolveWorkerModels(state, workerTargetModels) };
+
   try {
     const agg = await openTelemetryStore(dir).aggregate();
     if (agg.requests > 0) {
@@ -486,6 +573,32 @@ export async function collectGolemState(
     // no telemetry yet
   }
   return state;
+}
+
+/**
+ * One row per known worker: its configured target's model, or the local model
+ * when it has no target. A worker with no usable backend carries no `model` and
+ * is therefore omitted from the line — better to say nothing than to name a
+ * model that cannot serve.
+ */
+function resolveWorkerModels(
+  state: GolemState,
+  configured: readonly { worker: string; model?: string }[],
+): readonly { worker: string; model?: string }[] {
+  const localModel =
+    state.localModelReachable === true
+      ? state.localCoderModel !== undefined && state.localCoderModel !== ""
+        ? state.localCoderModel
+        : "local"
+      : undefined;
+  return KNOWN_WORKERS.map((worker) => {
+    // Only `coder` has an enable flag today; a future worker without one is
+    // simply always offered.
+    if (worker === "coder" && state.localCoderEnabled === false) return { worker };
+    const hit = configured.find((c) => c.worker === worker);
+    if (hit !== undefined) return hit;
+    return { worker, ...(localModel !== undefined ? { model: localModel } : {}) };
+  });
 }
 
 // Re-exported: callers have always imported `upstreamLabel` from here.

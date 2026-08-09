@@ -19,7 +19,7 @@ export function registerPrompts(server: McpServer): void {
         level: z
           .string()
           .optional()
-          .describe("New slider level 0–3; omit to show the current level"),
+          .describe("New slider level 1–3 (0 is CLI-only); omit to show the current level"),
       },
     },
     ({ level }) =>
@@ -29,10 +29,12 @@ export function registerPrompts(server: McpServer): void {
               "then briefly list what each level 0–3 enables " +
               "(0 passthrough — full bypass, NO redaction; 1 lossless; 2 balanced; 3 aggressive)."
           : `Set the Golem savings slider to level ${level} using the level ` +
-              "tool (it accepts integers 0–3; if the requested value is not a valid " +
+              "tool (it accepts integers 1–3; if the requested value is not a valid " +
               "level, tell the user instead of guessing). Then confirm the new level " +
-              "and summarize in one sentence what changes at that level. If the level " +
-              "is 0, warn that redaction is disabled at level 0.",
+              "and summarize in one sentence what changes at that level. Level 0 is a " +
+              "full bypass that turns redaction OFF and CANNOT be set from a tool " +
+              "call — if 0 was requested, do not attempt it: say that redaction would " +
+              "be off and that the user must run `golem slider 0` themselves.",
       ),
   );
 
@@ -92,9 +94,11 @@ export function registerPrompts(server: McpServer): void {
           "and pick per intent: (1) a per-request bypass that leaves the " +
           "persistent slider alone — direct API callers add the `x-golem-bypass` " +
           "header. (2) a persistent change — `level 1` keeps redaction on while " +
-          "compression stays byte-faithful; `level 0` turns Golem fully OFF but " +
-          "ALSO disables redaction (secrets reach the upstream raw), so only use " +
-          "0 for a deliberate full bypass. Prefer level 1 unless a true full " +
+          "compression stays byte-faithful, and you can set it with the level " +
+          "tool. `level 0` turns Golem fully OFF but ALSO disables redaction " +
+          "(secrets reach the upstream raw), so it cannot be set from a tool call " +
+          "at all: for a deliberate full bypass, tell the user to run " +
+          "`golem slider 0` in their terminal. Prefer level 1 unless a true full " +
           "bypass is intended; confirm the choice and remind the user to restore " +
           "their previous level afterwards.",
       ),

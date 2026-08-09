@@ -159,7 +159,7 @@ describe("renderStatusLine", () => {
       },
     );
     expect(line).toContain("⬢ Golem · Aggressive");
-    expect(line).toContain("→ foundry");
+    expect(line).toContain("→ ◆ foundry");
     // Savings moved to the fuller summary; ctx/5h/$ are deferred off the line.
     expect(line).not.toContain("saved");
     expect(line).not.toContain("ctx");
@@ -181,9 +181,83 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain(
-      "⬢ Golem · Lossless → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])",
+    // R9.4: named by ROLE, not by locality — after R9.3 the coder end can be
+    // any target, so "local + upstream" described a constraint that is gone.
+    expect(line).toContain("⬢ Golem · Lossless → ✎ qwen2.5-coder:7b · ◆ claude-opus-5[1m]");
+  });
+
+  it("flattens to ONE segment when both roles run the same model (R9.4)", () => {
+    // Printing the same id twice under two symbols tells the reader nothing and
+    // costs the width the rest of the line needs.
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        localCoderEnabled: true,
+        workers: [{ worker: "coder", model: "claude-opus-5[1m]" }],
+        proxyRunning: true,
+      },
     );
+    expect(line).toContain("⬢ Golem · Lossless → ◆ claude-opus-5[1m]");
+    expect(line).not.toContain("✎");
+  });
+
+  it("shows a configured coder target even when Ollama is unreachable (R9.4)", () => {
+    // A non-local target does not depend on the local model being up, so local
+    // reachability must not suppress it.
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        localModelReachable: false,
+        workers: [{ worker: "coder", model: "openai/gpt-oss-20b:free" }],
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("✎ openai/gpt-oss-20b:free · ◆ claude-opus-5[1m]");
+  });
+
+  it("shows NO coder segment when coder_target resolves to nothing (R9.4)", () => {
+    // `coder` fails closed on an unresolvable target, so it will never draft.
+    // Falling back to the local model here would name a model that can never
+    // run, attributed to a target that does not exist — found by running this
+    // live, not by reading the code.
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        localModelReachable: true,
+        localCoderModel: "qwen2.5-coder:7b",
+        workers: [{ worker: "coder" }],
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("→ ◆ claude-opus-5[1m]");
+    expect(line).not.toContain("✎");
+    expect(line).not.toContain("qwen");
+  });
+
+  it("reports NO coder segment rather than implying one that cannot serve", () => {
+    // Claiming a coder backend that cannot produce a draft is the R8.32 failure
+    // in miniature — better to say nothing than to say something false.
+    const line = renderStatusLine(
+      {},
+      {
+        sliderLevel: 1,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        localModelReachable: false,
+        proxyRunning: true,
+      },
+    );
+    expect(line).toContain("→ ◆ claude-opus-5[1m]");
+    expect(line).not.toContain("✎");
   });
 
   it("shows the configured model in the destination when nothing served yet", () => {
@@ -197,7 +271,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ kimi (kimi-k3)");
+    expect(line).toContain("→ ◆ kimi-k3");
   });
 
   it("prefers the last-served model over the configured default", () => {
@@ -211,7 +285,7 @@ describe("renderStatusLine", () => {
         lastServedModel: "kimi-k3-turbo",
       },
     );
-    expect(line).toContain("→ kimi (kimi-k3-turbo)");
+    expect(line).toContain("→ ◆ kimi-k3-turbo");
   });
 
   it("prefixes a bare 'local' when the local model is up but its id is unknown", () => {
@@ -225,7 +299,9 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ local + kimi (kimi-k3)");
+    // The chat segment carries the model id alone; the provider label is the
+    // fallback for when no model is known, not a prefix.
+    expect(line).toContain("→ ✎ local · ◆ kimi-k3");
   });
 
   it("omits the local prefix when the local coder is disabled, even if reachable", () => {
@@ -241,8 +317,9 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ kimi (kimi-k3)");
+    expect(line).toContain("→ ◆ kimi-k3");
     expect(line).not.toContain("local");
+    expect(line).not.toContain("✎");
   });
 
   it("omits the parenthetical for a plain Anthropic passthrough (no model known)", () => {
@@ -250,7 +327,7 @@ describe("renderStatusLine", () => {
       {},
       { sliderLevel: 1, upstreamLabel: "anthropic", upstreamProvider: "anthropic" },
     );
-    expect(line).toContain("→ anthropic");
+    expect(line).toContain("→ ◆ anthropic");
     expect(line).not.toContain("(");
   });
 
@@ -264,10 +341,10 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain("Lossless");
     expect(line).not.toContain("proxy off");
     // The configured destination is still shown (passthrough goes straight there).
-    expect(line).toContain("→ foundry");
+    expect(line).toContain("→ ◆ foundry");
   });
 
-  it("renders slider level 0 (running) as filled 'Passthrough' with local + upstream", () => {
+  it("renders slider level 0 (running) as filled 'Passthrough' with both roles", () => {
     const line = renderStatusLine(
       {},
       {
@@ -278,7 +355,7 @@ describe("renderStatusLine", () => {
       },
     );
     expect(line).toContain("⬢ Golem · Passthrough");
-    expect(line).toContain("→ local + anthropic");
+    expect(line).toContain("→ ✎ local · ◆ anthropic");
   });
 
   it("appends the waiting/update badges after the destination", () => {
@@ -292,7 +369,7 @@ describe("renderStatusLine", () => {
         updateAvailable: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Balanced → anthropic");
+    expect(line).toContain("⬢ Golem · Balanced → ◆ anthropic");
     expect(line).toContain("⏸ waiting");
     expect(line).toContain("⇧ update");
   });
@@ -532,6 +609,9 @@ describe("collectGolemState", () => {
       proxyRunning: false,
       localCoderEnabled: true,
       localModelReachable: false,
+      // R9.4: one row per known worker. Unreachable local model and no
+      // configured target → no model, so the line names no worker at all.
+      workers: [{ worker: "coder" }],
     });
   });
 });

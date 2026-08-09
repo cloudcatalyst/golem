@@ -4,6 +4,7 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import type { TargetDispatcher } from "../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase, WikiReader } from "../interfaces/index.js";
 import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import { backendUnavailableMessage, gatherGrounding } from "./search.js";
@@ -89,8 +90,31 @@ export function registerCoderTool(
   inference: InferenceService,
   grounding: CoderGroundingDeps,
   tel?: ToolTelemetry,
+  dispatcher?: TargetDispatcher,
 ): void {
   const editEnabled = grounding.editEnabled === true;
+  // R9.3: the conversation may pick a target, bounded to what config declares
+  // AND marks agent-selectable. An enum (rather than a free string) is what
+  // makes "can never reach anything undeclared" visible in the schema itself —
+  // an ad-hoc URL or an account name is not expressible.
+  const selectable = dispatcher?.selectableTargets() ?? [];
+  // A single declared property type keeps the tool's shape inferable — a
+  // conditionally-shaped object would erase every other parameter's type too.
+  const targetSchema: { target?: z.ZodOptional<z.ZodType<string>> } =
+    selectable.length > 0
+      ? {
+          target: z
+            .enum(selectable.map((t) => t.id) as [string, ...string[]])
+            .optional()
+            .describe(
+              "Which configured target to draft on; omit for the local model. " +
+                `Available: ${selectable
+                  .map((t) => `${t.id} (${t.provider}, trust=${t.trust})`)
+                  .join("; ")}. Anything non-local is REDACTED before dispatch — ` +
+                "secrets and PII are replaced with placeholders and restored in the reply.",
+            ),
+        }
+      : {};
   server.registerTool(
     "coder",
     {
@@ -108,6 +132,7 @@ export function registerCoderTool(
         (editEnabled ? EDIT_MODE_DESCRIPTION : ""),
       inputSchema: {
         task: z.string().min(1).describe("The task or instructions for the local model"),
+        ...targetSchema,
         ...(editEnabled ? EDIT_MODE_SCHEMA : {}),
         context: z
           .string()
@@ -168,7 +193,7 @@ export function registerCoderTool(
           .optional(),
       },
     },
-    async ({ task, mode, file, apply, context, ground, refine, project_id }) => {
+    async ({ task, target, mode, file, apply, context, ground, refine, project_id }) => {
       const startMs = Date.now();
 
       if (mode === "edit") {
@@ -244,23 +269,57 @@ export function registerCoderTool(
       if (grounded !== null) sections.push(grounded.block);
       const prompt = sections.length === 0 ? task : `${task}\n\n${sections.join("\n\n")}`;
       try {
-        const result = await inference.chat("drafter", [{ role: "user", content: prompt }]);
+        // R9.3: with a target named, go through the dispatcher — which redacts
+        // before any non-local dispatch and restores the placeholders in the
+        // reply. Without one, this is exactly the previous call.
+        const dispatched =
+          dispatcher !== undefined
+            ? await dispatcher.dispatch({
+                role: "drafter",
+                prompt,
+                worker: "coder",
+                ...(target !== undefined ? { targetId: target } : {}),
+              })
+            : null;
+        const result =
+          dispatched !== null
+            ? { text: dispatched.text, model: dispatched.model, role: "drafter" as const }
+            : await inference.chat("drafter", [{ role: "user", content: prompt }]);
+        // Refinement stays on the LOCAL service: it is a cheap critique loop,
+        // and sending the draft out a second time would double the egress for
+        // no benefit the target was chosen for.
         const refined = refine === true ? await refineDraft(inference, task, result.text) : null;
         const finalText = refined !== null ? refined.text : result.text;
         const groundedNote =
           grounded !== null ? ` Grounded on ${grounded.sources.length} local source(s).` : "";
         const refinedNote = refined === null ? "" : refineNote(refined);
+        // Say where it ran and whether anything was redacted — a remote draft
+        // must never read like a local one.
+        const whereNote =
+          dispatched !== null && dispatched.targetId !== null && dispatched.redactedCount > 0
+            ? `on target "${dispatched.targetId}" (trust=${dispatched.trust}; ` +
+              `${dispatched.redactedCount} secret(s) redacted before dispatch, restored here)`
+            : dispatched !== null && dispatched.targetId !== null
+              ? `on target "${dispatched.targetId}" (trust=${dispatched.trust})`
+              : "locally";
         return instrumented(tel, "coder", startMs, {
           content: [
             {
               type: "text",
-              text: `**Golem** Used ${result.model} locally — verify independently.${groundedNote}${refinedNote}\n\n${finalText}`,
+              text: `**Golem** Used ${result.model} ${whereNote} — verify independently.${groundedNote}${refinedNote}\n\n${finalText}`,
             },
           ],
           structuredContent: {
             text: finalText,
             model: result.model,
             role: result.role,
+            ...(dispatched !== null && dispatched.targetId !== null
+              ? {
+                  target: dispatched.targetId,
+                  trust: dispatched.trust,
+                  redacted_count: dispatched.redactedCount,
+                }
+              : {}),
             ...(grounded !== null
               ? { grounding: { sources: grounded.sources, injected_chars: grounded.chars } }
               : {}),

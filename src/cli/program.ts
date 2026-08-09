@@ -35,6 +35,7 @@ import register_proxy from "./commands/proxy.js";
 import register_session from "./commands/session.js";
 import register_slider_dials_stats from "./commands/slider-dials-stats.js";
 import register_status_update from "./commands/status-update.js";
+import register_target from "./commands/target.js";
 import register_tasks from "./commands/tasks.js";
 import register_wiki from "./commands/wiki.js";
 
@@ -49,6 +50,7 @@ register_bench(program);
 register_checkpoint(program);
 register_ext_models(program);
 register_account(program);
+register_target(program);
 register_note_dashboard_watch(program);
 register_tasks(program);
 register_autonomy(program);

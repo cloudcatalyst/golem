@@ -19,14 +19,28 @@ export const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   3: "aggressive",
 };
 
+/**
+ * R8.33 — the `level` tool accepts 1–3 only. Level 0 (full bypass, redaction
+ * OFF) remains a fully supported setting, but it is reachable only from the
+ * CLI (`golem slider 0`), mirroring ADR-0002 threat item 4: no MCP surface may
+ * write the least-safe setting, so context-borne injection cannot disable
+ * redaction. Legacy 4/5 still map to 3 via `migrateSliderLevel`.
+ */
+export const LEVEL_ZERO_IS_CLI_ONLY =
+  "Level 0 cannot be set from a tool call. It is a full bypass — redaction is " +
+  "OFF at level 0, so secrets/PII would reach the upstream unredacted. If that " +
+  "is genuinely intended, the user must run `golem slider 0` in their terminal. " +
+  "Use level 1 for byte-faithful passthrough with redaction still on.";
+
 export const sliderLevelInput = z
   .number()
   .int()
-  .min(0)
+  .min(1, { message: LEVEL_ZERO_IS_CLI_ONLY })
   .max(5)
   .describe(
-    "Slider level 0–3: 0 passthrough (no redaction — full bypass), 1 lossless, " +
-      "2 balanced, 3 aggressive. Legacy 4/5 are accepted and mapped to 3.",
+    "Slider level 1–3: 1 lossless, 2 balanced, 3 aggressive. Legacy 4/5 are " +
+      "accepted and mapped to 3. Level 0 (passthrough — full bypass, no " +
+      "redaction) is CLI-only: `golem slider 0`.",
   );
 
 export function asSliderLevel(level: number): SliderLevel {

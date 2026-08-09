@@ -11,8 +11,13 @@ import {
   OllamaClient,
   OllamaInferenceService,
 } from "../../inference/index.js";
+import { createTargetDispatcher } from "../../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase } from "../../interfaces/index.js";
-import { resolveUpstreamDisplay, upstreamAssumesCaching } from "../../providers/index.js";
+import {
+  listTargets,
+  resolveUpstreamDisplay,
+  upstreamAssumesCaching,
+} from "../../providers/index.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../../wiki/index.js";
 import { ensureProjectIndexed } from "../auto-index.js";
@@ -145,6 +150,27 @@ export default function register(program: Command): void {
             : {}),
           ...(inference !== undefined ? { inference } : {}),
           ...(coderInference !== undefined ? { coder: coderInference } : {}),
+          // R9.3: `coder` may draft on any declared target. Only wired when
+          // there is more than the synthetic default to choose from — with one
+          // target the `target` parameter would be a schema cost with no choice
+          // behind it, and `coder`'s definition bills on every request (§110).
+          ...(coderInference !== undefined && listTargets(settings.proxy).length > 1
+            ? {
+                targetDispatcher: createTargetDispatcher({
+                  inference: coderInference,
+                  settings: settings.proxy,
+                  workerTargets: settings.inference.worker_targets,
+                  audit: (e) => {
+                    // ADR-0003 invariant 5 — non-secret attribution for every
+                    // dispatch, including which trust floor applied.
+                    process.stderr.write(
+                      `golem coder: dispatched to ${e.targetId ?? "local"} ` +
+                        `(${e.provider ?? "local"}, model ${e.model ?? "?"}) — ${e.reason}\n`,
+                    );
+                  },
+                }),
+              }
+            : {}),
           ...(settings.inference.local_editor_enabled ? { localEditor: true } : {}),
           ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),
           ...(lspBridge !== undefined ? { lsp: lspBridge } : {}),

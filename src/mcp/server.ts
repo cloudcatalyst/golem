@@ -19,6 +19,7 @@ import {
   GOLEM_MCP_SERVER_NAME,
   GOLEM_MCP_SERVER_VERSION,
   LEVEL_NAMES,
+  LEVEL_ZERO_IS_CLI_ONLY,
   sliderLevelInput,
   type ToolTelemetry,
   textResult,
@@ -213,12 +214,13 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
     {
       title: "Set the Golem savings slider",
       description:
-        "Set Golem's global quality/savings slider (0–3). 0 = passthrough (FULL " +
-        "BYPASS — NO redaction; secrets reach the upstream raw), 1 = lossless (redaction " +
+        "Set Golem's global quality/savings slider (1–3). 1 = lossless (redaction " +
         "+ byte-faithful compression), 2 = balanced (adds lossy semantic stages), " +
-        "3 = aggressive (adds max semantic compression). Never engages the local model " +
-        "(that is `coder` only). Persists across sessions. The level is a preset over two " +
-        "pinnable dials, compression and brevity, both set via the CLI, not here.",
+        "3 = aggressive (adds max semantic compression). Level 0 (passthrough — FULL " +
+        "BYPASS, NO redaction) cannot be set from here; it is a deliberate CLI act " +
+        "(`golem slider 0`). Never engages the local model (that is `coder` only). " +
+        "Persists across sessions. The level is a preset over two pinnable dials, " +
+        "compression and brevity, both set via the CLI, not here.",
       inputSchema: { level: sliderLevelInput },
       outputSchema: {
         slider_level: z.number().int().min(0).max(3),
@@ -227,12 +229,14 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
     },
     async ({ level }) => {
       const sliderLevel = asSliderLevel(level);
+      // Second gate behind the schema's `min(1)`. The write is the security
+      // boundary (R8.33), so refuse BEFORE it lands rather than persisting and
+      // warning afterwards — a warning in a tool result the user never reads is
+      // not a control.
+      if (sliderLevel === 0) {
+        return errorResult(LEVEL_ZERO_IS_CLI_ONLY);
+      }
       await deps.sliderStore.set(sliderLevel);
-      const warning =
-        sliderLevel === 0
-          ? " ⚠ Level 0 is a full bypass: redaction is OFF, so secrets/PII reach" +
-            " the upstream unredacted. Use level 1 to keep redaction on."
-          : "";
       const gate = deps.compressionGate?.(sliderLevel);
       const inert =
         gate?.degraded === true
@@ -243,7 +247,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
         content: [
           {
             type: "text",
-            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${warning}${inert}`,
+            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${inert}`,
           },
         ],
         structuredContent: {
@@ -296,6 +300,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
         editEnabled: deps.localEditor === true,
       },
       tel,
+      deps.targetDispatcher,
     );
   }
 
