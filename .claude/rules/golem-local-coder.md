@@ -23,10 +23,11 @@ optional `golem task run` / `golem prompt translate` (see `golem guidance`);
 the slider is a compression dial only and never auto-engages the model
 (Decision 31). Use `coder` at every level.
 
-This project ENFORCES the practice while this rule is active: the PreToolUse
-gate denies the first non-trivial hand-written code Write/Edit of a session and
+This project ENFORCES the practice while this rule is active AND
+`inference.local_coder_enabled` is true (the default): the PreToolUse gate
+denies the first non-trivial hand-written code Write/Edit of a session and
 redirects you here (a one-shot reminder — if you already drafted with `coder`,
-say so and proceed). Disable the guidance with
-`golem guidance disable local-coder`; disable the local coder itself with
-`golem local disable`. `golem local status` shows whether it is on and which
-endpoint it uses — `golem local url <url>` points it at a LAN machine.
+say so and proceed). Disable the guidance with `golem guidance disable local-coder`;
+disable the local coder itself with `golem local disable` (`golem local status`
+shows whether it is on and which endpoint it uses — including a LAN box set with
+`golem local url <url>`).
