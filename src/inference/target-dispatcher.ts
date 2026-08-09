@@ -133,6 +133,14 @@ export interface TargetDispatcherOptions {
     readonly redactedCount: number;
     readonly reason: string;
   }) => void;
+  /**
+   * R9.4 — `inference.coder_target`: the target used when a dispatch names
+   * none. Unset → the local tiered service, exactly as before.
+   *
+   * Applied as a *default*, never as an override: an explicit `targetId` on the
+   * request always wins.
+   */
+  readonly defaultTargetId?: string | undefined;
   /** Per-request timeout for a remote dispatch. */
   readonly timeoutMs?: number;
 }
@@ -251,8 +259,15 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
     async dispatch(request: DispatchRequest): Promise<DispatchResult> {
       const messages: readonly ChatMessage[] = [{ role: "user", content: request.prompt }];
 
-      // No target named → exactly today's behaviour, through the frozen contract.
-      if (request.targetId === undefined || request.targetId === "") {
+      // R9.4: an explicit target always wins; `inference.coder_target` fills in
+      // when the call names none.
+      const named =
+        request.targetId !== undefined && request.targetId !== ""
+          ? request.targetId
+          : (options.defaultTargetId ?? undefined);
+
+      // No target at all → exactly today's behaviour, through the frozen contract.
+      if (named === undefined || named === "") {
         const result = await options.inference.chat(request.role, messages);
         options.audit?.({
           targetId: null,
@@ -273,7 +288,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
 
       // Fail closed: an unknown id is an error naming what exists, never a
       // fallback to another target or to the local model.
-      const lookup = resolveTarget(options.settings, request.targetId);
+      const lookup = resolveTarget(options.settings, named);
       if (!lookup.ok) throw new TargetDispatchError(lookup.reason);
       const target = lookup.target;
 

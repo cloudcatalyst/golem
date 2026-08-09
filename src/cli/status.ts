@@ -189,6 +189,16 @@ export interface StatusReport {
     readonly coder_model?: string;
     /** Whether `inference.local_coder_enabled` is true (default). */
     readonly coder_enabled: boolean;
+    /** R9.4 — `inference.coder_target`, when set. */
+    readonly coder_target?: string;
+    /**
+     * R9.4 — the model behind {@link coder_target}. Absent when the target is
+     * unset OR does not resolve; {@link coder_target_unknown} tells those apart,
+     * because a target naming nothing is a misconfiguration, not a default.
+     */
+    readonly coder_target_model?: string;
+    /** True when `inference.coder_target` names an id that is in no registry. */
+    readonly coder_target_unknown?: boolean;
     /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
@@ -343,6 +353,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     };
   });
 
+  // R9.4: which target `coder` drafts on by default. An id that resolves to
+  // nothing is a misconfiguration worth naming, not something to paper over —
+  // `coder` fails closed on it rather than quietly using the local model.
+  const coderTarget = settings.inference.coder_target;
+  const coderTargetRow =
+    coderTarget !== undefined ? targetRows.find((t) => t.id === coderTarget) : undefined;
+
   // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
   // wiring at all" from "another gateway owns it" — and those have different
   // remedies (the second one is not ours to fix). Read the owner properly.
@@ -446,6 +463,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       reachable: localInfo.reachable,
       coder_enabled: settings.inference.local_coder_enabled,
       ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
+      ...(coderTarget !== undefined ? { coder_target: coderTarget } : {}),
+      ...(coderTargetRow?.model != null ? { coder_target_model: coderTargetRow.model } : {}),
+      ...(coderTarget !== undefined && coderTargetRow === undefined
+        ? { coder_target_unknown: true }
+        : {}),
       base_url: settings.inference.ollama_base_url,
     },
     ...(cachedUpdate !== null
@@ -687,15 +709,53 @@ export function renderStatus(report: StatusReport): string {
   // available via the `coder` MCP tool at any level (Decision 30/31). Name the
   // concrete coder model when known. If the coder tool is disabled, show only
   // the upstream backend (the local model may still be used for rerank/local-answer).
-  const coder = report.local_model.coder_model;
-  const localCoderActive = report.local_model.coder_enabled && report.local_model.reachable;
-  lines.push(
-    localCoderActive
-      ? `Inference: local + upstream${coder !== undefined ? ` · coder ${coder}` : ""}`
-      : report.local_model.coder_enabled
-        ? "Inference: upstream only"
-        : "Inference: upstream only (local coder disabled)",
-  );
+  // R9.4: name the two models by ROLE rather than by locality — after R9.3 the
+  // coder end can be any target, so "local + upstream" described a constraint
+  // that no longer exists.
+  const chatModel = report.upstream.last_served_model ?? report.upstream.default_model;
+  // A configured target answers regardless of local reachability; otherwise a
+  // reachable local model counts even when its id is unknown — "there is a coder
+  // backend" and "we know which model it runs" are different facts, and only the
+  // first decides whether to show the role at all.
+  //
+  // A configured-but-unresolvable target means `coder` throws on EVERY dispatch
+  // (it fails closed rather than substituting), so there is no coder backend at
+  // all. Falling back to the local model here would name a model that will never
+  // run, attributed to a target that does not exist — the exact dishonesty the
+  // warning below is about.
+  const coderTargetBroken = report.local_model.coder_target_unknown === true;
+  const coderModel = coderTargetBroken
+    ? undefined
+    : (report.local_model.coder_target_model ??
+      (report.local_model.reachable ? (report.local_model.coder_model ?? "local") : undefined));
+  if (!report.local_model.coder_enabled) {
+    lines.push("Inference: chat only (local coder disabled)");
+  } else if (coderTargetBroken) {
+    lines.push(
+      `Inference: chat only — coder_target "${report.local_model.coder_target}" does not resolve, ` +
+        "so `coder` fails closed",
+    );
+  } else if (coderModel === undefined) {
+    lines.push("Inference: chat only (no coder backend available)");
+  } else if (chatModel != null && coderModel === chatModel) {
+    // One model doing both jobs — say so once rather than twice.
+    lines.push(`Inference: one model for chat and coder · ${coderModel}`);
+  } else {
+    const via =
+      report.local_model.coder_target !== undefined
+        ? ` (target ${report.local_model.coder_target})`
+        : " (local)";
+    lines.push(
+      `Inference: coder ${coderModel}${via} · chat ${chatModel ?? report.upstream.provider}`,
+    );
+  }
+  if (report.local_model.coder_target_unknown === true) {
+    lines.push(
+      `  ⚠ inference.coder_target "${report.local_model.coder_target}" is in neither ` +
+        "proxy.targets nor proxy.accounts — `coder` will fail closed rather than " +
+        "silently drafting somewhere else. Fix it or unset it: golem target list",
+    );
+  }
   if (report.update !== undefined) {
     lines.push(
       report.update.available
