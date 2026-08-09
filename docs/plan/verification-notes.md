@@ -5464,3 +5464,79 @@ existing config broke. R9.5 supplied managed-file refresh, so the rewritten
 tokens", the inverse of the truth once `coder` points at a vendor model — actually
 reaches projects that already ran `golem init`. Doing R9.10 first would have
 demonstrated both bugs instead of fixing them.
+
+## §120 — R9.7: the loopback escape is CLOSED by WebFetch's forced HTTPS; the red dot is accepted in writing (2026-08-09)
+
+Closes R9.7. §115 left exactly one untested escape from the cache-serve red dot:
+`updatedInput` + `permissionDecision: "allow"`, rewriting `tool_input.url` to a loopback
+URL Golem serves the page from, so WebFetch runs normally and renders green. Tested it
+live rather than reasoning about it. **Half of it works; the half that matters does not.**
+
+### What was measured (all live, this session)
+
+**1. `updatedInput` url-rewriting IS honoured — CONFIRMED.** A temporary probe branch in
+`runWebFetchPre` (reverted; never committed) answered a marked URL with
+`permissionDecision: "allow"` + `updatedInput: {url: <other>, prompt}`. `WebFetch("https://example.com/?r97-probe")`
+returned **RFC 2606** ("Reserved Top Level DNS Names"), not example.com — and rendered as
+a **normal, non-error tool call**. So the rewrite mechanism and the green render are both real.
+Note `updatedInput` replaces the *entire* input object: `prompt` must be carried through.
+
+**2. Every URL a local endpoint could plausibly use is rejected.** This is what kills it:
+
+| rewritten to | result |
+|---|---|
+| `http://127.0.0.1:<port>/…` | **`SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER`** — WebFetch upgraded http→https and spoke TLS at the plain-HTTP server. Nothing reached the HTTP layer. Matches the tool's own doc: *"HTTP is upgraded to HTTPS."* |
+| `https://127.0.0.1:<port>/…`, self-signed cert | **`self signed certificate`** — the cert is validated. (It *did* connect: there is no loopback/private-IP blocklist, the cert is the only objection.) |
+| `file:///…` | **`Invalid URL`** |
+| `data:text/html,…` | **`Invalid URL`** |
+
+So a loopback endpoint is reachable **only** over HTTPS with a certificate Claude Code's
+Node process already trusts. That means shipping a Golem-generated CA and installing it via
+`NODE_EXTRA_CA_CERTS` in Claude Code's env.
+
+**3. The summarizer call does transit the proxy, and it is uncached.** Controlled fetch of
+`https://example.org/` (~1.2 KB) with raw mode off, watched in `.golem/telemetry/events.jsonl`:
+a `cachePrefix: "first"`, `cacheMessageCount: 1` request of **362 tokens**, billed
+**551 input / 9 output, `cacheCreation` 0 and `cacheRead` 0**. (551 ≈ 362 + the 203-token
+brevity directive, which is being injected into the summarizer call too.) It is a single-turn
+tool-free request, exactly as §71 described — confirming part (b) of the R9.7 design was
+*possible*.
+
+### The decision: DECLINED — keep `deny` + serve, and say so in the text
+
+Three independent reasons, any one sufficient:
+
+1. **Cost of admission is a CA in Claude Code's trust store.** `NODE_EXTRA_CA_CERTS` is
+   process-wide: it would make Claude Code trust a locally-stored Golem CA for *all* TLS,
+   `api.anthropic.com` included. Anything on the machine that can read that key can MITM
+   the session. Golem is the component in this stack whose entire job is to be trustworthy;
+   spending that on a UI colour is a bad trade. (The published-key alternatives — a
+   third-party wildcard cert for a name resolving to 127.0.0.1, `traefik.me`-style — mean
+   shipping someone else's private key and needing DNS, so they are worse, not cheaper.)
+   Secondary costs: cert generation with no `openssl` dependency needs a new pure-JS dep,
+   and settings.json `env` is not hot-reloaded (§112), so it needs a restart to take effect.
+2. **Part (a) alone re-bills the summarizer on every fetch.** Measured above: uncached,
+   input scaling with page size. The hooks doc from §115 is 248,890 chars ≈ **62k input
+   tokens per fetch, every fetch, at 0% cache hit** — against a session whose real hit rate
+   is 98.4% (§93). Decision 42 Option A removed exactly this.
+3. **Part (b) would fix the tokens by breaking the context economy.** Short-circuiting the
+   summarization at the proxy means the *raw page* enters context whole instead of a summary.
+   `MAX_SERVED_CHARS` (8,000) exists precisely to stop a 249k-char page landing in one tool
+   result. Trading a red dot for a 62k-token context blow-up is a strictly worse bug.
+
+Reasons 2 and 3 stand **even if** the CA problem were solved, so this is not "blocked pending
+a cert" — it is declined on the merits. The sentinel-nonce and endpoint-auth designs in the
+R9.7 brief are moot and were not built.
+
+### What shipped instead
+
+The half-measure the brief allowed: **wording that reads correctly inside an error box.**
+The old intro opened `✓ Golem served this URL…` — a tick inside an `<error>` wrapper, which
+is what got it reported as broken. Both serve paths now open `NOT AN ERROR —` and close with
+an explicit sentence that Claude Code renders hook-served content as a *denied* tool call, so
+red is expected and the fetch did not fail. Pinned by a test so it cannot silently regress,
+and recorded in the module docstring so the next reader does not re-derive §115 → §120.
+
+**If Claude Code ever gains a PreToolUse output-substitution field, this becomes a one-line
+change and should be revisited.** Until then the red dot is the documented price of skipping
+both a network fetch and an LLM call.

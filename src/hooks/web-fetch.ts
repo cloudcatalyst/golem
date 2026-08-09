@@ -14,6 +14,14 @@
  * Fail-safe: any error → exit 0 with no stdout (the fetch proceeds / the capture
  * is skipped) so a hook can never break a session. Redaction runs BEFORE storage
  * (hard rule).
+ *
+ * R9.7: a served page therefore renders as a FAILED (red) tool call in Claude
+ * Code — it is a `deny`. This is accepted deliberately, not unfixed: the only
+ * green alternative is `updatedInput` + `allow` pointing at a loopback endpoint,
+ * and WebFetch forces http→https and validates the certificate, so that endpoint
+ * is unreachable without installing a Golem-generated CA into Claude Code's trust
+ * store — and it re-adds an uncached summarizer call per fetch. Measured and
+ * declined in verification-notes §120; the serve text says so out loud instead.
  */
 
 import { createHash } from "node:crypto";
@@ -35,6 +43,18 @@ import {
 } from "../knowledge/index.js";
 import type { HookIo } from "./post-tool-use.js";
 import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
+
+/**
+ * Opening frame for a served page. A serve is a `deny` (the only PreToolUse
+ * shape that returns content without running the tool — §115/§120), and Claude
+ * Code renders a denied call as an error. The old intro opened with a bare `✓`,
+ * which read as a tick inside an `<error>` box; this says plainly what happened
+ * so neither Claude nor a human reading the transcript mistakes it for a failure.
+ */
+const NOT_AN_ERROR = "NOT AN ERROR —";
+/** Closing frame: why the call renders red, then the content. */
+const RED_DOT_NOTE =
+  "Claude Code renders hook-served content as a *denied* tool call, so this shows as a failed/red WebFetch; that is expected and the fetch did not fail. Content follows:";
 
 /** Cap on cached content echoed in a deny reason (Claude Code flags hook output >10k chars). */
 export const MAX_SERVED_CHARS = 8_000;
@@ -291,7 +311,7 @@ async function serveCached(
     projectDir,
     url,
     entry.content,
-    `✓ Golem served this URL from the knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), skipping the web fetch. Content follows:`,
+    `${NOT_AN_ERROR} Golem served this URL from its knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), skipping the network fetch. ${RED_DOT_NOTE}`,
   );
 }
 
@@ -310,7 +330,7 @@ async function serveFetched(
     projectDir,
     url,
     content,
-    "✓ Golem fetched this page directly and served its raw content (skipping WebFetch's summarizer, so the text is prompt-independent and now cached). Content follows:",
+    `${NOT_AN_ERROR} Golem fetched this page directly and served its raw content (skipping WebFetch's summarizer, so the text is prompt-independent and now cached). ${RED_DOT_NOTE}`,
   );
 }
 
