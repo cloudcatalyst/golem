@@ -286,6 +286,15 @@ export const SETTING_META = {
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
     restart: "mcp",
   },
+  "inference.coder_target": {
+    label: "Default coder target",
+    summary: "Which target `coder` drafts on when a call names none",
+    detail:
+      "Unset means the local model, exactly as before. A non-local target is redacted at " +
+      "its trust floor on every dispatch. An unknown id fails closed — it never falls back " +
+      "to the local model. See `golem target list`.",
+    restart: "mcp",
+  },
   "inference.local_editor_enabled": {
     label: "Local editor mode",
     summary: 'Offer `coder`\'s `mode: "edit"` — a validated local rewrite of one small file',

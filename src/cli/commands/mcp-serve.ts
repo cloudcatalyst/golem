@@ -159,6 +159,9 @@ export default function register(program: Command): void {
                 targetDispatcher: createTargetDispatcher({
                   inference: coderInference,
                   settings: settings.proxy,
+                  ...(settings.inference.coder_target !== undefined
+                    ? { defaultTargetId: settings.inference.coder_target }
+                    : {}),
                   audit: (e) => {
                     // ADR-0003 invariant 5 — non-secret attribution for every
                     // dispatch, including which trust floor applied.

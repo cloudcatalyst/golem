@@ -277,6 +277,92 @@ describe("the local path is unchanged", () => {
   });
 });
 
+describe("inference.coder_target — the default coder target (R9.4)", () => {
+  it("dispatches to the configured default when a call names no target", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const inference = stubInference();
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: REMOTE,
+      fetchImpl,
+      env: {},
+      defaultTargetId: "cheap",
+    });
+
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT });
+
+    expect(result.targetId).toBe("cheap");
+    expect(inference.calls).toHaveLength(0);
+    // Still redacted — a default target is not a trusted one.
+    expect(sent[0]?.body).not.toContain(FAKE_KEY);
+    expect(result.redactedCount).toBeGreaterThan(0);
+  });
+
+  it("lets an explicit target override the default", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      content: [{ type: "text", text: "ok" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: {
+        ...REMOTE,
+        targets: [
+          ...(REMOTE.targets ?? []),
+          {
+            id: "vendor",
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+            model: "claude-opus-5",
+          },
+        ],
+      },
+      fetchImpl,
+      env: {},
+      defaultTargetId: "cheap",
+    });
+
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: "hi",
+      targetId: "vendor",
+    });
+    expect(result.targetId).toBe("vendor");
+    expect(sent[0]?.url).toContain("api.anthropic.com");
+  });
+
+  it("FAILS CLOSED on an unknown default rather than falling back to local", async () => {
+    // Silently drafting locally would report success while ignoring the user's
+    // configured choice — the same substitution the registry refuses everywhere.
+    const { fetchImpl, sent } = captureFetch({});
+    const inference = stubInference();
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: REMOTE,
+      fetchImpl,
+      env: {},
+      defaultTargetId: "ghost",
+    });
+
+    await expect(dispatcher.dispatch({ role: "drafter", prompt: "hi" })).rejects.toThrow(
+      /unknown target "ghost"/,
+    );
+    expect(sent).toHaveLength(0);
+    expect(inference.calls).toHaveLength(0);
+  });
+
+  it("keeps the local path when no default is configured", async () => {
+    const inference = stubInference();
+    const dispatcher = createTargetDispatcher({ inference, settings: REMOTE, env: {} });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi" });
+    expect(result.targetId).toBeNull();
+    expect(inference.calls).toHaveLength(1);
+  });
+});
+
 describe("fail-closed selection", () => {
   it("rejects an unknown target rather than falling back", async () => {
     const { fetchImpl, sent } = captureFetch({});

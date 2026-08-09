@@ -187,7 +187,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry", savedPct: 34 }),
-    "⬢ Golem · L1 → foundry",
+    "⬢ Golem · L1 → ◆ foundry",
   );
   // Slider name, title-cased, is preferred over the bare "L<n>" form.
   assert.equal(
@@ -197,7 +197,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
       sliderName: "aggressive",
       upstreamDisplay: "anthropic",
     }),
-    "⬢ Golem · Aggressive → anthropic",
+    "⬢ Golem · Aggressive → ◆ anthropic",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
@@ -208,12 +208,12 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   // configured destination is still shown.
   assert.equal(
     statusBarText({ proxyReachable: false, slider: 1, upstreamDisplay: "foundry" }),
-    "⬡ Golem · Passthrough → foundry",
+    "⬡ Golem · Passthrough → ◆ foundry",
   );
   // Running at slider level 0 (full bypass) also reads "Passthrough" (filled glyph).
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 0, upstreamDisplay: "anthropic" }),
-    "⬢ Golem · Passthrough → anthropic",
+    "⬢ Golem · Passthrough → ◆ anthropic",
   );
 });
 
@@ -225,7 +225,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       slider: 1,
       upstreamDisplay: "moonshotai (kimi-k3)",
     }),
-    "⬢ Golem · L1 → moonshotai (kimi-k3)",
+    "⬢ Golem · L1 → ◆ moonshotai (kimi-k3)",
   );
   // Last-served wins over the configured default; the Claude id is verbatim.
   assert.equal(
@@ -236,12 +236,12 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem · Aggressive → local + anthropic (claude-opus-5[1m])",
+    "⬢ Golem · Aggressive → ✎ local · ◆ anthropic (claude-opus-5[1m])",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "anthropic" }),
-    "⬢ Golem · L1 → anthropic",
+    "⬢ Golem · L1 → ◆ anthropic",
   );
 });
 
@@ -249,7 +249,7 @@ test("statusBarText — local segment appears whenever the local model is active
   // No local model reachable: no local segment.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry" }),
-    "⬢ Golem · L1 → foundry",
+    "⬢ Golem · L1 → ◆ foundry",
   );
   // Local model active at ANY level (Decision 30): "local" is folded into the
   // destination with "+", the arrow before the destination always present.
@@ -260,7 +260,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem · L1 → local + anthropic",
+    "⬢ Golem · L1 → ✎ local · ◆ anthropic",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
@@ -270,7 +270,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬡ Golem · Passthrough → local + anthropic",
+    "⬡ Golem · Passthrough → ✎ local · ◆ anthropic",
   );
 });
 
@@ -283,7 +283,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       localModelActive: true,
       localCoderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])",
+    "⬢ Golem · L1 → ✎ qwen2.5-coder:7b · ◆ anthropic (claude-opus-5[1m])",
   );
 });
 
@@ -301,7 +301,7 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
       localModelActive: false,
       localCoderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → anthropic (claude-opus-5[1m])",
+    "⬢ Golem · L1 → ◆ anthropic (claude-opus-5[1m])",
   );
 });
 
@@ -353,12 +353,12 @@ test("buildModel: no update info → not available", () => {
 test("statusBarText appends the update codicon only when an update is available", () => {
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬢ Golem · L1 → anthropic $(arrow-up)",
+    "⬢ Golem · L1 → ◆ anthropic $(arrow-up)",
   );
   // Shows even when the proxy is off (it's about the install, not the traffic).
   assert.equal(
     statusBarText({ proxyReachable: false, upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬡ Golem · Passthrough → anthropic $(arrow-up)",
+    "⬡ Golem · Passthrough → ◆ anthropic $(arrow-up)",
   );
   // Absent when up to date.
   assert.doesNotMatch(

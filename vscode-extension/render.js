@@ -210,6 +210,17 @@ function buildModel(stats, status, update, accounts, surface) {
       st.local_model && typeof st.local_model.coder_model === "string"
         ? st.local_model.coder_model
         : null,
+    // R9.4 — the model behind `inference.coder_target`, when set and resolvable.
+    // Wins over localCoderModel: a configured target is what `coder` will
+    // actually draft on, local or not. Absent on an older CLI → null, i.e. the
+    // pre-R9.4 local-only display.
+    coderTargetModel:
+      st.local_model && typeof st.local_model.coder_target_model === "string"
+        ? st.local_model.coder_target_model
+        : null,
+    // `inference.coder_target` names an id in no registry → coder fails closed,
+    // so there is no coder backend to advertise at all.
+    coderTargetUnknown: !!(st.local_model && st.local_model.coder_target_unknown === true),
     // The local (Ollama) base URL for the hover summary's `Local:` line — from
     // the status `local_model` block, falling back to the config value.
     localBaseUrl:
@@ -279,22 +290,64 @@ function statusBarText(model) {
 }
 
 /**
- * The one-liner destination — `local (qwen2.5-coder:7b) + anthropic
- * (claude-opus-5[1m])`. Each backend carries its own `(model)` id verbatim; the
- * `local (…)` segment is
- * present only when the local model is ACTIVE — reachable *and* enabled
- * (Decision 30 — Golem is then a local+upstream hybrid at any level). Shown in
- * every state (including passthrough/off): it's the configured destination
- * traffic goes to.
+ * R9.4 — the role markers on the destination segment.
+ *
+ * **Placeholders: pick the final glyphs here.** This is the SECOND of two
+ * copies — the CLI's lives in `src/cli/statusline.ts` (`ROLE_MARKS`), and the
+ * extension is plain JS sharing no module with it. Change both together; a test
+ * pins that they agree.
+ */
+const ROLE_MARKS = {
+  /** The model `coder` drafts on. */
+  coder: "✎",
+  /** The model the conversation itself runs on. */
+  chat: "◆",
+};
+
+/**
+ * The model `coder` drafts on by default: `inference.coder_target` when set
+ * (R9.4), otherwise the local model. Null when there is no coder backend to
+ * report — the tool is disabled, or it would use a local model that is not
+ * reachable. It must NOT fall back to the chat model: claiming a coder backend
+ * that cannot serve a draft is the R8.32 failure in miniature.
+ */
+function coderModelLabel(model) {
+  if (model.localCoderEnabled === false) return null;
+  // A target that resolves to nothing means `coder` fails closed on every
+  // dispatch — no backend at all. Falling through to the local model would
+  // advertise a model that can never run.
+  if (model.coderTargetUnknown) return null;
+  // A configured target answers regardless of whether Ollama is up.
+  if (model.coderTargetModel) return model.coderTargetModel;
+  if (!model.localModelActive) return null;
+  return model.localCoderModel || "local";
+}
+
+/**
+ * The one-liner destination, naming the two models that actually matter now
+ * that either end can be any target (R9.1–R9.4):
+ *
+ *   `✎ qwen2.5-coder:7b · ◆ claude-opus-5[1m]`
+ *
+ * **Flattened to one segment when both are the same model** — printing the same
+ * id twice under two symbols tells the reader nothing and costs width the rest
+ * of the line needs. The old shape (`local (…) + anthropic (…)`) hard-coded the
+ * assumption this work removed: that drafting is local and only the upstream is
+ * a real choice. Shown in every state (including passthrough/off): it is the
+ * configured destination traffic goes to.
  */
 function destinationLabel(model) {
   // R6.2: use the vendor/model-name display label (e.g. `moonshotai (kimi-k3)`)
   // built in buildModel; it already incorporates the last-served or configured
   // model and matches the CLI's `golem status` output.
-  const upstreamSeg = model.upstreamDisplay || model.upstreamLabel || "upstream";
-  if (!model.localModelActive) return upstreamSeg;
-  const localSeg = model.localCoderModel ? `local (${model.localCoderModel})` : "local";
-  return `${localSeg} + ${upstreamSeg}`;
+  const chatSeg = `${ROLE_MARKS.chat} ${model.upstreamDisplay || model.upstreamLabel || "upstream"}`;
+  const coderModel = coderModelLabel(model);
+  if (!coderModel) return chatSeg;
+  // Same model on both ends → one segment. Compare the raw ids, not the
+  // vendor-formatted labels, so `anthropic (x)` and `x` still match.
+  const chatModel = model.lastServedModel || model.model || model.defaultModel;
+  if (chatModel && coderModel === chatModel) return chatSeg;
+  return `${ROLE_MARKS.coder} ${coderModel} · ${chatSeg}`;
 }
 
 function esc(s) {

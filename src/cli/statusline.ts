@@ -29,6 +29,7 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/session-state.js";
 import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
 import {
+  listTargets,
   resolveUpstreamDisplay,
   type UpstreamProvider,
   upstreamAssumesCaching,
@@ -113,6 +114,19 @@ export interface GolemState {
   readonly localCoderModel?: string;
   /** Whether the `coder` MCP tool is enabled (`inference.local_coder_enabled`). */
   readonly localCoderEnabled?: boolean;
+  /**
+   * R9.4 — the model behind `inference.coder_target`, when that is set and
+   * resolves. Wins over {@link localCoderModel}: a configured target is what
+   * `coder` will actually draft on, local or not.
+   */
+  readonly coderTargetModel?: string;
+  /**
+   * R9.4 — `inference.coder_target` is set but names an id in no registry.
+   * `coder` then fails closed on every dispatch, so there is NO coder backend:
+   * the line must not fall back to advertising the local model, which would name
+   * a model that can never run.
+   */
+  readonly coderTargetUnknown?: boolean;
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
 }
@@ -209,24 +223,76 @@ function upstreamModelLabel(golem: GolemState): string | undefined {
 }
 
 /**
- * The one-liner destination, e.g.
- * `local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])`. Each backend
- * carries its own `(model)` parenthetical — the model id verbatim. The
- * `local (…)` segment is present only when a local model is reachable
- * (Decision 30 — Golem is then a local+upstream hybrid at any level); when the
- * local model is up but its id is unknown it degrades to a bare `local`. Model
- * parentheticals are omitted when the model isn't known.
+ * R9.4 — the role markers on the destination segment.
+ *
+ * **Placeholders: pick the final glyphs here.** They are deliberately the only
+ * place either surface names a symbol, so changing them is one edit — but there
+ * is a SECOND copy in `vscode-extension/render.js` (`ROLE_MARKS`), because the
+ * extension is plain JS and shares no module with the CLI. Change both together;
+ * a test pins that they agree.
+ *
+ * Keep them single-width. The status line is rendered every turn in a terminal
+ * of unknown width, and a double-width glyph misaligns everything after it.
+ */
+export const ROLE_MARKS = {
+  /** The model `coder` drafts on. */
+  coder: "✎",
+  /** The model the conversation itself runs on. */
+  chat: "◆",
+} as const;
+
+/**
+ * The model `coder` drafts on by default: the configured `inference.coder_target`
+ * when set (R9.4), otherwise the local tiered model.
+ *
+ * `undefined` means "no coder backend to report" — the tool is disabled, or it
+ * would use a local model that is not reachable. It must NOT fall back to
+ * showing the chat model: claiming a coder backend that cannot serve a draft is
+ * the R8.32 failure in miniature.
+ */
+function coderModelLabel(golem: GolemState): string | undefined {
+  if (golem.localCoderEnabled === false) return undefined;
+  // A target that resolves to nothing means `coder` fails closed on every
+  // dispatch — no backend at all. Falling through to the local model would
+  // advertise a model that can never run.
+  if (golem.coderTargetUnknown === true) return undefined;
+  // A configured target answers regardless of whether Ollama is up — it is not
+  // the local model, so local reachability says nothing about it.
+  if (golem.coderTargetModel !== undefined && golem.coderTargetModel !== "") {
+    return golem.coderTargetModel;
+  }
+  if (golem.localModelReachable !== true) return undefined;
+  return golem.localCoderModel !== undefined && golem.localCoderModel !== ""
+    ? golem.localCoderModel
+    : "local";
+}
+
+/**
+ * The one-liner destination, naming the two models that actually matter now
+ * that either end can be any target (R9.1–R9.4):
+ *
+ *   `✎ qwen2.5-coder:7b · ◆ claude-opus-5[1m]`
+ *
+ * **Flattened to one segment when both are the same model**, because printing
+ * the same id twice under two symbols tells the reader nothing and costs the
+ * width that the rest of the line needs:
+ *
+ *   `◆ claude-opus-5[1m]`
+ *
+ * The old shape (`local (…) + anthropic (…)`) hard-coded the assumption this
+ * work removed — that drafting is local and only the upstream is a real choice.
+ * Model ids stay verbatim (Decision 49): never a prettified family name.
+ * When the chat model is unknown the segment degrades to the upstream label
+ * alone, which is still true.
  */
 export function destinationLabel(golem: GolemState): string {
-  const upstreamModel = upstreamModelLabel(golem);
-  const upstreamSeg =
-    upstreamModel !== undefined ? `${golem.upstreamLabel} (${upstreamModel})` : golem.upstreamLabel;
-  if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return upstreamSeg;
-  const localSeg =
-    golem.localCoderModel !== undefined && golem.localCoderModel !== ""
-      ? `local (${golem.localCoderModel})`
-      : "local";
-  return `${localSeg} + ${upstreamSeg}`;
+  const chatModel = upstreamModelLabel(golem);
+  const chatSeg = `${ROLE_MARKS.chat} ${chatModel ?? golem.upstreamLabel}`;
+  const coderModel = coderModelLabel(golem);
+  if (coderModel === undefined) return chatSeg;
+  // Same model on both ends → one segment. Compare the ids, not the labels.
+  if (chatModel !== undefined && coderModel === chatModel) return chatSeg;
+  return `${ROLE_MARKS.coder} ${coderModel} · ${chatSeg}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -351,6 +417,8 @@ export async function collectGolemState(
   let providers: readonly LocalProviderEntry[] | undefined;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
+  let coderTargetModel: string | undefined;
+  let coderTargetUnknown = false;
   let activeAccount: string | null = null;
   let effectiveLevel: number | undefined;
   let proxyPort: number | undefined;
@@ -367,6 +435,17 @@ export async function collectGolemState(
     ollamaBaseUrl = settings.inference.ollama_base_url;
     coderEnabled = settings.inference.local_coder_enabled;
     providers = settings.inference.providers as readonly LocalProviderEntry[];
+    // R9.4: `coder` may default to any declared target. Resolve it from settings
+    // already in hand — no extra I/O on a per-prompt surface. An unknown id
+    // resolves to nothing and the line falls back to the local model rather than
+    // naming a target that does not exist; `golem status` is where the
+    // misconfiguration is reported properly.
+    const coderTarget = settings.inference.coder_target;
+    if (coderTarget !== undefined) {
+      const hit = listTargets(settings.proxy).find((t) => t.id === coderTarget);
+      if (hit === undefined) coderTargetUnknown = true;
+      else coderTargetModel = hit.model ?? undefined;
+    }
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
     const upstream = resolveUpstreamDisplay(settings.proxy);
@@ -404,6 +483,8 @@ export async function collectGolemState(
     ...(effectiveLevel !== undefined ? { effectiveLevel } : {}),
     ...(provider !== undefined ? { upstreamProvider: provider } : {}),
     ...(model !== undefined ? { upstreamModel: model } : {}),
+    ...(coderTargetModel !== undefined ? { coderTargetModel } : {}),
+    ...(coderTargetUnknown ? { coderTargetUnknown: true } : {}),
   };
   // Only probe the local model in a Golem project. The status line may be a
   // global Claude Code `statusLine` that runs in every project; probing (which
