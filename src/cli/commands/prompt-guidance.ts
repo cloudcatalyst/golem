@@ -2,7 +2,8 @@
  * golem prompt / guidance / hook — extracted from program.ts (R8.27).
  */
 
-import { access } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Command } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
 import {
@@ -24,8 +25,11 @@ import {
 import { fetchRawPage } from "../../knowledge/index.js";
 import {
   appendExample,
+  compactDir,
+  compactDocument,
   readExamples,
   readLastSuggestion,
+  renderCompactReport,
   translatePrompt,
   writeLastSuggestion,
 } from "../../prompt/index.js";
@@ -116,6 +120,91 @@ export default function register(program: Command): void {
         _fail(err);
       }
     });
+
+  promptCmd
+    .command("compact")
+    .description(
+      "P3a: propose a shorter CLAUDE.md (local model; code/paths/URLs byte-preserved; you review before it lands)",
+    )
+    .argument("[file]", "file to compact (default: CLAUDE.md in --dir)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--role <role>", "local role: drafter (default) | summarizer | judge", "drafter")
+    .option("--out <path>", "where to write the proposal (default .golem/compact/<name>)")
+    .option("--apply", "replace the file with an ALREADY-REVIEWED proposal from a previous run")
+    .option("--print", "also print the proposed text", false)
+    .option("--json", "machine-readable output", false)
+    .action(
+      async (
+        file: string | undefined,
+        opts: {
+          dir: string;
+          role: string;
+          out?: string;
+          apply?: boolean;
+          print: boolean;
+          json: boolean;
+        },
+      ) => {
+        try {
+          const target = path.resolve(opts.dir, file ?? "CLAUDE.md");
+          const proposalPath =
+            opts.out !== undefined
+              ? path.resolve(opts.dir, opts.out)
+              : path.join(compactDir(opts.dir), path.basename(target));
+
+          // `--apply` is the SECOND act, deliberately: it only ever copies a
+          // proposal a human has had the chance to read, and it never rewrites.
+          if (opts.apply === true) {
+            let proposed: string;
+            try {
+              proposed = await readFile(proposalPath, "utf8");
+            } catch {
+              throw new InitError(
+                `no reviewed proposal at ${proposalPath} — run \`golem prompt compact\` first, read the diff, then re-run with --apply`,
+              );
+            }
+            const backup = `${proposalPath}.backup`;
+            await writeFile(backup, await readFile(target, "utf8"), "utf8");
+            await writeFile(target, proposed, "utf8");
+            process.stdout.write(`applied: ${target}\nprevious version kept at: ${backup}\n`);
+            return;
+          }
+
+          let original: string;
+          try {
+            original = await readFile(target, "utf8");
+          } catch {
+            throw new InitError(`cannot read ${target}`);
+          }
+          const roles = ["classifier", "drafter", "judge", "summarizer", "extractor"] as const;
+          const role = opts.role as (typeof roles)[number];
+          if (!roles.includes(role))
+            throw new InitError(`invalid --role "${opts.role}" (expected ${roles.join(" | ")})`);
+
+          const inference = await _buildInferenceForDir(opts.dir);
+          if (inference === null) {
+            process.stdout.write("local model unavailable — start Ollama, then retry.\n");
+            return;
+          }
+          const result = await compactDocument(original, { inference, role });
+          await mkdir(path.dirname(proposalPath), { recursive: true });
+          await writeFile(proposalPath, result.compacted, "utf8");
+
+          if (opts.json) {
+            const { original: _o, ...rest } = result;
+            process.stdout.write(`${JSON.stringify({ target, proposalPath, ...rest }, null, 2)}\n`);
+            return;
+          }
+          process.stdout.write(renderCompactReport(result, target));
+          if (opts.print) process.stdout.write(`\n${result.compacted}`);
+          process.stdout.write(
+            `\nproposal: ${proposalPath}\nreview:   git diff --no-index -- "${target}" "${proposalPath}"\napply:    golem prompt compact --apply\n\n— Golem never edits ${path.basename(target)} for you. Read the diff first: an instruction file shapes every future session.\n`,
+          );
+        } catch (err) {
+          _fail(err);
+        }
+      },
+    );
 
   promptCmd
     .command("accept")

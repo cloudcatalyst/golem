@@ -25,6 +25,7 @@ coverage/
 .golem/notes/
 .golem/distill/
 .golem/tasks/
+.golem/compact/
 
 # Claude Code personal settings
 .claude/settings.local.json
