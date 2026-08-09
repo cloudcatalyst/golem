@@ -125,13 +125,9 @@ export const SETTINGS_LEAVES = {
         }),
       )
       .optional(),
-    /**
-     * R6.2: which `accounts` entry is active (its config overrides the top-level
-     * `upstream_*`). Unset → the top-level config. Set but unknown → the
-     * top-level config + a loud warning (never a silent switch to a different
-     * account — ADR-0003 fail-closed). Switch it with `golem account use <id>`.
-     */
-    active_account: z.string().min(1).optional(),
+    // R9.1 renamed `active_account` → `default_target`; R9.6 retired the leaf and
+    // moved the fallback into src/config/migrations.ts, so an existing file
+    // naming the old key still works and says so exactly once.
     /**
      * R9.1 (proposal `multi-target-routing.md`): the target registry — one table
      * for every model Golem can reach, local or upstream. A local model is just
@@ -168,10 +164,12 @@ export const SETTINGS_LEAVES = {
       )
       .optional(),
     /**
-     * R9.1: which target serves a request that names none. Supersedes
-     * {@link active_account} (spec Decision 21d), which is still read when this
-     * is unset — that fallback IS the migration shim, so an existing config keeps
-     * working untouched. Unknown id → fail-closed (no silent substitution).
+     * R9.1: which target serves a request that names none. Supersedes the
+     * retired `proxy.active_account` (spec Decision 21d). R9.6 moved that
+     * fallback out of `resolveDefaultTargetId` and into the declarative
+     * migration table (`src/config/migrations.ts`), so an existing file naming
+     * the old key still works, says so exactly once, and reports the old key as
+     * its provenance. Unknown id → fail-closed (no silent substitution).
      */
     default_target: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
@@ -572,7 +570,6 @@ export interface ProxySettings {
   readonly upstream_reasoning_effort?: "low" | "high" | "max";
   readonly map_reasoning_to_thinking: boolean;
   readonly accounts?: readonly UpstreamAccount[];
-  readonly active_account?: string;
   readonly targets?: readonly TargetEntry[];
   readonly default_target?: string;
   readonly request_timeout_ms: number;

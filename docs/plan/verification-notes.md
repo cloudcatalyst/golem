@@ -5340,3 +5340,43 @@ stage runs — 82% of the saving kept, zero markers — overridable per-request 
 `headroom_config: {"lossless_only": false}`. The flagship client is a coding agent doing
 exact-match edits, and a marker in a tool result is precisely what makes the model's view
 of a file differ from its bytes on disk.
+
+## §117 — R9.6: the migration shim only ever existed for one rename, and the account layer was claiming target ids (2026-08-09)
+
+Building the declarative migration table surfaced two things the task brief did not
+predict.
+
+**1. Retiring the leaf is what makes the mechanism real.** A migration table whose
+`from` key is still a live leaf is a fiction: both names remain writable, the loader
+never consults the table, and nothing changes. `assertLeafRename` therefore refuses
+that combination, and its test is the guard — registering a rename while leaving the
+old key in `SETTINGS_LEAVES` fails the suite rather than quietly doing nothing. This
+is the "example is the test" the brief asked for, inverted into an invariant.
+
+**2. `proxy.active_account` and `proxy.default_target` had drifted apart in meaning.**
+R9.1 renamed the selector and unified routing on `default_target`, but the *account*
+layer (`resolveActiveUpstream`, via proxy-runtime and every display surface) went on
+reading `active_account`. Retiring the leaf collapsed them — and exposed that the
+unified selector may legitimately name a **target** that is not an account
+(`sonnet-5`, say). The old code would have warned `active_account "sonnet-5" is not
+in proxy.accounts` on every proxy start.
+
+Fixed by giving `resolveActiveUpstream` the known target ids: a selector that names a
+target is not a misconfiguration, so the account layer stands aside silently and
+routing serves it. Fail-closed is not weakened — a selector in *neither* registry
+still warns, and `proxy-runtime` independently fail-closes against both registries at
+startup, so the unknown-id case is covered twice.
+
+**Where the warning goes.** Config warnings surfaced only in `golem status`, the TUI
+and the control surface — none of which anyone runs after an upgrade that appears to
+work. They now also print at proxy startup, which is the process that actually
+consumes the settings. That is only useful because R9.8 stopped the detached daemon
+spawning with `stdio: "ignore"`: before that commit the line would have gone to the
+same nowhere. The two tasks compose — a diagnostic and a place to read it.
+
+**Verified live** (built CLI, temp project whose `settings.json` names only the old
+key): `config get proxy.active_account` and `config get proxy.default_target` both
+report `proxy.default_target = "openrouter-qwen3" — project (…/settings.json)`;
+`golem status` prints the rename warning naming the file and the key to edit; and
+`config set proxy.active_account …` writes `default_target` and says so. `writeSetting`
+resolves retired keys too, so no write path can put a renamed key back into a file.

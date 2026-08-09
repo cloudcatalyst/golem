@@ -11,6 +11,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { ConfigError } from "../config/errors.js";
 import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js";
+import { migrationFrom, type SettingMigration } from "../config/migrations.js";
 import { allLeafPaths, leafSchema } from "../config/schema.js";
 import { unwrapSchema } from "../config/ui-model.js";
 
@@ -44,6 +45,8 @@ export interface ConfigWriteResult {
   readonly scope: SettingsScope;
   readonly file: string;
   readonly effective: ConfigGetReport;
+  /** R9.6: set when the caller typed a retired key and it was redirected. */
+  readonly renamedFrom?: SettingMigration;
   readonly overriddenBy?: ConfigGetReport;
 }
 
@@ -71,7 +74,11 @@ export async function listConfig(options: ConfigReadOptions): Promise<ConfigList
 }
 
 /** Read one effective setting by dotted `section.key`. */
-export async function getConfig(key: string, options: ConfigReadOptions): Promise<ConfigGetReport> {
+export async function getConfig(
+  requestedKey: string,
+  options: ConfigReadOptions,
+): Promise<ConfigGetReport> {
+  const key = resolveSettingKey(requestedKey).key;
   validateKnownKey(key);
   const { settings, provenance } = await loadConfig({
     projectDir: options.projectDir,
@@ -256,10 +263,13 @@ function jsonShapeOf(value: unknown): string {
 /** Write `value` to `scope`, then return the effective value (which may be overridden). */
 export async function setConfig(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   raw: string,
   options: ConfigReadOptions,
 ): Promise<ConfigWriteResult> {
+  // R9.6: writing the retired name would land a key the loader then warns
+  // about. Write the live one and report the redirect.
+  const { key, renamedFrom } = resolveSettingKey(requestedKey);
   validateKnownKey(key);
   const value = parseConfigValue(key, raw);
   const file = await writeSetting(scope, key, value, {
@@ -277,6 +287,7 @@ export async function setConfig(
     scope,
     file,
     effective,
+    ...(renamedFrom !== undefined && { renamedFrom }),
     ...(overridden && { overriddenBy: effective }),
   };
 }
@@ -284,9 +295,10 @@ export async function setConfig(
 /** Remove `key` from `scope`, returning the effective value after deletion. */
 export async function unsetConfig(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   options: ConfigReadOptions,
 ): Promise<{ key: string; scope: SettingsScope; file: string; effective: ConfigGetReport }> {
+  const key = resolveSettingKey(requestedKey).key;
   validateKnownKey(key);
   const file = await writeSetting(scope, key, undefined, {
     projectDir: options.projectDir,
@@ -315,9 +327,16 @@ export function renderConfigGet(report: ConfigGetReport): string {
 
 /** Human rendering of `config set`. */
 export function renderConfigSet(result: ConfigWriteResult): string {
-  const lines: string[] = [
+  const lines: string[] = [];
+  if (result.renamedFrom !== undefined) {
+    lines.push(
+      `note: "${result.renamedFrom.from}" was renamed to "${result.renamedFrom.to}" in ` +
+        `${result.renamedFrom.since} — writing "${result.renamedFrom.to}".`,
+    );
+  }
+  lines.push(
     `${result.key} set to ${JSON.stringify(result.value)} in ${result.file} (${result.scope} scope)`,
-  ];
+  );
   const eff = result.effective;
   const source = eff.source !== undefined ? ` (${eff.source})` : "";
   lines.push(`effective value: ${JSON.stringify(eff.value)} — ${eff.layer}${source}`);
@@ -344,6 +363,22 @@ export function renderConfigUnset(result: {
     `${result.key} removed from ${result.scope} scope (${result.file})\n` +
     `effective value: ${JSON.stringify(eff.value)} — ${eff.layer}${source}\n`
   );
+}
+
+/**
+ * R9.6 — resolve a possibly-retired key to the live one.
+ *
+ * Typing a renamed key at the CLI should do the sensible thing rather than
+ * reading nothing (`get`) or writing a key the loader will immediately warn
+ * about (`set`). The redirect is returned so callers can say it out loud — a
+ * silent rewrite of what the user typed would be its own small dishonesty.
+ */
+export function resolveSettingKey(key: string): {
+  readonly key: string;
+  readonly renamedFrom?: SettingMigration;
+} {
+  const migration = migrationFrom(key);
+  return migration === undefined ? { key } : { key: migration.to, renamedFrom: migration };
 }
 
 function validateKnownKey(key: string): void {

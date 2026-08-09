@@ -108,7 +108,17 @@ async function startShimDetached(
 }
 
 async function runProxyForeground(dir: string, portOpt?: string, shim = false): Promise<void> {
-  const { settings } = await loadConfig({ projectDir: dir });
+  const { settings, warnings } = await loadConfig({ projectDir: dir });
+  // R9.6: config warnings — a renamed key, an unknown key, an unrecognized
+  // GOLEM_* var — used to surface only in `golem status`, which nobody runs
+  // after an upgrade that appears to work. The proxy is the thing that consumes
+  // these settings, so it is the honest place to say the file names something
+  // that no longer takes effect. Since R9.8 the detached daemon's stderr lands
+  // in .golem/proxy.log rather than being discarded, so this actually reaches
+  // someone.
+  for (const warning of warnings) {
+    process.stderr.write(`golem proxy: ${warning}\n`);
+  }
   const { port } = await resolvePort(dir, portOpt);
 
   for (const [name, secret] of Object.entries(await credentialEnvForProxy(dir))) {

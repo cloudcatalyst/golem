@@ -228,12 +228,6 @@ export const SETTING_META = {
       "with `golem account add` / `golem account remove`.",
     kind: "opaque",
   },
-  "proxy.active_account": {
-    label: "Active account",
-    summary: "Which registered account the proxy fronts",
-    restart: "proxy",
-    ownedBy: "runtime:account",
-  },
   "proxy.targets": {
     label: "Target registry",
     summary: "Every model Golem can reach, local or upstream — managed by `golem target`",
@@ -247,8 +241,8 @@ export const SETTING_META = {
     label: "Default target",
     summary: "Which target serves a request that names none",
     detail:
-      "Supersedes the active account, which is still read when this is unset (migration shim). " +
-      "An unknown id fails closed — no silent substitution.",
+      "Supersedes the retired `proxy.active_account`, which an existing settings file may " +
+      "still name — R9.6's migration table reads it and says so. An unknown id fails closed.",
     advanced: true,
     restart: "proxy",
   },

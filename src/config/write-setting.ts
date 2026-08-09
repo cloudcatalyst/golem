@@ -21,6 +21,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ConfigError } from "./errors.js";
+import { liveKeyFor } from "./migrations.js";
 import { settingsFilePaths } from "./paths.js";
 import { allLeafPaths, leafSchema } from "./schema.js";
 
@@ -41,10 +42,15 @@ export interface WriteSettingOptions {
  */
 export async function writeSetting(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   value: unknown,
   options: WriteSettingOptions = {},
 ): Promise<string> {
+  // R9.6: a retired key resolves to its replacement, so NO write path can put a
+  // renamed key back into a settings file the loader would then warn about.
+  // `golem config set` resolves too and reports the redirect; this is the floor
+  // under every other caller.
+  const key = liveKeyFor(requestedKey);
   const dotIndex = key.indexOf(".");
   const section = dotIndex === -1 ? key : key.slice(0, dotIndex);
   const leafKey = dotIndex === -1 ? "" : key.slice(dotIndex + 1);

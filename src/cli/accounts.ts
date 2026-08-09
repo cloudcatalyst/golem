@@ -170,7 +170,7 @@ export async function collectAccounts(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<AccountsReport> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.proxy.active_account ?? null;
+  const selected = settings.proxy.default_target ?? null;
   const accounts = settings.proxy.accounts ?? [];
   const defaultId = defaultAccountId(settings.proxy.upstream_provider);
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
@@ -289,7 +289,7 @@ export async function useAccount(
 
   // A single-leaf write: `undefined` deletes the key (revert to the default),
   // a string sets it. writeSetting validates against the schema.
-  await writeSetting("local", "proxy.active_account", target ?? undefined, { projectDir });
+  await writeSetting("local", "proxy.default_target", target ?? undefined, { projectDir });
   // Drop the last-served-model snapshot: it describes the account we just left,
   // and leaving it would make `status`/statusline/the extension report the
   // PREVIOUS model as the current one until the new upstream serves a request.
@@ -570,9 +570,9 @@ export async function removeAccount(
   const remaining = accounts.filter((a) => a.id !== id);
   await writeSetting("local", "proxy.accounts", remaining, { projectDir });
 
-  const wasActive = p.active_account === id;
+  const wasActive = p.default_target === id;
   if (wasActive) {
-    await writeSetting("local", "proxy.active_account", undefined, { projectDir });
+    await writeSetting("local", "proxy.default_target", undefined, { projectDir });
   }
   await appendAudit(projectDir, { action: "remove", account: id }, nowIso);
   return { account: id, was_active: wasActive, credential_removed: credentialRemoved };
@@ -611,7 +611,7 @@ export async function credentialEnvForProxy(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<Record<string, string>> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.proxy.active_account ?? null;
+  const selected = settings.proxy.default_target ?? null;
   const defaultId = defaultAccountId(settings.proxy.upstream_provider);
   // The default top-level config is in force when nothing is selected or the
   // selection names the default id; its credential rides the plain var.
