@@ -56,25 +56,80 @@ function readBody(req: IncomingMessage): Promise<Buffer | null> {
   });
 }
 
+/**
+ * R9.2: replace the body's `model` with the target's real model id, for a
+ * request that selected its target with a virtual `golem/<id>` id.
+ *
+ * Returns `null` when the body is absent or is not JSON carrying a `model`
+ * string — the caller then refuses the request rather than forwarding
+ * `golem/coder` to a provider that has no such model and will 404 or, worse,
+ * fuzzy-match it.
+ *
+ * This is the **only** place the proxy rewrites the request model, and it fires
+ * only when the incoming value was a Golem selector — never a real model id — so
+ * the byte-faithful guarantee for ordinary traffic is untouched.
+ */
+function rewriteBodyModel(body: Buffer | null, model: string): Buffer | null {
+  if (body === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body.toString("utf8"));
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const record = parsed as Record<string, unknown>;
+  if (typeof record.model !== "string") return null;
+  return Buffer.from(JSON.stringify({ ...record, model }), "utf8");
+}
+
+/**
+ * R9.2: how many distinct upstream origins one proxy run will pool connections
+ * for. Generous next to any real target registry, and present only so a bug (or
+ * a config that generates origins) cannot grow the map without bound. Reaching
+ * it does not fail the request — the origin is dialled with a throwaway pool.
+ */
+const MAX_POOLED_ORIGINS = 32;
+
 export class GolemProxy {
   readonly config: ProxyConfig;
   private readonly server: Server;
-  private readonly pool: Pool;
-  /** Upstream path prefix (empty unless the base URL carries one). */
+  /**
+   * R9.2 — one `Pool` per upstream origin, created lazily and all closed in
+   * `close()`. Per-origin pooling is what undici is designed for, so serving
+   * several targets concurrently falls out of it; a single `Pool` bound to one
+   * origin in the constructor was the entire structural blocker.
+   *
+   * The single-upstream case is unchanged in behaviour: it is simply a map with
+   * one entry, created on the first request instead of in the constructor.
+   */
+  private readonly pools = new Map<string, Pool>();
+  /** Upstream path prefix for the DEFAULT upstream (empty unless the base URL carries one). */
   private readonly basePath: string;
 
   constructor(options: ProxyServerOptions = {}) {
     this.config = resolveProxyConfig(options);
     const upstream = new URL(this.config.upstreamBaseUrl);
     this.basePath = upstream.pathname.replace(/\/+$/, "");
-    this.pool = new Pool(upstream.origin, {
+    this.server = createServer((req, res) => {
+      void this.handle(req, res);
+    });
+  }
+
+  /** The pooled dispatcher for an origin, created on first use. */
+  private poolFor(origin: string): Pool {
+    const existing = this.pools.get(origin);
+    if (existing !== undefined) return existing;
+    const pool = new Pool(origin, {
       connect: { timeout: this.config.connectTimeoutMs },
       headersTimeout: this.config.headersTimeoutMs,
       bodyTimeout: this.config.bodyTimeoutMs,
     });
-    this.server = createServer((req, res) => {
-      void this.handle(req, res);
-    });
+    // Past the cap the pool is still returned but not retained, so it is closed
+    // by GC rather than tracked — a request must never fail because of a cap
+    // that exists only to bound a pathological config.
+    if (this.pools.size < MAX_POOLED_ORIGINS) this.pools.set(origin, pool);
+    return pool;
   }
 
   /** Bind the proxy. `port` 0 picks an ephemeral port (tests). */
@@ -99,7 +154,9 @@ export class GolemProxy {
       // Drop lingering keep-alive connections so close() completes promptly.
       this.server.closeAllConnections();
     });
-    await this.pool.close();
+    // Every origin dialled this run, not just the configured one.
+    await Promise.all([...this.pools.values()].map((p) => p.close()));
+    this.pools.clear();
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -125,6 +182,42 @@ export class GolemProxy {
       // We could not even read the client request — nothing to forward.
       this.respondProxyError(res, 400, `golem proxy: could not read request (${String(err)})`);
       return;
+    }
+
+    // R9.2: resolve the route BEFORE the pipeline, because the route decides two
+    // pipeline inputs — the redaction floor (from the target's `trust`) and
+    // whether the semantic stage may assume a caching upstream. Redaction still
+    // runs first WITHIN the pipeline, so the hard rule is untouched.
+    //
+    // Fail-closed: an unknown target is an error, never a fallback to the
+    // default. Applied before the bypass check as well — `x-golem-bypass` turns
+    // off *processing*, and must not also turn a refused route into a silent
+    // forward to somewhere the caller did not name.
+    if (this.config.resolveRoute !== undefined) {
+      const decision = this.config.resolveRoute(forward);
+      if (!decision.ok) {
+        this.respondProxyError(res, decision.status, decision.message);
+        return;
+      }
+      forward = { ...forward, route: decision.route };
+      // A virtual `golem/<id>` model selected the target; no provider has a
+      // model by that name, so the body must carry the target's real one. This
+      // is the ONLY case where the proxy rewrites the model field, and it only
+      // ever replaces a string that was never a real model id.
+      if (decision.route.rewriteModel !== undefined) {
+        const rewritten = rewriteBodyModel(forward.body, decision.route.rewriteModel);
+        if (rewritten === null) {
+          this.respondProxyError(
+            res,
+            400,
+            `golem proxy: request selected target "${decision.route.targetId}" with a virtual ` +
+              "model id, but the body is not JSON with a model field, so there is nothing to " +
+              "rewrite. No request was forwarded.",
+          );
+          return;
+        }
+        forward = { ...forward, body: rewritten };
+      }
     }
 
     // A3 seam: redaction -> compression. FAIL-OPEN — a pipeline error must
@@ -155,17 +248,27 @@ export class GolemProxy {
     // fidelity is untouched. Default (Anthropic passthrough) has no mapper, so
     // this is literally a no-op there. Applied outside the pipeline so bypass
     // requests still reach the configured upstream with valid credentials.
-    const upstreamHeaders = this.config.mapUpstreamHeaders
-      ? this.config.mapUpstreamHeaders({ ...forward.headers })
-      : forward.headers;
+    //
+    // R9.2: read transport from the resolved ROUTE when there is one, falling
+    // back to the single-upstream config otherwise. Byte-fidelity is a property
+    // of the provider, not of the proxy — an Anthropic-protocol route stays a
+    // raw byte pipe and a translating route was never byte-faithful (R6.1 case
+    // b); per-route selection just states that per request instead of per run.
+    const route = forward.route;
+    const upstreamOrigin = route !== undefined ? new URL(route.baseUrl) : undefined;
+    const mapHeaders =
+      route !== undefined ? route.mapUpstreamHeaders : this.config.mapUpstreamHeaders;
+    const upstreamHeaders = mapHeaders ? mapHeaders({ ...forward.headers }) : forward.headers;
 
     // R6.1 case (b) slice b1: translate the request body to the OpenAI schema
     // for a translating upstream (OpenAI / Ollama). The pipeline (redaction →
     // compression) has already run in Anthropic terms above, so translation is
     // the final step and never sees un-redacted content. A translation failure
     // is a clean proxy error, not a mismatched-shape forward.
-    const translate = this.config.translateUpstream;
-    let requestPath = this.basePath + forward.url;
+    const translate = route !== undefined ? route.translateUpstream : this.config.translateUpstream;
+    const basePath =
+      upstreamOrigin !== undefined ? upstreamOrigin.pathname.replace(/\/+$/, "") : this.basePath;
+    let requestPath = basePath + forward.url;
     let requestBody = forward.body;
     let requestHeaders = upstreamHeaders;
     let translateStreaming = false;
@@ -189,7 +292,9 @@ export class GolemProxy {
 
     let upstream: Dispatcher.ResponseData;
     try {
-      upstream = await this.pool.request({
+      upstream = await this.poolFor(
+        upstreamOrigin?.origin ?? new URL(this.config.upstreamBaseUrl).origin,
+      ).request({
         path: requestPath,
         method: forward.method as Dispatcher.HttpMethod,
         headers: requestHeaders,

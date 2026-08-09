@@ -4,8 +4,12 @@
  * A pure resolver that turns the proxy's account registry + the selected active
  * account into the concrete upstream a request should use. Legitimate
  * account/provider switching only — the automated quota-evasion half is OUT of
- * scope (ADR-0003 ToS decision). There is NO per-request routing here (that is
- * 21e, future); one account is active per proxy run, chosen explicitly.
+ * scope (ADR-0003 ToS decision). There is NO per-request routing **in this
+ * module** — it resolves the single active account, and stays the degenerate
+ * one-target case. Per-request routing across many targets shipped in R9.2 and
+ * lives in `providers/routing.ts` (the pure precedence chain) plus
+ * `cli/route-resolver.ts` (registry lookup + transport), keyed off the R9.1
+ * target registry rather than this account registry.
  *
  * ADR-0003 invariants honoured here:
  * - **Secrets are never a setting.** An account entry holds only non-secret

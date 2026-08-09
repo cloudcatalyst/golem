@@ -42,6 +42,22 @@ export interface LimitPrediction {
   readonly observedAtIso: string;
   readonly fiveHour: LimitWindow;
   readonly sevenDay?: LimitWindow | undefined;
+  /**
+   * R9.2 — the target whose response carried these headers, or null/absent for
+   * the single-upstream case.
+   *
+   * This module assumed one upstream and one rate-limit window. With many
+   * targets that assumption is structurally wrong: **only some providers emit
+   * `anthropic-ratelimit-unified-*` at all**, so a prediction is a statement
+   * about ONE target, not about "the limit". Stamping the source is what lets a
+   * display surface say *whose* limit this is, and treat every other target as
+   * **unmonitored** rather than quietly implying the number covers them.
+   *
+   * (This was already observably wrong with one target: the auto-park went blind
+   * during the R9 design session because the active upstream emits no such
+   * headers, and nothing said so.)
+   */
+  readonly targetId?: string | null | undefined;
 }
 
 const windowSchema = z.object({
@@ -53,6 +69,7 @@ const predictionSchema = z.object({
   observedAtIso: z.string(),
   fiveHour: windowSchema,
   sevenDay: windowSchema.optional(),
+  targetId: z.string().nullable().optional(),
 });
 
 type RawHeaders = Readonly<Record<string, string | string[] | undefined>>;

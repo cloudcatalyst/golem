@@ -20,31 +20,25 @@ import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
 import {
-  anthropicToGemini,
-  anthropicToOpenAIChat,
-  createGeminiToAnthropicSSE,
-  createOpenAIToAnthropicSSE,
-  geminiPath,
-  geminiToAnthropic,
   isGeminiProvider,
   isTranslatingProvider,
+  listTargets,
   makeAuthMapper,
-  openAIChatToAnthropic,
-  preservesVendorPrefix,
   resolveActiveUpstream,
   resolveAuthScheme,
+  resolveDefaultTargetId,
   sniffRequestModel,
+  targetWarnings,
   type UpstreamProvider,
   upstreamAssumesCaching,
-  upstreamChatCompletionsPath,
 } from "../providers/index.js";
-import type { UpstreamTranslator } from "../proxy/index.js";
 import {
   GolemProxy,
   parseLimitPrediction,
   writeContextLedger,
   writeLimitState,
   writeServedModel,
+  writeServedModelForTarget,
 } from "../proxy/index.js";
 import { SessionTreeRecorder, writeSessionTree } from "../session/session-tree.js";
 import {
@@ -53,6 +47,7 @@ import {
   recordUsageEvent,
 } from "../telemetry/index.js";
 import type { TelemetryStore } from "../telemetry/types.js";
+import { buildUpstreamTransport, createRouteResolver } from "./route-resolver.js";
 
 /**
  * The bypass shim's fixed policy (Decision 56): slider level 1 — redaction ON,
@@ -242,6 +237,22 @@ export function buildProxyFromSettings(
     process.env,
   );
   if (accountWarning !== undefined) process.stderr.write(`golem proxy: ${accountWarning}\n`);
+  // R9.1: warn for EVERY misconfigured target, not just the one being served.
+  // A broken target that is not yet routed to is still broken, and the point of
+  // a registry is finding that out before a request depends on it. The registry
+  // is inert here — this changes what is printed, never what is served.
+  for (const w of targetWarnings(settings.proxy)) {
+    process.stderr.write(`golem proxy: target "${w.targetId}": ${w.message}\n`);
+  }
+  // A default_target naming an id in neither registry fails closed downstream
+  // (R9.2); say so at startup rather than on the first request that needs it.
+  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
+  if (!listTargets(settings.proxy).some((t) => t.id === defaultTargetId)) {
+    process.stderr.write(
+      `golem proxy: default target "${defaultTargetId}" is in neither proxy.targets nor ` +
+        "proxy.accounts — no substitute will be used.\n",
+    );
+  }
   // R6.1 case (a): the selected provider governs the semantic stage's caching
   // assumption (verification-notes §73). undefined for `anthropic` → URL heuristic.
   const assumeCachingUpstream = upstreamAssumesCaching(upstream.provider);
@@ -314,61 +325,19 @@ export function buildProxyFromSettings(
   // Non-streaming uses translateResponse; streaming uses createStreamTranslator.
   // The pipeline still runs in Anthropic terms before this; translation is last.
   const upstreamModel = upstream.model;
-  const upstreamBase = upstream.baseUrl;
-  const translateFallback = {
-    id: "msg_golem_translated",
-    model: upstreamModel ?? upstreamProvider,
-  };
-  const modelOpt = upstreamModel !== undefined ? { model: upstreamModel } : {};
-
-  let translateUpstream: UpstreamTranslator | undefined;
-  if (isGeminiProvider(upstreamProvider)) {
-    // Gemini: distinct schema; auth is a `?key=` query param carried in the
-    // per-request path, so the base `path` is a placeholder that translateRequest
-    // always overrides.
-    translateUpstream = {
-      path: geminiPath(upstreamBase, upstreamModel ?? "", false, upstreamApiKey),
-      translateRequest: (body: Buffer | null) => {
-        const { body: g, stream, model } = anthropicToGemini(body, modelOpt);
-        return {
-          body: Buffer.from(JSON.stringify(g), "utf8"),
-          stream,
-          path: geminiPath(upstreamBase, model, stream, upstreamApiKey),
-        };
-      },
-      translateResponse: (body: Buffer): Buffer =>
-        Buffer.from(JSON.stringify(geminiToAnthropic(body, translateFallback)), "utf8"),
-      createStreamTranslator: () => createGeminiToAnthropicSSE(translateFallback),
-    };
-  } else if (isTranslatingProvider(upstreamProvider)) {
-    // OpenAI / Ollama: OpenAI Chat Completions schema. b4-kimi: pass through
-    // reasoning_effort and map the reasoning trace ↔ Anthropic thinking blocks.
-    const reasoningEffort = settings.proxy.upstream_reasoning_effort;
-    const mapReasoning = settings.proxy.map_reasoning_to_thinking;
-    // A multi-vendor gateway's ids keep their `vendor/` segment (Decision 48) —
-    // stripping it on OpenRouter resolves to a different vendor's model or 400s.
-    const keepVendorPrefix = preservesVendorPrefix(upstreamProvider);
-    const reqOpts = {
-      ...modelOpt,
-      ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
-      ...(keepVendorPrefix ? { keepVendorPrefix } : {}),
-    };
-    const respOpts = { mapReasoning };
-    translateUpstream = {
-      path: upstreamChatCompletionsPath(upstreamBase),
-      translateRequest: (body: Buffer | null) => {
-        const req = anthropicToOpenAIChat(body, reqOpts);
-        return { body: Buffer.from(JSON.stringify(req), "utf8"), stream: req.stream };
-      },
-      translateResponse: (body: Buffer): Buffer =>
-        Buffer.from(
-          JSON.stringify(openAIChatToAnthropic(body, translateFallback, respOpts)),
-          "utf8",
-        ),
-      createStreamTranslator: () =>
-        createOpenAIToAnthropicSSE({ ...translateFallback, mapReasoning }),
-    };
-  }
+  // R9.2: the SAME builder every routed target uses, so the single-upstream path
+  // and the multi-target path cannot drift. A drifting translator does not throw
+  // — it mangles a response — so sharing one construction is the only way to
+  // keep them honest.
+  const { translateUpstream } = buildUpstreamTransport({
+    provider: upstreamProvider,
+    baseUrl: upstream.baseUrl,
+    model: upstreamModel,
+    authScheme,
+    apiKey: upstreamApiKey,
+    reasoningEffort: settings.proxy.upstream_reasoning_effort,
+    mapReasoning: settings.proxy.map_reasoning_to_thinking,
+  });
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {
     process.stderr.write(
       `golem proxy: upstream_provider "${upstreamProvider}" needs proxy.upstream_model ` +
@@ -397,6 +366,24 @@ export function buildProxyFromSettings(
     pipeline,
     ...(mapUpstreamHeaders !== undefined ? { mapUpstreamHeaders } : {}),
     ...(translateUpstream !== undefined ? { translateUpstream } : {}),
+    // R9.2: serve every configured target, selected per request by an explicit
+    // act. Enabled only when the registry holds more than the synthetic default
+    // — with one target the resolver would decide the same thing on every
+    // request, so leaving it absent keeps the single-upstream path byte-for-byte
+    // the code it has always been.
+    ...(listTargets(settings.proxy).length > 1 && build.shim !== true
+      ? {
+          resolveRoute: createRouteResolver({
+            settings: settings.proxy,
+            onRoute: ({ targetId, reason, sticky }) => {
+              // ADR-0003 invariant 5: every (request → target, why) selection is
+              // attributable. Non-secret by construction.
+              if (sticky) return; // Already logged when the binding was made.
+              process.stderr.write(`golem proxy: routed to "${targetId}" — ${reason}\n`);
+            },
+          }),
+        }
+      : {}),
     onPipelineError: (err) => {
       process.stderr.write(
         `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
@@ -457,22 +444,45 @@ export function buildProxyFromSettings(
       // The active account id is stamped alongside it so a snapshot can be told
       // apart from one written by a different upstream — otherwise a switch left
       // every display surface reporting the previous account's model.
-      const servedModel = upstreamModel ?? sniffRequestModel(request.body);
+      //
+      // R9.2: with many targets served concurrently, "the current model" has N
+      // answers. When a route served this request, record it under that
+      // TARGET's id — the spec's 21e correctness rail ("the responding model is
+      // always visible") is not optional, and one surface showing one model
+      // while three targets serve is the R8.32 failure again. The target's own
+      // configured model wins, since that is what actually reached the upstream.
+      const route = request.route;
+      const servedModel =
+        (route !== undefined ? route.rewriteModel : undefined) ??
+        upstreamModel ??
+        sniffRequestModel(request.body);
       if (servedModel !== undefined) {
-        void writeServedModel(dir, {
+        const snapshot = {
           model: servedModel,
           servedAtIso: nowIso,
           accountId: upstream.accountId,
-        }).catch(() => {});
+        };
+        void (
+          route !== undefined
+            ? writeServedModelForTarget(dir, route.targetId, snapshot)
+            : writeServedModel(dir, snapshot)
+        ).catch(() => {});
       }
       // Limit prediction (snooze P2a): persist the observed session/weekly window
       // utilization + reset to `.golem/state/limit-state.json`, throttled so a busy
       // stream doesn't rewrite the file per response. Observe-only, fail-open.
       if (nowMs - lastLimitPersistMs < LIMIT_PERSIST_THROTTLE_MS) return;
       const prediction = parseLimitPrediction(headers, nowIso);
+      // R9.2: a target emitting no `anthropic-ratelimit-unified-*` headers writes
+      // nothing, which is right — but the snapshot must then say WHOSE limit it
+      // describes, or a display surface implies one target's number covers
+      // targets that are in fact unmonitored.
       if (prediction === null) return;
       lastLimitPersistMs = nowMs;
-      void writeLimitState(dir, prediction).catch(() => {});
+      void writeLimitState(dir, {
+        ...prediction,
+        targetId: route?.targetId ?? null,
+      }).catch(() => {});
     },
   });
   const upstreamInfo = {

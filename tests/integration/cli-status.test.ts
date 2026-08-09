@@ -367,7 +367,8 @@ describe("renderStatus", () => {
     expect(output).toContain("proxy.port = 4653 — default");
     expect(output).not.toContain("proxy.port = 4653 — default (");
     expect(output).not.toContain("Warnings:");
-    expect(output).toContain("Inference: local + upstream");
+    // R9.4: roles, not locality — the coder end can be any target now.
+    expect(output).toContain("Inference: chat ");
     expect(output.endsWith("\n")).toBe(true);
   });
 
@@ -399,7 +400,7 @@ describe("renderStatus", () => {
     expect(output).toContain(
       "  - config file .golem/settings.json is malformed JSON; using defaults",
     );
-    expect(output).toContain("Inference: upstream only");
+    expect(output).toContain("Inference: chat ");
   });
 
   it("shows the coder model on the Inference line when a local model is reachable", () => {
@@ -412,7 +413,40 @@ describe("renderStatus", () => {
         base_url: "http://localhost:11434",
       },
     });
-    expect(output).toContain("Inference: local + upstream · coder qwen2.5-coder:7b");
+    expect(output).toContain("  coder: qwen2.5-coder:7b (local)");
+  });
+
+  it("names a configured coder target and flags one that resolves to nothing (R9.4)", () => {
+    const output = renderStatus({
+      ...healthyReport,
+      local_model: {
+        reachable: false,
+        coder_enabled: true,
+        workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
+        base_url: "http://localhost:11434",
+      },
+    });
+    // An unresolvable default must be called out, not papered over: `coder`
+    // fails closed on it rather than quietly drafting on the local model.
+    expect(output).toContain('coder: FAILS CLOSED — target "ghost"');
+  });
+
+  it("does not advertise a coder model when coder_target resolves to nothing (R9.4)", () => {
+    // Regression, found live: this rendered `coder qwen2.5-coder:7b (target
+    // ghost)` — a model that will never run, via a target that does not exist,
+    // directly contradicting the warning underneath it.
+    const output = renderStatus({
+      ...healthyReport,
+      local_model: {
+        reachable: true,
+        coder_enabled: true,
+        coder_model: "qwen2.5-coder:7b",
+        workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
+        base_url: "http://localhost:11434",
+      },
+    });
+    expect(output).toContain('coder: FAILS CLOSED — target "ghost"');
+    expect(output).not.toContain("coder qwen2.5-coder:7b");
   });
 
   it("shows upstream only when local coder is disabled", () => {
@@ -425,7 +459,7 @@ describe("renderStatus", () => {
         base_url: "http://localhost:11434",
       },
     });
-    expect(output).toContain("Inference: upstream only (local coder disabled)");
+    expect(output).toContain("coder: disabled (inference.local_coder_enabled)");
     expect(output).not.toContain("coder qwen");
   });
 

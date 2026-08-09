@@ -18,12 +18,18 @@ import {
 } from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
+import { isKnownWorker, KNOWN_WORKERS, unknownWorkerWarnings } from "../inference/workers.js";
 import type { SliderLevel } from "../interfaces/policy.js";
-import { resolveUpstreamDisplay, upstreamAssumesCaching } from "../providers/index.js";
+import {
+  listTargets,
+  resolveDefaultTargetId,
+  resolveUpstreamDisplay,
+  upstreamAssumesCaching,
+} from "../providers/index.js";
 // Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
 // which imports `undici` (~270ms), and both of these only read a JSON file.
 import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
-import { servedModelFor } from "../proxy/served-model.js";
+import { readServedModel, servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { type DialInfo, getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
@@ -118,6 +124,28 @@ export interface StatusReport {
     /** When that model was served (ISO), if known. */
     readonly last_served_at?: string | null;
   };
+  /**
+   * R9.2 — one row per configured target, present only when the registry holds
+   * more than the synthetic default (i.e. when the proxy is actually routing).
+   *
+   * The spec's 21e correctness rail is that **the responding model is always
+   * visible**. With N targets served concurrently, a single `upstream` block
+   * cannot satisfy that: it reports one model while others are serving. These
+   * rows say which target served what, and when.
+   */
+  readonly targets?: readonly {
+    readonly id: string;
+    readonly provider: string;
+    readonly base_url: string;
+    readonly model: string | null;
+    readonly trust: string;
+    readonly account: string | null;
+    /** True for the target that serves requests naming none. */
+    readonly is_default: boolean;
+    /** What this target last actually served, if it has served anything. */
+    readonly last_served_model?: string;
+    readonly last_served_at?: string;
+  }[];
   readonly slider: {
     readonly level: number;
     readonly name: string;
@@ -162,6 +190,19 @@ export interface StatusReport {
     readonly coder_model?: string;
     /** Whether `inference.local_coder_enabled` is true (default). */
     readonly coder_enabled: boolean;
+    /**
+     * R9.4 — one row per tool worker that has a configured target, so surfaces
+     * can render N workers without knowing their names. A worker with no entry
+     * is absent here and uses the local model.
+     */
+    readonly workers?: readonly {
+      readonly worker: string;
+      readonly target: string;
+      /** The target's model. Absent when the target does not resolve. */
+      readonly model?: string;
+      /** True when `target` names an id in no registry — the worker fails closed. */
+      readonly target_unknown?: boolean;
+    }[];
     /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
@@ -191,6 +232,19 @@ export interface StatusReport {
     readonly stale: boolean;
     /** Whether the snooze auto-park is ENFORCING (persistent deny) vs advisory. */
     readonly enforced: boolean;
+    /**
+     * R9.2 — the target whose response carried these headers, when routing is on.
+     * A prediction is a statement about ONE target, never about "the limit".
+     */
+    readonly source_target?: string | null;
+    /**
+     * R9.2 — configured targets that have never produced rate-limit headers, so
+     * this reading says NOTHING about them. Only some providers emit
+     * `anthropic-ratelimit-unified-*` at all; without naming them, one target's
+     * utilization silently reads as coverage for all of them, and the auto-park
+     * is blind for every target on this list.
+     */
+    readonly unmonitored_targets?: readonly string[];
   };
   readonly warnings: readonly string[];
 }
@@ -283,6 +337,42 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       readProxyPid(projectDir).catch(() => null),
     ]);
 
+  // R9.2: per-target rows, each carrying what that target last served. Read from
+  // the same snapshot the proxy writes, so status never has to reach the daemon.
+  const allServed = await readServedModel(projectDir).catch(() => null);
+  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
+  const targetRows = listTargets(settings.proxy).map((t) => {
+    const seen = allServed?.targets?.[t.id];
+    return {
+      id: t.id,
+      provider: t.provider,
+      base_url: t.baseUrl,
+      model: t.model ?? null,
+      trust: t.trust,
+      account: t.accountId,
+      is_default: t.id === defaultTargetId,
+      ...(seen !== undefined
+        ? { last_served_model: seen.model, last_served_at: seen.servedAtIso }
+        : {}),
+    };
+  });
+
+  // R9.4: which target each tool worker drafts on by default. A target id that
+  // resolves to nothing is a misconfiguration worth naming, not something to
+  // paper over — the worker fails closed on it rather than quietly using the
+  // local model. Built generically so a new worker needs no change here.
+  const workerRows = Object.entries(settings.inference.worker_targets)
+    .filter(([worker]) => isKnownWorker(worker))
+    .map(([worker, target]) => {
+      const row = targetRows.find((t) => t.id === target);
+      return {
+        worker,
+        target,
+        ...(row?.model != null ? { model: row.model } : {}),
+        ...(row === undefined ? { target_unknown: true } : {}),
+      };
+    });
+
   // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
   // wiring at all" from "another gateway owns it" — and those have different
   // remedies (the second one is not ours to fix). Read the owner properly.
@@ -299,8 +389,27 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // blind) — surfaced both as a field and, when stale, a warning.
   const nowMs = options.now?.() ?? Date.now();
   const limitState = await (options.readLimit ?? readLimitState)(projectDir).catch(() => null);
-  const limits =
+  const baseLimits =
     limitState === null ? undefined : buildLimits(limitState, nowMs, settings.snooze.enforce);
+  // R9.2: name the target this reading came from, and every target it says
+  // nothing about. Without that, one target's utilization reads as coverage for
+  // all of them — and the auto-park is blind for the rest without saying so.
+  const limits =
+    baseLimits === undefined
+      ? undefined
+      : {
+          ...baseLimits,
+          ...(limitState?.targetId !== undefined && limitState.targetId !== null
+            ? { source_target: limitState.targetId }
+            : {}),
+          ...(targetRows.length > 1
+            ? {
+                unmonitored_targets: targetRows
+                  .filter((t) => t.id !== limitState?.targetId)
+                  .map((t) => t.id),
+              }
+            : {}),
+        };
 
   // §103: what the compression dial will ACTUALLY do on this upstream. The dial —
   // not the slider — is the input-side level the pipeline reads (Decision 52), and
@@ -355,6 +464,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         ? { last_served_model: servedModel.model, last_served_at: servedModel.servedAtIso }
         : {}),
     },
+    // R9.2: only when the proxy is actually serving more than one target —
+    // otherwise the `upstream` block above already answers the question and a
+    // one-row table would be noise.
+    ...(targetRows.length > 1 ? { targets: targetRows } : {}),
     slider: sliderJson(slider),
     dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
     effective_compression: effectiveCompressionJson(effective),
@@ -363,6 +476,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       reachable: localInfo.reachable,
       coder_enabled: settings.inference.local_coder_enabled,
       ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
+      ...(workerRows.length > 0 ? { workers: workerRows } : {}),
       base_url: settings.inference.ollama_base_url,
     },
     ...(cachedUpdate !== null
@@ -383,6 +497,9 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           ? [...warnings, REDACTION_OFF_WARNING]
           : warnings),
       ...(limits?.stale ? [LIMIT_STALE_WARNING] : []),
+      // R9.4: a `worker_targets` key naming no worker would otherwise be silently
+      // ignored — the failure mode the map shape trades per-key schema docs for.
+      ...unknownWorkerWarnings(settings.inference.worker_targets),
     ],
   };
 }
@@ -555,6 +672,20 @@ export function renderStatus(report: StatusReport): string {
     if (!foreign) lines.push("    Fix: `golem proxy wire` (then reload the window).");
   }
   lines.push(`Upstream: ${renderUpstream(report.upstream)}`);
+  // R9.2: with many targets in play, one Upstream line is not the whole truth —
+  // the responding model must be visible per target (21e correctness rail).
+  if (report.targets !== undefined) {
+    lines.push(`Targets: ${report.targets.length} configured`);
+    for (const t of report.targets) {
+      const mark = t.is_default ? "*" : " ";
+      const model = t.model ?? "(client's own id)";
+      const served =
+        t.last_served_model !== undefined
+          ? ` — last served ${t.last_served_model}`
+          : " — nothing served yet";
+      lines.push(`  ${mark} ${t.id} (${t.provider}, trust=${t.trust}) ${model}${served}`);
+    }
+  }
   const slider = report.slider;
   const ec = report.effective_compression;
   // §103: the LABEL carries the truth. A warning line under a headline that still
@@ -590,15 +721,50 @@ export function renderStatus(report: StatusReport): string {
   // available via the `coder` MCP tool at any level (Decision 30/31). Name the
   // concrete coder model when known. If the coder tool is disabled, show only
   // the upstream backend (the local model may still be used for rerank/local-answer).
-  const coder = report.local_model.coder_model;
-  const localCoderActive = report.local_model.coder_enabled && report.local_model.reachable;
-  lines.push(
-    localCoderActive
-      ? `Inference: local + upstream${coder !== undefined ? ` · coder ${coder}` : ""}`
-      : report.local_model.coder_enabled
-        ? "Inference: upstream only"
-        : "Inference: upstream only (local coder disabled)",
-  );
+  // R9.4: name the two models by ROLE rather than by locality — after R9.3 the
+  // coder end can be any target, so "local + upstream" described a constraint
+  // that no longer exists.
+  const chatModel = report.upstream.last_served_model ?? report.upstream.default_model;
+  // A configured target answers regardless of local reachability; otherwise a
+  // reachable local model counts even when its id is unknown — "there is a coder
+  // backend" and "we know which model it runs" are different facts, and only the
+  // first decides whether to show the role at all.
+  //
+  // Rendered generically over N workers so a new one needs no change here.
+  lines.push(`Inference: chat ${chatModel ?? report.upstream.provider}`);
+  const workers = report.local_model.workers ?? [];
+  const localModel = report.local_model.coder_model ?? "local";
+  for (const worker of KNOWN_WORKERS) {
+    // Only `coder` has an enabled flag today; a future worker without one is
+    // simply always offered.
+    if (worker === "coder" && !report.local_model.coder_enabled) {
+      lines.push("  coder: disabled (inference.local_coder_enabled)");
+      continue;
+    }
+    const configured = workers.find((w) => w.worker === worker);
+    if (configured === undefined) {
+      // No configured target → the local model, which has to actually be up.
+      lines.push(
+        report.local_model.reachable
+          ? `  ${worker}: ${localModel} (local)`
+          : `  ${worker}: unavailable — no target configured and the local model is not reachable`,
+      );
+      continue;
+    }
+    // A target that resolves to nothing means the worker throws on EVERY
+    // dispatch. Naming its model would advertise something that can never run.
+    if (configured.target_unknown === true) {
+      lines.push(
+        `  ${worker}: FAILS CLOSED — target "${configured.target}" is in neither proxy.targets ` +
+          "nor proxy.accounts, and it will not fall back to the local model. " +
+          "Fix it or unset it: golem target list",
+      );
+      continue;
+    }
+    const model = configured.model ?? configured.target;
+    const same = chatModel != null && model === chatModel ? " — same model as chat" : "";
+    lines.push(`  ${worker}: ${model} (target ${configured.target})${same}`);
+  }
   if (report.update !== undefined) {
     lines.push(
       report.update.available

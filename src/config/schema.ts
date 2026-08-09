@@ -25,8 +25,17 @@
 
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
-import type { UpstreamAccount, UpstreamAuthScheme, UpstreamProvider } from "../providers/index.js";
-import { UPSTREAM_AUTH_SCHEMES, UPSTREAM_PROVIDERS } from "../providers/index.js";
+import type {
+  TargetEntry,
+  UpstreamAccount,
+  UpstreamAuthScheme,
+  UpstreamProvider,
+} from "../providers/index.js";
+import {
+  TARGET_TRUST_LEVELS,
+  UPSTREAM_AUTH_SCHEMES,
+  UPSTREAM_PROVIDERS,
+} from "../providers/index.js";
 
 const portSchema = z.number().int().min(1).max(65535);
 const timeoutMsSchema = z.number().int().positive();
@@ -123,6 +132,48 @@ export const SETTINGS_LEAVES = {
      * account — ADR-0003 fail-closed). Switch it with `golem account use <id>`.
      */
     active_account: z.string().min(1).optional(),
+    /**
+     * R9.1 (proposal `multi-target-routing.md`): the target registry — one table
+     * for every model Golem can reach, local or upstream. A local model is just
+     * a target whose provider is `ollama`.
+     *
+     * A target is **entirely non-secret**: it answers *which endpoint + model*,
+     * and points at a `proxy.accounts` id for *whose credential*. Several targets
+     * may share one account (one key backing several model ids), which is why the
+     * two registries are separate. There is deliberately no key field — a secret
+     * here would be a plaintext secret in settings, which ADR-0003 invariant 1
+     * forbids.
+     *
+     * `trust` (`vendor | local | lan | third-party`) is stored and surfaced in
+     * R9.1 and consumed as a redaction floor in R9.3, where a target may only
+     * ever RAISE the floor. Omitted → {@link defaultTrustFor}, which errs toward
+     * more redaction.
+     *
+     * Inert in R9.1: nothing routes on this yet (R9.2/R9.3 consume it). Entries
+     * in `proxy.accounts` already appear in `golem target list` without being
+     * restated here.
+     */
+    targets: z
+      .array(
+        z.object({
+          id: z.string().min(1),
+          provider: z.enum(UPSTREAM_PROVIDERS),
+          base_url: z.string().url(),
+          model: z.string().min(1).optional(),
+          account: z.string().min(1).optional(),
+          auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
+          trust: z.enum(TARGET_TRUST_LEVELS).optional(),
+          agent_selectable: z.boolean().optional(),
+        }),
+      )
+      .optional(),
+    /**
+     * R9.1: which target serves a request that names none. Supersedes
+     * {@link active_account} (spec Decision 21d), which is still read when this
+     * is unset — that fallback IS the migration shim, so an existing config keeps
+     * working untouched. Unknown id → fail-closed (no silent substitution).
+     */
+    default_target: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
@@ -147,6 +198,31 @@ export const SETTINGS_LEAVES = {
      * must still be reachable for coder to actually work.
      */
     local_coder_enabled: z.boolean(),
+    /**
+     * R9.4 — which `proxy.targets` id each **tool worker** defaults to, keyed by
+     * worker name (`{ coder = "openrouter-qwen3" }`). A worker with no entry
+     * uses the local tiered model, exactly as before, so this changes nothing
+     * until it is set.
+     *
+     * The point of the setting is that "the default coder model" becomes a real,
+     * settable thing rather than permanently-local: after R9.3 a draft can run
+     * on any declared target, and a status line that always says "local" would
+     * be describing a constraint that no longer exists.
+     *
+     * **A map, not one leaf per worker.** More workers are expected (a `writer`
+     * for documents, and so on); a scalar each would grow a schema leaf, a
+     * UI-model entry, a status field and two status-surface branches per worker,
+     * while a map grows by one line of config. The cost is that a key naming no
+     * worker would be silently ignored, so keys are validated against
+     * `KNOWN_WORKERS` and reported — see `inference/workers.ts`.
+     *
+     * Fail-closed like every other target reference: an unknown TARGET id is an
+     * error naming what is configured, never a silent fall back to the local
+     * model — that would send the work somewhere the user did not choose while
+     * reporting success. A non-local target is redacted at its trust floor on
+     * every dispatch (R9.3), so setting this never weakens redaction.
+     */
+    worker_targets: z.record(z.string().min(1), z.string().min(1)).default({}),
     /**
      * OPT-IN (R8.7, default **false**): offer `coder`'s `edit` mode — the local
      * model rewrites one small file, Golem validates the result (syntax must
@@ -497,6 +573,8 @@ export interface ProxySettings {
   readonly map_reasoning_to_thinking: boolean;
   readonly accounts?: readonly UpstreamAccount[];
   readonly active_account?: string;
+  readonly targets?: readonly TargetEntry[];
+  readonly default_target?: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
 }
@@ -505,6 +583,8 @@ export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
   readonly local_coder_enabled: boolean;
+  /** R9.4: worker name → target id (see `inference/workers.ts`). */
+  readonly worker_targets: Readonly<Record<string, string>>;
   readonly local_editor_enabled: boolean;
   /** R8.15: user-declared provider table for local-model role routing. */
   readonly providers: readonly {
@@ -618,6 +698,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
     local_coder_enabled: true,
+    worker_targets: {},
     local_editor_enabled: false,
     providers: [],
   },

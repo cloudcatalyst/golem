@@ -37,12 +37,38 @@ export interface ServedModel {
    * field existed — treated as "unknown provenance" (see {@link servedModelFor}).
    */
   readonly accountId?: string | null;
+  /**
+   * R9.2 — what each TARGET last served, keyed by target id.
+   *
+   * With one upstream per run the top-level fields answered "which model is
+   * current". With many targets served concurrently that question has N answers,
+   * and the spec's 21e correctness rail ("the responding model is always
+   * visible") is not optional — a display surface showing one model while three
+   * targets are serving is the R8.32 failure again.
+   *
+   * The top-level fields are KEPT and mean "most recently served, whichever
+   * target", so every existing display surface keeps working unchanged and this
+   * stays additive. Absent in snapshots written before the field existed.
+   */
+  readonly targets?: Readonly<Record<string, TargetServedModel>>;
 }
+
+/** What one target last served. */
+export interface TargetServedModel {
+  readonly model: string;
+  readonly servedAtIso: string;
+}
+
+const targetServedModelSchema = z.object({
+  model: z.string(),
+  servedAtIso: z.string(),
+});
 
 const servedModelSchema = z.object({
   model: z.string(),
   servedAtIso: z.string(),
   accountId: z.string().nullable().optional(),
+  targets: z.record(z.string(), targetServedModelSchema).optional(),
 });
 
 /** `.golem/state/served-model.json` for a project. */
@@ -57,6 +83,35 @@ export async function writeServedModel(projectDir: string, state: ServedModel): 
   const tmp = `${file}.${process.pid}.tmp`;
   await writeFile(tmp, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   await rename(tmp, file);
+}
+
+/**
+ * R9.2 — record what one TARGET just served, merging into the existing snapshot
+ * rather than replacing it, so the other targets' rows survive.
+ *
+ * Also refreshes the top-level fields, which mean "most recently served by any
+ * target" — that is what keeps every pre-R9.2 display surface correct without
+ * being taught about targets.
+ *
+ * Fail-open like the rest of this module: a read failure starts from an empty
+ * snapshot instead of throwing, because losing a display detail must never cost
+ * the user a response.
+ */
+export async function writeServedModelForTarget(
+  projectDir: string,
+  targetId: string,
+  state: ServedModel,
+): Promise<void> {
+  const existing = await readServedModel(projectDir);
+  await writeServedModel(projectDir, {
+    model: state.model,
+    servedAtIso: state.servedAtIso,
+    ...(state.accountId !== undefined ? { accountId: state.accountId } : {}),
+    targets: {
+      ...(existing?.targets ?? {}),
+      [targetId]: { model: state.model, servedAtIso: state.servedAtIso },
+    },
+  });
 }
 
 /** Read the last-served model, or null (missing/corrupt). */

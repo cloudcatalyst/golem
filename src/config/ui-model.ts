@@ -234,6 +234,24 @@ export const SETTING_META = {
     restart: "proxy",
     ownedBy: "runtime:account",
   },
+  "proxy.targets": {
+    label: "Target registry",
+    summary: "Every model Golem can reach, local or upstream — managed by `golem target`",
+    detail:
+      "A target is non-secret: it names an endpoint and model, and points at an account id " +
+      "for the credential. Several targets may share one account. Inert until R9.2/R9.3 " +
+      "route on it. Entries in the account registry already appear in `golem target list`.",
+    kind: "opaque",
+  },
+  "proxy.default_target": {
+    label: "Default target",
+    summary: "Which target serves a request that names none",
+    detail:
+      "Supersedes the active account, which is still read when this is unset (migration shim). " +
+      "An unknown id fails closed — no silent substitution.",
+    advanced: true,
+    restart: "proxy",
+  },
   "proxy.request_timeout_ms": {
     label: "Request timeout",
     summary: "End-to-end request budget in ms (generous: long SSE streams)",
@@ -266,6 +284,16 @@ export const SETTING_META = {
     label: "Local coder tool",
     summary: "Offer the `coder` MCP tool so Claude drafts code on the local model",
     detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
+    restart: "mcp",
+  },
+  "inference.worker_targets": {
+    label: "Worker targets",
+    summary: "Which target each tool worker (coder, …) drafts on by default",
+    detail:
+      "Keyed by worker name. A worker with no entry uses the local model, exactly as before. " +
+      "A non-local target is redacted at its trust floor on every dispatch, and an unknown " +
+      "target id fails closed — it never falls back to the local model. See `golem target list`.",
+    kind: "opaque",
     restart: "mcp",
   },
   "inference.local_editor_enabled": {

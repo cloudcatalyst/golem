@@ -7,6 +7,7 @@
 
 import type { EffectiveCompression } from "../compression/effective-level.js";
 import type { LspBridge } from "../ext/index.js";
+import type { TargetDispatcher } from "../inference/target-dispatcher.js";
 import type {
   CompressionService,
   InferenceService,
@@ -87,6 +88,19 @@ export interface GolemMcpServerDeps {
    * Requires {@link projectRootDir} — an edit must be containable to a project.
    */
   readonly localEditor?: boolean;
+  /**
+   * R9.3 — lets `coder` draft on any declared target, not only the local model.
+   *
+   * When present, `coder` gains an optional `target` parameter whose enum lists
+   * exactly the targets config declares AND marks agent-selectable, and every
+   * non-local dispatch is redacted at that target's trust floor before it leaves
+   * the machine (placeholders restored in the reply).
+   *
+   * Absent → `coder` behaves exactly as it did before R9.3: no `target`
+   * parameter in the schema at all, so the definition costs nothing extra, and
+   * dispatch goes straight to the local {@link coder} service.
+   */
+  readonly targetDispatcher?: TargetDispatcher;
   /**
    * POSIX-relative wiki location (spec Decision 28), e.g. `"docs/wiki"` —
    * see `wikiSourcePrefix` in `cli/wiki.ts`. When set, `search` ranks hits

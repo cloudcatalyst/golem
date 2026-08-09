@@ -67,7 +67,74 @@ export interface ProxyRequest {
     readonly headers: Readonly<Record<string, string>>;
     readonly body: Buffer;
   };
+  /**
+   * R9.2: the target this request was routed to, resolved BEFORE the pipeline
+   * runs so the pipeline can see the decision. Follows the `respondDirectly`
+   * precedent (Decision 33) rather than inventing a new seam.
+   *
+   * Absent when no {@link ProxyServerOptions.resolveRoute} is configured — the
+   * single-upstream case, which behaves exactly as it did before this field
+   * existed.
+   */
+  readonly route?: ProxyRoute;
 }
+
+/**
+ * R9.2 — where one request goes, and everything the transport needs to send it
+ * there. Assembled per request by {@link RouteResolver} from the R9.1 target
+ * registry.
+ *
+ * The transport fields mirror the single-upstream `ProxyConfig` fields one for
+ * one; when no resolver is configured the proxy reads them from `config` exactly
+ * as before, so a route is strictly additive.
+ */
+export interface ProxyRoute {
+  readonly targetId: string;
+  /** Why this target was chosen — recorded in the audit log verbatim. */
+  readonly reason: string;
+  readonly baseUrl: string;
+  /**
+   * The model id to send upstream. Set when the request selected this target
+   * with a virtual `golem/<id>` model, in which case the proxy MUST replace the
+   * body's model field: no provider has a model called `golem/coder`.
+   *
+   * Undefined leaves the body untouched (the byte-faithful default).
+   */
+  readonly rewriteModel?: string;
+  /**
+   * R9.1 `trust` — the redaction floor for this route. Carried so the pipeline
+   * can see it; consumed in R9.3. Redaction is never *weakened* by it.
+   */
+  readonly trust?: string;
+  /**
+   * Whether the semantic stage may assume a caching upstream for this route
+   * (`upstreamAssumesCaching(provider)`). Per-route because it is a property of
+   * the provider, not of the proxy.
+   */
+  readonly assumeCachingUpstream?: boolean;
+  /** Per-route transport, mirroring the same-named {@link ProxyConfig} fields. */
+  readonly mapUpstreamHeaders?: (
+    headers: Record<string, string | string[]>,
+  ) => Record<string, string | string[]>;
+  readonly translateUpstream?: UpstreamTranslator;
+}
+
+/**
+ * R9.2 — resolve one request to a target, or refuse it.
+ *
+ * **Fail-closed by construction:** the failure arm carries a status and a
+ * message rather than a fallback route, because a proxy that quietly serves a
+ * different target than the one named sends the caller's context somewhere they
+ * did not choose. Claude Code will not catch an unknown `golem/*` id
+ * (verification-notes §114 caveat 4), so Golem must produce the error itself.
+ *
+ * Synchronous and total: it reads already-loaded settings, never the network.
+ */
+export type RouteResolver = (
+  request: ProxyRequest,
+) =>
+  | { readonly ok: true; readonly route: ProxyRoute }
+  | { readonly ok: false; readonly status: number; readonly message: string };
 
 /**
  * Extension seam for the A3 pipeline (redaction -> compression).
@@ -161,6 +228,15 @@ export interface ProxyServerOptions {
    * response stays a raw byte pipe (byte-faithful hard rule). Default: none.
    */
   readonly translateUpstream?: UpstreamTranslator;
+  /**
+   * R9.2: resolve each request to a target from the R9.1 registry. **Optional —
+   * when absent the proxy behaves exactly as it did before multi-target routing,
+   * serving the single configured upstream.** The single-upstream fields above
+   * remain the degenerate one-target case, which is what makes this an additive
+   * change rather than a rewrite: every existing byte-fidelity and
+   * recorded-shape test passes unmodified.
+   */
+  readonly resolveRoute?: RouteResolver;
 }
 
 /**
@@ -217,6 +293,7 @@ export interface ProxyConfig {
     headers: Record<string, string | string[]>,
   ) => Record<string, string | string[]>;
   readonly translateUpstream?: UpstreamTranslator;
+  readonly resolveRoute?: RouteResolver;
 }
 
 export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfig {
@@ -237,5 +314,6 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     ...(options.translateUpstream !== undefined
       ? { translateUpstream: options.translateUpstream }
       : {}),
+    ...(options.resolveRoute !== undefined ? { resolveRoute: options.resolveRoute } : {}),
   };
 }

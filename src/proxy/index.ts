@@ -49,7 +49,9 @@ export {
   type ServedModel,
   servedModelFor,
   servedModelPath,
+  type TargetServedModel,
   writeServedModel,
+  writeServedModelForTarget,
 } from "./served-model.js";
 export { GolemProxy } from "./server.js";
 export {
@@ -58,9 +60,11 @@ export {
   identityPipeline,
   type ProxyConfig,
   type ProxyRequest,
+  type ProxyRoute,
   type ProxyServerOptions,
   type RequestPipeline,
   type ResponseUsage,
+  type RouteResolver,
   resolveProxyConfig,
   type UpstreamTranslator,
 } from "./types.js";

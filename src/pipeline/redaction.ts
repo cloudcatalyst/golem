@@ -63,6 +63,20 @@ class PlaceholderTable {
     }
     return `[REDACTED:${kind}:${index}]`;
   }
+
+  /**
+   * Every placeholder this pass allocated, paired with the ORIGINAL value it
+   * replaced. Used only by {@link redactReversibleText} (R9.3) to restore a
+   * remote model's reply; the map never leaves the process and is never
+   * serialized, stored, or logged.
+   */
+  entries(): [placeholder: string, original: string][] {
+    const out: [string, string][] = [];
+    for (const [kind, values] of this.#byKind) {
+      for (const [value, index] of values) out.push([`[REDACTED:${kind}:${index}]`, value]);
+    }
+    return out;
+  }
 }
 
 function applyRule(text: string, rule: RedactionRule, table: PlaceholderTable): [string, number] {
@@ -148,6 +162,54 @@ export function redactText(text: string, table: PlaceholderTable): RedactionResu
  */
 export function redactStandaloneText(text: string): string {
   return redactText(text, new PlaceholderTable()).text;
+}
+
+/** A redaction whose placeholders can be put back afterwards. */
+export interface ReversibleRedaction {
+  /** The redacted text — this is what may leave the machine. */
+  readonly text: string;
+  readonly count: number;
+  /**
+   * Restore the original values in a reply that came back referring to the
+   * placeholders. Pure; safe to call on text containing none.
+   */
+  readonly restore: (reply: string) => string;
+}
+
+/**
+ * R9.3 — redact a string for dispatch to a NON-LOCAL model, keeping the
+ * placeholder table so the model's reply can be de-redacted before it reaches
+ * the caller.
+ *
+ * Why this exists: `coder` may now name a remote target, which makes it an
+ * egress path. Redaction has to run before dispatch (CLAUDE.md hard rule), but a
+ * draft full of `[REDACTED:aws-key:1]` is useless — so the round trip is part of
+ * the requirement, not a nicety.
+ *
+ * **This does not weaken redaction anywhere.** It is an additional entry point
+ * beside {@link redactStandaloneText}, using the exact same rules and the same
+ * per-value placeholder allocation; the restoration map lives only in memory for
+ * the duration of one dispatch and is never sent, stored, or logged. What
+ * crosses the wire is identical to what `redactStandaloneText` would have
+ * produced.
+ *
+ * Placeholders carry their closing bracket, so no placeholder is a prefix of
+ * another (`[REDACTED:x:1]` cannot match inside `[REDACTED:x:11]`) and
+ * restoration needs no ordering care.
+ */
+export function redactReversibleText(text: string): ReversibleRedaction {
+  const table = new PlaceholderTable();
+  const { text: redacted, count } = redactText(text, table);
+  const entries = table.entries();
+  return {
+    text: redacted,
+    count,
+    restore: (reply: string): string => {
+      let out = reply;
+      for (const [placeholder, original] of entries) out = out.split(placeholder).join(original);
+      return out;
+    },
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
