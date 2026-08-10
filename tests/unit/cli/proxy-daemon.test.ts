@@ -322,7 +322,10 @@ setTimeout(() => process.exit(0), 4000);
     await writeFile(scriptPath, `"use strict";\nprocess.exit(0);\n`, "utf8");
     const port = await getFreePort();
 
-    const pid = await startDetached(dir, port, scriptPath);
+    // Short budget on purpose: the production default is deliberately generous
+    // (R9.18 — a tight one reported healthy daemons as failed), and waiting it
+    // out here would both slow this test and starve the parallel suite.
+    const pid = await startDetached(dir, port, scriptPath, {}, { waitMs: 1_000 });
     expect(pid).toBeNull();
   }, 10_000);
 });

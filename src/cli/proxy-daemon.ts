@@ -123,8 +123,18 @@ export function portInUse(port: number, timeoutMs = 500): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll until the port is accepting connections, or timeout. */
-export async function waitForPort(port: number, timeoutMs = 8000): Promise<boolean> {
+/**
+ * Poll until the port is accepting connections, or timeout.
+ *
+ * R9.18: the budget was 8s, and daemon start-up on a project with several
+ * configured accounts measured ~6.7s of credential resolution alone — close
+ * enough that normal jitter reported "proxy did not come up" for a proxy that
+ * came up a moment later. The resolution itself is now concurrent, but the
+ * budget stays generous: being slow to declare failure costs a few seconds on a
+ * genuinely broken start, while being quick to declare it lies about a working
+ * one, and the lie sends people debugging a healthy daemon.
+ */
+export async function waitForPort(port: number, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await portInUse(port)) return true;
@@ -264,7 +274,7 @@ export async function startDetached(
   port: number,
   scriptPath: string,
   env: Readonly<Record<string, string>> = {},
-  opts: { readonly shim?: boolean } = {},
+  opts: { readonly shim?: boolean; readonly waitMs?: number } = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
   // Decision 56: the bypass shim is the same daemon with the pipeline pinned to
@@ -284,7 +294,7 @@ export async function startDetached(
   // The child holds its own duplicate of the descriptor; ours is done.
   if (log !== null) await log.close().catch(() => {});
   child.unref();
-  const up = await waitForPort(port);
+  const up = await waitForPort(port, opts.waitMs);
   if (!up) return null;
   // The child writes its own pid file on listen; report that pid if present.
   const info = await readProxyPid(projectDir);

@@ -619,15 +619,22 @@ export async function credentialEnvForProxy(
   const activeStoreId = onDefault ? DEFAULT_STORE_ID : selected;
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
-  // The active account first — unchanged behaviour, so a single-upstream setup
-  // spawns exactly as it did before this task.
+  // Resolution stays SEQUENTIAL, deliberately. R9.18 measured this as the bulk
+  // of proxy start-up — ~2.6s one-time for the DPAPI host self-test, then ~0.94s
+  // per *stored* account (unstored ones cost ~1ms) — and tried resolving them
+  // concurrently. That bought nothing on Windows, because concurrent PowerShell
+  // startups contend rather than overlap, and the burst of processes was enough
+  // to destabilise the test suite. The fix that actually removes the cost is one
+  // batched decrypt in a single invocation: filed as R9.20, with the numbers.
+  //
+  // The active account first, so its credential wins the shared var; then every
+  // account a target references. A missing credential is skipped silently rather
+  // than thrown — an unkeyed target must not stop the proxy starting for the
+  // targets that ARE keyed. `golem target list` reports it.
   const out: Record<string, string> = {};
   const active = await store.resolve(activeStoreId);
   if (active !== null) out[envVarForAccount(activeStoreId)] = active.secret;
 
-  // Then every account some target references. A missing credential is skipped
-  // silently here, not thrown: an unkeyed target must not stop the proxy from
-  // starting for the targets that ARE keyed. `golem target list` reports it.
   for (const accountId of accountsReferencedByTargets(settings.proxy)) {
     const varName = envVarForAccount(accountId);
     if (out[varName] !== undefined) continue;
