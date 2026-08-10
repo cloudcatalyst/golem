@@ -5267,3 +5267,568 @@ green. It is documented and legal, but it re-introduces exactly what Decision 42
 removed — WebFetch would run, including its **internal summarization model call** (which
 transits the proxy, see §the Decision 42 note). That is a real cost traded for a UI
 colour, so it needs measuring rather than assuming. Written up as **R9.7**.
+
+## §116 — R9.8: `lossless_only` is unreachable by ANY config, and the daemon was discarding every warning (2026-08-09)
+
+Measured directly against the pinned package (`uv run --python 3.13 --with
+headroom-ai==0.30.0`), not from docs. Four findings, three of them contradicting
+what R9.8 was written to assume.
+
+**1. `CompressConfig` is eight flat fields, and that is the whole reachable surface.**
+Confirmed by introspection: `compress_user_messages` (False), `compress_system_messages`
+(True), `protect_recent` (4), `protect_analysis_context` (True), `target_ratio` (None),
+`min_tokens_to_compress` (250), `kompress_model` (None), `savings_profile` (None).
+`headroom.compress()` forwards seven of them to `pipeline.apply()`; `savings_profile` is
+applied earlier via `apply_agent_savings_profile`. There is no `smart_crusher`,
+`lossless_only` or `read_lifecycle` field anywhere on it.
+
+**2. The nested config R9.8 proposed to reach does not work — and it is not a passthrough
+problem.** `HeadroomConfig` *does* carry `smart_crusher: SmartCrusherConfig`, and
+`SmartCrusherConfig.lossless_only` *does* exist (default False). But Headroom's default
+pipeline builds the router with **no config at all** — `transforms/pipeline.py`:
+
+```python
+transforms.append(ContentRouter())      # ← no config argument
+```
+
+so `HeadroomConfig.smart_crusher` is held by the pipeline and never handed to anything.
+Measured on a 400-row tool result, `mode="aggressive"`:
+
+| route | tokens saved | `<<ccr:…>>` markers |
+|---|---|---|
+| stock pipeline | 19,181 | **37** |
+| `HeadroomConfig(smart_crusher=SmartCrusherConfig(lossless_only=True))` | 19,181 | **37** |
+| `ContentRouter(ContentRouterConfig(lossless=True))` | 15,740 | **0** |
+
+`HEADROOM_LOSSLESS_ONLY` exists but is read only in `proxy/server.py` — Headroom's own
+proxy, which Golem does not run. **The reach point is the transform instance, not a
+config object.** Golem therefore swaps the ContentRouter inside a real default pipeline
+rather than rebuilding the transform list, so an upstream release that adds a transform
+keeps it; if no ContentRouter is found the option is reported, never silently dropped.
+
+`ContentRouterConfig.lossless` is the right switch rather than
+`smart_crusher_lossless_only`: it *also* sets `ccr_inject_marker = False`, so the
+marker-free promise holds on every path, not just the crusher's.
+
+**3. Headroom already protects Read/Glob/Grep/Write/Edit — when the tool name resolves.**
+`DEFAULT_EXCLUDE_TOOLS` covers exactly those five. The same payload routed
+`router:excluded:lossless_json` (0 markers) under tool name `Read` and
+`router:tool_result:smart_crusher` (37 markers) under `Bash`. Golem forwards the whole
+message array including the assistant `tool_use` blocks, so the exclusion does apply —
+the marker exposure is **Bash, WebFetch and MCP tool output**, not Read.
+
+**4. `compress_user_messages` is INERT on the shipped install.** R9.8 flagged Golem's
+level-3 preset setting it True against Headroom's "skip them for coding agents" default.
+Measured both ways on identical input: same 7,984 tokens saved, user prose byte-identical
+(8,160B), tool_result byte-identical (37,979B). The prose-compressing Kompress stage
+needs `[ml]`/torch, which the default install deliberately omits (§35), and tool_result
+blocks are routed by ContentRouter regardless of the flag. **The preset is not the lever
+it appeared to be** — the router is. Left as-is, documented rather than flipped.
+
+**5. The daemon was throwing away every proxy diagnostic.** `startDetached` spawned with
+`stdio: "ignore"` (`src/cli/proxy-daemon.ts`), so in the mode people actually run the
+proxy in, the adapter's "this Headroom ignored …" warning — and the target-misconfig and
+missing-credential warnings beside it — reached nobody. This repo's own
+`.golem/settings.local.json` carries `headroom_config.plugins`, which was filtered out
+and never applied; the warning existed and was invisible. The daemon now appends
+stdout/stderr to `.golem/proxy.log` (front-truncated at 1 MB, falling back to `"ignore"`
+if it cannot be opened), and `golem status` reports the path. A diagnostic nobody can
+find is the same as no diagnostic.
+
+**Decision taken (2026-08-09):** marker-free is Golem's **default** wherever the semantic
+stage runs — 82% of the saving kept, zero markers — overridable per-request with
+`headroom_config: {"lossless_only": false}`. The flagship client is a coding agent doing
+exact-match edits, and a marker in a tool result is precisely what makes the model's view
+of a file differ from its bytes on disk.
+
+## §117 — R9.6: the migration shim only ever existed for one rename, and the account layer was claiming target ids (2026-08-09)
+
+Building the declarative migration table surfaced two things the task brief did not
+predict.
+
+**1. Retiring the leaf is what makes the mechanism real.** A migration table whose
+`from` key is still a live leaf is a fiction: both names remain writable, the loader
+never consults the table, and nothing changes. `assertLeafRename` therefore refuses
+that combination, and its test is the guard — registering a rename while leaving the
+old key in `SETTINGS_LEAVES` fails the suite rather than quietly doing nothing. This
+is the "example is the test" the brief asked for, inverted into an invariant.
+
+**2. `proxy.active_account` and `proxy.default_target` had drifted apart in meaning.**
+R9.1 renamed the selector and unified routing on `default_target`, but the *account*
+layer (`resolveActiveUpstream`, via proxy-runtime and every display surface) went on
+reading `active_account`. Retiring the leaf collapsed them — and exposed that the
+unified selector may legitimately name a **target** that is not an account
+(`sonnet-5`, say). The old code would have warned `active_account "sonnet-5" is not
+in proxy.accounts` on every proxy start.
+
+Fixed by giving `resolveActiveUpstream` the known target ids: a selector that names a
+target is not a misconfiguration, so the account layer stands aside silently and
+routing serves it. Fail-closed is not weakened — a selector in *neither* registry
+still warns, and `proxy-runtime` independently fail-closes against both registries at
+startup, so the unknown-id case is covered twice.
+
+**Where the warning goes.** Config warnings surfaced only in `golem status`, the TUI
+and the control surface — none of which anyone runs after an upgrade that appears to
+work. They now also print at proxy startup, which is the process that actually
+consumes the settings. That is only useful because R9.8 stopped the detached daemon
+spawning with `stdio: "ignore"`: before that commit the line would have gone to the
+same nowhere. The two tasks compose — a diagnostic and a place to read it.
+
+**Verified live** (built CLI, temp project whose `settings.json` names only the old
+key): `config get proxy.active_account` and `config get proxy.default_target` both
+report `proxy.default_target = "openrouter-qwen3" — project (…/settings.json)`;
+`golem status` prints the rename warning naming the file and the key to edit; and
+`config set proxy.active_account …` writes `default_target` and says so. `writeSetting`
+resolves retired keys too, so no write path can put a renamed key back into a file.
+
+## §118 — R9.5: the two managed-file bugs were one missing question (2026-08-09)
+
+Skills were overwritten on any difference; guidance was never rewritten at all.
+They read as opposite bugs and are the same one: both surfaces asked *does this
+file differ from what Golem ships?* — which cannot separate "Golem's text moved
+on" from "the user edited it". Each picked an answer and was therefore wrong half
+the time. Recording the hash of what Golem last wrote adds the missing question,
+and both behaviours fall out of it: **stale** (matches what Golem wrote, so
+refreshing loses nothing) vs **owned** (does not, so it is the user's).
+
+**No record means owned — the deliberate direction.** A project initialized
+before this mechanism has no hashes, so its drifted files classify as owned and
+are kept with a note rather than refreshed. The alternative (refresh when
+unsure) is the original data-loss bug wearing a new mechanism: Golem cannot prove
+it wrote that content, so it must not discard it. The record self-heals, since
+every write from here on records a hash. A corrupt or unreadable record degrades
+the same way — to *keep the user's file*, never to overwrite it.
+
+**The sentinel kept its real job.** `.golem/state/guidance.json` `{seeded:true}`
+existed so `golem guidance disable` survives a re-init, and that is still exactly
+what it does — but "don't undo the user's choice" and "never refresh the text"
+had been the same mechanism, and only the first was ever intended. Seeding now
+asks per rule: still present → refresh it if unmodified; absent → leave it absent
+and say "disabled — not re-seeded". A refresh that resurrected a disabled rule
+would be a worse bug than the one being fixed, so that case has its own test.
+
+**`conflict` is a new ActionKind, not a `modify` variant.** The brief's
+requirement — "'refreshing stale text' and 'replacing your edit' cannot both
+render as `modify`" — is a vocabulary problem, not a message problem: any shared
+kind loses the distinction wherever actions are rendered generically (the two
+`padEnd` renderers, the VS Code panel, `--dry-run`). The detail text carries the
+instruction, because a refusal with no way forward is just an unexplained stop.
+
+**Verified live** (built CLI, temp project): `golem init`, append a line to
+`.claude/skills/golem/ship/SKILL.md`, `golem init` again → reports
+`conflict .claude/skills/golem/ship/SKILL.md — … kept your version …` and the
+edit is still on disk. Before this change the same sequence silently destroyed
+it, reporting only `modify`.
+
+## §119 — R9.10: the rename was the easy half; `config set` was leaving a dead key behind (2026-08-09)
+
+`inference.local_coder_enabled` → `inference.coder_enabled`, registered in R9.6's
+migration table. The rename itself was mechanical. Two things were not.
+
+**1. `golem config set` on a retired key left the file holding BOTH names.**
+R9.6 made `set` write the live key and report the redirect, which is right — but
+`writeSetting` only ever adds. So a user following the deprecation notice ended up
+with `local_coder_enabled` *and* `coder_enabled` in one file, the loader's
+shadowed-key warning firing on every load, and no way out but a hand edit. Found
+by running the migration on this repo's own `.golem/settings.json`. `setConfig`
+now deletes the retired key from **the same scope's file** after writing the live
+one, via a `deleteRetiredKey` helper that deliberately bypasses migration
+resolution — `writeSetting` resolves retired names, so using it to delete one
+would have deleted the replacement instead. Other scopes are untouched: cleaning
+up a file the command did not write would be overreach.
+
+**2. `local_model.workers` had to move, not just be renamed.** The gate says
+`golem status --json` must never report a non-local model under a `local_model`
+key. With `coder` pointed at a vendor target this repo was emitting exactly that
+— `local_model.workers[0].model = "claude-sonnet-5"` beside
+`local_model.coder_model = "qwen2.5-coder:7b"`. Workers are now top-level with a
+`local` boolean per row; `local_model` keeps only what is genuinely the local
+backend. The VS Code renderer reads the new key and falls back to the old one, so
+a stale extension degrades rather than breaks.
+
+`golem local status` gained a line naming any worker that does NOT run on that
+backend, because "Local model: ACTIVE" above a worker table pointing at
+api.anthropic.com is a true sentence arranged to mislead.
+
+**Verified live on this repo, which was the honest test case**: `.golem/settings.json`
+still held `local_coder_enabled` after the rename, and `golem status` reported
+`coder_enabled: true` (migration carried it) with a warning naming the file and
+the key to edit; `golem local status` printed
+``note: `coder` runs on target "sonnet-5", NOT on this backend``; `local_model`
+no longer contained `claude-sonnet-5`; and `config set` on the old name left the
+file holding only `coder_enabled`, after which the warning was gone.
+
+**Sequencing paid off exactly as predicted.** R9.6 supplied the migration, so no
+existing config broke. R9.5 supplied managed-file refresh, so the rewritten
+`local-coder` guidance rationale — which previously said "leaves the paid model's
+tokens", the inverse of the truth once `coder` points at a vendor model — actually
+reaches projects that already ran `golem init`. Doing R9.10 first would have
+demonstrated both bugs instead of fixing them.
+
+## §120 — R9.7: the loopback escape is CLOSED by WebFetch's forced HTTPS; the red dot is accepted in writing (2026-08-09)
+
+Closes R9.7. §115 left exactly one untested escape from the cache-serve red dot:
+`updatedInput` + `permissionDecision: "allow"`, rewriting `tool_input.url` to a loopback
+URL Golem serves the page from, so WebFetch runs normally and renders green. Tested it
+live rather than reasoning about it. **Half of it works; the half that matters does not.**
+
+### What was measured (all live, this session)
+
+**1. `updatedInput` url-rewriting IS honoured — CONFIRMED.** A temporary probe branch in
+`runWebFetchPre` (reverted; never committed) answered a marked URL with
+`permissionDecision: "allow"` + `updatedInput: {url: <other>, prompt}`. `WebFetch("https://example.com/?r97-probe")`
+returned **RFC 2606** ("Reserved Top Level DNS Names"), not example.com — and rendered as
+a **normal, non-error tool call**. So the rewrite mechanism and the green render are both real.
+Note `updatedInput` replaces the *entire* input object: `prompt` must be carried through.
+
+**2. Every URL a local endpoint could plausibly use is rejected.** This is what kills it:
+
+| rewritten to | result |
+|---|---|
+| `http://127.0.0.1:<port>/…` | **`SSL routines:OPENSSL_internal:WRONG_VERSION_NUMBER`** — WebFetch upgraded http→https and spoke TLS at the plain-HTTP server. Nothing reached the HTTP layer. Matches the tool's own doc: *"HTTP is upgraded to HTTPS."* |
+| `https://127.0.0.1:<port>/…`, self-signed cert | **`self signed certificate`** — the cert is validated. (It *did* connect: there is no loopback/private-IP blocklist, the cert is the only objection.) |
+| `file:///…` | **`Invalid URL`** |
+| `data:text/html,…` | **`Invalid URL`** |
+
+So a loopback endpoint is reachable **only** over HTTPS with a certificate Claude Code's
+Node process already trusts. That means shipping a Golem-generated CA and installing it via
+`NODE_EXTRA_CA_CERTS` in Claude Code's env.
+
+**3. The summarizer call does transit the proxy, and it is uncached.** Controlled fetch of
+`https://example.org/` (~1.2 KB) with raw mode off, watched in `.golem/telemetry/events.jsonl`:
+a `cachePrefix: "first"`, `cacheMessageCount: 1` request of **362 tokens**, billed
+**551 input / 9 output, `cacheCreation` 0 and `cacheRead` 0**. (551 ≈ 362 + the 203-token
+brevity directive, which is being injected into the summarizer call too.) It is a single-turn
+tool-free request, exactly as §71 described — confirming part (b) of the R9.7 design was
+*possible*.
+
+### The decision: DECLINED — keep `deny` + serve, and say so in the text
+
+Three independent reasons, any one sufficient:
+
+1. **Cost of admission is a CA in Claude Code's trust store.** `NODE_EXTRA_CA_CERTS` is
+   process-wide: it would make Claude Code trust a locally-stored Golem CA for *all* TLS,
+   `api.anthropic.com` included. Anything on the machine that can read that key can MITM
+   the session. Golem is the component in this stack whose entire job is to be trustworthy;
+   spending that on a UI colour is a bad trade. (The published-key alternatives — a
+   third-party wildcard cert for a name resolving to 127.0.0.1, `traefik.me`-style — mean
+   shipping someone else's private key and needing DNS, so they are worse, not cheaper.)
+   Secondary costs: cert generation with no `openssl` dependency needs a new pure-JS dep,
+   and settings.json `env` is not hot-reloaded (§112), so it needs a restart to take effect.
+2. **Part (a) alone re-bills the summarizer on every fetch.** Measured above: uncached,
+   input scaling with page size. The hooks doc from §115 is 248,890 chars ≈ **62k input
+   tokens per fetch, every fetch, at 0% cache hit** — against a session whose real hit rate
+   is 98.4% (§93). Decision 42 Option A removed exactly this.
+3. **Part (b) would fix the tokens by breaking the context economy.** Short-circuiting the
+   summarization at the proxy means the *raw page* enters context whole instead of a summary.
+   `MAX_SERVED_CHARS` (8,000) exists precisely to stop a 249k-char page landing in one tool
+   result. Trading a red dot for a 62k-token context blow-up is a strictly worse bug.
+
+Reasons 2 and 3 stand **even if** the CA problem were solved, so this is not "blocked pending
+a cert" — it is declined on the merits. The sentinel-nonce and endpoint-auth designs in the
+R9.7 brief are moot and were not built.
+
+### What shipped instead
+
+The half-measure the brief allowed: **wording that reads correctly inside an error box.**
+The old intro opened `✓ Golem served this URL…` — a tick inside an `<error>` wrapper, which
+is what got it reported as broken. Both serve paths now open `NOT AN ERROR —` and close with
+an explicit sentence that Claude Code renders hook-served content as a *denied* tool call, so
+red is expected and the fetch did not fail. Pinned by a test so it cannot silently regress,
+and recorded in the module docstring so the next reader does not re-derive §115 → §120.
+
+**If Claude Code ever gains a PreToolUse output-substitution field, this becomes a one-line
+change and should be revisited.** Until then the red dot is the documented price of skipping
+both a network fetch and an LLM call.
+
+## §121 — CORRECTION to §120: the loopback cert needs no CA, and the real blockers are scope holes, not trust (2026-08-09)
+
+§120 declined the loopback design partly on *"it needs a Golem CA in Claude Code's
+process-wide trust, covering `api.anthropic.com`"*. **That reason is wrong and is
+withdrawn.** Prompted by the user asking whether the cert could be handled at install
+time. Measured, not reasoned:
+
+### What was measured
+
+**1. A self-signed `CA:FALSE` LEAF works as a trust anchor.** First attempt proved
+nothing — `openssl req -x509` emits `CA:TRUE` by default, so the "self-signed cert"
+tested in §120 was a CA. Regenerated with `basicConstraints=critical,CA:FALSE`
+(+`keyUsage`, `extendedKeyUsage=serverAuth`, SAN `DNS:localhost,IP:127.0.0.1`):
+
+| client env | result |
+|---|---|
+| none (control) | `FAIL DEPTH_ZERO_SELF_SIGNED_CERT` |
+| `NODE_EXTRA_CA_CERTS=<the leaf itself>` | **`OK`** — TLS validated |
+| same env, fetching `https://example.com` | **`OK 200`** — the public store still works |
+
+So `NODE_EXTRA_CA_CERTS` **appends to** the default store rather than replacing it, and
+the anchor can be the leaf itself. **There is no CA to install and therefore no signing
+capability to steal**: a `CA:FALSE` cert cannot mint a cert for any other host, so the
+"could MITM api.anthropic.com" blast radius does not exist. Residual risk is only that
+someone who can read the key can impersonate `127.0.0.1:<port>` to Claude Code — and
+anyone with that access can already write the web cache and the KB, which are served
+into context anyway. Incremental risk over the status quo: small.
+
+**2. Claude Code documents the variable** (`code.claude.com/docs/en/network-config.md`,
+fetched 2026-08-09): `NODE_EXTRA_CA_CERTS` under "Custom CA certificates", *"All
+environment variables shown on this page can also be configured in `settings.json`"*,
+read **once at startup** (so a restart is required — consistent with §112), and
+verifiable: `claude --debug` logs `CA certs: Appended extra certificates from
+NODE_EXTRA_CA_CERTS (<path>)`, and `/status` shows an **Additional CA cert(s)** row.
+
+### The blockers that actually remain
+
+**A. Settings-scope holes make the wiring unreliable exactly where Golem writes it.**
+Same doc: in **cloud sessions** Claude Code *ignores* `NODE_EXTRA_CA_CERTS` from a
+settings `env` block outright; and in **Claude Desktop app-managed sessions** it reads
+it only from managed settings and `~/.claude/settings.json`, explicitly **ignoring a
+repository's own settings files** — which is precisely where `golem init` writes its
+wiring. So a project-scope install silently does nothing in those sessions.
+
+**B. A failed rewrite is worse than a red dot.** Today's failure mode is "works, looks
+red". If the hook rewrites to loopback in a session where the cert is not trusted, the
+fetch **actually fails**. Any build must therefore keep deny-and-serve as the fallback
+and only rewrite once it has positive evidence the endpoint was reachable (e.g. a latch
+recording that a real WebFetch arrived at the endpoint), rather than assuming.
+
+**C. `NODE_EXTRA_CA_CERTS` is a single path, and someone else may own it.** A user
+behind a corporate TLS-inspection proxy already has it set. Golem must not clobber it;
+concatenating their bundle with ours creates a copy that goes stale when theirs rotates.
+Safest posture: set it only when unset, otherwise print instructions.
+
+**D. §120 reasons 2 and 3 are untouched.** The summarizer still runs per fetch
+(measured: 551 in / 9 out for 1.2 KB, uncached), and it can only be bounded by serving a
+*capped* page from the endpoint — at which point the model receives WebFetch's
+**prompt-specific summary of a truncated page** instead of today's prompt-independent
+raw text. That is Decision 42's thesis in reverse, and it is a fidelity regression paid
+for with tokens, to buy a colour.
+
+### Verdict
+
+Install-time cert handling is **feasible and much cheaper than §120 claimed** — a leaf,
+a settings `env` line and a restart. It is **not** suitable as a default, because of A
+(silently inert in two session types), B (converts a cosmetic problem into a real
+failure) and D (tokens + fidelity). It is a reasonable **opt-in** for users who want the
+green dot and mostly fetch small pages. Filed as R9.12 rather than built, because the
+default stays as shipped in R9.7.
+
+## §122 — CORRECTION to §121: `additionalContext` reaches the model on an `allow`, and it SURVIVES a failed tool call — R9.12 needs no opt-in (2026-08-09)
+
+§115 listed `additionalContext` in the PreToolUse contract (*"added to Claude's context
+alongside the tool result"*) but never exercised it, and §120/§121 both reasoned as if the
+loopback **endpoint's response body** had to carry the served page. It does not. Prompted
+by the user asking whether R9.12 could ship on by default instead of behind a flag.
+
+Measured live in one session with a temporary probe branch in `runWebFetchPre`, keyed off
+a `golem_probe=<n>` marker in the URL. The global `golem` is a directory junction to the
+repo, so `npm run build` takes effect on the **next hook invocation** — no Claude Code
+restart is needed to iterate on hook behaviour (unlike settings `env`, §112).
+
+### What was measured
+
+| probe | hook output | tool outcome | did the payload reach the model? |
+|---|---|---|---|
+| 1 | `allow` + `additionalContext`, no rewrite | **green**, real fetch ran, returned `"Example Domain"` | **YES** — arrived as `<system-reminder>` prefixed `PreToolUse:WebFetch hook additional context:` |
+| 2 | `allow` + `additionalContext` + `updatedInput.url` → `https://127.0.0.1:1/` | **failed**, `<error>connect ECONNREFUSED 127.0.0.1:1</error>` | **YES — unchanged.** Delivery is independent of tool success |
+| 3 | as probe 2, `additionalContext` ≈ 20 224 chars | failed as above | **partly** — Claude Code emitted `<persisted-output>`: *"Output too large (19.7KB). Full output saved to: …\tool-results\<id>.txt"* plus a 2 KB preview |
+
+### What this changes
+
+**Blocker B is FALSIFIED.** §121 said *"a failed rewrite is worse than a red dot"* because
+the fetch would actually fail. Probe 2 shows the content still arrives in full when the
+rewritten call fails. The worst case of a wrong rewrite is therefore *red dot + content
+delivered* — substantively what R9.7 already ships — not a lost fetch. The latch is now a
+**cosmetic** optimisation, not a safety mechanism.
+
+**Blocker D is mostly dissolved.** The endpoint no longer has to serve the page; it serves
+a **stub**, and the raw cached text rides in on `additionalContext` — prompt-independent,
+never passed through WebFetch's summarizer, so Decision 42's thesis is preserved rather
+than inverted. The residual cost is one summarizer call over a few hundred bytes of stub
+per served fetch. That is a real but small and *fixed* cost, not a per-page one.
+
+**Blockers A and C become harmless rather than blocking.** A cloud session, a
+Desktop-app-managed session, or a machine where `NODE_EXTRA_CA_CERTS` is already owned by
+a TLS-inspection proxy simply never gets a trusted endpoint — so the hook keeps using
+today's deny-and-serve. Silently inert now means *silently identical to what shipped*.
+
+**The 8 000-char serve cap stays.** Probe 3 shows oversized `additionalContext` is not
+truncated destructively, but it is moved out of context into a `tool-results/*.txt` file
+behind a 2 KB preview. That is strictly worse than the current cap + CCR ref, which puts
+8 000 chars in context *and* leaves a one-step `expand` for the rest.
+
+### Consequence for R9.12
+
+The only remaining reason for an opt-in was the tokens/fidelity trade (D), and the
+stub-plus-`additionalContext` shape removes the fidelity half and shrinks the token half.
+R9.12 is therefore rewritten as a **default-on, self-configuring** feature: green when the
+endpoint is provably trusted in the running session, byte-identical to R9.7's
+deny-and-serve otherwise. No flag to tick, and no session where the user is worse off than
+today. `NODE_EXTRA_CA_CERTS` is still only ever set when unset (§121 C stands).
+
+### Caveat that must be designed for
+
+A failed rewrite renders an opaque `connect ECONNREFUSED …` / TLS error in the transcript,
+whereas today's deny renders Golem's own `NOT AN ERROR —` framing. Any path that can fail
+visibly must therefore either (a) keep `deny` as the fallback so the framing survives, or
+(b) carry an explicit "this error is expected, the content is below, do not retry" line in
+`additionalContext`. (a) is preferred — it is the known-good path.
+
+## §123 — CORRECTION to §121/§122: Claude Code is Bun/BoringSSL and REJECTS a `CA:FALSE` leaf anchor — the green path needs a real CA, which R9.12 forbids (2026-08-09)
+
+§121 measured the `CA:FALSE` leaf trick against **Node/OpenSSL** and concluded "ship a
+leaf, never a CA". §122 built on it. Both were measured against the wrong TLS stack.
+The `claude` on this machine is a **`PE32+ executable`** — a compiled **Bun** binary — and
+its TLS errors read `error:10000009:SSL routines:OPENSSL_internal:...`, i.e. **BoringSSL**.
+
+### What was measured
+
+Claude Code *does* read the variable — pointing it at a garbage file yields
+`warn: ignoring extra certs from <path>, load failed: error:10000009:SSL routines:OPENSSL_internal:PEM routines`.
+So the env plumbing works; the anchor is what fails. Each row below is a real headless
+`claude -p … --allowedTools WebFetch` run against a local HTTPS server on `127.0.0.1`,
+with `NODE_EXTRA_CA_CERTS` pointing at that server's own certificate:
+
+| trust anchor | WebFetch result |
+|---|---|
+| Golem's hand-rolled `CA:FALSE` leaf (`src/proxy/loopback-cert.ts`) | **FAIL** — `unable to verify the first certificate` |
+| **`openssl`-generated** `CA:FALSE` leaf (the §121 recipe, as a control) | **FAIL** — `unable to verify the first certificate` |
+| `openssl`-generated **`CA:TRUE`** self-signed | **OK**, `is_error=false`, body returned verbatim |
+
+The openssl control matters: it rules out a defect in the hand-rolled DER. Both leaves
+fail identically, and only the CA succeeds. **BoringSSL requires a trust anchor to be a
+CA**, where OpenSSL will accept a self-signed leaf as its own anchor. That is the whole
+difference, and §121's central correction does not survive it.
+
+### Consequence
+
+The green path is reachable **only** by installing a `CA:TRUE` certificate into Claude
+Code's process-wide trust. That reinstates §120's original objection verbatim: a CA in
+that store can sign for **any** host, `api.anthropic.com` included, so anyone who can read
+the key can MITM Claude Code's traffic. R9.12's own "Out of scope" says *"Any form of CA.
+If a design needs signing power, it is the wrong design."* By the task's own gate, the
+honest answer is **REGRESSED**: the green path does not ship.
+
+### What survives
+
+- **§122's three `additionalContext` measurements stand** — they were measured against
+  Claude Code itself, not against Node, and the live run re-confirmed the important one:
+  when the rewritten call failed with `unable to verify the first certificate`, the page
+  **still reached the model**, which answered from it and correctly reported the fetch as
+  having failed. Content delivery really is decoupled from tool success.
+- **The floor is untouched.** With `NODE_EXTRA_CA_CERTS` unset (every session today) the
+  hook takes R9.7's deny path, byte-for-byte; the full suite passes unchanged.
+- The hand-rolled X.509 generator works and adds no dependency, should a future design
+  need a loopback certificate for something that is not Claude Code's WebFetch.
+
+### The one shape not yet measured
+
+A **publicly-trusted certificate for a hostname that resolves to `127.0.0.1`** (the
+`localtest.me` / `traefik.me` pattern) would give a green fetch with **no** trust-store
+change, no CA, and no restart — the anchor is already in the public store. Costs: a
+dependency on a third-party domain and its published key, and a DNS lookup per fetch (so
+it fails closed to the deny floor when offline). Not measured, and not obviously
+acceptable for a local-first project — recorded so the option is not lost.
+
+## §124 — the green WebFetch IS reachable: a DNS-name-constrained CA that provably cannot issue a cert for api.anthropic.com (2026-08-09)
+
+§123 closed R9.12 on the grounds that green needs a CA and "any CA" was forbidden because
+it could sign for `api.anthropic.com`. That premise assumed an **unconstrained** CA. X.509
+`nameConstraints` removes the assumption, and BoringSSL turns out to enforce them. Prompted
+by the user asking whether WebFetch could be used without HTTPS; it cannot, but the
+question reopened the trust question and this is the way through.
+
+### Plain HTTP is definitively closed (asked and answered first)
+
+A plain-HTTP server on loopback, fetched from a cwd with no Golem hooks, logged:
+
+```
+PORT=52358
+CLIENT-ERROR HPE_INVALID_METHOD          <- TLS ClientHello bytes hitting an HTTP parser
+CLIENT-ERROR ERR_HTTP_REQUEST_TIMEOUT
+```
+
+No request ever reached the HTTP layer, for either `http://127.0.0.1:<port>` or
+`http://localhost:<port>`. Server-side confirmation of §120's client-side
+`WRONG_VERSION_NUMBER`. There is no loopback exemption from the `http`→`https` upgrade.
+
+### New fact: `localhost` is not a usable hostname for WebFetch
+
+`https://localhost:<port>/…` returns **`Invalid URL`** — the same rejection `file://` and
+`data:` get (§120). Only the IP literal `127.0.0.1` is accepted. This matters structurally:
+the rewrite target must be an IP, so the leaf must be validated by an **iPAddress** SAN.
+
+### The certificate matrix, all measured with live `claude -p … --allowedTools WebFetch`
+
+| trust anchor (`NODE_EXTRA_CA_CERTS`) | server leaf | result |
+|---|---|---|
+| hand-rolled `CA:FALSE` leaf | itself | FAIL — `unable to verify the first certificate` |
+| `openssl` `CA:FALSE` leaf (§121 recipe, control) | itself | FAIL — `unable to verify the first certificate` |
+| unconstrained `CA:TRUE` | itself | OK — but this is the forbidden shape |
+| CA + `nameConstraints` including `permitted;IP:127.0.0.1/…` | `IP:127.0.0.1` | FAIL — **`unsupported name constraint type`** |
+| CA + `nameConstraints=critical,permitted;DNS:golem.invalid` | `IP:127.0.0.1` | **OK — GREEN** |
+| the same DNS-constrained CA | `IP:127.0.0.1` **+ `DNS:api.anthropic.com`** | FAIL — **`permitted subtree violation`** |
+
+The last two rows together are the finding. BoringSSL **cannot parse** `iPAddress` name
+constraints (it rejects the whole anchor rather than ignoring the extension — it fails
+closed, which is the safe direction), but it **does parse and enforce** `dNSName`
+constraints. So a CA restricted to `permitted;DNS:golem.invalid` is accepted as an anchor,
+validates an IP-SAN leaf for `127.0.0.1`, and is *provably* unable to issue anything
+bearing `api.anthropic.com` — the exact certificate §120 feared was refused with
+`permitted subtree violation`, by the client, in a live run.
+
+### Residual risk, stated plainly
+
+The `iPAddress` name form stays **unconstrained**, because constraining it makes BoringSSL
+reject the anchor outright. So whoever can read the CA key can mint a certificate for any
+**IP literal** that a Claude Code started with this env would trust. It cannot mint one for
+any **hostname** outside `*.golem.invalid`, and Claude Code reaches `api.anthropic.com` by
+hostname, so the MITM path §120 named is closed. `pathlen:0` also prevents sub-CAs.
+
+This is materially different from shipping an unconstrained CA, and it is not zero. The
+key would live in `.golem/loopback/` at `0600`, beside a KB and web cache that are already
+fed into context.
+
+### Status
+
+Not built. R9.12's "Out of scope" still says *"Any form of CA"*, written when a CA meant
+unlimited signing power. That boundary is now the only thing between this and a green
+WebFetch, and moving it is the user's call, not an agent's.
+
+## §125 — the loopback CA takes effect WITHOUT restarting Claude Code, and tool children see settings `env` immediately (2026-08-10)
+
+Found while deploying R9.12 to this repo. Two related facts, both measured in the session
+that was already running when `golem init` wrote the wiring:
+
+**1. Settings `env` reaches child processes immediately.** Straight after `golem init`, a
+Bash tool call printed
+`NODE_EXTRA_CA_CERTS=D:\…\.golem\loopback\ca.pem` — no restart, no reload. So a hook's own
+environment reflects the *settings file*, not necessarily what Claude Code's TLS stack was
+started with. That made the hook's env check look like a possible false positive.
+
+**2. It is not a false positive — Claude Code's own TLS picked it up too.** A WebFetch of
+a cached URL in that same pre-existing session returned **`is_error=false`**, served from
+the loopback stub, with the page arriving via `additionalContext`. The TLS handshake
+against the newly-created CA succeeded in a process that started before the CA existed.
+
+This is **better than the documentation implies**. `network-config.md` says these
+variables are "read once at startup", and §112 recorded the same for settings `env`
+generally — true for `ANTHROPIC_BASE_URL`, but the CA store is evidently re-read when
+settings change (the same doc already says mTLS cert/key are "re-read each time it applies
+settings, including when settings change during a session"; the CA appears to behave the
+same way). `golem init`'s notice was written to promise a restart was required; it now
+says a restart is only needed *if* the green path does not appear.
+
+### The residual mismatch this does NOT rule out
+
+In **cloud** and **Desktop-app-managed** sessions the doc says `NODE_EXTRA_CA_CERTS` from a
+repository's settings `env` is ignored for TLS (§121-A). If such a session nonetheless
+injects it into child environments, the hook would see the variable, believe the endpoint
+is trusted, rewrite, and the fetch would fail. Thanks to §122 the page still reaches the
+model, so nothing is lost — but the transcript shows an opaque TLS error instead of the
+clean `NOT AN ERROR —` deny.
+
+Closing that needs the reachability **latch** that R9.12's design described and the shipped
+code does not implement: rewrite optimistically once, have the endpoint record that a real
+WebFetch arrived, and fall back to the deny floor for the rest of the session when no hit
+was recorded. Filed as R9.19. Not reproducible from a terminal session, which is why it was
+filed rather than guessed at.

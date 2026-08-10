@@ -21,6 +21,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ConfigError } from "./errors.js";
+import { liveKeyFor } from "./migrations.js";
 import { settingsFilePaths } from "./paths.js";
 import { allLeafPaths, leafSchema } from "./schema.js";
 
@@ -41,10 +42,15 @@ export interface WriteSettingOptions {
  */
 export async function writeSetting(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   value: unknown,
   options: WriteSettingOptions = {},
 ): Promise<string> {
+  // R9.6: a retired key resolves to its replacement, so NO write path can put a
+  // renamed key back into a settings file the loader would then warn about.
+  // `golem config set` resolves too and reports the redirect; this is the floor
+  // under every other caller.
+  const key = liveKeyFor(requestedKey);
   const dotIndex = key.indexOf(".");
   const section = dotIndex === -1 ? key : key.slice(0, dotIndex);
   const leafKey = dotIndex === -1 ? "" : key.slice(dotIndex + 1);
@@ -107,6 +113,51 @@ export async function writeSetting(
     );
   }
   return file;
+}
+
+/**
+ * R9.6/R9.10 — delete a RETIRED key from one scope's file, bypassing both the
+ * migration resolution and the schema check.
+ *
+ * {@link writeSetting} deliberately resolves retired names, so it cannot be used
+ * to remove one — it would delete the replacement instead. Without this, setting
+ * a renamed key leaves the file holding both names: the new one wins, the old
+ * one is dead weight, and the loader warns about the pair forever. Nobody asked
+ * for a dead duplicate.
+ *
+ * Only ever called with a key that {@link liveKeyFor} resolved, i.e. one the
+ * schema no longer knows. Missing file or missing key: a silent no-op.
+ */
+export async function deleteRetiredKey(
+  scope: SettingsScope,
+  retiredKey: string,
+  options: WriteSettingOptions = {},
+): Promise<void> {
+  const dotIndex = retiredKey.indexOf(".");
+  if (dotIndex === -1) return;
+  const section = retiredKey.slice(0, dotIndex);
+  const leafKey = retiredKey.slice(dotIndex + 1);
+  const file = settingsFilePaths(options)[scope];
+
+  let existing: ExistingFile;
+  try {
+    existing = await readExisting(file);
+  } catch {
+    return; // unreadable/malformed: leave it entirely alone
+  }
+  const sectionValue = existing.root[section];
+  if (!isPlainObject(sectionValue) || !(leafKey in sectionValue)) return;
+  delete sectionValue[leafKey];
+
+  const text =
+    JSON.stringify(existing.root, null, existing.indent) + (existing.trailingNewline ? "\n" : "");
+  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, text, "utf8");
+    await rename(tmp, file);
+  } catch {
+    await rm(tmp, { force: true }).catch(() => {});
+  }
 }
 
 interface ExistingFile {

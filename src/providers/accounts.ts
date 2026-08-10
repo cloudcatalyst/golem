@@ -65,7 +65,8 @@ export interface ResolveResult {
 }
 
 /**
- * Resolve the active upstream from the registry + selection. `active_account`
+ * Resolve the active upstream from the registry + selection. The selector
+ * (`proxy.default_target`, renamed from `active_account` in R9.1)
  * unset → the legacy top-level config. Set + found → that account (secret from
  * its per-account env var). Set + NOT found → legacy config + a warning (never a
  * different registry account — ADR-0003 fail-closed).
@@ -75,6 +76,8 @@ export function resolveActiveUpstream(
     readonly legacy: LegacyUpstream;
     readonly accounts?: readonly UpstreamAccount[];
     readonly activeAccount?: string;
+    /** Target ids that exist; a selector naming one of these is not a misconfiguration. */
+    readonly knownTargetIds?: readonly string[];
     readonly legacyApiKey: string | undefined;
   },
   env: Readonly<Record<string, string | undefined>>,
@@ -92,11 +95,19 @@ export function resolveActiveUpstream(
 
   const account = input.accounts?.find((a) => a.id === input.activeAccount);
   if (account === undefined) {
+    // R9.6: since R9.1 the selector is `proxy.default_target`, which may name a
+    // target rather than an account. That is not a misconfiguration — the target
+    // registry serves it — so the account layer stands aside without comment.
+    // A genuinely unknown id still warns here, and the proxy separately
+    // fail-closes on it against BOTH registries at startup.
+    if (input.knownTargetIds?.includes(input.activeAccount) === true) {
+      return { resolved: legacyResolved };
+    }
     return {
       resolved: legacyResolved,
       warning:
-        `active_account "${input.activeAccount}" is not in proxy.accounts — ` +
-        "using the top-level upstream config instead (no silent switch to another account).",
+        `proxy.default_target "${input.activeAccount}" is in neither proxy.accounts nor ` +
+        "proxy.targets — using the top-level upstream config instead (no silent switch).",
     };
   }
 
@@ -135,7 +146,15 @@ export interface UpstreamDisplaySettings {
   readonly upstream_model?: string;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
   readonly accounts?: readonly UpstreamAccount[];
-  readonly active_account?: string;
+  /** R9.6: the selector, renamed from `active_account` in R9.1. */
+  readonly default_target?: string;
+  /**
+   * R9.6: ids the target registry knows. The selector may legitimately name a
+   * TARGET rather than an account, in which case the account layer must stand
+   * aside silently — routing owns it. Without this the account layer would warn
+   * about a perfectly valid target id.
+   */
+  readonly targets?: readonly { readonly id: string }[];
 }
 
 /**
@@ -157,7 +176,10 @@ export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): Upstr
         auth_scheme: resolveAuthScheme(settings.upstream_provider, settings.upstream_auth_scheme),
       },
       ...(settings.accounts !== undefined ? { accounts: settings.accounts } : {}),
-      ...(settings.active_account !== undefined ? { activeAccount: settings.active_account } : {}),
+      ...(settings.default_target !== undefined ? { activeAccount: settings.default_target } : {}),
+      ...(settings.targets !== undefined
+        ? { knownTargetIds: settings.targets.map((t) => t.id) }
+        : {}),
       legacyApiKey: undefined,
     },
     {},

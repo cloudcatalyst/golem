@@ -265,6 +265,13 @@ describe("WebFetch gate (PreToolUse)", () => {
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("CACHED BODY TEXT");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("knowledge base");
+    // R9.7: a serve is a deny, so Claude Code renders it red. The red dot is
+    // accepted (verification-notes §120) on the condition that the text says so
+    // — a bare "✓" inside an <error> box is what got this reported as broken.
+    expect(decision.hookSpecificOutput.permissionDecisionReason.startsWith("NOT AN ERROR —")).toBe(
+      true,
+    );
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toContain("denied* tool call");
   });
 
   it("stores an oversized served page as a CCR ref and emits an expand handle", async () => {

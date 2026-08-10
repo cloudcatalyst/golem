@@ -119,7 +119,7 @@ describe("buildProxyFromSettings — resolved-upstream reporting", () => {
               auth_scheme: "bearer",
             },
           ],
-          active_account: "openrouter-laguna",
+          default_target: "openrouter-laguna",
         },
       },
     });

@@ -1,7 +1,7 @@
 ---
 task: P3a
 title: CLAUDE.md compaction actuator — the write half of R6.4's leanness check
-state: queued
+state: done
 owner: agent
 size: M
 design: docs/plan/proposals/r8-context-economy.md (Workstream P, P3a); verification-notes §87
@@ -9,7 +9,7 @@ gate: Report the saving AND its cost together (Decision 52's rule). Code, URLs a
 depends_on: []
 touches: [src/cli/, src/prompt/]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-08-09T03:32:12.890Z
 ---
 
 ## Goal
@@ -55,3 +55,7 @@ and tracks an upstream. Measure before choosing.
 
 Wrapping the Caveman speech skill (settled: §87, Decision 52, Decision 53). Rewriting
 the wiki or the spec. Anything that edits `CLAUDE.md` without review.
+
+## Outcome
+
+shipped — tier 3b local rewrite; golem prompt compact; measured ~1-3% on an already-lean CLAUDE.md

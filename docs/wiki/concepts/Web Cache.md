@@ -2,9 +2,9 @@
 title: Web Cache
 type: concept
 tags: [webfetch, cache, hooks, knowledge, decision-42]
-sources: [src/hooks/web-fetch.ts, src/knowledge/web-cache.ts, docs/plan/verification-notes.md#44]
+sources: [src/hooks/web-fetch.ts, src/knowledge/web-cache.ts, docs/plan/verification-notes.md#44, docs/plan/verification-notes.md#120, docs/wiki/debriefs/2026-08-09-R9.7-webfetch-red-dot.md]
 created: 2026-07-25
-updated: 2026-07-25
+updated: 2026-08-09
 ---
 
 # Web Cache
@@ -60,6 +60,19 @@ sequenceDiagram
   `WebFetch`'s answer. In raw mode the pre-hook already owns caching, so the post
   hook deliberately caches nothing (storing a prompt-specific answer is exactly the
   bug Decision 42 fixes).
+
+## A served page renders RED, and that is expected
+
+A serve is a `deny` — the only `PreToolUse` shape that returns content without running
+the tool — so Claude Code draws it as a **failed tool call**. Golem's best path (cache
+hit, no network fetch, no summarizer LLM call) is therefore the one that looks broken.
+The serve text says so out loud: it opens `NOT AN ERROR —` and names the cause.
+
+The green alternative (`updatedInput` + `allow` pointing at a loopback endpoint) was
+tested and **declined**: `WebFetch` upgrades `http`→`https` and validates the
+certificate, so the endpoint would need a Golem CA installed into Claude Code's
+process-wide trust — and it re-bills an uncached summarizer call per fetch. Measured
+and written up in `debriefs/2026-08-09-R9.7-webfetch-red-dot.md` (verification-notes §120).
 
 ## Freshness lifecycle
 

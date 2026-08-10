@@ -1,1 +1,5 @@
-{}
+{
+  "inference": {
+    "coder_enabled": true
+  }
+}

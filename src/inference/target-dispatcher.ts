@@ -37,11 +37,13 @@ import type { ChatMessage, InferenceService, Role } from "../interfaces/inferenc
 import { redactReversibleText } from "../pipeline/redaction.js";
 import {
   isGeminiProvider,
+  isSpawnProvider,
   isTranslatingProvider,
   listTargets,
   makeAuthMapper,
   perAccountEnvVar,
   type ResolvedTarget,
+  resolveDefaultTargetId,
   resolveTarget,
   type TargetRegistrySettings,
   type TargetTrust,
@@ -149,6 +151,44 @@ export interface TargetDispatcherOptions {
    * request always wins.
    */
   readonly workerTargets?: Readonly<Record<string, string>> | undefined;
+  /**
+   * Resolve a target's credential without it ever entering the environment.
+   *
+   * Decision 47's spawn-time handoff assumes a process the CLI *spawns* (the
+   * proxy daemon, which gets `credentialEnvForProxy` injected at spawn). The MCP
+   * server is spawned by Claude Code from `.mcp.json`, so it inherits no
+   * `GOLEM_UPSTREAM_API_KEY__*` at all — every credentialed target dispatched
+   * from `coder` therefore went out with **no auth header** and came back 401,
+   * while `golem target list` correctly reported the key as stored.
+   *
+   * A resolver rather than more env: secrets stay in this process's closure, so
+   * nothing the MCP server spawns (capability probes, Ollama calls) inherits
+   * them. Receives `null` for a target on the default top-level upstream config.
+   * When omitted, the env lookup below is used unchanged.
+   */
+  readonly resolveKey?: (
+    accountId: string | null,
+  ) => string | undefined | Promise<string | undefined>;
+  /**
+   * R9.15 — how a `claude-cli` target is reached: by spawning the user's own
+   * Claude Code CLI. Injected rather than imported so that POLICY (the two
+   * guards below, redaction, audit) and MECHANISM (a child process) stay in
+   * separate modules, and a policy test needs no child process.
+   *
+   * Absent → a `claude-cli` target is refused rather than silently rerouted.
+   */
+  readonly spawnDrafter?: (input: {
+    readonly prompt: string;
+    readonly model: string;
+  }) => Promise<string>;
+  /**
+   * The model the interactive session is currently being served, for the
+   * "don't draft on the model you are already using" guard. Read from
+   * `.golem/state/served-model.json` by the caller. Returning undefined means
+   * "unknown", and the guard then allows the dispatch — refusing on no evidence
+   * would be worse than the waste it prevents.
+   */
+  readonly sessionModel?: () => string | undefined | Promise<string | undefined>;
   /** Per-request timeout for a remote dispatch. */
   readonly timeoutMs?: number;
 }
@@ -239,6 +279,72 @@ async function dispatchAnthropic(
     );
   }
   return { text, model: json.model ?? target.model ?? target.provider };
+}
+
+/**
+ * R9.15 — the provider whose "endpoint" is the user's own Claude Code session.
+ *
+ * Two guards, both asked for explicitly and both REFUSING rather than falling
+ * back, because a silent reroute is the failure mode this dispatcher exists to
+ * avoid (see the unknown-target branch above).
+ *
+ * 1. **The session's upstream must be Anthropic.** The spawned client
+ *    authenticates as itself, so if the session is fronted by a third-party
+ *    gateway the draft lands on a *different* account than the work it is
+ *    drafting for. That is a surprise, not a saving.
+ * 2. **The target's model must differ from the session's.** Spawning a whole
+ *    second session to draft on the model already in use spends the same quota
+ *    for a strictly worse context. Unknown session model → allowed: refusing on
+ *    no evidence would cost more than the waste it prevents.
+ */
+async function dispatchSpawned(
+  options: TargetDispatcherOptions,
+  target: ResolvedTarget,
+  redactedPrompt: string,
+): Promise<RemoteReply> {
+  if (options.spawnDrafter === undefined) {
+    throw new TargetDispatchError(
+      `target "${target.id}" is a claude-cli target, which is served by spawning the Claude ` +
+        "Code CLI — and this process has no spawner wired. Route this worker elsewhere.",
+    );
+  }
+
+  const sessionProvider = sessionUpstreamProvider(options.settings);
+  if (sessionProvider !== "anthropic") {
+    throw new TargetDispatchError(
+      `target "${target.id}" drafts by spawning your own Claude Code session, but this ` +
+        `project's upstream is "${sessionProvider}". The spawned client authenticates as ` +
+        "itself, so the draft would be billed to a different account than the session it is " +
+        "drafting for. Point the upstream at Anthropic, or route this worker to a target with " +
+        "its own credential.",
+    );
+  }
+
+  const current = await options.sessionModel?.();
+  if (current !== undefined && target.model !== undefined && current === target.model) {
+    throw new TargetDispatchError(
+      `target "${target.id}" would draft on "${target.model}", which is the model this session ` +
+        "is already using — the same quota, in a worse context, for a whole extra session " +
+        "start. Give the target a different model, or route this worker elsewhere.",
+    );
+  }
+  if (target.model === undefined) {
+    throw new TargetDispatchError(
+      `target "${target.id}" declares no model, so there is nothing to ask.`,
+    );
+  }
+
+  const text = await options.spawnDrafter({ prompt: redactedPrompt, model: target.model });
+  return { text, model: target.model };
+}
+
+/**
+ * Which provider actually fronts this session — the resolved default target's,
+ * falling back to the top-level upstream config when the registry cannot answer.
+ */
+function sessionUpstreamProvider(settings: TargetRegistrySettings): string {
+  const lookup = resolveTarget(settings, resolveDefaultTargetId(settings));
+  return lookup.ok ? lookup.target.provider : settings.upstream_provider;
 }
 
 export function createTargetDispatcher(options: TargetDispatcherOptions): TargetDispatcher {
@@ -344,14 +450,48 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
       }
 
       // ── The egress boundary. Everything past this line may leave the machine,
-      // so redaction happens HERE and there is no other non-local path.
+      // so redaction happens HERE and there is no other non-local path. A spawn
+      // is an egress like any other: the child talks to Anthropic.
       const redacted = redactReversibleText(request.prompt);
 
+      if (isSpawnProvider(target.provider)) {
+        const reply = await dispatchSpawned(options, target, redacted.text);
+        options.audit?.({
+          targetId: target.id,
+          provider: target.provider,
+          model: reply.model,
+          trust: target.trust,
+          redactedCount: redacted.count,
+          reason: "spawned the user's own Claude Code CLI — redacted before spawn",
+        });
+        return {
+          text: redacted.restore(reply.text),
+          model: reply.model,
+          targetId: target.id,
+          trust: target.trust,
+          redactedCount: redacted.count,
+        };
+      }
+
       const apiKey =
-        target.accountId === null
-          ? env.GOLEM_UPSTREAM_API_KEY
-          : env[perAccountEnvVar(target.accountId)];
+        options.resolveKey !== undefined
+          ? await options.resolveKey(target.accountId)
+          : target.accountId === null
+            ? env.GOLEM_UPSTREAM_API_KEY
+            : env[perAccountEnvVar(target.accountId)];
       const mapper = makeAuthMapper(target.authScheme, apiKey);
+      // A credentialed target with no resolvable key would otherwise dispatch
+      // with NO auth header and come back as a bare 401 — a failure that names
+      // neither the target nor the missing credential. Say which is missing.
+      if (mapper === undefined && target.authScheme !== "inherit") {
+        throw new TargetDispatchError(
+          `target "${target.id}" needs a credential and none resolved` +
+            (target.accountId === null
+              ? " for the default upstream account"
+              : ` for account "${target.accountId}"`) +
+            `. Store one with \`golem account login ${target.accountId ?? "anthropic"}\`.`,
+        );
+      }
       const authHeaders = mapper ? (mapper({}) as Record<string, string>) : {};
 
       const controller = new AbortController();

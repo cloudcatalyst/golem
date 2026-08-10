@@ -229,9 +229,10 @@ export function buildProxyFromSettings(
         ),
       },
       ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
-      ...(settings.proxy.active_account !== undefined
-        ? { activeAccount: settings.proxy.active_account }
+      ...(settings.proxy.default_target !== undefined
+        ? { activeAccount: settings.proxy.default_target }
         : {}),
+      knownTargetIds: listTargets(settings.proxy).map((t) => t.id),
       legacyApiKey: process.env.GOLEM_UPSTREAM_API_KEY,
     },
     process.env,

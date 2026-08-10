@@ -23,10 +23,18 @@
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
+import path, { resolve } from "node:path";
+import { loopbackCaPath } from "../proxy/loopback-cert.js";
 
 export const ENV_BASE_URL = "ANTHROPIC_BASE_URL";
 export const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
+/**
+ * R9.12: the trust anchor for the loopback stub endpoint, which is what lets a
+ * cache-served WebFetch render green instead of as a denied tool call. Read ONCE
+ * at Claude Code startup (§112), so setting it needs a restart to take effect.
+ * Golem sets it only when nothing else owns it — see §121-C.
+ */
+export const ENV_EXTRA_CA = "NODE_EXTRA_CA_CERTS";
 export const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
 export const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
 
@@ -52,11 +60,23 @@ export function claudeSettingsPath(projectDir: string): string {
  * init wrote (notes §12 — init sets it *because* a non-first-party base URL
  * disables tool search, so it is Golem's key while our wiring is present).
  */
-export function removeGolemEnv(envObj: JsonObject, baseUrl: string): boolean {
+export function removeGolemEnv(envObj: JsonObject, baseUrl: string, caPath?: string): boolean {
   let changed = false;
   if (envObj[ENV_BASE_URL] === baseUrl) {
     delete envObj[ENV_BASE_URL];
     changed = true;
+  }
+  // R9.12: the loopback CA trust, removed on the same "only if it is ours" rule.
+  // A `NODE_EXTRA_CA_CERTS` pointing anywhere else belongs to the user (§121-C)
+  // and un-wiring Golem must not disturb it.
+  if (caPath !== undefined && typeof envObj[ENV_EXTRA_CA] === "string") {
+    const current = envObj[ENV_EXTRA_CA] as string;
+    const norm = (p: string): string =>
+      process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
+    if (norm(current) === norm(caPath)) {
+      delete envObj[ENV_EXTRA_CA];
+      changed = true;
+    }
   }
   if (envObj[ENV_FOUNDRY_BASE_URL] === `${baseUrl}/anthropic`) {
     delete envObj[ENV_FOUNDRY_BASE_URL];
@@ -183,7 +203,7 @@ export async function unwireProxyEnv(
     return { changed: false, foreignBaseUrl: current, needsReload: false };
   }
 
-  const changed = removeGolemEnv(env, baseUrl);
+  const changed = removeGolemEnv(env, baseUrl, loopbackCaPath(projectDir));
   if (!changed) return { changed: false, needsReload: false };
   if (Object.keys(env).length === 0) delete settings.env;
   if (opts.dryRun !== true) await writeJson(file, settings);

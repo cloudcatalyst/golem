@@ -20,12 +20,14 @@ import {
 import {
   buildDigest,
   DEFAULT_MAX_INLINE_CHARS,
+  findTextSlot,
   type HookIo,
   identityRedact,
   REDACTED_PEM_PLACEHOLDER,
   REDACTED_SK_ANT_PLACEHOLDER,
   type RedactFn,
   runPostToolUseHook,
+  servedFetchLabel,
   stripReadLineNumbers,
 } from "../../../src/hooks/index.js";
 import { rmTemp } from "../../helpers/tmp.js";
@@ -440,5 +442,95 @@ describe("stripReadLineNumbers", () => {
 
   it("returns null for text that is not a numbered read", () => {
     expect(stripReadLineNumbers("just some output\nwith no numbers")).toBeNull();
+  });
+});
+
+describe("R9.12 — served-WebFetch provenance label", () => {
+  /** WebFetch's real response shape, measured: the text lives in `result`. */
+  const webFetchResponse = (result: string) => ({
+    bytes: 552,
+    code: 200,
+    codeText: "OK",
+    result,
+    durationMs: 10,
+    url: "https://127.0.0.1:5555/w?n=x&s=hit&u=x",
+  });
+
+  const stubUrl = (source: "hit" | "miss", target: string, age?: string) =>
+    `https://127.0.0.1:5555/w?n=nonce&s=${source}${age === undefined ? "" : `&a=${encodeURIComponent(age)}`}&u=${encodeURIComponent(target)}`;
+
+  it("recognises WebFetch's `result` field as the text slot", () => {
+    // It did not until R9.12, so the oversized-output swap never fired for
+    // WebFetch at all — a silent gap, since a missed swap looks like a small page.
+    const slot = findTextSlot(webFetchResponse("hello"));
+    expect(slot?.text).toBe("hello");
+  });
+
+  it("labels a cache hit with the real URL and the age", () => {
+    const label = servedFetchLabel("WebFetch", {
+      url: stubUrl("hit", "https://example.com/", "14h ago"),
+      prompt: "x",
+    });
+    expect(label?.detail).toContain("Served from cache (stored 14h ago)");
+    expect(label?.detail).toContain("https://example.com/");
+    // The user-visible line must be ONE line: it renders as a systemMessage.
+    expect(label?.line).toBe("Golem: served from cache (stored 14h ago) — https://example.com/");
+    expect(label?.line.includes("\n")).toBe(false);
+    expect(label?.detail).not.toContain("127.0.0.1"); // stub URL is an implementation detail
+  });
+
+  it("labels a miss as a live fetch that is now cached", () => {
+    const label = servedFetchLabel("WebFetch", {
+      url: stubUrl("miss", "https://example.net/"),
+      prompt: "x",
+    });
+    expect(label?.detail).toContain("Fetched live from https://example.net/");
+    expect(label?.detail).toContain("now cached");
+    expect(label?.line).toBe("Golem: fetched live and cached — https://example.net/");
+  });
+
+  it("leaves a genuine fetch alone", () => {
+    expect(servedFetchLabel("WebFetch", { url: "https://example.com/", prompt: "x" })).toBeNull();
+    expect(servedFetchLabel("Bash", { url: stubUrl("hit", "https://example.com/") })).toBeNull();
+    expect(servedFetchLabel("WebFetch", { prompt: "no url" })).toBeNull();
+  });
+
+  it("substitutes the tool output, replacing only the text field", async () => {
+    const io = fakeIo(
+      JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: "WebFetch",
+        tool_input: { url: stubUrl("hit", "https://example.com/", "2d ago"), prompt: "x" },
+        tool_response: webFetchResponse("a summariser paraphrase of the stub"),
+      }),
+    );
+
+    expect(await runPostToolUseHook(io)).toBe(0);
+    const emitted = JSON.parse(io.out.join("")) as {
+      systemMessage?: string;
+      hookSpecificOutput: { updatedToolOutput: Record<string, unknown> };
+    };
+    // The user only ever sees `systemMessage` for a WebFetch row — assert it.
+    expect(emitted.systemMessage).toBe(
+      "Golem: served from cache (stored 2d ago) — https://example.com/",
+    );
+    const out = emitted.hookSpecificOutput.updatedToolOutput;
+    expect(out.result).toContain("**Golem** Served from cache (stored 2d ago)");
+    // The envelope must survive intact — only the text changes.
+    expect(out.code).toBe(200);
+    expect(out.bytes).toBe(552);
+  });
+
+  it("passes a real WebFetch through untouched when it is small", async () => {
+    const io = fakeIo(
+      JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: "WebFetch",
+        tool_input: { url: "https://example.com/", prompt: "x" },
+        tool_response: webFetchResponse("a genuine short answer"),
+      }),
+    );
+    expect(await runPostToolUseHook(io)).toBe(0);
+    expect(io.out.join("")).toBe("");
   });
 });

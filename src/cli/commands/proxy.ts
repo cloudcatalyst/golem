@@ -3,7 +3,13 @@
  */
 
 import type { Command } from "commander";
-import { findProjectDir, loadConfig, settingsFilePaths } from "../../config/index.js";
+import {
+  findProjectDir,
+  loadConfig,
+  migrateOnVersionChange,
+  settingsFilePaths,
+} from "../../config/index.js";
+import { VERSION } from "../../index.js";
 import {
   createProbeRunner,
   detectCapability,
@@ -13,6 +19,8 @@ import {
 } from "../../inference/index.js";
 import type { InferenceService } from "../../interfaces/inference.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
+import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
+import { startLoopbackServe } from "../../proxy/loopback-serve.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
 import { credentialEnvForProxy } from "../accounts.js";
 import { resolvePersistedEmbedMode } from "../auto-index.js";
@@ -69,7 +77,17 @@ async function restartProxyDetached(
   await writeProxyDesired(dir, "running", new Date().toISOString());
   const { port, upstream } = await resolvePort(dir, portOpt);
   await stopProxy(dir);
-  await waitForPortFree(port);
+  // R9.18: this result used to be discarded. When the port is still held, the
+  // daemon we are about to spawn exits immediately with "already running", and
+  // whether the restart then *looks* successful depends on whether the old
+  // listener happens to outlive `waitForPort` — a coin toss reported as fact.
+  // Say what is actually true instead of starting a process that cannot win.
+  if (!(await waitForPortFree(port))) {
+    throw new InitError(
+      `port ${port} is still in use after stopping the proxy — something else is holding it. ` +
+        "Check with `golem proxy status`, then retry.",
+    );
+  }
   const credEnv = await credentialEnvForProxy(dir);
   const pid = await startDetached(dir, port, process.argv[1] ?? "", credEnv);
   if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
@@ -108,7 +126,24 @@ async function startShimDetached(
 }
 
 async function runProxyForeground(dir: string, portOpt?: string, shim = false): Promise<void> {
-  const { settings } = await loadConfig({ projectDir: dir });
+  // R9.13: first start under a new version — rewrite retired setting names in
+  // every scope, then load. Before the load, so this run already reads the fixed
+  // files and the warnings below describe what is still wrong rather than what
+  // was just fixed. Best-effort inside; it cannot throw.
+  for (const line of (await migrateOnVersionChange({ projectDir: dir, version: VERSION })).lines) {
+    process.stderr.write(`golem config: ${line}\n`);
+  }
+  const { settings, warnings } = await loadConfig({ projectDir: dir });
+  // R9.6: config warnings — a renamed key, an unknown key, an unrecognized
+  // GOLEM_* var — used to surface only in `golem status`, which nobody runs
+  // after an upgrade that appears to work. The proxy is the thing that consumes
+  // these settings, so it is the honest place to say the file names something
+  // that no longer takes effect. Since R9.8 the detached daemon's stderr lands
+  // in .golem/proxy.log rather than being discarded, so this actually reaches
+  // someone.
+  for (const warning of warnings) {
+    process.stderr.write(`golem proxy: ${warning}\n`);
+  }
   const { port } = await resolvePort(dir, portOpt);
 
   for (const [name, secret] of Object.entries(await credentialEnvForProxy(dir))) {
@@ -180,11 +215,39 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       ? `golem proxy: BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)\n`
       : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
   );
+  // R9.12: the loopback stub endpoint that would let a cache-served WebFetch
+  // render green. OFF unless explicitly switched on: §123 measured that Claude
+  // Code (Bun/BoringSSL) rejects the `CA:FALSE` leaf anchor this depends on, so
+  // the endpoint has nothing to serve today and the hook never rewrites to it.
+  // Best-effort even when on — a failure here must never stop the proxy.
+  let loopback: Awaited<ReturnType<typeof startLoopbackServe>> | null = null;
+  try {
+    const cert = await ensureLoopbackCert(dir);
+    loopback = await startLoopbackServe({
+      projectDir: dir,
+      certPem: cert.chainPem,
+      keyPem: cert.leafKeyPem,
+      certPath: cert.caPath,
+    });
+    process.stdout.write(
+      `golem proxy: loopback serve on https://127.0.0.1:${loopback.port} — cache-served WebFetches render green in sessions started with NODE_EXTRA_CA_CERTS=${cert.caPath}\n`,
+    );
+  } catch (err) {
+    process.stderr.write(
+      `golem proxy: loopback serve unavailable (${
+        err instanceof Error ? err.message : String(err)
+      }); served WebFetches use the deny path\n`,
+    );
+  }
+
   const shutdown = (): void => {
     semantic?.stop();
-    void Promise.allSettled([proxy.close(), telemetry.close(), removeProxyPid(dir)]).finally(() =>
-      process.exit(0),
-    );
+    void Promise.allSettled([
+      proxy.close(),
+      telemetry.close(),
+      removeProxyPid(dir),
+      ...(loopback === null ? [] : [loopback.close()]),
+    ]).finally(() => process.exit(0));
   };
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

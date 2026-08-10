@@ -7,7 +7,7 @@
  * discipline as the account tests) — never the machine's real keychain.
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -100,8 +100,23 @@ describe("collectTargets", () => {
     expect(renderTargets(report)).toContain("WARNING");
   });
 
-  it("reads active_account as the default when default_target is unset (migration shim)", async () => {
-    await writeSetting("project", "proxy.active_account", "work", { projectDir: dir });
+  it("reads a settings file that still names the retired active_account (R9.6 migration)", async () => {
+    // Written as raw JSON on purpose: writeSetting resolves retired keys, so it
+    // can no longer produce this file. What is being tested is an EXISTING file
+    // from before the rename, which is exactly what the migration exists for.
+    await writeSetting("project", "proxy.default_target", "work", { projectDir: dir });
+    const settingsPath = path.join(dir, ".golem", "settings.json");
+    const raw = JSON.parse(await readFile(settingsPath, "utf8")) as {
+      proxy: Record<string, unknown>;
+    };
+    delete raw.proxy.default_target;
+    raw.proxy.active_account = "work";
+    await writeFile(
+      settingsPath,
+      `${JSON.stringify(raw, null, 2)}
+`,
+      "utf8",
+    );
     const report = await collectTargets(dir, {}, { store_backend: store });
     expect(report.default_target).toBe("work");
     expect(report.default_unknown).toBe(false);

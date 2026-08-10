@@ -29,8 +29,7 @@
 import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { writeSetting } from "../config/index.js";
+import { removeVersionStamp, writeSetting } from "../config/index.js";
 import {
   addEventHook,
   addMatcherHook,
@@ -54,11 +53,19 @@ import {
   writeStatusLine,
 } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
+import { ensureLoopbackCert, loopbackCaPath } from "../proxy/loopback-cert.js";
+import {
+  classifyManaged,
+  ownedDetail,
+  rememberManaged,
+  removeManagedState,
+} from "./managed-files.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
 import {
   ENV_BASE_URL,
+  ENV_EXTRA_CA,
   ENV_FOUNDRY_BASE_URL,
   ENV_TOOL_SEARCH,
   ENV_USE_FOUNDRY,
@@ -66,6 +73,13 @@ import {
   removeGolemEnv,
 } from "./proxy-wiring.js";
 import { P0_SKILLS } from "./skills.js";
+// R9.16: one definition of what the extension IS and where it lives, shared with
+// the status surface — two copies of the file list is how the two would drift.
+import {
+  defaultVscodeSourceDir,
+  inspectVscodeExtension,
+  VSCODE_EXTENSION_FILES,
+} from "./vscode-extension.js";
 
 /** External-state checks, injectable for tests. */
 export interface InitProbe {
@@ -144,13 +158,30 @@ export interface InitOptions {
    * this URL. Ignored when `foundry` is set.
    */
   readonly upstream?: string;
+  /**
+   * R9.12: skip generating the loopback CA and trusting it via
+   * `NODE_EXTRA_CA_CERTS`. Cache-served WebFetches then keep rendering as denied
+   * (red) tool calls — the behaviour R9.7 shipped — instead of green.
+   */
+  readonly noLoopbackCert?: boolean;
   /** Override the VS Code extension source dir (tests). Default: the bundled one. */
   readonly vscodeSourceDir?: string;
   /** External-state probe; tests inject a fake. */
   readonly probe?: InitProbe;
 }
 
-export type ActionKind = "create" | "modify" | "skip" | "remove";
+export type ActionKind =
+  | "create"
+  | "modify"
+  | "skip"
+  | "remove"
+  /**
+   * R9.5 — Golem has newer content for a managed file, but the file has been
+   * edited since Golem wrote it (or Golem has no record of writing it), so it
+   * was left alone. Distinct from `modify` on purpose: "refreshing stale text"
+   * and "replacing your edit" must not render the same.
+   */
+  | "conflict";
 
 export interface InitAction {
   readonly kind: ActionKind;
@@ -232,7 +263,6 @@ const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
 const PERSONAL_INSTRUCTIONS_FILENAME = "CLAUDE.local.md";
 
 /** Runtime files copied into the installed VS Code extension (no tests/tooling). */
-const VSCODE_EXTENSION_FILES = ["extension.js", "render.js", "package.json", "README.md", "media"];
 
 /**
  * Golem's own gitignored runtime dirs that churn constantly while a proxy is
@@ -256,9 +286,6 @@ const VSCODE_WATCHER_EXCLUDE_DIRS = [
 const VSCODE_WATCHER_EXCLUDE_KEY = "files.watcherExclude";
 
 /** Where this package's bundled VS Code extension lives (dist/cli/init.js -> ../../vscode-extension). */
-function defaultVscodeSourceDir(): string {
-  return fileURLToPath(new URL("../../vscode-extension", import.meta.url));
-}
 
 /**
  * Idempotently ensure `entry` is in the project's `.gitignore`. Golem uses it to
@@ -355,6 +382,19 @@ function stringArrayEntry(obj: JsonObject, key: string): string[] {
 }
 
 /** Push a create/modify/skip action for the .claude/settings.json env block. */
+/**
+ * Loose path comparison for "does this env var already point at our CA?".
+ * Windows paths differ in case and separator between what a user typed and what
+ * `join` produces, and a false "not ours" would silently drop the green path.
+ */
+function samePathIsh(a: string, b: string): boolean {
+  const norm = (p: string): string => {
+    const resolved = path.resolve(p);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  };
+  return norm(a) === norm(b);
+}
+
 function pushEnvAction(
   actions: InitAction[],
   changed: boolean,
@@ -554,6 +594,43 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     if (envChanged && !dryRun) await writeJsonObject(settingsPath, settings);
   }
 
+  // 1b-bis. R9.12 — trust the loopback CA so a cache-served WebFetch renders
+  // GREEN rather than as a denied tool call. Three rules, all from measurements:
+  //   * set it ONLY when nothing else owns the variable (§121-C): a user behind a
+  //     TLS-inspection proxy already has it, and concatenating bundles creates a
+  //     copy that goes stale when theirs rotates.
+  //   * the anchor is a CA, because BoringSSL refuses a bare leaf (§123), but it
+  //     carries a dNSName name constraint so it CANNOT issue a certificate for
+  //     api.anthropic.com (§124, measured: `permitted subtree violation`).
+  //   * it takes effect only after a restart (§112), so say so.
+  // Declining with `--no-loopback-cert` costs nothing: the hook falls back to the
+  // deny-and-serve path R9.7 shipped, which is what every un-wired session uses.
+  if (options.noLoopbackCert !== true) {
+    const currentCa = env[ENV_EXTRA_CA];
+    if (typeof currentCa === "string" && currentCa.length > 0) {
+      const cert = dryRun ? null : await ensureLoopbackCert(projectDir);
+      const ours = cert !== null && samePathIsh(currentCa, cert.caPath);
+      actions.push({
+        kind: "skip",
+        path: rel(projectDir, settingsPath),
+        detail: ours
+          ? `${ENV_EXTRA_CA} already trusts Golem's loopback CA`
+          : `${ENV_EXTRA_CA} is already set to ${currentCa} — left alone; served WebFetches stay on the deny path`,
+      });
+    } else if (!dryRun) {
+      const cert = await ensureLoopbackCert(projectDir);
+      env[ENV_EXTRA_CA] = cert.caPath;
+      pushEnvAction(actions, true, settingsExisted, rel(projectDir, settingsPath), {
+        [ENV_EXTRA_CA]: cert.caPath,
+      });
+      await writeJsonObject(settingsPath, settings);
+    } else {
+      pushEnvAction(actions, true, settingsExisted, rel(projectDir, settingsPath), {
+        [ENV_EXTRA_CA]: loopbackCaPath(projectDir),
+      });
+    }
+  }
+
   // 1c. .claude/settings.json — pre-approve Golem's own MCP tools so they don't
   // prompt on first use. All of them, wiki_upsert included (Decision 44 / USER
   // 2026-07-30): wiki writes are un-gated because git makes them reviewable.
@@ -650,18 +727,34 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     } catch {
       existing = null;
     }
-    if (existing === content) {
+    // R9.5: "differs from what Golem ships" cannot tell a stale file from an
+    // edited one. Ask the provenance record which it is — an edited skill is
+    // reported and kept, not silently replaced.
+    const disposition = await classifyManaged(projectDir, skillPath, content, existing);
+    if (disposition === "current") {
       actions.push({ kind: "skip", path: rel(projectDir, skillPath), detail: "up to date" });
       continue;
     }
+    if (disposition === "owned") {
+      actions.push({
+        kind: "conflict",
+        path: rel(projectDir, skillPath),
+        detail: ownedDetail(`/golem/${name} skill`),
+      });
+      continue;
+    }
     actions.push({
-      kind: existing === null ? "create" : "modify",
+      kind: disposition === "absent" ? "create" : "modify",
       path: rel(projectDir, skillPath),
-      detail: `/golem/${name} skill`,
+      detail:
+        disposition === "absent"
+          ? `/golem/${name} skill`
+          : `/golem/${name} skill — refreshed (unmodified since Golem wrote it)`,
     });
     if (!dryRun) {
       await mkdir(path.dirname(skillPath), { recursive: true });
       await writeFile(skillPath, content, "utf8");
+      await rememberManaged(projectDir, skillPath, content);
     }
   }
 
@@ -879,21 +972,37 @@ async function installVscodeExtension(
   const id = `${String(manifest.publisher)}.${String(manifest.name)}-${String(manifest.version)}`;
   const target = path.join(extensionsDir, id);
 
-  if (await pathExists(target)) {
-    return { kind: "skip", path: `~/.vscode/extensions/${id}`, detail: "already installed" };
+  // R9.16: "the directory exists" is NOT "the right bytes are in it". The dir is
+  // named for the extension version, so shipping a fix without a version bump
+  // made every later init a silent no-op — and a stale `render.js` then named a
+  // model the coder was not using. Compare content, refresh when it differs.
+  const inspected = await inspectVscodeExtension({ sourceDir, extensionsDir });
+  if (inspected.state === "current") {
+    return { kind: "skip", path: `~/.vscode/extensions/${id}`, detail: "already up to date" };
   }
   if (!dryRun) {
     await mkdir(target, { recursive: true });
     for (const name of VSCODE_EXTENSION_FILES) {
       const src = path.join(sourceDir, name);
-      if (await pathExists(src)) await cp(src, path.join(target, name), { recursive: true });
+      // `force: true` so a refresh overwrites rather than failing on an existing
+      // file. Safe here and nowhere else: this is Golem's own build artifact in
+      // VS Code's directory, not a document the user may have edited (R9.5).
+      if (await pathExists(src)) {
+        await cp(src, path.join(target, name), { recursive: true, force: true });
+      }
     }
   }
-  return {
-    kind: "create",
-    path: `~/.vscode/extensions/${id}`,
-    detail: "VS Code panel + status bar (reload the window to activate)",
-  };
+  return inspected.state === "stale"
+    ? {
+        kind: "modify",
+        path: `~/.vscode/extensions/${id}`,
+        detail: `refreshed ${inspected.staleFiles.join(", ")} — reload the VS Code window`,
+      }
+    : {
+        kind: "create",
+        path: `~/.vscode/extensions/${id}`,
+        detail: "VS Code panel + status bar (reload the window to activate)",
+      };
 }
 
 /** Remove any installed Golem VS Code extension(s) — matches `golem-run.golem-vscode-*`. */
@@ -950,7 +1059,7 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
     const envObj = env as JsonObject;
     // Ownership-guarded: removes ANTHROPIC_BASE_URL / the Foundry pair /
     // ENABLE_TOOL_SEARCH only where they hold OUR values (proxy-wiring.ts).
-    const changed = removeGolemEnv(envObj, baseUrl);
+    const changed = removeGolemEnv(envObj, baseUrl, loopbackCaPath(projectDir));
     if (Object.keys(envObj).length === 0) delete settings.env;
     if (changed) {
       actions.push({
@@ -1026,6 +1135,13 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   // (`.claude/rules/golem-*.md`, both scopes) and the seed sentinel.
   actions.push(await removePostToolUseHook({ projectDir, dryRun }));
   actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
+  // R9.5: the managed-file provenance record is something init added, so uninit
+  // takes it away. Silent — it is internal bookkeeping under .golem/state/, and
+  // the files it described have their own removal actions above.
+  if (!dryRun) await removeManagedState(projectDir);
+  // R9.13: same reasoning for the version stamp. The config backups beside it
+  // stay — those are copies of the user's own settings, not our bookkeeping.
+  if (!dryRun) await removeVersionStamp(projectDir);
 
   // 5. Remove the status line + blocked-state event hooks.
   actions.push(await removeStatusLine({ projectDir, dryRun }));

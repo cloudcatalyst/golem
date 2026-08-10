@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
+import { loopbackCaPath } from "../../src/proxy/loopback-cert.js";
 import { rmTemp } from "../helpers/tmp.js";
 
 const okProbe: InitProbe = {
@@ -52,6 +53,9 @@ describe("golem init", () => {
     expect(settings.env).toStrictEqual({
       ANTHROPIC_BASE_URL: `http://localhost:${port}`,
       ENABLE_TOOL_SEARCH: "true",
+      // R9.12: trusting the constrained loopback CA is what makes a cache-served
+      // WebFetch render green instead of as a denied tool call.
+      NODE_EXTRA_CA_CERTS: loopbackCaPath(projectDir),
     });
 
     const mcp = await readJson(".mcp.json");
@@ -121,6 +125,34 @@ describe("golem init", () => {
 
     await golemUninit({ projectDir, probe: okProbe });
     expect((await readJson(".claude/settings.json")).defaultMode).toBe("acceptEdits");
+  });
+
+  it("never clobbers a NODE_EXTRA_CA_CERTS that someone else owns (§121-C)", async () => {
+    // A user behind a corporate TLS-inspection proxy already has this set.
+    // Concatenating their bundle with ours makes a copy that goes stale when
+    // theirs rotates, so Golem sets it only when nothing else does — and
+    // served WebFetches simply stay on the deny path.
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: "/corp/zscaler-root.pem" } }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/corp/zscaler-root.pem");
+
+    // …and uninit leaves the foreign value alone too.
+    await golemUninit({ projectDir, probe: okProbe });
+    const after = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(after.NODE_EXTRA_CA_CERTS).toBe("/corp/zscaler-root.pem");
+  });
+
+  it("skips the loopback CA entirely with noLoopbackCert", async () => {
+    await golemInit({ projectDir, probe: okProbe, noLoopbackCert: true });
+    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
   it("respects a configured proxy port", async () => {
@@ -421,6 +453,29 @@ describe("golem init — VS Code extension install", () => {
       vscodeSourceDir: sourceDir,
     });
     expect(r2.actions.some((a) => a.kind === "skip" && a.path.includes(id))).toBe(true);
+    await rm(projectDir2, rmTemp);
+  });
+
+  it("REFRESHES a stale deployment instead of skipping it (R9.16)", async () => {
+    const id = "golem-run.golem-vscode-9.9.9";
+    await golemInit({ projectDir, probe: vscodeProbe, vscodeSourceDir: sourceDir });
+
+    // Ship a newer renderer WITHOUT bumping the version — the exact shape that
+    // left a three-release-old render.js on the user's machine naming the wrong
+    // model, because init keyed on the directory existing.
+    await writeFile(path.join(sourceDir, "render.js"), "// fixed renderer", "utf8");
+
+    const projectDir2 = await mkdtemp(path.join(tmpdir(), "golem-init3-"));
+    const report = await golemInit({
+      projectDir: projectDir2,
+      probe: vscodeProbe,
+      vscodeSourceDir: sourceDir,
+    });
+
+    const action = report.actions.find((a) => a.path.includes(id));
+    expect(action?.kind).toBe("modify");
+    expect(action?.detail).toContain("render.js");
+    expect(await readFile(path.join(extDir, id, "render.js"), "utf8")).toBe("// fixed renderer");
     await rm(projectDir2, rmTemp);
   });
 
