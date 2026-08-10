@@ -5611,3 +5611,224 @@ a settings `env` line and a restart. It is **not** suitable as a default, becaus
 failure) and D (tokens + fidelity). It is a reasonable **opt-in** for users who want the
 green dot and mostly fetch small pages. Filed as R9.12 rather than built, because the
 default stays as shipped in R9.7.
+
+## §122 — CORRECTION to §121: `additionalContext` reaches the model on an `allow`, and it SURVIVES a failed tool call — R9.12 needs no opt-in (2026-08-09)
+
+§115 listed `additionalContext` in the PreToolUse contract (*"added to Claude's context
+alongside the tool result"*) but never exercised it, and §120/§121 both reasoned as if the
+loopback **endpoint's response body** had to carry the served page. It does not. Prompted
+by the user asking whether R9.12 could ship on by default instead of behind a flag.
+
+Measured live in one session with a temporary probe branch in `runWebFetchPre`, keyed off
+a `golem_probe=<n>` marker in the URL. The global `golem` is a directory junction to the
+repo, so `npm run build` takes effect on the **next hook invocation** — no Claude Code
+restart is needed to iterate on hook behaviour (unlike settings `env`, §112).
+
+### What was measured
+
+| probe | hook output | tool outcome | did the payload reach the model? |
+|---|---|---|---|
+| 1 | `allow` + `additionalContext`, no rewrite | **green**, real fetch ran, returned `"Example Domain"` | **YES** — arrived as `<system-reminder>` prefixed `PreToolUse:WebFetch hook additional context:` |
+| 2 | `allow` + `additionalContext` + `updatedInput.url` → `https://127.0.0.1:1/` | **failed**, `<error>connect ECONNREFUSED 127.0.0.1:1</error>` | **YES — unchanged.** Delivery is independent of tool success |
+| 3 | as probe 2, `additionalContext` ≈ 20 224 chars | failed as above | **partly** — Claude Code emitted `<persisted-output>`: *"Output too large (19.7KB). Full output saved to: …\tool-results\<id>.txt"* plus a 2 KB preview |
+
+### What this changes
+
+**Blocker B is FALSIFIED.** §121 said *"a failed rewrite is worse than a red dot"* because
+the fetch would actually fail. Probe 2 shows the content still arrives in full when the
+rewritten call fails. The worst case of a wrong rewrite is therefore *red dot + content
+delivered* — substantively what R9.7 already ships — not a lost fetch. The latch is now a
+**cosmetic** optimisation, not a safety mechanism.
+
+**Blocker D is mostly dissolved.** The endpoint no longer has to serve the page; it serves
+a **stub**, and the raw cached text rides in on `additionalContext` — prompt-independent,
+never passed through WebFetch's summarizer, so Decision 42's thesis is preserved rather
+than inverted. The residual cost is one summarizer call over a few hundred bytes of stub
+per served fetch. That is a real but small and *fixed* cost, not a per-page one.
+
+**Blockers A and C become harmless rather than blocking.** A cloud session, a
+Desktop-app-managed session, or a machine where `NODE_EXTRA_CA_CERTS` is already owned by
+a TLS-inspection proxy simply never gets a trusted endpoint — so the hook keeps using
+today's deny-and-serve. Silently inert now means *silently identical to what shipped*.
+
+**The 8 000-char serve cap stays.** Probe 3 shows oversized `additionalContext` is not
+truncated destructively, but it is moved out of context into a `tool-results/*.txt` file
+behind a 2 KB preview. That is strictly worse than the current cap + CCR ref, which puts
+8 000 chars in context *and* leaves a one-step `expand` for the rest.
+
+### Consequence for R9.12
+
+The only remaining reason for an opt-in was the tokens/fidelity trade (D), and the
+stub-plus-`additionalContext` shape removes the fidelity half and shrinks the token half.
+R9.12 is therefore rewritten as a **default-on, self-configuring** feature: green when the
+endpoint is provably trusted in the running session, byte-identical to R9.7's
+deny-and-serve otherwise. No flag to tick, and no session where the user is worse off than
+today. `NODE_EXTRA_CA_CERTS` is still only ever set when unset (§121 C stands).
+
+### Caveat that must be designed for
+
+A failed rewrite renders an opaque `connect ECONNREFUSED …` / TLS error in the transcript,
+whereas today's deny renders Golem's own `NOT AN ERROR —` framing. Any path that can fail
+visibly must therefore either (a) keep `deny` as the fallback so the framing survives, or
+(b) carry an explicit "this error is expected, the content is below, do not retry" line in
+`additionalContext`. (a) is preferred — it is the known-good path.
+
+## §123 — CORRECTION to §121/§122: Claude Code is Bun/BoringSSL and REJECTS a `CA:FALSE` leaf anchor — the green path needs a real CA, which R9.12 forbids (2026-08-09)
+
+§121 measured the `CA:FALSE` leaf trick against **Node/OpenSSL** and concluded "ship a
+leaf, never a CA". §122 built on it. Both were measured against the wrong TLS stack.
+The `claude` on this machine is a **`PE32+ executable`** — a compiled **Bun** binary — and
+its TLS errors read `error:10000009:SSL routines:OPENSSL_internal:...`, i.e. **BoringSSL**.
+
+### What was measured
+
+Claude Code *does* read the variable — pointing it at a garbage file yields
+`warn: ignoring extra certs from <path>, load failed: error:10000009:SSL routines:OPENSSL_internal:PEM routines`.
+So the env plumbing works; the anchor is what fails. Each row below is a real headless
+`claude -p … --allowedTools WebFetch` run against a local HTTPS server on `127.0.0.1`,
+with `NODE_EXTRA_CA_CERTS` pointing at that server's own certificate:
+
+| trust anchor | WebFetch result |
+|---|---|
+| Golem's hand-rolled `CA:FALSE` leaf (`src/proxy/loopback-cert.ts`) | **FAIL** — `unable to verify the first certificate` |
+| **`openssl`-generated** `CA:FALSE` leaf (the §121 recipe, as a control) | **FAIL** — `unable to verify the first certificate` |
+| `openssl`-generated **`CA:TRUE`** self-signed | **OK**, `is_error=false`, body returned verbatim |
+
+The openssl control matters: it rules out a defect in the hand-rolled DER. Both leaves
+fail identically, and only the CA succeeds. **BoringSSL requires a trust anchor to be a
+CA**, where OpenSSL will accept a self-signed leaf as its own anchor. That is the whole
+difference, and §121's central correction does not survive it.
+
+### Consequence
+
+The green path is reachable **only** by installing a `CA:TRUE` certificate into Claude
+Code's process-wide trust. That reinstates §120's original objection verbatim: a CA in
+that store can sign for **any** host, `api.anthropic.com` included, so anyone who can read
+the key can MITM Claude Code's traffic. R9.12's own "Out of scope" says *"Any form of CA.
+If a design needs signing power, it is the wrong design."* By the task's own gate, the
+honest answer is **REGRESSED**: the green path does not ship.
+
+### What survives
+
+- **§122's three `additionalContext` measurements stand** — they were measured against
+  Claude Code itself, not against Node, and the live run re-confirmed the important one:
+  when the rewritten call failed with `unable to verify the first certificate`, the page
+  **still reached the model**, which answered from it and correctly reported the fetch as
+  having failed. Content delivery really is decoupled from tool success.
+- **The floor is untouched.** With `NODE_EXTRA_CA_CERTS` unset (every session today) the
+  hook takes R9.7's deny path, byte-for-byte; the full suite passes unchanged.
+- The hand-rolled X.509 generator works and adds no dependency, should a future design
+  need a loopback certificate for something that is not Claude Code's WebFetch.
+
+### The one shape not yet measured
+
+A **publicly-trusted certificate for a hostname that resolves to `127.0.0.1`** (the
+`localtest.me` / `traefik.me` pattern) would give a green fetch with **no** trust-store
+change, no CA, and no restart — the anchor is already in the public store. Costs: a
+dependency on a third-party domain and its published key, and a DNS lookup per fetch (so
+it fails closed to the deny floor when offline). Not measured, and not obviously
+acceptable for a local-first project — recorded so the option is not lost.
+
+## §124 — the green WebFetch IS reachable: a DNS-name-constrained CA that provably cannot issue a cert for api.anthropic.com (2026-08-09)
+
+§123 closed R9.12 on the grounds that green needs a CA and "any CA" was forbidden because
+it could sign for `api.anthropic.com`. That premise assumed an **unconstrained** CA. X.509
+`nameConstraints` removes the assumption, and BoringSSL turns out to enforce them. Prompted
+by the user asking whether WebFetch could be used without HTTPS; it cannot, but the
+question reopened the trust question and this is the way through.
+
+### Plain HTTP is definitively closed (asked and answered first)
+
+A plain-HTTP server on loopback, fetched from a cwd with no Golem hooks, logged:
+
+```
+PORT=52358
+CLIENT-ERROR HPE_INVALID_METHOD          <- TLS ClientHello bytes hitting an HTTP parser
+CLIENT-ERROR ERR_HTTP_REQUEST_TIMEOUT
+```
+
+No request ever reached the HTTP layer, for either `http://127.0.0.1:<port>` or
+`http://localhost:<port>`. Server-side confirmation of §120's client-side
+`WRONG_VERSION_NUMBER`. There is no loopback exemption from the `http`→`https` upgrade.
+
+### New fact: `localhost` is not a usable hostname for WebFetch
+
+`https://localhost:<port>/…` returns **`Invalid URL`** — the same rejection `file://` and
+`data:` get (§120). Only the IP literal `127.0.0.1` is accepted. This matters structurally:
+the rewrite target must be an IP, so the leaf must be validated by an **iPAddress** SAN.
+
+### The certificate matrix, all measured with live `claude -p … --allowedTools WebFetch`
+
+| trust anchor (`NODE_EXTRA_CA_CERTS`) | server leaf | result |
+|---|---|---|
+| hand-rolled `CA:FALSE` leaf | itself | FAIL — `unable to verify the first certificate` |
+| `openssl` `CA:FALSE` leaf (§121 recipe, control) | itself | FAIL — `unable to verify the first certificate` |
+| unconstrained `CA:TRUE` | itself | OK — but this is the forbidden shape |
+| CA + `nameConstraints` including `permitted;IP:127.0.0.1/…` | `IP:127.0.0.1` | FAIL — **`unsupported name constraint type`** |
+| CA + `nameConstraints=critical,permitted;DNS:golem.invalid` | `IP:127.0.0.1` | **OK — GREEN** |
+| the same DNS-constrained CA | `IP:127.0.0.1` **+ `DNS:api.anthropic.com`** | FAIL — **`permitted subtree violation`** |
+
+The last two rows together are the finding. BoringSSL **cannot parse** `iPAddress` name
+constraints (it rejects the whole anchor rather than ignoring the extension — it fails
+closed, which is the safe direction), but it **does parse and enforce** `dNSName`
+constraints. So a CA restricted to `permitted;DNS:golem.invalid` is accepted as an anchor,
+validates an IP-SAN leaf for `127.0.0.1`, and is *provably* unable to issue anything
+bearing `api.anthropic.com` — the exact certificate §120 feared was refused with
+`permitted subtree violation`, by the client, in a live run.
+
+### Residual risk, stated plainly
+
+The `iPAddress` name form stays **unconstrained**, because constraining it makes BoringSSL
+reject the anchor outright. So whoever can read the CA key can mint a certificate for any
+**IP literal** that a Claude Code started with this env would trust. It cannot mint one for
+any **hostname** outside `*.golem.invalid`, and Claude Code reaches `api.anthropic.com` by
+hostname, so the MITM path §120 named is closed. `pathlen:0` also prevents sub-CAs.
+
+This is materially different from shipping an unconstrained CA, and it is not zero. The
+key would live in `.golem/loopback/` at `0600`, beside a KB and web cache that are already
+fed into context.
+
+### Status
+
+Not built. R9.12's "Out of scope" still says *"Any form of CA"*, written when a CA meant
+unlimited signing power. That boundary is now the only thing between this and a green
+WebFetch, and moving it is the user's call, not an agent's.
+
+## §125 — the loopback CA takes effect WITHOUT restarting Claude Code, and tool children see settings `env` immediately (2026-08-10)
+
+Found while deploying R9.12 to this repo. Two related facts, both measured in the session
+that was already running when `golem init` wrote the wiring:
+
+**1. Settings `env` reaches child processes immediately.** Straight after `golem init`, a
+Bash tool call printed
+`NODE_EXTRA_CA_CERTS=D:\…\.golem\loopback\ca.pem` — no restart, no reload. So a hook's own
+environment reflects the *settings file*, not necessarily what Claude Code's TLS stack was
+started with. That made the hook's env check look like a possible false positive.
+
+**2. It is not a false positive — Claude Code's own TLS picked it up too.** A WebFetch of
+a cached URL in that same pre-existing session returned **`is_error=false`**, served from
+the loopback stub, with the page arriving via `additionalContext`. The TLS handshake
+against the newly-created CA succeeded in a process that started before the CA existed.
+
+This is **better than the documentation implies**. `network-config.md` says these
+variables are "read once at startup", and §112 recorded the same for settings `env`
+generally — true for `ANTHROPIC_BASE_URL`, but the CA store is evidently re-read when
+settings change (the same doc already says mTLS cert/key are "re-read each time it applies
+settings, including when settings change during a session"; the CA appears to behave the
+same way). `golem init`'s notice was written to promise a restart was required; it now
+says a restart is only needed *if* the green path does not appear.
+
+### The residual mismatch this does NOT rule out
+
+In **cloud** and **Desktop-app-managed** sessions the doc says `NODE_EXTRA_CA_CERTS` from a
+repository's settings `env` is ignored for TLS (§121-A). If such a session nonetheless
+injects it into child environments, the hook would see the variable, believe the endpoint
+is trusted, rewrite, and the fetch would fail. Thanks to §122 the page still reaches the
+model, so nothing is lost — but the transcript shows an opaque TLS error instead of the
+clean `NOT AN ERROR —` deny.
+
+Closing that needs the reachability **latch** that R9.12's design described and the shipped
+code does not implement: rewrite optimistically once, have the endpoint record that a real
+WebFetch arrived, and fall back to the deny floor for the rest of the session when no hit
+was recorded. Filed as R9.19. Not reproducible from a terminal session, which is why it was
+filed rather than guessed at.
