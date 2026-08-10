@@ -50,12 +50,12 @@ describe("golem init", () => {
 
     const port = defaultProjectPort(projectDir);
     const settings = await readJson(".claude/settings.json");
+    // Only portable values live in the COMMITTED file. R9.12's loopback CA trust
+    // is a machine-absolute path, so R9.22 moved it to settings.local.json —
+    // asserted on its own below.
     expect(settings.env).toStrictEqual({
       ANTHROPIC_BASE_URL: `http://localhost:${port}`,
       ENABLE_TOOL_SEARCH: "true",
-      // R9.12: trusting the constrained loopback CA is what makes a cache-served
-      // WebFetch render green instead of as a denied tool call.
-      NODE_EXTRA_CA_CERTS: loopbackCaPath(projectDir),
     });
 
     const mcp = await readJson(".mcp.json");
@@ -147,6 +147,88 @@ describe("golem init", () => {
     await golemUninit({ projectDir, probe: okProbe });
     const after = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
     expect(after.NODE_EXTRA_CA_CERTS).toBe("/corp/zscaler-root.pem");
+  });
+
+  it("writes the CA trust to settings.local.json, never the committed file (R9.22)", async () => {
+    // A machine-absolute cert path must never land in the file teammates receive
+    // via git: it resolves on no other clone, and Claude Code then warns about it
+    // twice at every start.
+    await golemInit({ projectDir, probe: okProbe });
+
+    const committedEnv = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(committedEnv.NODE_EXTRA_CA_CERTS).toBeUndefined();
+
+    const localEnv = (await readJson(".claude/settings.local.json")).env as Record<string, unknown>;
+    expect(localEnv.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
+  });
+
+  it("heals a stale Golem CA path a teammate committed (R9.22)", async () => {
+    // An older init — here from a differently-rooted checkout — left its own
+    // loopback CA path in the committed file. It is recognisably Golem's output
+    // (the shared `.golem/loopback/ca.pem` tail) and resolves nowhere on this
+    // machine, so a clone self-heals on its first init instead of inheriting it.
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.json"),
+      JSON.stringify({
+        env: { NODE_EXTRA_CA_CERTS: "/home/someone-else/repos/golem/.golem/loopback/ca.pem" },
+      }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+
+    const committedEnv = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    expect(committedEnv.NODE_EXTRA_CA_CERTS).toBeUndefined();
+
+    const localEnv = (await readJson(".claude/settings.local.json")).env as Record<string, unknown>;
+    expect(localEnv.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
+  });
+
+  it("preserves unrelated keys already in settings.local.json", async () => {
+    // The local scope is the user's machine-local space and is frequently already
+    // in use — init merges into it rather than replacing it.
+    await mkdir(path.join(projectDir, ".claude"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { MY_TOKEN: "keep-me" }, permissions: { allow: ["Bash"] } }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+
+    const local = await readJson(".claude/settings.local.json");
+    const env = local.env as Record<string, unknown>;
+    expect(env.MY_TOKEN).toBe("keep-me");
+    expect(env.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
+    expect((local.permissions as Record<string, unknown>).allow).toStrictEqual(["Bash"]);
+  });
+
+  it("uninit removes the CA trust from settings.local.json but leaves a foreign one", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    await golemUninit({ projectDir, probe: okProbe });
+
+    const afterOurs = (await readJson(".claude/settings.local.json")).env as
+      | Record<string, unknown>
+      | undefined;
+    expect(afterOurs?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+
+    // …and the §121-C rule holds in the local scope too: a corporate MITM root
+    // there is the user's, so neither init nor uninit touches it.
+    await writeFile(
+      path.join(projectDir, ".claude", "settings.local.json"),
+      JSON.stringify({ env: { NODE_EXTRA_CA_CERTS: "/corp/zscaler-root.pem" } }),
+      "utf8",
+    );
+
+    await golemInit({ projectDir, probe: okProbe });
+    await golemUninit({ projectDir, probe: okProbe });
+
+    const afterForeign = (await readJson(".claude/settings.local.json")).env as Record<
+      string,
+      unknown
+    >;
+    expect(afterForeign.NODE_EXTRA_CA_CERTS).toBe("/corp/zscaler-root.pem");
   });
 
   it("skips the loopback CA entirely with noLoopbackCert", async () => {

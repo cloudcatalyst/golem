@@ -70,6 +70,34 @@ describe("collectStatus", () => {
   });
 
   /**
+   * R9.22 — init moved the CA trust to `.claude/settings.local.json`, so status
+   * has to look there to answer the colour question. Reading only the committed
+   * file would report `wired: false` on a correctly wired project — a green path
+   * that works while status calls it broken.
+   */
+  it("reads the CA trust from settings.local.json (R9.22)", async () => {
+    await golemInit({ projectDir, probe: passingProbe });
+
+    // Pin the premise: the committed file must NOT carry the machine-absolute path.
+    const committed = JSON.parse(
+      await readFile(join(projectDir, ".claude", "settings.json"), "utf8"),
+    ) as { env?: Record<string, unknown> };
+    expect(committed.env?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+
+    const report = await collectStatus({
+      projectDir,
+      version: VERSION,
+      userDir,
+      probeTimeoutMs: 200,
+    });
+
+    // `wired` is the whole point: it must come from the local file. (`trusted`
+    // and `foreign_ca` read THIS process's env, which the runner inherits from
+    // the developer's own session — not something a temp project can pin.)
+    expect(report.webfetch_green?.wired).toBe(true);
+  });
+
+  /**
    * R8.32 — status now READS `.claude/settings.json` to answer "is Golem in the
    * request path?". The obvious next step is to have it repair what it finds,
    * and that is exactly the mistake R8.31 avoided by keeping `start`/`stop` out

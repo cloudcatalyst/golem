@@ -64,6 +64,7 @@ import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
 import {
+  claudeLocalSettingsPath,
   ENV_BASE_URL,
   ENV_EXTRA_CA,
   ENV_FOUNDRY_BASE_URL,
@@ -71,6 +72,8 @@ import {
   ENV_USE_FOUNDRY,
   proxyBaseUrl,
   removeGolemEnv,
+  removeLocalCaTrust,
+  writeLocalCaTrust,
 } from "./proxy-wiring.js";
 import { P0_SKILLS } from "./skills.js";
 // R9.16: one definition of what the extension IS and where it lives, shared with
@@ -382,19 +385,6 @@ function stringArrayEntry(obj: JsonObject, key: string): string[] {
 }
 
 /** Push a create/modify/skip action for the .claude/settings.json env block. */
-/**
- * Loose path comparison for "does this env var already point at our CA?".
- * Windows paths differ in case and separator between what a user typed and what
- * `join` produces, and a false "not ours" would silently drop the green path.
- */
-function samePathIsh(a: string, b: string): boolean {
-  const norm = (p: string): string => {
-    const resolved = path.resolve(p);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
-  return norm(a) === norm(b);
-}
-
 function pushEnvAction(
   actions: InitAction[],
   changed: boolean,
@@ -595,38 +585,57 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   }
 
   // 1b-bis. R9.12 — trust the loopback CA so a cache-served WebFetch renders
-  // GREEN rather than as a denied tool call. Three rules, all from measurements:
+  // GREEN rather than as a denied tool call. Four rules, all from measurements:
   //   * set it ONLY when nothing else owns the variable (§121-C): a user behind a
   //     TLS-inspection proxy already has it, and concatenating bundles creates a
   //     copy that goes stale when theirs rotates.
   //   * the anchor is a CA, because BoringSSL refuses a bare leaf (§123), but it
   //     carries a dNSName name constraint so it CANNOT issue a certificate for
   //     api.anthropic.com (§124, measured: `permitted subtree violation`).
+  //   * it goes in `.claude/settings.local.json`, NOT the committed settings.json
+  //     (R9.22): the path is machine-absolute, so a committed one resolves on no
+  //     other clone and Claude Code warns about it twice at every start. A Golem
+  //     path left in the committed file by an older init is healed away here, so
+  //     a clone self-heals on its first `golem init`.
   //   * it takes effect only after a restart (§112), so say so.
   // Declining with `--no-loopback-cert` costs nothing: the hook falls back to the
   // deny-and-serve path R9.7 shipped, which is what every un-wired session uses.
   if (options.noLoopbackCert !== true) {
-    const currentCa = env[ENV_EXTRA_CA];
-    if (typeof currentCa === "string" && currentCa.length > 0) {
-      const cert = dryRun ? null : await ensureLoopbackCert(projectDir);
-      const ours = cert !== null && samePathIsh(currentCa, cert.caPath);
+    const localPath = claudeLocalSettingsPath(projectDir);
+    const localExisted = (await readJsonObject(localPath).catch(() => null)) !== null;
+    const caPath = dryRun
+      ? loopbackCaPath(projectDir)
+      : (await ensureLoopbackCert(projectDir)).caPath;
+    const trust = await writeLocalCaTrust(projectDir, caPath, { dryRun });
+
+    if (trust.healedCommitted) {
+      // The heal was performed against writeLocalCaTrust's own read of the file.
+      // `settings` is still live in this function and is written again below
+      // (step 1c), so the key has to go from the in-memory copy too — otherwise
+      // that write puts the machine-absolute path straight back.
+      delete env[ENV_EXTRA_CA];
+      actions.push({
+        kind: "modify",
+        path: rel(projectDir, settingsPath),
+        detail: `${ENV_EXTRA_CA} moved to ${rel(projectDir, localPath)} — a machine-absolute path does not belong in a committed file`,
+      });
+    }
+
+    if (trust.foreign !== undefined) {
       actions.push({
         kind: "skip",
-        path: rel(projectDir, settingsPath),
-        detail: ours
-          ? `${ENV_EXTRA_CA} already trusts Golem's loopback CA`
-          : `${ENV_EXTRA_CA} is already set to ${currentCa} — left alone; served WebFetches stay on the deny path`,
+        path: rel(projectDir, localPath),
+        detail: `${ENV_EXTRA_CA} is already set to ${trust.foreign} — left alone; served WebFetches stay on the deny path`,
       });
-    } else if (!dryRun) {
-      const cert = await ensureLoopbackCert(projectDir);
-      env[ENV_EXTRA_CA] = cert.caPath;
-      pushEnvAction(actions, true, settingsExisted, rel(projectDir, settingsPath), {
-        [ENV_EXTRA_CA]: cert.caPath,
+    } else if (trust.wrote) {
+      pushEnvAction(actions, true, localExisted, rel(projectDir, localPath), {
+        [ENV_EXTRA_CA]: caPath,
       });
-      await writeJsonObject(settingsPath, settings);
     } else {
-      pushEnvAction(actions, true, settingsExisted, rel(projectDir, settingsPath), {
-        [ENV_EXTRA_CA]: loopbackCaPath(projectDir),
+      actions.push({
+        kind: "skip",
+        path: rel(projectDir, localPath),
+        detail: `${ENV_EXTRA_CA} already trusts Golem's loopback CA`,
       });
     }
   }
@@ -1069,6 +1078,17 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
       });
       if (!dryRun) await writeJsonObject(settingsPath, settings);
     }
+  }
+
+  // 1a-bis. R9.22 — the loopback CA trust lives in the gitignored local scope, so
+  // uninit has to visit that file too. Same ownership rule: a NODE_EXTRA_CA_CERTS
+  // that is not ours (and not a stale Golem path) is the user's and stays.
+  if (await removeLocalCaTrust(projectDir, { dryRun })) {
+    actions.push({
+      kind: "modify",
+      path: rel(projectDir, claudeLocalSettingsPath(projectDir)),
+      detail: `removed ${ENV_EXTRA_CA}`,
+    });
   }
 
   // 1b. Remove only the MCP permission rules init added (exact rules only). The
