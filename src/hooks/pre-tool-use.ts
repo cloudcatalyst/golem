@@ -174,8 +174,8 @@ export async function runPreToolUseHook(
     if (codeTarget.isCode) {
       const guided = options.isGuidanceEnabled ?? guidanceEnabled;
       if (await guided(projectDir, "local-coder")) {
-        const nudgedSession = await readCoderFirstNudgeState(projectDir);
-        const decision = decideCoderFirstNudge(codeTarget, nudgedSession, payload.session_id);
+        const nudgedSessions = await readCoderFirstNudgeState(projectDir);
+        const decision = decideCoderFirstNudge(codeTarget, nudgedSessions, payload.session_id);
         if (decision.nudge && decision.sessionKey !== undefined) {
           await writeCoderFirstNudgeState(projectDir, decision.sessionKey);
           io.stdout.write(
