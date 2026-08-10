@@ -79,14 +79,14 @@ describe("resolveActiveUpstream", () => {
     expect(resolved.apiKey).toBeUndefined(); // fail-closed: no fallback to legacy/other keys
   });
 
-  it("falls back to legacy + a warning for an unknown active account (no silent switch)", () => {
+  it("falls back to legacy + a warning for a selector in neither registry (no silent switch)", () => {
     const { resolved, warning } = resolveActiveUpstream(
       { legacy, accounts, activeAccount: "ghost", legacyApiKey: "sk-legacy" },
       {},
     );
     expect(resolved.accountId).toBeNull();
     expect(resolved.provider).toBe("anthropic");
-    expect(warning).toMatch(/not in proxy.accounts/);
+    expect(warning).toMatch(/in neither proxy\.accounts nor proxy\.targets/);
   });
 });
 
@@ -109,7 +109,7 @@ describe("resolveUpstreamDisplay", () => {
   });
 
   it("reflects the ACTIVE account's provider/base/model (never a secret)", () => {
-    const d = resolveUpstreamDisplay({ ...base, active_account: "work" });
+    const d = resolveUpstreamDisplay({ ...base, default_target: "work" });
     expect(d).toEqual({
       accountId: "work",
       provider: "openai",
@@ -133,10 +133,10 @@ describe("resolveUpstreamDisplay", () => {
     expect(d.accountId).toBeNull();
   });
 
-  it("falls back to legacy + a warning for an unknown active account (fail-closed)", () => {
-    const d = resolveUpstreamDisplay({ ...base, active_account: "ghost" });
+  it("falls back to legacy + a warning for a selector in neither registry (fail-closed)", () => {
+    const d = resolveUpstreamDisplay({ ...base, default_target: "ghost" });
     expect(d.accountId).toBeNull();
     expect(d.provider).toBe("anthropic");
-    expect(d.warning).toMatch(/not in proxy.accounts/);
+    expect(d.warning).toMatch(/in neither proxy\.accounts nor proxy\.targets/);
   });
 });

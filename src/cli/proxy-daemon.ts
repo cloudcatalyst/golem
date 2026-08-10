@@ -12,7 +12,8 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import path from "node:path";
 
@@ -50,6 +51,23 @@ export interface ProxyPidInfo {
 export function proxyPidPath(projectDir: string): string {
   return path.join(projectDir, ".golem", "proxy.pid");
 }
+
+/**
+ * Where a detached daemon's stdout/stderr go (R9.8).
+ *
+ * The daemon used to spawn with `stdio: "ignore"`, which meant every diagnostic
+ * the proxy prints was discarded in the mode people actually run it in: a
+ * misconfigured target, a missing upstream credential, and — the case that
+ * found this — `compression.headroom_config` keys the installed Headroom does
+ * not accept. Those warnings exist precisely so a setting that does nothing
+ * does not also say nothing, and none of them reached anybody.
+ */
+export function proxyLogPath(projectDir: string): string {
+  return path.join(projectDir, ".golem", "proxy.log");
+}
+
+/** Bytes of {@link proxyLogPath} kept on each daemon start (tail-truncated). */
+export const PROXY_LOG_MAX_BYTES = 1_000_000;
 
 export async function readProxyPid(projectDir: string): Promise<ProxyPidInfo | null> {
   try {
@@ -105,8 +123,18 @@ export function portInUse(port: number, timeoutMs = 500): Promise<boolean> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Poll until the port is accepting connections, or timeout. */
-export async function waitForPort(port: number, timeoutMs = 8000): Promise<boolean> {
+/**
+ * Poll until the port is accepting connections, or timeout.
+ *
+ * R9.18: the budget was 8s, and daemon start-up on a project with several
+ * configured accounts measured ~6.7s of credential resolution alone — close
+ * enough that normal jitter reported "proxy did not come up" for a proxy that
+ * came up a moment later. The resolution itself is now concurrent, but the
+ * budget stays generous: being slow to declare failure costs a few seconds on a
+ * genuinely broken start, while being quick to declare it lies about a working
+ * one, and the lie sends people debugging a healthy daemon.
+ */
+export async function waitForPort(port: number, timeoutMs = 30_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await portInUse(port)) return true;
@@ -217,26 +245,56 @@ export async function stopProxy(projectDir: string): Promise<number | null> {
  * reaches the daemon deterministically and a stray `GOLEM_*` var in one
  * terminal can no longer silently un-configure a working daemon.
  */
+/**
+ * Open (creating, appending to) the daemon log and return its fd, or null when
+ * it cannot be opened. Truncates from the front when the file has grown past
+ * {@link PROXY_LOG_MAX_BYTES} so an always-on daemon cannot fill a disk.
+ */
+async function openProxyLog(projectDir: string): Promise<FileHandle | null> {
+  const file = proxyLogPath(projectDir);
+  try {
+    await mkdir(path.dirname(file), { recursive: true });
+    try {
+      const info = await stat(file);
+      if (info.size > PROXY_LOG_MAX_BYTES) {
+        const kept = (await readFile(file, "utf8")).slice(-Math.floor(PROXY_LOG_MAX_BYTES / 2));
+        await writeFile(file, kept, "utf8");
+      }
+    } catch {
+      // No existing log (or unreadable) — `open` below creates it.
+    }
+    return await open(file, "a");
+  } catch {
+    return null;
+  }
+}
+
 export async function startDetached(
   projectDir: string,
   port: number,
   scriptPath: string,
   env: Readonly<Record<string, string>> = {},
-  opts: { readonly shim?: boolean } = {},
+  opts: { readonly shim?: boolean; readonly waitMs?: number } = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
   // Decision 56: the bypass shim is the same daemon with the pipeline pinned to
   // level 1 — one flag, not a second executable, so the pid file, port
   // resolution and credential injection all stay single-sourced.
   if (opts.shim === true) args.push("--shim");
+  // R9.8: keep the daemon's diagnostics instead of discarding them. Falls back
+  // to "ignore" if the log cannot be opened — a proxy that will not start
+  // because of a log file would be a worse bug than the one being fixed.
+  const log = await openProxyLog(projectDir);
   const child = spawn(process.execPath, [scriptPath, ...args], {
     detached: true,
-    stdio: "ignore",
+    stdio: log === null ? "ignore" : ["ignore", log.fd, log.fd],
     windowsHide: true,
     env: buildSpawnEnv(process.env, env),
   });
+  // The child holds its own duplicate of the descriptor; ours is done.
+  if (log !== null) await log.close().catch(() => {});
   child.unref();
-  const up = await waitForPort(port);
+  const up = await waitForPort(port, opts.waitMs);
   if (!up) return null;
   // The child writes its own pid file on listen; report that pid if present.
   const info = await readProxyPid(projectDir);

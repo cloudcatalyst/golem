@@ -32,6 +32,7 @@ import type {
   UpstreamProvider,
 } from "../providers/index.js";
 import {
+  PROXY_PROVIDERS,
   TARGET_TRUST_LEVELS,
   UPSTREAM_AUTH_SCHEMES,
   UPSTREAM_PROVIDERS,
@@ -72,7 +73,9 @@ export const SETTINGS_LEAVES = {
      * transparent passthrough. Genuine OpenAI/Gemini/Ollama translation is
      * case (b), not this key.
      */
-    upstream_provider: z.enum(UPSTREAM_PROVIDERS),
+    // R9.15: PROXY_PROVIDERS, not UPSTREAM_PROVIDERS — `claude-cli` is a target
+    // provider only (it spawns a process; there is no endpoint to forward to).
+    upstream_provider: z.enum(PROXY_PROVIDERS),
     /**
      * R6.1 case (a): how the upstream credential is presented — `inherit`
      * (forward the client's own auth unchanged; the Anthropic default),
@@ -125,13 +128,9 @@ export const SETTINGS_LEAVES = {
         }),
       )
       .optional(),
-    /**
-     * R6.2: which `accounts` entry is active (its config overrides the top-level
-     * `upstream_*`). Unset → the top-level config. Set but unknown → the
-     * top-level config + a loud warning (never a silent switch to a different
-     * account — ADR-0003 fail-closed). Switch it with `golem account use <id>`.
-     */
-    active_account: z.string().min(1).optional(),
+    // R9.1 renamed `active_account` → `default_target`; R9.6 retired the leaf and
+    // moved the fallback into src/config/migrations.ts, so an existing file
+    // naming the old key still works and says so exactly once.
     /**
      * R9.1 (proposal `multi-target-routing.md`): the target registry — one table
      * for every model Golem can reach, local or upstream. A local model is just
@@ -168,10 +167,12 @@ export const SETTINGS_LEAVES = {
       )
       .optional(),
     /**
-     * R9.1: which target serves a request that names none. Supersedes
-     * {@link active_account} (spec Decision 21d), which is still read when this
-     * is unset — that fallback IS the migration shim, so an existing config keeps
-     * working untouched. Unknown id → fail-closed (no silent substitution).
+     * R9.1: which target serves a request that names none. Supersedes the
+     * retired `proxy.active_account` (spec Decision 21d). R9.6 moved that
+     * fallback out of `resolveDefaultTargetId` and into the declarative
+     * migration table (`src/config/migrations.ts`), so an existing file naming
+     * the old key still works, says so exactly once, and reports the old key as
+     * its provenance. Unknown id → fail-closed (no silent substitution).
      */
     default_target: z.string().min(1).optional(),
     /** End-to-end request timeout (generous: long SSE streams). */
@@ -192,12 +193,19 @@ export const SETTINGS_LEAVES = {
      */
     request_timeout_ms: timeoutMsSchema,
     /**
-     * Whether the `coder` MCP tool (local model drafting) is enabled. Default
-     * true. Set false to hide the tool from Claude Code and keep the status line
-     * from showing a local backend. Independent of rerank/local-answer; Ollama
-     * must still be reachable for coder to actually work.
+     * Whether the `coder` MCP tool is offered. Default true.
+     *
+     * R9.10 renamed this from `coder_enabled`: since R9.3/R9.4 a worker
+     * dispatches to whatever `inference.worker_targets` names — local tiered
+     * inference only when it names nothing — so a switch named for WHERE the
+     * model runs was describing a constraint that no longer exists. The old key
+     * still works (see `src/config/migrations.ts`).
+     *
+     * This gates the TOOL, not the backend: with no worker target, `coder` needs
+     * Ollama reachable; with one, it needs that target's credential. Independent
+     * of rerank/local-answer.
      */
-    local_coder_enabled: z.boolean(),
+    coder_enabled: z.boolean(),
     /**
      * R9.4 — which `proxy.targets` id each **tool worker** defaults to, keyed by
      * worker name (`{ coder = "openrouter-qwen3" }`). A worker with no entry
@@ -572,7 +580,6 @@ export interface ProxySettings {
   readonly upstream_reasoning_effort?: "low" | "high" | "max";
   readonly map_reasoning_to_thinking: boolean;
   readonly accounts?: readonly UpstreamAccount[];
-  readonly active_account?: string;
   readonly targets?: readonly TargetEntry[];
   readonly default_target?: string;
   readonly request_timeout_ms: number;
@@ -582,7 +589,7 @@ export interface ProxySettings {
 export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
-  readonly local_coder_enabled: boolean;
+  readonly coder_enabled: boolean;
   /** R9.4: worker name → target id (see `inference/workers.ts`). */
   readonly worker_targets: Readonly<Record<string, string>>;
   readonly local_editor_enabled: boolean;
@@ -697,7 +704,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   inference: {
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
-    local_coder_enabled: true,
+    coder_enabled: true,
     worker_targets: {},
     local_editor_enabled: false,
     providers: [],

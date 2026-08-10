@@ -288,7 +288,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
 });
 
 test("statusBarText omits the local segment when the coder tool is disabled", () => {
-  // Regression: a reachable Ollama with `inference.local_coder_enabled` false was
+  // Regression: a reachable Ollama with `inference.coder_enabled` false was
   // still shown as `local + …`, advertising a hybrid Golem wasn't offering. The
   // CLI statusline already gated on both conditions; the status bar did not.
   assert.equal(

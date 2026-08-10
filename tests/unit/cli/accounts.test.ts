@@ -419,7 +419,7 @@ describe("removeAccount", () => {
     });
     expect(was_active).toBe(true);
     const { settings } = await loadConfig({ projectDir: dir });
-    expect(settings.proxy.active_account).toBeUndefined();
+    expect(settings.proxy.default_target).toBeUndefined();
     expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 });

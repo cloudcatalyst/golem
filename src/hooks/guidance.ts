@@ -16,6 +16,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
+import { classifyManaged, ownedDetail, rememberManaged } from "../cli/managed-files.js";
 import { loadConfig } from "../config/index.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
@@ -104,13 +105,20 @@ const LOCAL_ANSWER = [
 ].join("\n");
 
 const LOCAL_CODER = [
-  "## Golem: prefer the local model for coding drafts",
+  "## Golem: draft code with the `coder` tool first",
   "",
-  "By default, before writing non-trivial code, draft it with the `coder` MCP",
-  "tool first — a local model — then review and refine the result yourself",
-  "rather than writing from scratch. Do this proactively; you don't need to be",
-  "asked. It leaves the paid model's tokens for the judgment calls the local",
-  "model can't make: review, integration, and anything genuinely hard.",
+  "Before writing non-trivial code, draft it with the `coder` MCP tool, then",
+  "review and refine that draft rather than writing from scratch. Do this",
+  "proactively; you don't need to be asked.",
+  "",
+  "**Why depends on where `coder` is pointed, and both are legitimate.** With no",
+  "worker target it runs on this machine's local model, so drafting costs nothing",
+  "and spends none of the paid model's budget. With a target configured",
+  "(`inference.worker_targets`) it runs on that target — possibly a vendor model",
+  "you pay for — and the reason becomes division of labour rather than thrift:",
+  "the draft is generated once, and your tokens go on review, integration, and",
+  "the judgment the draft cannot make. `golem status` names the model each worker",
+  "will actually reach; check it rather than assuming.",
   "",
   "**What counts as non-trivial (draft it):** any new function, class, or module,",
   "or a change adding more than a few lines of logic (rule of thumb: ≳240 chars of",
@@ -120,21 +128,23 @@ const LOCAL_CODER = [
   "",
   "**Self-check:** before a substantial code Write/Edit, if you did NOT draft it",
   "with `coder`, either do so now or state why you're skipping (too small, or the",
-  "local model is unavailable — see `golem devices`). Don't skip silently.",
+  "tool is unavailable — `golem status` shows whether it is on and what it would",
+  "reach). Don't skip silently.",
   "",
-  "The local model is engaged only by explicit acts — `coder` (drafting) and the",
-  "optional `golem task run` / `golem prompt translate` (see `golem guidance`);",
-  "the slider is a compression dial only and never auto-engages the model",
-  "(Decision 31). Use `coder` at every level.",
+  "`coder` is engaged only by explicit acts — the tool itself, and the optional",
+  "`golem task run` / `golem prompt translate` (see `golem guidance`). The slider",
+  "is a compression dial only and never auto-engages a model (Decision 31). Use",
+  "`coder` at every level.",
   "",
   "This project ENFORCES the practice while this rule is active AND",
-  "`inference.local_coder_enabled` is true (the default): the PreToolUse gate",
+  "`inference.coder_enabled` is true (the default): the PreToolUse gate",
   "denies the first non-trivial hand-written code Write/Edit of a session and",
   "redirects you here (a one-shot reminder — if you already drafted with `coder`,",
   "say so and proceed). Disable the guidance with `golem guidance disable local-coder`;",
-  "disable the local coder itself with `golem local disable` (`golem local status`",
-  "shows whether it is on and which endpoint it uses — including a LAN box set with",
-  "`golem local url <url>`).",
+  "disable the tool itself with `golem coder disable`. `golem coder status` shows",
+  "whether it is on and which target each worker uses; `golem local url <url>`",
+  "points the LOCAL backend at a LAN machine, which matters only for a worker with",
+  "no target of its own.",
 ].join("\n");
 
 const PROMPT_TRANSLATION = [
@@ -276,7 +286,7 @@ export function guidanceRuleBody(feature: GuidanceFeature): string {
  *
  * Use this (not {@link guidanceEnabled}) when reporting state to a user: a
  * settings UI must show which scope a rule is enabled at, and must not report
- * `local-coder` as "off" merely because `inference.local_coder_enabled` is false
+ * `local-coder` as "off" merely because `inference.coder_enabled` is false
  * — that is a separate toggle with its own row.
  */
 export async function guidanceRuleExists(
@@ -298,8 +308,8 @@ export async function guidanceRuleExists(
  * enable/disable` add/remove it). Used to gate enforcement on "if guided".
  *
  * For the `local-coder` feature, the rule file is necessary but not sufficient:
- * the `inference.local_coder_enabled` setting must also be true. When the local
- * coder is disabled via `golem config set inference.local_coder_enabled false`,
+ * the `inference.coder_enabled` setting must also be true. When the local
+ * coder is disabled via `golem config set inference.coder_enabled false`,
  * the guidance text is still present but enforcement is bypassed (the agent is
  * not told to draft with a tool that is not enabled).
  */
@@ -318,11 +328,11 @@ export async function guidanceEnabled(projectDir: string, name: string): Promise
   return false;
 }
 
-/** Read the effective `inference.local_coder_enabled` setting; fail-open true. */
+/** Read the effective `inference.coder_enabled` setting; fail-open true. */
 async function localCoderEnabled(projectDir: string): Promise<boolean> {
   try {
     const { settings } = await loadConfig({ projectDir });
-    return settings.inference.local_coder_enabled;
+    return settings.inference.coder_enabled;
   } catch {
     return true;
   }
@@ -353,14 +363,28 @@ export async function writeGuidanceRule(
       detail: `${feature.name} rule already present`,
     };
   }
+  // R9.5: an edited rule is the user's. Golem reports that it has newer text
+  // and leaves the file alone rather than overwriting their words.
+  const disposition = await classifyManaged(projectDir, file, body, existing);
+  if (disposition === "owned") {
+    return {
+      kind: "conflict",
+      path: rel(projectDir, file),
+      detail: ownedDetail(`${scope} guidance: ${feature.name}`),
+    };
+  }
   if (!dryRun) {
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, body, "utf8");
+    await rememberManaged(projectDir, file, body);
   }
   return {
     kind: existing === null ? "create" : "modify",
     path: rel(projectDir, file),
-    detail: `${scope} guidance: ${feature.name}`,
+    detail:
+      existing === null
+        ? `${scope} guidance: ${feature.name}`
+        : `${scope} guidance: ${feature.name} — refreshed (unmodified since Golem wrote it)`,
   };
 }
 
@@ -419,13 +443,23 @@ export async function seedDefaultGuidance(
   projectDir: string,
   dryRun = false,
 ): Promise<InitAction[]> {
-  if (await alreadySeeded(projectDir)) {
-    return [
-      { kind: "skip", path: ".claude/rules/", detail: "guidance already seeded (user-owned)" },
-    ];
-  }
+  const seeded = await alreadySeeded(projectDir);
   const actions: InitAction[] = [];
   for (const f of GUIDANCE_FEATURES.filter((g) => g.seededByDefault)) {
+    // R9.5: the sentinel keeps its real job — a rule the user turned off with
+    // `golem guidance disable` (i.e. deleted) is NOT re-created on a later init.
+    // But "don't undo the user's choice" and "never refresh the text" used to be
+    // the same mechanism, and only the first was ever intended. So once seeded,
+    // a rule that is still PRESENT is refreshed (when unmodified) and one that is
+    // ABSENT is left absent.
+    if (seeded && !(await guidanceRuleExists(projectDir, f.name, "project"))) {
+      actions.push({
+        kind: "skip",
+        path: rel(projectDir, guidanceRulePath(projectDir, f.name, "project")),
+        detail: `${f.name} is disabled — not re-seeded`,
+      });
+      continue;
+    }
     actions.push(await writeGuidanceRule(projectDir, f, "project", dryRun));
   }
   if (!dryRun) {

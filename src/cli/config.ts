@@ -7,11 +7,14 @@
  * report the effective value after the write in case a higher layer overrides.
  */
 
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { ConfigError } from "../config/errors.js";
 import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js";
+import { migrationFrom, type SettingMigration } from "../config/migrations.js";
 import { allLeafPaths, leafSchema } from "../config/schema.js";
 import { unwrapSchema } from "../config/ui-model.js";
+import { deleteRetiredKey } from "../config/write-setting.js";
 
 export interface ConfigReadOptions {
   readonly projectDir: string;
@@ -43,6 +46,8 @@ export interface ConfigWriteResult {
   readonly scope: SettingsScope;
   readonly file: string;
   readonly effective: ConfigGetReport;
+  /** R9.6: set when the caller typed a retired key and it was redirected. */
+  readonly renamedFrom?: SettingMigration;
   readonly overriddenBy?: ConfigGetReport;
 }
 
@@ -70,7 +75,11 @@ export async function listConfig(options: ConfigReadOptions): Promise<ConfigList
 }
 
 /** Read one effective setting by dotted `section.key`. */
-export async function getConfig(key: string, options: ConfigReadOptions): Promise<ConfigGetReport> {
+export async function getConfig(
+  requestedKey: string,
+  options: ConfigReadOptions,
+): Promise<ConfigGetReport> {
+  const key = resolveSettingKey(requestedKey).key;
   validateKnownKey(key);
   const { settings, provenance } = await loadConfig({
     projectDir: options.projectDir,
@@ -88,8 +97,66 @@ export async function getConfig(key: string, options: ConfigReadOptions): Promis
   };
 }
 
+/**
+ * R9.9 — resolve `golem config set`'s value argument: the positional `<value>`,
+ * or `--value-file <path>` (with `-` meaning stdin).
+ *
+ * The escape hatch exists because JSON on the command line is a shell fight:
+ * PowerShell, cmd and POSIX shells each quote embedded `"` differently, and a
+ * user who loses that fight gets a JSON parse error rather than a setting.
+ * Exactly one source must be given — silently preferring one over the other
+ * would write a value the user did not intend.
+ */
+export async function resolveSetValue(
+  value: string | undefined,
+  valueFile: string | undefined,
+  io: {
+    readonly readFile?: (p: string) => Promise<string>;
+    readonly readStdin?: () => Promise<string>;
+  } = {},
+): Promise<string> {
+  if (value !== undefined && valueFile !== undefined) {
+    throw new ConfigError("pass either <value> or --value-file, not both");
+  }
+  if (value !== undefined) return value;
+  if (valueFile === undefined) {
+    throw new ConfigError(
+      "missing value: pass it as an argument, or use --value-file <path> (or --value-file - for stdin)",
+    );
+  }
+  if (valueFile === "-") {
+    const readStdin = io.readStdin ?? defaultReadStdin;
+    return stripBom(await readStdin()).trim();
+  }
+  const read = io.readFile ?? ((p: string) => readFile(p, "utf8"));
+  try {
+    return stripBom(await read(valueFile)).trim();
+  } catch (err) {
+    throw new ConfigError(
+      `cannot read --value-file ${valueFile}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** A UTF-8 BOM — what Windows editors and `Out-File -Encoding utf8BOM` leave behind — is not JSON. */
+function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+async function defaultReadStdin(): Promise<string> {
+  if (process.stdin.isTTY) {
+    throw new ConfigError("--value-file - expects the value on stdin, but stdin is a terminal");
+  }
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 /** Parse and validate a raw CLI string into the schema type for `key`. */
-export function parseConfigValue(key: string, raw: string): unknown {
+export function parseConfigValue(requestedKey: string, raw: string): unknown {
+  // R9.6: resolve here too, so every entry point into the config engine accepts
+  // a retired name rather than only the two that happen to call resolveSettingKey.
+  const key = resolveSettingKey(requestedKey).key;
   const leaf = leafForKey(key);
   if (leaf === undefined) {
     throw new ConfigError(
@@ -120,14 +187,7 @@ export function parseConfigValue(key: string, raw: string): unknown {
   if (target instanceof z.ZodArray) {
     const trimmed = raw.trim();
     if (trimmed.startsWith("[")) {
-      try {
-        return JSON.parse(trimmed);
-      } catch (err) {
-        throw new ConfigError(
-          `"${key}" expects a JSON array, got "${raw}" (${err instanceof Error ? err.message : String(err)})`,
-          { key },
-        );
-      }
+      return parseJsonValue(key, trimmed, "array");
     }
     return trimmed
       .split(",")
@@ -135,31 +195,113 @@ export function parseConfigValue(key: string, raw: string): unknown {
       .filter((item) => item !== "");
   }
 
+  // R9.9: object-valued leaves (`z.record`, `z.object`) are JSON. Without this
+  // branch the raw string reached zod untouched and failed with "Expected
+  // object, received string" — a symptom that hid the cause, and left
+  // `compression.headroom_config` settable only by hand-editing the file.
+  if (target instanceof z.ZodRecord || target instanceof z.ZodObject) {
+    return parseJsonValue(key, raw.trim(), "object");
+  }
+
   // Strings and URLs: pass through and let zod validate in writeSetting.
   return raw;
+}
+
+/**
+ * Parse `raw` as JSON for a leaf that expects `expected` ("object" | "array"),
+ * failing with a message that names the *cause* (bad JSON, or valid JSON of the
+ * wrong shape) rather than the downstream zod symptom.
+ */
+function parseJsonValue(key: string, raw: string, expected: "object" | "array"): unknown {
+  if (raw === "") {
+    throw new ConfigError(
+      `"${key}" expects a JSON ${expected}, got an empty value` +
+        ` (pass ${expected === "object" ? "{}" : "[]"} to clear it, or \`golem config unset ${key}\`)`,
+      { key },
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new ConfigError(
+      `invalid JSON for "${key}": ${err instanceof Error ? err.message : String(err)}` +
+        ` — got ${JSON.stringify(raw)}.` +
+        ` If your shell is eating the quotes, use \`--value-file <path>\` or \`--value-file -\` (stdin).`,
+      { key },
+    );
+  }
+  if (jsonShapeOf(parsed) !== expected) {
+    throw new ConfigError(
+      `"${key}" expects a JSON ${expected}, got ${jsonShapeOf(parsed)}: ${JSON.stringify(parsed)}`,
+      { key },
+    );
+  }
+  return parsed;
+}
+
+/** Structural equality over JSON-shaped settings values (scalars, arrays, objects). */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameValue(item, b[index]));
+  }
+  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
+  const aKeys = Object.keys(a as Record<string, unknown>);
+  const bKeys = Object.keys(b as Record<string, unknown>);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (k) =>
+      Object.hasOwn(b as Record<string, unknown>, k) &&
+      sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]),
+  );
+}
+
+function jsonShapeOf(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
 }
 
 /** Write `value` to `scope`, then return the effective value (which may be overridden). */
 export async function setConfig(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   raw: string,
   options: ConfigReadOptions,
 ): Promise<ConfigWriteResult> {
+  // R9.6: writing the retired name would land a key the loader then warns
+  // about. Write the live one and report the redirect.
+  const { key, renamedFrom } = resolveSettingKey(requestedKey);
   validateKnownKey(key);
   const value = parseConfigValue(key, raw);
   const file = await writeSetting(scope, key, value, {
     projectDir: options.projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
   });
+  // R9.6/R9.10: having written the live key, drop the retired one from the SAME
+  // file. Leaving both would hand the user a dead duplicate and a warning about
+  // the pair on every load — a worse outcome than the rename they just asked to
+  // follow. Other scopes are untouched: this only cleans up what it just wrote.
+  if (renamedFrom !== undefined) {
+    await deleteRetiredKey(scope, renamedFrom.from, {
+      projectDir: options.projectDir,
+      ...(options.userDir !== undefined && { userDir: options.userDir }),
+    });
+  }
   const effective = await getConfig(key, options);
-  const overridden = effective.layer !== scope || effective.value !== value;
+  // Structural, not reference, comparison: an object- or array-valued leaf read
+  // back through the loader is a different object every time, so `!==` reported
+  // every such write as overridden by a layer that had not overridden anything.
+  const overridden = effective.layer !== scope || !sameValue(effective.value, value);
   return {
     key,
     value,
     scope,
     file,
     effective,
+    ...(renamedFrom !== undefined && { renamedFrom }),
     ...(overridden && { overriddenBy: effective }),
   };
 }
@@ -167,9 +309,10 @@ export async function setConfig(
 /** Remove `key` from `scope`, returning the effective value after deletion. */
 export async function unsetConfig(
   scope: SettingsScope,
-  key: string,
+  requestedKey: string,
   options: ConfigReadOptions,
 ): Promise<{ key: string; scope: SettingsScope; file: string; effective: ConfigGetReport }> {
+  const key = resolveSettingKey(requestedKey).key;
   validateKnownKey(key);
   const file = await writeSetting(scope, key, undefined, {
     projectDir: options.projectDir,
@@ -198,9 +341,16 @@ export function renderConfigGet(report: ConfigGetReport): string {
 
 /** Human rendering of `config set`. */
 export function renderConfigSet(result: ConfigWriteResult): string {
-  const lines: string[] = [
+  const lines: string[] = [];
+  if (result.renamedFrom !== undefined) {
+    lines.push(
+      `note: "${result.renamedFrom.from}" was renamed to "${result.renamedFrom.to}" in ` +
+        `${result.renamedFrom.since} — writing "${result.renamedFrom.to}".`,
+    );
+  }
+  lines.push(
     `${result.key} set to ${JSON.stringify(result.value)} in ${result.file} (${result.scope} scope)`,
-  ];
+  );
   const eff = result.effective;
   const source = eff.source !== undefined ? ` (${eff.source})` : "";
   lines.push(`effective value: ${JSON.stringify(eff.value)} — ${eff.layer}${source}`);
@@ -227,6 +377,22 @@ export function renderConfigUnset(result: {
     `${result.key} removed from ${result.scope} scope (${result.file})\n` +
     `effective value: ${JSON.stringify(eff.value)} — ${eff.layer}${source}\n`
   );
+}
+
+/**
+ * R9.6 — resolve a possibly-retired key to the live one.
+ *
+ * Typing a renamed key at the CLI should do the sensible thing rather than
+ * reading nothing (`get`) or writing a key the loader will immediately warn
+ * about (`set`). The redirect is returned so callers can say it out loud — a
+ * silent rewrite of what the user typed would be its own small dishonesty.
+ */
+export function resolveSettingKey(key: string): {
+  readonly key: string;
+  readonly renamedFrom?: SettingMigration;
+} {
+  const migration = migrationFrom(key);
+  return migration === undefined ? { key } : { key: migration.to, renamedFrom: migration };
 }
 
 function validateKnownKey(key: string): void {

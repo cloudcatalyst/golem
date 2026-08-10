@@ -33,6 +33,7 @@ import {
 import { probeCredential } from "../credentials/probe.js";
 import {
   doubledVersionSegment,
+  isSpawnProvider,
   isTranslatingProvider,
   listTargets,
   type ResolvedTarget,
@@ -218,7 +219,14 @@ export async function addTarget(
 
   // Same two registration-time checks `account add` makes, for the same reason:
   // both fail on the FIRST request otherwise, one of them with an HTML 404.
-  if (input.model !== undefined && !isTranslatingProvider(input.provider)) {
+  // R9.15: `claude-cli` is neither byte-faithful nor translating — the model id
+  // becomes the spawned client's `--model`, so it is very much used on the wire.
+  // Without this exclusion `target add` printed a warning that was simply false.
+  if (
+    input.model !== undefined &&
+    !isTranslatingProvider(input.provider) &&
+    !isSpawnProvider(input.provider)
+  ) {
     process.stderr.write(
       `warning: provider "${input.provider}" is byte-faithful (it forwards the client's own ` +
         `model id unchanged), so model "${input.model}" will be IGNORED on the wire — it is ` +

@@ -40,6 +40,20 @@ interface SelfTestResult {
   readonly bad_value_applied: readonly string[];
   readonly non_dict_protect_recent: number;
   readonly non_dict_ignored: readonly string[];
+  readonly router_supported: readonly string[];
+  readonly alias_applied: readonly string[];
+  readonly alias_ignored: readonly string[];
+  readonly alias_router_lossless: boolean | null;
+  readonly namespace_ccr_enabled: boolean | null;
+  readonly default_lossless: boolean | null;
+  readonly default_lossless_aggressive: boolean | null;
+  readonly opt_out_lossless: boolean | null;
+  readonly leak_before: boolean | null;
+  readonly leak_after: boolean | null;
+  readonly router_unknown_ignored: readonly string[];
+  readonly router_unknown_applied: readonly string[];
+  readonly mixed_applied: readonly string[];
+  readonly mixed_ignored: readonly string[];
 }
 
 describe.runIf(PYTHON !== null)("headroom-worker.py config passthrough (Decision 53)", () => {
@@ -92,11 +106,69 @@ describe.runIf(PYTHON !== null)("headroom-worker.py config passthrough (Decision
   it("degrades a supported name with an unusable value to the preset, and says so", () => {
     expect(result.bad_value_protect_recent).toBe(4);
     expect(result.bad_value_reported).toBe(true);
-    expect(result.bad_value_applied).toEqual(["protect_recent"]);
+    // The CompressConfig half degrades to the preset alone. Router keys are
+    // namespaced and unaffected by a bad CompressConfig value (R9.8).
+    expect(result.bad_value_applied.filter((k) => !k.startsWith("router."))).toEqual([
+      "protect_recent",
+    ]);
   });
 
   it("tolerates a non-object config from the untrusted HTTP surface", () => {
     expect(result.non_dict_protect_recent).toBe(4);
     expect(result.non_dict_ignored).toEqual([]);
+  });
+
+  // --- R9.8: the ContentRouter half of the config surface -------------------
+  // Measured against the real 0.30.0 pin: `CompressConfig` cannot express
+  // marker-free mode, and neither can `HeadroomConfig(smart_crusher=…)` —
+  // Headroom's default pipeline builds `ContentRouter()` with no config, so the
+  // only reach point is the transform instance.
+  describe("router namespace (R9.8)", () => {
+    it("introspects ContentRouterConfig rather than hardcoding its fields", () => {
+      expect(result.router_supported).toContain("lossless");
+    });
+
+    it("maps the lossless_only alias onto the field that actually works", () => {
+      // Upstream's name for the option is SmartCrusherConfig.lossless_only, but
+      // ContentRouterConfig.lossless is what suppresses the markers.
+      expect(result.alias_router_lossless).toBe(true);
+      expect(result.alias_applied).toContain("router.lossless");
+      expect(result.alias_ignored).toEqual([]);
+    });
+
+    it("reaches an arbitrary router field, not just the alias", () => {
+      expect(result.namespace_ccr_enabled).toBe(false);
+    });
+
+    it("defaults to marker-free, in every mode", () => {
+      // Golem's default (R9.8): 82% of the semantic stage's saving, and tool
+      // output that never differs from the bytes an Edit will be applied to.
+      expect(result.default_lossless).toBe(true);
+      expect(result.default_lossless_aggressive).toBe(true);
+    });
+
+    it("lets an explicit false opt out — a default, not a lock", () => {
+      expect(result.opt_out_lossless).toBe(false);
+    });
+
+    it("does not leak one request's router config into the next", () => {
+      // The pipeline singleton is process-global; without an explicit restore,
+      // one request's router would quietly configure every later request.
+      expect(result.leak_before).toBe(false);
+      expect(result.leak_after).toBe(true); // back to the default
+    });
+
+    it("reports an unknown router key under its namespace instead of forwarding it", () => {
+      expect(result.router_unknown_ignored).toEqual(["router.not_a_router_option"]);
+      expect(result.router_unknown_applied).not.toContain("router.not_a_router_option");
+    });
+
+    it("applies router and CompressConfig keys from one bag, and still reports the rest", () => {
+      expect(result.mixed_applied).toContain("router.lossless");
+      expect(result.mixed_applied).toContain("protect_recent");
+      // `plugins` is the key this repo's own settings.local.json carries and
+      // that used to vanish without a word.
+      expect(result.mixed_ignored).toEqual(["plugins"]);
+    });
   });
 });

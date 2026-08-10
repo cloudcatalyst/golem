@@ -12,6 +12,7 @@ import {
   coderFirstNudgeStatePath,
   decideCoderFirstNudge,
   isCodeDraftTarget,
+  MAX_REMEMBERED_SESSIONS,
   MIN_CODE_DRAFT_CHARS,
   readCoderFirstNudgeState,
   writeCoderFirstNudgeState,
@@ -79,27 +80,27 @@ describe("isCodeDraftTarget", () => {
 
 describe("decideCoderFirstNudge", () => {
   it("nudges on non-trivial code in a new session and returns the key to persist", () => {
-    expect(decideCoderFirstNudge({ isCode: true }, undefined, "s1")).toEqual({
+    expect(decideCoderFirstNudge({ isCode: true }, [], "s1")).toEqual({
       nudge: true,
       sessionKey: "s1",
     });
   });
 
   it("is one-shot: no nudge when this session already nudged", () => {
-    expect(decideCoderFirstNudge({ isCode: true }, "s1", "s1")).toEqual({ nudge: false });
+    expect(decideCoderFirstNudge({ isCode: true }, ["s1"], "s1")).toEqual({ nudge: false });
   });
 
   it("never nudges when the target is not code", () => {
-    expect(decideCoderFirstNudge({ isCode: false }, undefined, "s1")).toEqual({ nudge: false });
+    expect(decideCoderFirstNudge({ isCode: false }, [], "s1")).toEqual({ nudge: false });
   });
 
   it("one-shots even with a missing session id (stable fallback key)", () => {
-    const first = decideCoderFirstNudge({ isCode: true }, undefined, undefined);
+    const first = decideCoderFirstNudge({ isCode: true }, [], undefined);
     expect(first.nudge).toBe(true);
     expect(typeof first.sessionKey).toBe("string");
     expect((first.sessionKey ?? "").length).toBeGreaterThan(0);
     // Feed the recorded key back → the missing-id session is now consumed.
-    expect(decideCoderFirstNudge({ isCode: true }, first.sessionKey, undefined)).toEqual({
+    expect(decideCoderFirstNudge({ isCode: true }, [first.sessionKey ?? ""], undefined)).toEqual({
       nudge: false,
     });
   });
@@ -116,15 +117,63 @@ describe("coderFirstNudgeReason", () => {
 
 describe("coder-first-nudge state I/O", () => {
   it("round-trips the nudged session id", async () => {
-    expect(await readCoderFirstNudgeState(dir)).toBeUndefined();
+    expect(await readCoderFirstNudgeState(dir)).toEqual([]);
     await writeCoderFirstNudgeState(dir, "sess-9");
-    expect(await readCoderFirstNudgeState(dir)).toBe("sess-9");
+    expect(await readCoderFirstNudgeState(dir)).toEqual(["sess-9"]);
   });
 
-  it("fails open (undefined) on a corrupt state file", async () => {
+  it("fails open (empty) on a corrupt state file", async () => {
     const file = coderFirstNudgeStatePath(dir);
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, "{ not json", "utf8");
-    expect(await readCoderFirstNudgeState(dir)).toBeUndefined();
+    expect(await readCoderFirstNudgeState(dir)).toEqual([]);
+  });
+
+  it("R9.17: a second session does not evict the first one's one-shot", async () => {
+    // The defect: the state was a single slot, so any concurrent session in the
+    // project — another window, a parallel agent, a headless `claude -p` — wiped
+    // the previous session's record and it got nudged all over again.
+    await writeCoderFirstNudgeState(dir, "sess-A");
+    await writeCoderFirstNudgeState(dir, "sess-B");
+
+    const seen = await readCoderFirstNudgeState(dir);
+    expect(decideCoderFirstNudge({ isCode: true }, seen, "sess-A")).toEqual({ nudge: false });
+    expect(decideCoderFirstNudge({ isCode: true }, seen, "sess-B")).toEqual({ nudge: false });
+    expect(decideCoderFirstNudge({ isCode: true }, seen, "sess-C")).toEqual({
+      nudge: true,
+      sessionKey: "sess-C",
+    });
+  });
+
+  it("R9.17: interleaved sessions are each nudged exactly once", async () => {
+    let nudges = 0;
+    // Two sessions taking turns at non-trivial code writes, as two agents in one
+    // repo actually do.
+    for (const session of ["s1", "s2", "s1", "s2", "s1", "s2"]) {
+      const seen = await readCoderFirstNudgeState(dir);
+      const decision = decideCoderFirstNudge({ isCode: true }, seen, session);
+      if (decision.nudge && decision.sessionKey !== undefined) {
+        nudges += 1;
+        await writeCoderFirstNudgeState(dir, decision.sessionKey);
+      }
+    }
+    expect(nudges).toBe(2);
+  });
+
+  it("reads the pre-R9.17 single-slot file so an upgrade does not re-nudge", async () => {
+    const file = coderFirstNudgeStatePath(dir);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, JSON.stringify({ nudgedSessionId: "legacy-1" }), "utf8");
+    expect(await readCoderFirstNudgeState(dir)).toEqual(["legacy-1"]);
+  });
+
+  it("caps how many sessions it remembers", async () => {
+    for (let i = 0; i < MAX_REMEMBERED_SESSIONS + 10; i++) {
+      await writeCoderFirstNudgeState(dir, `s${i}`);
+    }
+    const seen = await readCoderFirstNudgeState(dir);
+    expect(seen.length).toBe(MAX_REMEMBERED_SESSIONS);
+    expect(seen.at(-1)).toBe(`s${MAX_REMEMBERED_SESSIONS + 9}`); // newest kept
+    expect(seen).not.toContain("s0"); // oldest evicted
   });
 });

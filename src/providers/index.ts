@@ -97,9 +97,29 @@ export const UPSTREAM_PROVIDERS = [
   "openai",
   "ollama",
   "gemini",
+  // R9.15: not an endpoint at all — a target that SPAWNS the user's own Claude
+  // Code CLI, so a draft runs on their subscription without Golem ever touching
+  // that credential. Valid only as a target provider; see PROXY_PROVIDERS.
+  "claude-cli",
 ] as const;
 
 export type UpstreamProvider = (typeof UPSTREAM_PROVIDERS)[number];
+
+/**
+ * The providers the PROXY can front. `claude-cli` is excluded deliberately: the
+ * proxy forwards a request to an endpoint, and there is no endpoint to forward
+ * to — naming it as `proxy.upstream_provider` would be a setting that parses and
+ * then cannot work, which is the silent-no-op class this repo keeps closing.
+ * Enforced at config-load time by the schema, not at first request.
+ */
+export const PROXY_PROVIDERS = UPSTREAM_PROVIDERS.filter(
+  (p) => p !== "claude-cli",
+) as readonly UpstreamProvider[] as readonly [UpstreamProvider, ...UpstreamProvider[]];
+
+/** Whether reaching this provider means spawning a process rather than an HTTP call. */
+export function isSpawnProvider(provider: UpstreamProvider): boolean {
+  return provider === "claude-cli";
+}
 
 /**
  * Whether the provider needs request/response translation (case b) rather than a
@@ -169,6 +189,11 @@ export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthSchem
     case "gemini":
       // Gemini authenticates with a `?key=` query param carried in the path, not
       // a header — so no header mapping (inherit = none injected).
+      return "inherit";
+    case "claude-cli":
+      // R9.15: there is no request for Golem to sign. The spawned Claude Code
+      // authenticates as itself, which is the entire point of the route — Golem
+      // never holds, reads or forwards that credential.
       return "inherit";
   }
 }

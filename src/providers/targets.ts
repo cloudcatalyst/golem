@@ -122,7 +122,6 @@ export interface TargetRegistrySettings {
   readonly upstream_model?: string;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
   readonly accounts?: readonly UpstreamAccount[];
-  readonly active_account?: string;
   readonly targets?: readonly TargetEntry[];
   readonly default_target?: string;
 }
@@ -249,17 +248,12 @@ export function listTargets(settings: TargetRegistrySettings): readonly Resolved
 /**
  * Which target is used when a request names none.
  *
- * `default_target` is the new selector; `active_account` is the R6.2 one. Reading
- * the old key when the new one is unset **is** the migration shim (Decision 21d
- * → per-target selection): an existing config keeps working with no edit and no
- * rewrite of the user's settings file.
+ * R9.6: the `active_account` fallback that used to live here is now a declarative
+ * entry in `src/config/migrations.ts`, applied by the loader — so this reads one
+ * key and the rename is handled in exactly one place.
  */
 export function resolveDefaultTargetId(settings: TargetRegistrySettings): string {
-  return (
-    settings.default_target ??
-    settings.active_account ??
-    defaultTargetId(settings.upstream_provider)
-  );
+  return settings.default_target ?? defaultTargetId(settings.upstream_provider);
 }
 
 /** The outcome of a lookup. Fail-closed: an unknown id yields no target at all. */

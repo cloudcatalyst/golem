@@ -28,6 +28,7 @@
 import { readFile } from "node:fs/promises";
 import { readEnvLayer } from "./env.js";
 import { ConfigError } from "./errors.js";
+import { migrationFrom, migrationShadowedWarning, migrationWarning } from "./migrations.js";
 import { type SettingsFilePaths, settingsFilePaths } from "./paths.js";
 import {
   DEFAULT_SETTINGS,
@@ -45,6 +46,14 @@ export interface ProvenanceEntry {
   readonly layer: LayerName;
   /** Absolute file path or env var name; absent for defaults and overrides. */
   readonly source?: string;
+  /**
+   * R9.6 — the dotted key actually present in the source, when it differs from
+   * the leaf this value landed on (i.e. the file still names a renamed setting).
+   * Absent in the ordinary case. Reporting the new key here would claim the file
+   * says something it does not, which is the dishonesty the migration exists to
+   * avoid: the user must be able to find the line they need to edit.
+   */
+  readonly key?: string;
 }
 
 /** Dotted `section.key` → which layer supplied the effective value. */
@@ -203,11 +212,34 @@ function applyObjectLayer(
     }
     for (const [key, value] of Object.entries(sectionValue)) {
       const dotted = `${sectionName}.${key}`;
-      const leaf = leafSchema(sectionName, key);
+      let leaf = leafSchema(sectionName, key);
+      // R9.6: the key the value lands on, and the key the FILE named — the same
+      // thing except for a renamed setting, where provenance must report the
+      // name actually present in the file rather than implying the new one.
+      let targetKey = key;
+      let fromKey: string | undefined;
+
       if (leaf === undefined) {
-        warnings.push(`${label}: unknown setting "${dotted}" ignored`);
-        continue;
+        const migration = migrationFrom(dotted);
+        if (migration === undefined) {
+          warnings.push(`${label}: unknown setting "${dotted}" ignored`);
+          continue;
+        }
+        // The replacement set in the SAME layer wins; the old key is reported
+        // and dropped. Across layers, normal precedence applies untouched.
+        const [, liveKey] = splitDotted(migration.to);
+        if (liveKey !== undefined && Object.hasOwn(sectionValue, liveKey)) {
+          warnings.push(migrationShadowedWarning(migration, label));
+          continue;
+        }
+        // Exactly one warning per migrated key — never also "unknown setting".
+        warnings.push(migrationWarning(migration, label));
+        targetKey = liveKey ?? key;
+        fromKey = dotted;
+        leaf = leafSchema(sectionName, targetKey);
+        if (leaf === undefined) continue; // guarded by assertLeafRename's test
       }
+
       if (value === undefined) {
         continue; // absent — only possible via in-memory overrides
       }
@@ -221,14 +253,22 @@ function applyObjectLayer(
       }
       const section = tree[sectionName];
       if (section !== undefined) {
-        section[key] = parsed.data;
-        provenance[dotted] = {
+        section[targetKey] = parsed.data;
+        provenance[`${sectionName}.${targetKey}`] = {
           layer,
           ...(sourceFile !== undefined && { source: sourceFile }),
+          ...(fromKey !== undefined && { key: fromKey }),
         };
       }
     }
   }
+}
+
+/** Split a dotted `section.key`; the key is undefined when there is no dot. */
+function splitDotted(dotted: string): readonly [string, string | undefined] {
+  const i = dotted.indexOf(".");
+  if (i === -1) return [dotted, undefined];
+  return [dotted.slice(0, i), dotted.slice(i + 1)];
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

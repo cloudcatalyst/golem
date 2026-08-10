@@ -150,7 +150,7 @@ describe("the gate — no secret leaves, and the draft comes back usable", () =>
       inference: stubInference(),
       settings: REMOTE,
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" },
     });
 
     const result = await dispatcher.dispatch({
@@ -173,7 +173,7 @@ describe("the gate — no secret leaves, and the draft comes back usable", () =>
       inference: stubInference(),
       settings: REMOTE,
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" },
     });
     await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT, targetId: "cheap" });
 
@@ -264,7 +264,7 @@ describe("the local path is unchanged", () => {
         ],
       },
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY: "sk-thekey" },
     });
 
     await dispatcher.dispatch({
@@ -292,7 +292,7 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       inference,
       settings: REMOTE,
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" },
       workerTargets: { coder: "cheap" },
     });
 
@@ -528,10 +528,106 @@ describe("transport and audit", () => {
       inference: stubInference(),
       settings: REMOTE,
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" },
     });
     await expect(
       dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "cheap" }),
     ).rejects.toThrow(/returned 429/);
+  });
+});
+
+/**
+ * R9.14 — the MCP server inherits no `GOLEM_UPSTREAM_API_KEY__*`, because Claude
+ * Code spawns it from `.mcp.json` rather than the CLI spawning it. Before the
+ * resolver, every credentialed target dispatched from `coder` went out with no
+ * auth header and came back 401 while `golem target list` said the key was
+ * stored. These pin both halves: the resolver supplies the key, and a target
+ * with no resolvable key fails by NAME rather than as a bare upstream 401.
+ */
+describe("credential resolution without the environment", () => {
+  it("uses resolveKey in preference to the environment", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const asked: (string | null)[] = [];
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: {}, // deliberately empty — the whole point is that env is not the source
+      resolveKey: (accountId) => {
+        asked.push(accountId);
+        return "sk-from-the-store";
+      },
+    });
+
+    await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "cheap" });
+
+    expect(asked).toEqual(["openrouter"]);
+    expect(sent[0]?.headers.authorization).toBe("Bearer sk-from-the-store");
+  });
+
+  it("awaits an async resolver, so the store can be read lazily", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: {},
+      resolveKey: async () => "sk-async",
+    });
+
+    await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "cheap" });
+
+    expect(sent[0]?.headers.authorization).toBe("Bearer sk-async");
+  });
+
+  it("names the missing credential instead of dispatching unauthenticated", async () => {
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: {},
+      resolveKey: () => undefined,
+    });
+
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "cheap" }),
+    ).rejects.toThrow(/needs a credential.*account "openrouter"/s);
+    // Nothing was sent: an unauthenticated request would only have earned a 401.
+    expect(sent).toHaveLength(0);
+  });
+
+  it("still dispatches with no credential when the scheme is inherit", async () => {
+    const { fetchImpl, sent } = captureFetch({ content: [{ type: "text", text: "ok" }] });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: {
+        ...REMOTE,
+        targets: [
+          {
+            id: "inherits",
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+            model: "claude-sonnet-5",
+            auth_scheme: "inherit",
+            trust: "vendor",
+          },
+        ],
+      },
+      fetchImpl,
+      env: {},
+      resolveKey: () => undefined,
+    });
+
+    await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "inherits" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.headers["x-api-key"]).toBeUndefined();
   });
 });

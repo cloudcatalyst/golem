@@ -41,11 +41,15 @@ function parseConfigScope(raw: string): SettingsScope {
 export default function register(program: Command): void {
   const localCmd = program
     .command("local")
-    .description("Enable, disable, and configure the local (or LAN) model");
+    .description(
+      "Configure the LOCAL (or LAN) model backend — the fallback for workers with no target",
+    );
 
   localCmd
     .command("status", { isDefault: true })
-    .description("Show whether the local model is enabled, where it lives, and if it answers")
+    .description(
+      "Show the local backend: whether `coder` is on, where the backend lives, and if it answers",
+    )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)
     .action(async (opts: { dir: string; json: boolean }) => {
@@ -115,7 +119,7 @@ export default function register(program: Command): void {
 
   program
     .command("coder")
-    .description("Enable, disable, or show the local coder tool status (alias of `golem local`)")
+    .description("Enable, disable, or show the `coder` tool — and which target each worker uses")
     .argument("[state]", "enable | disable | status")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--scope <scope>", "settings scope for enable/disable", "project")

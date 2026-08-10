@@ -185,21 +185,15 @@ describe("target registry — trust defaults", () => {
   });
 });
 
-describe("target registry — the default selector and its migration shim", () => {
-  it("reads active_account when default_target is unset (existing config keeps working)", () => {
-    expect(resolveDefaultTargetId({ ...SIX_ACCOUNTS, active_account: "openrouter-qwen3" })).toBe(
-      "openrouter-qwen3",
+describe("target registry — the default selector", () => {
+  // R9.6: the `active_account` → `default_target` shim used to live in
+  // resolveDefaultTargetId. It is now a declarative entry in
+  // src/config/migrations.ts applied by the loader, and is covered there
+  // (tests/unit/config-migrations.test.ts) — this function reads one key.
+  it("reads default_target", () => {
+    expect(resolveDefaultTargetId({ ...SIX_ACCOUNTS, default_target: "openrouter-laguna" })).toBe(
+      "openrouter-laguna",
     );
-  });
-
-  it("prefers default_target once it is set", () => {
-    expect(
-      resolveDefaultTargetId({
-        ...SIX_ACCOUNTS,
-        active_account: "openrouter-qwen3",
-        default_target: "openrouter-laguna",
-      }),
-    ).toBe("openrouter-laguna");
   });
 
   it("falls back to the synthetic default id when neither is set", () => {

@@ -5,7 +5,7 @@
  * existed as settings leaves; what was missing was one place to see and set
  * them. This is that place:
  *
- * - `inference.local_coder_enabled` — whether the `coder` MCP tool (the only
+ * - `inference.coder_enabled` — whether the `coder` MCP tool (the only
  *   thing that routinely engages the local model, Decision 31) is offered.
  * - `inference.ollama_base_url` — *which* Ollama the local roles talk to.
  *   Pointing this at another machine is the whole LAN-offload story (spec §6,
@@ -28,6 +28,7 @@ import {
   OllamaNativeClient,
   type PulledState,
 } from "../inference/index.js";
+import { isKnownWorker } from "../inference/workers.js";
 import type { HardwareTier } from "../interfaces/inference.js";
 import { type ConfigWriteResult, setConfig } from "./config.js";
 import { InitError } from "./init.js";
@@ -40,7 +41,7 @@ const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
   3: "P_MAX",
 };
 
-const CODER_KEY = "inference.local_coder_enabled";
+const CODER_KEY = "inference.coder_enabled";
 const BASE_URL_KEY = "inference.ollama_base_url";
 
 /**
@@ -69,7 +70,7 @@ export function isRemoteEndpoint(baseUrl: string): boolean {
 }
 
 export interface LocalModelReport {
-  /** Whether the `coder` tool is offered (`inference.local_coder_enabled`). */
+  /** Whether the `coder` tool is offered (`inference.coder_enabled`). */
   readonly coder_enabled: boolean;
   /** Which config layer supplied `coder_enabled`. */
   readonly coder_enabled_layer: string;
@@ -90,6 +91,13 @@ export interface LocalModelReport {
    * drafter is precisely what made `coder --refine` silently do nothing (§89/§100).
    */
   readonly coder_model_state: PulledState;
+  /**
+   * R9.10 — workers whose `inference.worker_targets` entry sends them somewhere
+   * other than this local backend. Non-empty means this command is NOT
+   * describing where `coder` runs, and it must say so rather than letting
+   * "Local model: ACTIVE" imply otherwise.
+   */
+  readonly non_local_workers?: readonly { readonly worker: string; readonly target: string }[];
   /**
    * The effective state the status surfaces show: the local model counts as
    * ACTIVE only when it is both enabled and reachable. Neither alone is enough —
@@ -128,7 +136,13 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
     ...(opts.userDir !== undefined ? { userDir: opts.userDir } : {}),
   });
   const baseUrl = settings.inference.ollama_base_url;
-  const coderEnabled = settings.inference.local_coder_enabled;
+  const coderEnabled = settings.inference.coder_enabled;
+  // R9.10: a worker with a `worker_targets` entry does not run on this backend.
+  // Unknown worker names are ignored here — `unknownWorkerWarnings` already
+  // reports those, and repeating it would be a second voice for one fact.
+  const nonLocalWorkers = Object.entries(settings.inference.worker_targets)
+    .filter(([worker, target]) => isKnownWorker(worker) && target !== "")
+    .map(([worker, target]) => ({ worker, target }));
 
   const probe = opts.probe ?? ((url: string) => probeLocalModel(url, URL_PROBE_TIMEOUT_MS));
   const detect = opts.detect ?? detectTierAndModel;
@@ -171,6 +185,9 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
     tier_name: TIER_NAMES[tier],
     coder_model: coderModel,
     coder_model_state: coderModelState,
+    // R9.10: which workers this backend does NOT serve. Built here rather than
+    // in the renderer so `--json` carries the same fact the text does.
+    ...(nonLocalWorkers.length > 0 ? { non_local_workers: nonLocalWorkers } : {}),
     active: coderEnabled && reachable,
   };
 }
@@ -246,8 +263,14 @@ export function renderLocalModel(report: LocalModelReport): string {
   lines.push(`Local model: ${report.active ? "ACTIVE" : "not active"} (${where})`);
   lines.push(
     `  coder tool: ${report.coder_enabled ? "enabled" : "DISABLED"} ` +
-      `(inference.local_coder_enabled, from ${report.coder_enabled_layer})`,
+      `(inference.coder_enabled, from ${report.coder_enabled_layer})`,
   );
+  // R9.10: a worker with a target does not run here, and this command must not
+  // imply it does. Everything below describes the LOCAL backend, which such a
+  // worker never reaches.
+  for (const w of report.non_local_workers ?? []) {
+    lines.push(`  note:       \`${w.worker}\` runs on target "${w.target}", NOT on this backend`);
+  }
   lines.push(
     `  endpoint:   ${report.base_url} — ${report.reachable ? "reachable" : "NOT reachable"} ` +
       `(inference.ollama_base_url, from ${report.base_url_layer})`,
@@ -270,7 +293,7 @@ export function renderLocalModel(report: LocalModelReport): string {
   // is unmet — "not active" with no reason is the unhelpful version.
   if (!report.coder_enabled) {
     lines.push("");
-    lines.push("The coder tool is disabled — enable it with: golem local enable");
+    lines.push("The coder tool is disabled — enable it with: golem coder enable");
   }
   if (report.reachable && report.coder_model_state === "not-pulled") {
     lines.push("");

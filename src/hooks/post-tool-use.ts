@@ -50,6 +50,7 @@ import { createHash } from "node:crypto";
 import { extname, join } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
+import { parseLoopbackServeUrl } from "../proxy/loopback-serve.js";
 import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
 
 export const HOOK_EVENT_NAME = "PostToolUse";
@@ -124,7 +125,7 @@ export interface PostToolUseOptions {
 }
 
 /** Where a swappable text payload lives inside `tool_response`. */
-interface TextSlot {
+export interface TextSlot {
   readonly text: string;
   rebuild(next: string): unknown;
 }
@@ -133,10 +134,67 @@ interface TextSlot {
  * `tool_response` keys probed for the dominant text payload, in order. The
  * shape is undocumented (verification-notes §20) — keep this list short and
  * obvious; unknown shapes must pass through untouched.
+ *
+ * `result` was missing until R9.12, and its absence was silent: WebFetch answers
+ * with `{bytes, code, codeText, result, durationMs, url}` (measured), so every
+ * WebFetch response failed to match and the oversized-output swap never once
+ * fired for that tool. `web-fetch.ts`'s own `textOf()` had listed `result` all
+ * along — two lists of the same thing, drifting apart where nothing checked.
  */
-const TEXT_KEYS = ["output", "stdout", "content", "text"] as const;
+const TEXT_KEYS = ["output", "stdout", "content", "text", "result"] as const;
 
-function findTextSlot(response: unknown): TextSlot | null {
+/** Provenance wording for a served WebFetch: one line for the user, more for the model. */
+export interface ServedFetchLabel {
+  /**
+   * Single line for `systemMessage`, the only channel the UI actually shows the
+   * user here. A collapsed WebFetch row renders as just `Fetch(url)` — no result
+   * line — and the URL it prints is the ORIGINAL input, not our rewrite, so
+   * neither the header nor `updatedToolOutput` can carry a visible label.
+   */
+  readonly line: string;
+  /** The fuller receipt that replaces the tool output the model reads. */
+  readonly detail: string;
+}
+
+/**
+ * The provenance label for a WebFetch Golem served, or null when this call is
+ * not one of ours (in which case the real fetch's output is left untouched).
+ * Pure: everything it needs travels on the rewritten URL.
+ */
+export function servedFetchLabel(
+  toolName: string | undefined,
+  toolInput: unknown,
+): ServedFetchLabel | null {
+  if (toolName !== "WebFetch") return null;
+  const input =
+    typeof toolInput === "object" && toolInput !== null && !Array.isArray(toolInput)
+      ? (toolInput as Record<string, unknown>)
+      : null;
+  const url = input?.url;
+  if (typeof url !== "string") return null;
+
+  const served = parseLoopbackServeUrl(url);
+  if (served === null) return null;
+
+  if (served.source === "miss") {
+    return {
+      line: `Golem: fetched live and cached — ${served.targetUrl}`,
+      detail:
+        `**Golem** Fetched live from ${served.targetUrl} — now cached.\n` +
+        "Golem fetched the raw page itself, so the model received the full page text " +
+        "rather than a summary of it.",
+    };
+  }
+  const age = served.age === undefined ? "" : ` (stored ${served.age})`;
+  return {
+    line: `Golem: served from cache${age} — ${served.targetUrl}`,
+    detail:
+      `**Golem** Served from cache${age} — ${served.targetUrl}\n` +
+      "No network request was made; the page text was delivered to the model directly.",
+  };
+}
+
+export function findTextSlot(response: unknown): TextSlot | null {
   if (typeof response === "string") {
     return { text: response, rebuild: (next) => next };
   }
@@ -451,6 +509,36 @@ export async function runPostToolUseHook(
   }
 
   const slot = findTextSlot(payload.tool_response);
+
+  // R9.12: a WebFetch Golem served from its cache actually ran, against a
+  // loopback STUB, so what lands in the transcript is the summarizer's paraphrase
+  // of that placeholder — accurate but vague, and worded differently every run.
+  // Replace it with a deterministic receipt naming the real URL and where the
+  // bytes came from. This lives here rather than in the WebFetch post hook
+  // because that one is registered `async`, so its stdout is discarded; this hook
+  // is the one Claude Code actually reads output substitution from.
+  if (slot !== null) {
+    const served = servedFetchLabel(payload.tool_name, payload.tool_input);
+    if (served !== null) {
+      io.stdout.write(
+        `${JSON.stringify({
+          // `systemMessage` is the ONLY user-visible channel here (docs: "Warning
+          // message shown to the user"). A collapsed WebFetch row shows just
+          // `Fetch(url)` with no result line, and that URL is the original input
+          // rather than our rewrite — so without this the provenance is invisible
+          // unless the entry is expanded. `additionalContext`, by contrast,
+          // "doesn't appear as a chat message in the interface".
+          systemMessage: served.line,
+          hookSpecificOutput: {
+            hookEventName: HOOK_EVENT_NAME,
+            updatedToolOutput: slot.rebuild(served.detail),
+          },
+        })}\n`,
+      );
+      return 0;
+    }
+  }
+
   if (slot === null || slot.text.length <= maxInlineChars) {
     return 0; // below threshold or shape we don't understand — silent pass-through
   }

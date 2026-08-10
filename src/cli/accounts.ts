@@ -170,7 +170,7 @@ export async function collectAccounts(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<AccountsReport> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.proxy.active_account ?? null;
+  const selected = settings.proxy.default_target ?? null;
   const accounts = settings.proxy.accounts ?? [];
   const defaultId = defaultAccountId(settings.proxy.upstream_provider);
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
@@ -289,7 +289,7 @@ export async function useAccount(
 
   // A single-leaf write: `undefined` deletes the key (revert to the default),
   // a string sets it. writeSetting validates against the schema.
-  await writeSetting("local", "proxy.active_account", target ?? undefined, { projectDir });
+  await writeSetting("local", "proxy.default_target", target ?? undefined, { projectDir });
   // Drop the last-served-model snapshot: it describes the account we just left,
   // and leaving it would make `status`/statusline/the extension report the
   // PREVIOUS model as the current one until the new upstream serves a request.
@@ -570,9 +570,9 @@ export async function removeAccount(
   const remaining = accounts.filter((a) => a.id !== id);
   await writeSetting("local", "proxy.accounts", remaining, { projectDir });
 
-  const wasActive = p.active_account === id;
+  const wasActive = p.default_target === id;
   if (wasActive) {
-    await writeSetting("local", "proxy.active_account", undefined, { projectDir });
+    await writeSetting("local", "proxy.default_target", undefined, { projectDir });
   }
   await appendAudit(projectDir, { action: "remove", account: id }, nowIso);
   return { account: id, was_active: wasActive, credential_removed: credentialRemoved };
@@ -611,7 +611,7 @@ export async function credentialEnvForProxy(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<Record<string, string>> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.proxy.active_account ?? null;
+  const selected = settings.proxy.default_target ?? null;
   const defaultId = defaultAccountId(settings.proxy.upstream_provider);
   // The default top-level config is in force when nothing is selected or the
   // selection names the default id; its credential rides the plain var.
@@ -619,15 +619,22 @@ export async function credentialEnvForProxy(
   const activeStoreId = onDefault ? DEFAULT_STORE_ID : selected;
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
-  // The active account first — unchanged behaviour, so a single-upstream setup
-  // spawns exactly as it did before this task.
+  // Resolution stays SEQUENTIAL, deliberately. R9.18 measured this as the bulk
+  // of proxy start-up — ~2.6s one-time for the DPAPI host self-test, then ~0.94s
+  // per *stored* account (unstored ones cost ~1ms) — and tried resolving them
+  // concurrently. That bought nothing on Windows, because concurrent PowerShell
+  // startups contend rather than overlap, and the burst of processes was enough
+  // to destabilise the test suite. The fix that actually removes the cost is one
+  // batched decrypt in a single invocation: filed as R9.20, with the numbers.
+  //
+  // The active account first, so its credential wins the shared var; then every
+  // account a target references. A missing credential is skipped silently rather
+  // than thrown — an unkeyed target must not stop the proxy starting for the
+  // targets that ARE keyed. `golem target list` reports it.
   const out: Record<string, string> = {};
   const active = await store.resolve(activeStoreId);
   if (active !== null) out[envVarForAccount(activeStoreId)] = active.secret;
 
-  // Then every account some target references. A missing credential is skipped
-  // silently here, not thrown: an unkeyed target must not stop the proxy from
-  // starting for the targets that ARE keyed. `golem target list` reports it.
   for (const accountId of accountsReferencedByTargets(settings.proxy)) {
     const varName = envVarForAccount(accountId);
     if (out[varName] !== undefined) continue;

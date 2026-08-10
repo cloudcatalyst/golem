@@ -127,7 +127,7 @@ describe("collectLocalModel", () => {
    * was turned off.
    */
   it("is not active when the coder tool is disabled, even if the endpoint answers", async () => {
-    await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
+    await writeSetting("project", "inference.coder_enabled", false, { projectDir: dir });
     const report = await collectLocalModel({
       projectDir: dir,
       userDir: dir,
@@ -194,11 +194,11 @@ describe("setLocalCoderEnabled", () => {
   it("writes the setting and it is readable back through the loader", async () => {
     await setLocalCoderEnabled(false, "project", { projectDir: dir });
     expect(
-      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.local_coder_enabled,
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.coder_enabled,
     ).toBe(false);
     await setLocalCoderEnabled(true, "project", { projectDir: dir });
     expect(
-      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.local_coder_enabled,
+      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.coder_enabled,
     ).toBe(true);
   });
 
@@ -206,8 +206,8 @@ describe("setLocalCoderEnabled", () => {
     await setLocalCoderEnabled(false, "local", { projectDir: dir });
     const raw = JSON.parse(
       await readFile(path.join(dir, ".golem", "settings.local.json"), "utf8"),
-    ) as { inference?: { local_coder_enabled?: boolean } };
-    expect(raw.inference?.local_coder_enabled).toBe(false);
+    ) as { inference?: { coder_enabled?: boolean } };
+    expect(raw.inference?.coder_enabled).toBe(false);
   });
 });
 
@@ -282,7 +282,7 @@ describe("setLocalBaseUrl", () => {
 
 describe("rendering", () => {
   it("says WHY the local model is inactive, and how to fix it", async () => {
-    await writeSetting("project", "inference.local_coder_enabled", false, { projectDir: dir });
+    await writeSetting("project", "inference.coder_enabled", false, { projectDir: dir });
     const out = renderLocalModel(
       await collectLocalModel({
         projectDir: dir,
@@ -294,7 +294,7 @@ describe("rendering", () => {
     );
     expect(out).toContain("not active");
     expect(out).toContain("DISABLED");
-    expect(out).toContain("golem local enable");
+    expect(out).toContain("golem coder enable");
   });
 
   it("gives LAN-specific advice when a remote endpoint is unreachable", async () => {
@@ -338,7 +338,7 @@ describe("rendering", () => {
       }),
     );
     expect(out).toContain("ACTIVE");
-    expect(out).not.toContain("golem local enable");
+    expect(out).not.toContain("golem coder enable");
   });
 
   it("tells the user to restart after a toggle or a URL change", async () => {
