@@ -44,6 +44,23 @@ export type {
   SettingsOverrides,
 } from "./loader.js";
 export { loadConfig } from "./loader.js";
+export type {
+  MigrationSweep,
+  ScopeResult,
+  SettingChange,
+  SweepOptions,
+  VersionMigrationOutcome,
+} from "./migrate-files.js";
+export {
+  backupPath,
+  migrateOnVersionChange,
+  readVersionStamp,
+  removeVersionStamp,
+  renderSweep,
+  sweepSettingsFiles,
+  versionStampPath,
+  writeVersionStamp,
+} from "./migrate-files.js";
 export type { SettingsFilePaths } from "./paths.js";
 export {
   defaultUserDir,

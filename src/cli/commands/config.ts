@@ -5,7 +5,7 @@
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import { collectControlSurface } from "../../config/control-surface.js";
-import { findProjectDir } from "../../config/index.js";
+import { findProjectDir, renderSweep, sweepSettingsFiles } from "../../config/index.js";
 import type { SettingsScope } from "../../config/write-setting.js";
 import { VERSION } from "../../index.js";
 import {
@@ -124,6 +124,37 @@ export default function register(program: Command): void {
         const result = await unsetConfig(scope, key, { projectDir: opts.dir });
         process.stdout.write(
           opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigUnset(result),
+        );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  configCmd
+    .command("migrate")
+    .description(
+      "Rewrite retired setting names to their current ones in every scope " +
+        "(runs automatically on the first run after an upgrade)",
+    )
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--write", "apply the changes; without it, nothing is written", false)
+    .option("--json", "machine-readable output", false)
+    .action(async (opts: { dir: string; write: boolean; json: boolean }) => {
+      try {
+        const sweep = await sweepSettingsFiles({
+          projectDir: opts.dir,
+          write: opts.write,
+          version: VERSION,
+        });
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify(sweep, null, 2)}\n`);
+          return;
+        }
+        const lines = renderSweep(sweep, opts.write);
+        process.stdout.write(
+          lines.length === 0
+            ? "Every settings file uses current setting names.\n"
+            : `${lines.join("\n")}\n`,
         );
       } catch (err) {
         _fail(err);

@@ -32,6 +32,7 @@ import type {
   UpstreamProvider,
 } from "../providers/index.js";
 import {
+  PROXY_PROVIDERS,
   TARGET_TRUST_LEVELS,
   UPSTREAM_AUTH_SCHEMES,
   UPSTREAM_PROVIDERS,
@@ -72,7 +73,9 @@ export const SETTINGS_LEAVES = {
      * transparent passthrough. Genuine OpenAI/Gemini/Ollama translation is
      * case (b), not this key.
      */
-    upstream_provider: z.enum(UPSTREAM_PROVIDERS),
+    // R9.15: PROXY_PROVIDERS, not UPSTREAM_PROVIDERS — `claude-cli` is a target
+    // provider only (it spawns a process; there is no endpoint to forward to).
+    upstream_provider: z.enum(PROXY_PROVIDERS),
     /**
      * R6.1 case (a): how the upstream credential is presented — `inherit`
      * (forward the client's own auth unchanged; the Anthropic default),

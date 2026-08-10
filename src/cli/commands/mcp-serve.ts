@@ -5,6 +5,8 @@
 import type { Command } from "commander";
 import { resolveEffectiveCompression } from "../../compression/effective-level.js";
 import { findProjectDir, loadConfig, settingsFilePaths } from "../../config/index.js";
+import { DEFAULT_KEY_ENV } from "../../credentials/backends.js";
+import { createClaudeCliDrafter } from "../../inference/claude-cli.js";
 import {
   createProbeRunner,
   detectCapability,
@@ -15,11 +17,14 @@ import { createTargetDispatcher } from "../../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase } from "../../interfaces/index.js";
 import {
   listTargets,
+  perAccountEnvVar,
   resolveUpstreamDisplay,
   upstreamAssumesCaching,
 } from "../../providers/index.js";
+import { readServedModel } from "../../proxy/served-model.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../../wiki/index.js";
+import { credentialEnvForProxy } from "../accounts.js";
 import { ensureProjectIndexed } from "../auto-index.js";
 import { buildKnowledgeStack } from "../build-knowledge.js";
 import { InitError } from "../init.js";
@@ -31,6 +36,33 @@ const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(err instanceof InitError ? 2 : 1);
+}
+
+/**
+ * Credential resolution for `coder`'s remote dispatch.
+ *
+ * Decision 47 hands credentials to a *spawned* process in its environment, which
+ * works for the proxy daemon because the CLI spawns it. Claude Code spawns this
+ * server from `.mcp.json`, so it inherits none of them — every credentialed
+ * target went out with no auth header and came back 401 while `golem target
+ * list` truthfully reported the key as stored.
+ *
+ * Resolution itself is `credentialEnvForProxy`'s, deliberately: it already
+ * encodes which store id backs the active account versus a named one, and a
+ * second implementation of that mapping would drift silently. What changes is
+ * only where the secrets land — this closure, never `process.env`, so nothing
+ * this server spawns inherits them. Read lazily and once: a session that never
+ * dispatches to a remote target never touches the credential store.
+ */
+function resolveTargetCredential(
+  projectDir: string,
+): (accountId: string | null) => Promise<string | undefined> {
+  let pending: Promise<Record<string, string>> | undefined;
+  return async (accountId) => {
+    pending ??= credentialEnvForProxy(projectDir);
+    const creds = await pending;
+    return creds[accountId === null ? DEFAULT_KEY_ENV : perAccountEnvVar(accountId)];
+  };
 }
 
 export default function register(program: Command): void {
@@ -160,6 +192,13 @@ export default function register(program: Command): void {
                   inference: coderInference,
                   settings: settings.proxy,
                   workerTargets: settings.inference.worker_targets,
+                  resolveKey: resolveTargetCredential(opts.dir),
+                  // R9.15: a `claude-cli` target drafts by spawning the user's
+                  // own Claude Code. Wired here, guarded in the dispatcher.
+                  spawnDrafter: createClaudeCliDrafter({
+                    timeoutMs: settings.inference.request_timeout_ms,
+                  }),
+                  sessionModel: async () => (await readServedModel(opts.dir))?.model,
                   audit: (e) => {
                     // ADR-0003 invariant 5 — non-secret attribution for every
                     // dispatch, including which trust floor applied.
