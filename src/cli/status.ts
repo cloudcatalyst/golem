@@ -12,7 +12,7 @@
 
 import { readFile } from "node:fs/promises";
 import http from "node:http";
-import path, { resolve } from "node:path";
+import path from "node:path";
 import {
   type EffectiveCompression,
   resolveEffectiveCompression,
@@ -43,10 +43,12 @@ import {
 } from "./local-model.js";
 import { proxyLogPath, readProxyPid } from "./proxy-daemon.js";
 import {
+  claudeLocalSettingsPath,
   claudeSettingsPath,
   ENV_EXTRA_CA,
   proxyBaseUrl,
   readWiringState,
+  samePath,
   type WiringState,
 } from "./proxy-wiring.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
@@ -89,22 +91,27 @@ async function webFetchGreenStatus(
   projectDir: string,
 ): Promise<NonNullable<StatusReport["webfetch_green"]>> {
   const caPath = loopbackCaPath(projectDir);
-  const same = (value: string | undefined): boolean => {
-    if (value === undefined || value.length === 0) return false;
-    const [a, b] = [resolve(value), resolve(caPath)];
-    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const same = (value: string | undefined): boolean =>
+    value !== undefined && value.length > 0 && samePath(value, caPath);
+
+  const readCaFrom = async (file: string): Promise<string | undefined> => {
+    try {
+      const raw = JSON.parse(await readFile(file, "utf8")) as { env?: Record<string, unknown> };
+      const value = raw.env?.[ENV_EXTRA_CA];
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    } catch {
+      // no settings file / unreadable → nothing wired here
+      return undefined;
+    }
   };
 
-  let wiredValue: string | undefined;
-  try {
-    const raw = JSON.parse(await readFile(claudeSettingsPath(projectDir), "utf8")) as {
-      env?: Record<string, unknown>;
-    };
-    const fromSettings = raw.env?.[ENV_EXTRA_CA];
-    if (typeof fromSettings === "string") wiredValue = fromSettings;
-  } catch {
-    // no settings file / unreadable → not wired
-  }
+  // R9.22: init writes the trust into `.claude/settings.local.json`, which also
+  // OUTRANKS the committed file in Claude Code's ladder (notes §13) — so read it
+  // first and let it decide. The committed file is still consulted behind it, for
+  // a project initialized before the move and for a value the user put there.
+  const wiredValue =
+    (await readCaFrom(claudeLocalSettingsPath(projectDir))) ??
+    (await readCaFrom(claudeSettingsPath(projectDir)));
 
   const inProcess = process.env[ENV_EXTRA_CA];
   const foreign = [wiredValue, inProcess].find((v) => v !== undefined && v.length > 0 && !same(v));

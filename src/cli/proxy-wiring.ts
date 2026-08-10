@@ -50,6 +50,65 @@ export function claudeSettingsPath(projectDir: string): string {
 }
 
 /**
+ * R9.22 — the gitignored, machine-local settings scope, and the only correct
+ * home for a machine-absolute path.
+ *
+ * `.claude/settings.json` is COMMITTED, so an absolute `NODE_EXTRA_CA_CERTS`
+ * written there travels to every clone and resolves on none of them: Claude Code
+ * then warns twice at every start about a certificate the reader never asked
+ * for. The local file is gitignored and sits ABOVE the committed one in Claude
+ * Code's precedence ladder (managed → CLI args → `settings.local.json` →
+ * `settings.json` → `~/.claude/settings.json`, notes §13), so moving the key
+ * here changes nothing about how it is read — only about who receives it.
+ *
+ * `ANTHROPIC_BASE_URL` deliberately stays in the committed file:
+ * `http://localhost:<port>` is portable, and its presence is what tells a
+ * teammate the project is wired.
+ */
+export function claudeLocalSettingsPath(projectDir: string): string {
+  return path.join(projectDir, ".claude", "settings.local.json");
+}
+
+/**
+ * Path equality as the filesystem sees it: resolved, and case-folded on win32
+ * only. A user-typed path and one from `join` differ in case and separator on
+ * Windows, and a false "not ours" silently drops the green WebFetch path; case
+ * folding everywhere would instead merge two genuinely distinct files on POSIX.
+ * One definition, because this comparison decides ownership in three places
+ * (here, `init.ts`, `status.ts`) and three copies drift.
+ */
+export function samePath(a: string, b: string): boolean {
+  const [ra, rb] = [resolve(a), resolve(b)];
+  return process.platform === "win32" ? ra.toLowerCase() === rb.toLowerCase() : ra === rb;
+}
+
+function segmentsOf(p: string): string[] {
+  return p.split(/[\\/]+/).filter((s) => s.length > 0);
+}
+
+/**
+ * R9.22 — is this a Golem loopback CA from SOMEONE ELSE'S checkout?
+ *
+ * True when `value` is not our path but ends in the same trailing segments ours
+ * does (`.golem/loopback/ca.pem`), i.e. the same file under a different repo
+ * root or drive letter. That is the signature of a path an older `golem init`
+ * committed on another machine, and recognising it is what lets a fresh clone
+ * self-heal on first init instead of inheriting a dead path.
+ *
+ * The tail is read off `ourCaPath` rather than hard-coded, so it follows
+ * `loopbackCaPath` if that ever moves. Deliberately narrow: anything that does
+ * NOT match this shape is assumed to be the user's own trust bundle and is never
+ * touched (§121-C).
+ */
+export function isStaleGolemCaPath(value: string, ourCaPath: string): boolean {
+  if (value.length === 0 || samePath(value, ourCaPath)) return false;
+  const fold = (s: string): string => (process.platform === "win32" ? s.toLowerCase() : s);
+  const ours = segmentsOf(ourCaPath).slice(-3).map(fold);
+  const tail = segmentsOf(value).slice(-3).map(fold);
+  return tail.length === ours.length && tail.every((s, i) => s === ours[i]);
+}
+
+/**
  * Delete the env entries Golem owns, in place, and report whether anything
  * changed. Pure apart from the mutation of `envObj`, so the ownership rule is
  * unit-testable without a filesystem.
@@ -68,12 +127,12 @@ export function removeGolemEnv(envObj: JsonObject, baseUrl: string, caPath?: str
   }
   // R9.12: the loopback CA trust, removed on the same "only if it is ours" rule.
   // A `NODE_EXTRA_CA_CERTS` pointing anywhere else belongs to the user (§121-C)
-  // and un-wiring Golem must not disturb it.
+  // and un-wiring Golem must not disturb it. R9.22 widens "ours" by exactly one
+  // case: a Golem CA path from ANOTHER checkout is still Golem's output, so
+  // uninit clears the committed leftover rather than leaving a dead path behind.
   if (caPath !== undefined && typeof envObj[ENV_EXTRA_CA] === "string") {
     const current = envObj[ENV_EXTRA_CA] as string;
-    const norm = (p: string): string =>
-      process.platform === "win32" ? resolve(p).toLowerCase() : resolve(p);
-    if (norm(current) === norm(caPath)) {
+    if (samePath(current, caPath) || isStaleGolemCaPath(current, caPath)) {
       delete envObj[ENV_EXTRA_CA];
       changed = true;
     }
@@ -196,18 +255,126 @@ export async function unwireProxyEnv(
   const file = claudeSettingsPath(projectDir);
   const settings = await readJson(file);
   const env = envOf(settings);
-  if (settings === null || env === null) return { changed: false, needsReload: false };
 
-  const current = env[ENV_BASE_URL];
+  const current = env?.[ENV_BASE_URL];
   if (typeof current === "string" && current !== baseUrl) {
     return { changed: false, foreignBaseUrl: current, needsReload: false };
   }
 
-  const changed = removeGolemEnv(env, baseUrl, loopbackCaPath(projectDir));
-  if (!changed) return { changed: false, needsReload: false };
+  // R9.22: the CA trust lives in the LOCAL scope now, so unwiring has to visit
+  // both files — and it must still run when the committed file has no `env` at
+  // all, which is the normal shape once the CA key moved out of it.
+  const localChanged = await removeLocalCaTrust(projectDir, opts);
+
+  let committedChanged = false;
+  if (settings !== null && env !== null) {
+    committedChanged = removeGolemEnv(env, baseUrl, loopbackCaPath(projectDir));
+    if (committedChanged) {
+      if (Object.keys(env).length === 0) delete settings.env;
+      if (opts.dryRun !== true) await writeJson(file, settings);
+    }
+  }
+
+  const changed = committedChanged || localChanged;
+  return { changed, needsReload: changed };
+}
+
+/**
+ * R9.22 — drop Golem's `NODE_EXTRA_CA_CERTS` from `.claude/settings.local.json`,
+ * on the same ownership rule as everything else here: only a path that is ours,
+ * or a stale Golem path from another checkout, is removed. Returns whether the
+ * file changed. The file itself is left in place even when it empties out — it
+ * is gitignored and frequently holds settings that are not ours.
+ */
+export async function removeLocalCaTrust(
+  projectDir: string,
+  opts: { readonly dryRun?: boolean } = {},
+): Promise<boolean> {
+  const file = claudeLocalSettingsPath(projectDir);
+  const settings = await readJson(file);
+  const env = envOf(settings);
+  if (settings === null || env === null) return false;
+
+  const current = env[ENV_EXTRA_CA];
+  const ourCa = loopbackCaPath(projectDir);
+  if (typeof current !== "string") return false;
+  if (!samePath(current, ourCa) && !isStaleGolemCaPath(current, ourCa)) return false;
+
+  delete env[ENV_EXTRA_CA];
   if (Object.keys(env).length === 0) delete settings.env;
   if (opts.dryRun !== true) await writeJson(file, settings);
-  return { changed: true, needsReload: true };
+  return true;
+}
+
+/** What {@link writeLocalCaTrust} did — each field maps to one reported action. */
+export interface LocalCaTrustResult {
+  /** The local file now carries our CA path (false when it already did). */
+  readonly wrote: boolean;
+  /** A Golem CA path was found in the COMMITTED file and removed from it. */
+  readonly healedCommitted: boolean;
+  /** Someone else's `NODE_EXTRA_CA_CERTS`; nothing was written (§121-C). */
+  readonly foreign?: string;
+}
+
+/**
+ * R9.22 — put the loopback CA trust where a machine-absolute path belongs, and
+ * clean up the committed file if an earlier init left one there.
+ *
+ * Ownership is settled before anything is written (§121-C): if EITHER file holds
+ * a `NODE_EXTRA_CA_CERTS` that is neither ours nor a stale Golem path, it is the
+ * user's — a TLS-inspection bundle, typically — and both files are left exactly
+ * as found, reported as `foreign`. Concatenating bundles is not an option: the
+ * copy goes stale when theirs rotates.
+ *
+ * Otherwise the committed value (ours, or a teammate's dead path) is deleted and
+ * the local file is brought to `caPath`. Both halves matter: writing the local
+ * file without healing the committed one leaves the stale path shadowed but
+ * still in everyone's diff.
+ */
+export async function writeLocalCaTrust(
+  projectDir: string,
+  caPath: string,
+  opts: { readonly dryRun?: boolean } = {},
+): Promise<LocalCaTrustResult> {
+  const localFile = claudeLocalSettingsPath(projectDir);
+  const committedFile = claudeSettingsPath(projectDir);
+  const localSettings = (await readJson(localFile)) ?? {};
+  const committedSettings = await readJson(committedFile);
+
+  const ownedByUs = (value: unknown): value is string =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    (samePath(value, caPath) || isStaleGolemCaPath(value, caPath));
+  const foreignValue = (value: unknown): string | null =>
+    typeof value === "string" && value.length > 0 && !ownedByUs(value) ? value : null;
+
+  const localEnv = envOf(localSettings);
+  const committedEnv = envOf(committedSettings);
+  const foreign =
+    foreignValue(localEnv?.[ENV_EXTRA_CA]) ?? foreignValue(committedEnv?.[ENV_EXTRA_CA]);
+  if (foreign !== null) return { wrote: false, healedCommitted: false, foreign };
+
+  let healedCommitted = false;
+  if (
+    committedSettings !== null &&
+    committedEnv !== null &&
+    ownedByUs(committedEnv[ENV_EXTRA_CA])
+  ) {
+    delete committedEnv[ENV_EXTRA_CA];
+    if (Object.keys(committedEnv).length === 0) delete committedSettings.env;
+    healedCommitted = true;
+    if (opts.dryRun !== true) await writeJson(committedFile, committedSettings);
+  }
+
+  const currentLocal = localEnv?.[ENV_EXTRA_CA];
+  const alreadySet = typeof currentLocal === "string" && samePath(currentLocal, caPath);
+  if (!alreadySet) {
+    const env = localEnv ?? {};
+    env[ENV_EXTRA_CA] = caPath;
+    localSettings.env = env;
+    if (opts.dryRun !== true) await writeJson(localFile, localSettings);
+  }
+  return { wrote: !alreadySet, healedCommitted };
 }
 
 export interface WireResult {

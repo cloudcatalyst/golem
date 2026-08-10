@@ -15,13 +15,16 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ENV_BASE_URL,
+  ENV_EXTRA_CA,
   ENV_TOOL_SEARCH,
+  isStaleGolemCaPath,
   proxyBaseUrl,
   readWiringState,
   removeGolemEnv,
   unwireProxyEnv,
   wireProxyEnv,
   wiringGap,
+  writeLocalCaTrust,
 } from "../../../src/cli/proxy-wiring.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
@@ -234,5 +237,100 @@ describe("wiringGap", () => {
     const none = wiringGap({ owner: "none", baseUrl: null }, OURS);
     const foreign = wiringGap({ owner: "foreign", baseUrl: FOREIGN }, OURS);
     expect(none?.problem).not.toBe(foreign?.problem);
+  });
+});
+
+/**
+ * R9.22 — the CA trust is a machine-absolute path, so it belongs in the
+ * gitignored local scope. These pin the two halves that make that safe: telling
+ * a stale Golem path apart from a value the user owns, and never writing when
+ * the answer is "theirs".
+ */
+describe("isStaleGolemCaPath", () => {
+  const ours = "/home/me/repos/golem/.golem/loopback/ca.pem";
+
+  it("recognises the same CA under a different checkout root", () => {
+    expect(isStaleGolemCaPath("/home/someone-else/work/golem/.golem/loopback/ca.pem", ours)).toBe(
+      true,
+    );
+    expect(
+      isStaleGolemCaPath("D:\\Personar\\Source\\repos\\golem\\.golem\\loopback\\ca.pem", ours),
+    ).toBe(true);
+  });
+
+  it("is false for our own path — that is ours, not stale", () => {
+    expect(isStaleGolemCaPath(ours, ours)).toBe(false);
+  });
+
+  it("leaves anything that is not Golem-shaped alone", () => {
+    expect(isStaleGolemCaPath("/corp/zscaler-root.pem", ours)).toBe(false);
+    expect(isStaleGolemCaPath("/etc/ssl/certs/.golem/other/ca.pem", ours)).toBe(false);
+    expect(isStaleGolemCaPath("", ours)).toBe(false);
+  });
+});
+
+describe("writeLocalCaTrust — R9.22", () => {
+  const caPath = (): string => path.join(projectDir, ".golem", "loopback", "ca.pem");
+
+  async function readLocal(): Promise<Record<string, unknown>> {
+    const raw = await readFile(path.join(projectDir, ".claude", "settings.local.json"), "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+
+  it("writes the local file and leaves the committed one without the key", async () => {
+    await writeClaudeSettings({ env: { [ENV_BASE_URL]: OURS } });
+    const result = await writeLocalCaTrust(projectDir, caPath());
+
+    expect(result).toStrictEqual({ wrote: true, healedCommitted: false });
+    expect((await readLocal()).env).toStrictEqual({ [ENV_EXTRA_CA]: caPath() });
+    expect((await readClaudeSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
+  });
+
+  it("heals a stale Golem path out of the committed file, keeping its other keys", async () => {
+    await writeClaudeSettings({
+      env: { [ENV_BASE_URL]: OURS, [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem" },
+    });
+    const result = await writeLocalCaTrust(projectDir, caPath());
+
+    expect(result.healedCommitted).toBe(true);
+    expect((await readClaudeSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
+    expect((await readLocal()).env).toStrictEqual({ [ENV_EXTRA_CA]: caPath() });
+  });
+
+  it("writes nothing at all when the value is the user's (§121-C)", async () => {
+    await writeClaudeSettings({ env: { [ENV_EXTRA_CA]: "/corp/zscaler-root.pem" } });
+    const result = await writeLocalCaTrust(projectDir, caPath());
+
+    expect(result).toStrictEqual({
+      wrote: false,
+      healedCommitted: false,
+      foreign: "/corp/zscaler-root.pem",
+    });
+    // Neither file touched: the committed value survives and no local file appears.
+    expect((await readClaudeSettings()).env).toStrictEqual({
+      [ENV_EXTRA_CA]: "/corp/zscaler-root.pem",
+    });
+    await expect(readLocal()).rejects.toThrow();
+  });
+
+  it("is idempotent — a second call reports no write", async () => {
+    await writeLocalCaTrust(projectDir, caPath());
+    expect(await writeLocalCaTrust(projectDir, caPath())).toStrictEqual({
+      wrote: false,
+      healedCommitted: false,
+    });
+  });
+
+  it("dry run computes the result without touching either file", async () => {
+    await writeClaudeSettings({
+      env: { [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem" },
+    });
+    const result = await writeLocalCaTrust(projectDir, caPath(), { dryRun: true });
+
+    expect(result).toStrictEqual({ wrote: true, healedCommitted: true });
+    expect((await readClaudeSettings()).env).toStrictEqual({
+      [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem",
+    });
+    await expect(readLocal()).rejects.toThrow();
   });
 });
