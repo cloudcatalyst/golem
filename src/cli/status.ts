@@ -10,8 +10,9 @@
  * JSON output keys are snake_case, matching the settings-file conventions.
  */
 
+import { readFile } from "node:fs/promises";
 import http from "node:http";
-import path from "node:path";
+import path, { resolve } from "node:path";
 import {
   type EffectiveCompression,
   resolveEffectiveCompression,
@@ -29,6 +30,8 @@ import {
 // Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
 // which imports `undici` (~270ms), and both of these only read a JSON file.
 import { type LimitPrediction, readLimitState } from "../proxy/limit-prediction.js";
+import { loopbackCaPath } from "../proxy/loopback-cert.js";
+import { readLoopbackServeState } from "../proxy/loopback-serve.js";
 import { readServedModel, servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 import { type DialInfo, getDialInfo } from "./dials.js";
@@ -39,8 +42,19 @@ import {
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
 import { proxyLogPath, readProxyPid } from "./proxy-daemon.js";
-import { proxyBaseUrl, readWiringState, type WiringState } from "./proxy-wiring.js";
+import {
+  claudeSettingsPath,
+  ENV_EXTRA_CA,
+  proxyBaseUrl,
+  readWiringState,
+  type WiringState,
+} from "./proxy-wiring.js";
 import { getSliderInfo, SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
+import {
+  inspectVscodeExtension,
+  staleExtensionWarning,
+  type VscodeExtensionReport,
+} from "./vscode-extension.js";
 
 /** Decision 52 — one dial's state in the JSON report. */
 export interface DialStatus {
@@ -66,6 +80,60 @@ export interface ConfigKeyStatus {
   readonly source?: string;
 }
 
+/**
+ * R9.12 — answer the colour question honestly, separating "configured" from
+ * "in effect". `trusted` reads THIS process's environment, which is the only
+ * evidence that survives §112's read-once-at-startup rule.
+ */
+async function webFetchGreenStatus(
+  projectDir: string,
+): Promise<NonNullable<StatusReport["webfetch_green"]>> {
+  const caPath = loopbackCaPath(projectDir);
+  const same = (value: string | undefined): boolean => {
+    if (value === undefined || value.length === 0) return false;
+    const [a, b] = [resolve(value), resolve(caPath)];
+    return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  };
+
+  let wiredValue: string | undefined;
+  try {
+    const raw = JSON.parse(await readFile(claudeSettingsPath(projectDir), "utf8")) as {
+      env?: Record<string, unknown>;
+    };
+    const fromSettings = raw.env?.[ENV_EXTRA_CA];
+    if (typeof fromSettings === "string") wiredValue = fromSettings;
+  } catch {
+    // no settings file / unreadable → not wired
+  }
+
+  const inProcess = process.env[ENV_EXTRA_CA];
+  const foreign = [wiredValue, inProcess].find((v) => v !== undefined && v.length > 0 && !same(v));
+
+  return {
+    endpoint: (await readLoopbackServeState(projectDir)) !== null,
+    wired: same(wiredValue),
+    trusted: same(inProcess),
+    ...(foreign !== undefined ? { foreign_ca: foreign } : {}),
+  };
+}
+
+/** One line that says which of the three states this session is in, and the fix. */
+function renderWebFetchGreen(report: StatusReport): string {
+  const g = report.webfetch_green;
+  if (g === undefined) return "loopback CA state unknown";
+  if (g.trusted && g.endpoint) return "cache-served WebFetch renders green";
+  if (g.trusted && !g.endpoint) {
+    return "loopback CA trusted, but the serve endpoint is down — start the proxy";
+  }
+  if (g.foreign_ca !== undefined) {
+    return `NODE_EXTRA_CA_CERTS is owned by ${g.foreign_ca} — left alone; served WebFetches show as denied (red)`;
+  }
+  if (g.wired) {
+    return "loopback CA wired but NOT in this session — restart Claude Code (env is read once at startup)";
+  }
+  return "loopback CA not wired — served WebFetches show as denied (red); `golem init` wires it";
+}
+
 export interface StatusReport {
   readonly version: string;
   readonly project_dir: string;
@@ -75,6 +143,25 @@ export interface StatusReport {
     readonly mcp_registered: boolean;
     readonly skills: boolean;
     readonly golem_settings: boolean;
+  };
+  /**
+   * R9.12 — can a cache-served WebFetch render GREEN *in the session that is
+   * actually running*? Three separate facts, because they fail for different
+   * reasons and the fix differs: whether the endpoint is up, whether the settings
+   * name our CA, and whether THIS process inherited it. The last one is the only
+   * one that decides the colour, and no settings file can prove it (§112: the
+   * variable is read once at startup, so a correct settings file plus no restart
+   * still means red).
+   */
+  readonly webfetch_green?: {
+    /** The loopback endpoint has published coordinates (proxy daemon is up). */
+    readonly endpoint: boolean;
+    /** `.claude/settings.json` names our CA in its `env` block. */
+    readonly wired: boolean;
+    /** `NODE_EXTRA_CA_CERTS` in THIS process names our CA — restart-sensitive. */
+    readonly trusted: boolean;
+    /** Set when something else owns the variable — we never overwrite it (§121-C). */
+    readonly foreign_ca?: string;
   };
   readonly proxy: {
     readonly port: number;
@@ -263,6 +350,12 @@ export interface StatusReport {
      */
     readonly unmonitored_targets?: readonly string[];
   };
+  /**
+   * R9.16 — how the deployed VS Code extension compares with the one this Golem
+   * ships. Absent when there is nothing to say (no VS Code, or no bundled
+   * source), so the JSON stays quiet on machines this cannot apply to.
+   */
+  readonly vscode?: VscodeExtensionReport;
   readonly warnings: readonly string[];
 }
 
@@ -272,6 +365,8 @@ export interface StatusOptions {
   readonly version: string;
   /** Proxy probe timeout; keep short — status must never hang. */
   readonly probeTimeoutMs?: number;
+  /** R9.16: VS Code extensions dir; null means "no VS Code". Tests inject. */
+  readonly vscodeExtensionsDir?: string | null;
   /** Test injection (forwarded to loadConfig). */
   readonly userDir?: string;
   readonly env?: Readonly<Record<string, string | undefined>>;
@@ -319,6 +414,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
   });
+
+  // R9.16: cheap (a few file hashes) and only ever read here.
+  const vscode = await inspectVscodeExtension(
+    options.vscodeExtensionsDir === undefined ? {} : { extensionsDir: options.vscodeExtensionsDir },
+  );
 
   const sliderOpts = {
     projectDir,
@@ -466,6 +566,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       skills: init.skillsInstalled,
       golem_settings: init.golemSettingsPresent,
     },
+    webfetch_green: await webFetchGreenStatus(projectDir),
     proxy: {
       port: settings.proxy.port,
       url: `http://localhost:${settings.proxy.port}`,
@@ -525,7 +626,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // R9.4: a `worker_targets` key naming no worker would otherwise be silently
       // ignored — the failure mode the map shape trades per-key schema docs for.
       ...unknownWorkerWarnings(settings.inference.worker_targets),
+      // R9.16: a deployed extension older than the one we ship renders stale
+      // facts — it named the coder's model as the local one long after the coder
+      // had moved. Status names it; only `golem init` fixes it (a read-only
+      // diagnostic that rewrote an install would be its own surprise).
+      ...(vscode.state === "stale" ? [staleExtensionWarning(vscode)] : []),
     ],
+    ...(vscode.state !== "unknown" ? { vscode } : {}),
   };
 }
 
@@ -669,6 +776,9 @@ export function renderStatus(report: StatusReport): string {
   lines.push(`  ${checkbox(init.mcp_registered)} .mcp.json -> golem MCP server`);
   lines.push(`  ${checkbox(init.skills)} /golem/* skills installed`);
   lines.push(`  ${checkbox(init.golem_settings)} .golem/settings.json present`);
+  lines.push(
+    `  ${checkbox(report.webfetch_green?.trusted === true)} ${renderWebFetchGreen(report)}`,
+  );
   lines.push("");
 
   lines.push(

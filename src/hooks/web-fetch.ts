@@ -15,20 +15,30 @@
  * is skipped) so a hook can never break a session. Redaction runs BEFORE storage
  * (hard rule).
  *
- * R9.7: a served page therefore renders as a FAILED (red) tool call in Claude
- * Code — it is a `deny`. This is accepted deliberately, not unfixed: the only
- * green alternative is `updatedInput` + `allow` pointing at a loopback endpoint,
- * and WebFetch forces http→https and validates the certificate, so that endpoint
- * needs a cert Claude Code trusts, and it re-adds an uncached summarizer call per
- * fetch. Measured and declined in verification-notes §120; the serve text says so
- * out loud instead. §121 corrects the cert half — a `CA:FALSE` leaf in
- * NODE_EXTRA_CA_CERTS suffices (no CA, no signing power) — so the standing reasons
- * are the per-fetch summarizer cost, the fidelity loss, and that the wiring is
- * silently inert in cloud/Desktop-managed sessions. Opt-in candidate: R9.12.
+ * R9.12: a served page renders GREEN when this session can reach Golem's
+ * loopback endpoint, and falls back to R9.7's red `deny` when it cannot. The two
+ * paths deliver the same bytes; only the colour and the mechanism differ:
+ *
+ *   green — `allow` + `updatedInput` pointing at a loopback STUB, with the raw
+ *           cached page carried in `additionalContext`. §122 measured that
+ *           `additionalContext` reaches the model on an `allow`, and reaches it
+ *           even when the rewritten call fails, so content delivery does not
+ *           depend on the fetch succeeding. Serving a stub rather than the page
+ *           keeps WebFetch's summarizer off the content, preserving Decision 42.
+ *   floor — the `deny` R9.7 shipped, byte for byte. Used whenever the endpoint is
+ *           absent, the certificate is not trusted in THIS process, or anything
+ *           else is unclear. Never worse than what shipped.
+ *
+ * Reaching green needs a trust anchor Claude Code accepts. §121 thought a
+ * `CA:FALSE` leaf sufficed; §123 measured that Claude Code is Bun/BoringSSL and
+ * refuses one. §124 resolved it: a CA whose `nameConstraints` permit only
+ * `DNS:golem.invalid`, which is accepted and provably cannot issue a certificate
+ * for `api.anthropic.com` (`permitted subtree violation`, measured).
  */
 
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
@@ -44,6 +54,14 @@ import {
   type WebCacheMeta,
   webCacheDir,
 } from "../knowledge/index.js";
+import {
+  isLoopbackStubUrl,
+  type LoopbackServeState,
+  loopbackServeUrl,
+  probeLoopbackServe,
+  readLoopbackServeState,
+  type ServeSource,
+} from "../proxy/loopback-serve.js";
 import type { HookIo } from "./post-tool-use.js";
 import { pipelineRedact, type RedactFn, stripKnownSecrets } from "./redact.js";
 
@@ -58,6 +76,13 @@ const NOT_AN_ERROR = "NOT AN ERROR —";
 /** Closing frame: why the call renders red, then the content. */
 const RED_DOT_NOTE =
   "Claude Code renders hook-served content as a *denied* tool call, so this shows as a failed/red WebFetch; that is expected and the fetch did not fail. Content follows:";
+/**
+ * Closing frame for the GREEN path (R9.12). The tool really ran, against Golem's
+ * loopback stub, so the tool result the model sees is a placeholder — this says
+ * so, and points at the real content that follows in `additionalContext`.
+ */
+const GREEN_NOTE =
+  "The WebFetch call SUCCEEDED — its tool result is a short Golem placeholder rather than the page, and the real page content follows here. Do not describe the fetch as failed and do not retry it. Content:";
 
 /** Cap on cached content echoed in a deny reason (Claude Code flags hook output >10k chars). */
 export const MAX_SERVED_CHARS = 8_000;
@@ -250,17 +275,72 @@ async function storeServedPageRef(projectDir: string, content: string): Promise<
   }
 }
 
-/** Write a `deny` PreToolUse decision that hands Claude `content` as the reason. */
-async function writeServedDeny(
+/**
+ * Whether the GREEN path is available *for the session actually running* — the
+ * positive evidence §121-B demanded instead of assuming. Three conditions, all
+ * cheap, all failing closed to the deny path:
+ *
+ * 1. A loopback endpoint has published its coordinates (the proxy daemon is up).
+ * 2. `NODE_EXTRA_CA_CERTS` — which the hook inherits from Claude Code, so it IS
+ *    what Claude Code was started with — points at *our* certificate. If it is
+ *    unset (no restart yet) or owned by someone else (a TLS-inspection proxy,
+ *    §121-C), we must not rewrite.
+ * 3. The endpoint answers a TLS probe validated against that same certificate.
+ *
+ * Returns the endpoint state on success, else null (caller serves the floor).
+ */
+async function greenServeState(projectDir: string): Promise<LoopbackServeState | null> {
+  const state = await readLoopbackServeState(projectDir);
+  if (state === null) return null;
+
+  const configured = process.env.NODE_EXTRA_CA_CERTS;
+  if (configured === undefined || configured.length === 0) return null;
+  const samePath = (a: string, b: string): boolean => {
+    const [x, y] = [resolve(a), resolve(b)];
+    return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+  };
+  if (!samePath(configured, state.certPath)) return null;
+
+  let certPem: string;
+  try {
+    certPem = await readFile(state.certPath, "utf8");
+  } catch {
+    return null;
+  }
+  return (await probeLoopbackServe(state, certPem)) ? state : null;
+}
+
+/** What a serve needs beyond the content: the original input, and the green verdict. */
+interface ServeContext {
+  /** The original `tool_input`; `updatedInput` replaces it wholesale, so `prompt` must be carried. */
+  readonly toolInput: unknown;
+  /** Non-null → rewrite to the stub and render green; null → the deny floor. */
+  readonly green: LoopbackServeState | null;
+}
+
+/**
+ * Hand Claude a served page. Two shapes, one body:
+ *
+ * - **floor** (`green: null`): today's `deny` + content in `permissionDecisionReason`,
+ *   byte-for-byte what R9.7 shipped. This is the known-good path, kept rather
+ *   than reimplemented, so its framing survives every failure mode.
+ * - **green**: `allow` + `updatedInput` pointing at the loopback stub + the same
+ *   content in `additionalContext`, which §122 measured as reaching the model —
+ *   and as still reaching it if the rewritten call fails.
+ */
+async function writeServed(
   io: HookIo,
   projectDir: string,
   url: string,
   content: string,
-  intro: string,
+  head: string,
+  ctx: ServeContext,
+  source: ServeSource,
+  age?: string,
 ): Promise<void> {
   let served: string;
   if (content.length > MAX_SERVED_CHARS) {
-    const head = content.slice(0, MAX_SERVED_CHARS);
+    const truncated = content.slice(0, MAX_SERVED_CHARS);
     // Stash the full page as a CCR ref so the whole thing is retrievable in one
     // `expand` call — not a vague "go search the KB" hint. Falls back to that
     // hint only when the CCR write fails (the content is still in the web cache
@@ -268,10 +348,10 @@ async function writeServedDeny(
     const refId = await storeServedPageRef(projectDir, content);
     served =
       refId !== null
-        ? `${head}\n\n[Golem: page truncated for inline display (${content.length} chars total); ` +
+        ? `${truncated}\n\n[Golem: page truncated for inline display (${content.length} chars total); ` +
           `the full page is stored losslessly. Retrieve original: hash=${refId} — call the expand ` +
           `MCP tool with ref_id "${refId}" (or /golem/expand ${refId}).]`
-        : `${head}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`;
+        : `${truncated}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`;
   } else {
     served = content;
   }
@@ -290,31 +370,64 @@ async function writeServedDeny(
     // best-effort only
   }
 
+  const body = `${served}${draftNote}`;
+
+  if (ctx.green === null) {
+    // The floor: byte-for-byte what R9.7 shipped.
+    io.stdout.write(
+      `${JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: `${NOT_AN_ERROR} ${head} ${RED_DOT_NOTE}\n\n${body}`,
+        },
+      })}\n`,
+    );
+    return;
+  }
+
+  // The green path. `updatedInput` replaces the ENTIRE input object (§115), so
+  // `prompt` has to be carried across or the tool call is malformed.
+  const input =
+    typeof ctx.toolInput === "object" && ctx.toolInput !== null && !Array.isArray(ctx.toolInput)
+      ? (ctx.toolInput as Record<string, unknown>)
+      : {};
   io.stdout.write(
     `${JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: `${intro}\n\n${served}${draftNote}`,
+        permissionDecision: "allow",
+        // Shown to the user, not to Claude, on an `allow` — so it names the
+        // mechanism rather than repeating the content.
+        permissionDecisionReason: "Golem served this URL from its knowledge base (cached).",
+        updatedInput: {
+          url: loopbackServeUrl(ctx.green, url, source, age),
+          prompt: typeof input.prompt === "string" ? input.prompt : "Summarize this page.",
+        },
+        additionalContext: `${head} ${GREEN_NOTE}\n\n${body}`,
       },
     })}\n`,
   );
 }
 
-/** Serve a fresh cache hit (deny + cached content), skipping the fetch. */
+/** Serve a fresh cache hit, skipping the fetch. */
 async function serveCached(
   io: HookIo,
   projectDir: string,
   url: string,
   entry: WebCacheEntry,
   nowMs: number,
+  ctx: ServeContext,
 ): Promise<void> {
-  await writeServedDeny(
+  await writeServed(
     io,
     projectDir,
     url,
     entry.content,
-    `${NOT_AN_ERROR} Golem served this URL from its knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), skipping the network fetch. ${RED_DOT_NOTE}`,
+    `Golem served this URL from its knowledge base (fetched ${humanAge(entry.fetchedAt, nowMs)}), skipping the network fetch.`,
+    ctx,
+    "hit",
+    humanAge(entry.fetchedAt, nowMs),
   );
 }
 
@@ -327,13 +440,16 @@ async function serveFetched(
   projectDir: string,
   url: string,
   content: string,
+  ctx: ServeContext,
 ): Promise<void> {
-  await writeServedDeny(
+  await writeServed(
     io,
     projectDir,
     url,
     content,
-    `${NOT_AN_ERROR} Golem fetched this page directly and served its raw content (skipping WebFetch's summarizer, so the text is prompt-independent and now cached). ${RED_DOT_NOTE}`,
+    "Golem fetched this page directly and served its raw content (skipping WebFetch's summarizer, so the text is prompt-independent and now cached).",
+    ctx,
+    "miss",
   );
 }
 
@@ -372,6 +488,7 @@ async function fetchCacheAndServe(
   options: WebFetchHookOptions,
   nowMs: number,
   nowIso: string,
+  ctx: ServeContext,
 ): Promise<boolean> {
   const fetchRaw = options.fetchRaw;
   if (fetchRaw === undefined) return false; // caller guarantees this; narrows the type
@@ -402,7 +519,7 @@ async function fetchCacheAndServe(
     // best-effort only
   }
 
-  await serveFetched(io, projectDir, url, content);
+  await serveFetched(io, projectDir, url, content, ctx);
   return true;
 }
 
@@ -423,6 +540,8 @@ export async function runWebFetchPre(
     if (!parsed.success) return 0;
     const url = urlOf(parsed.data.tool_input);
     if (url === null) return 0;
+    // Our own rewrite (R9.12) — let it through untouched, never re-serve it.
+    if (isLoopbackStubUrl(url)) return 0;
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
     const cache = options.cache ?? new WebCache(webCacheDir(projectDir));
@@ -436,11 +555,18 @@ export async function runWebFetchPre(
       options.fetchRaw !== undefined &&
       (options.fetchRawEnabled === undefined || (await options.fetchRawEnabled(projectDir)));
 
+    // R9.12: decide ONCE per call whether this session can render green. Failing
+    // closed here is what keeps a cert-less session byte-identical to R9.7.
+    const ctx: ServeContext = {
+      toolInput: parsed.data.tool_input,
+      green: await greenServeState(projectDir),
+    };
+
     // "Should we self-fetch and serve the raw page for this miss?" In raw mode we
     // do; otherwise we fall open and let the post hook capture WebFetch's answer.
     const serveMiss = (): Promise<boolean> =>
       rawMode
-        ? fetchCacheAndServe(io, projectDir, cache, url, options, nowMs, nowIso)
+        ? fetchCacheAndServe(io, projectDir, cache, url, options, nowMs, nowIso, ctx)
         : Promise.resolve(false);
 
     const entry = await cache.get(url);
@@ -496,7 +622,7 @@ export async function runWebFetchPre(
       }
     }
 
-    await serveCached(io, projectDir, url, entry, nowMs);
+    await serveCached(io, projectDir, url, entry, nowMs, ctx);
     return 0;
   } catch (err) {
     io.stderr.write(
@@ -527,6 +653,11 @@ export async function runWebFetchPost(
     if (url === null) return 0;
 
     const projectDir = options.projectDir ?? parsed.data.cwd ?? process.cwd();
+
+    // Never cache Golem's own placeholder as if it were the page (R9.12). The
+    // human-facing label for a served fetch is emitted by the CCR post hook, not
+    // here: this one is registered `async`, so its stdout is discarded.
+    if (isLoopbackStubUrl(url)) return 0;
 
     // Raw mode → the pre hook owns caching; never cache WebFetch's answer here.
     const rawMode =

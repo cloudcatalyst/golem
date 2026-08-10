@@ -26,6 +26,12 @@ coverage/
 .golem/distill/
 .golem/tasks/
 .golem/compact/
+# R9.12: the loopback CA + leaf, and the CA's PRIVATE KEY. Machine-local by
+# nature (the cert is issued for this machine's 127.0.0.1 and regenerated on
+# demand), and a committed CA key would be trusted by every clone.
+.golem/loopback/
+# R9.8: the detached daemon's log.
+.golem/proxy.log
 
 # Claude Code personal settings
 .claude/settings.local.json

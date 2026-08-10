@@ -3,8 +3,10 @@
  */
 
 import type { Command } from "commander";
-import { findProjectDir, loadConfig } from "../../config/index.js";
+import { findProjectDir, loadConfig, migrateOnVersionChange } from "../../config/index.js";
+import { VERSION } from "../../index.js";
 import { createProbeRunner, detectCapability, embedModelFor } from "../../inference/index.js";
+import { loopbackCaPath } from "../../proxy/loopback-cert.js";
 import { credentialEnvForProxy } from "../accounts.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "../init.js";
@@ -69,6 +71,31 @@ async function initSummary(dir: string, proxyStarted: boolean): Promise<string> 
   return `${lines.join("\n")}\n`;
 }
 
+/**
+ * Say plainly what was just trusted, why, and what it cannot do. Trust changes
+ * should never be silent, even when they are the default — and the restart is
+ * not optional: `NODE_EXTRA_CA_CERTS` is read once at startup (§112), so until
+ * Claude Code restarts, served WebFetches keep using the deny path.
+ */
+function loopbackCertNotice(projectDir: string): string {
+  return [
+    "",
+    "  WebFetch  Golem generated a loopback certificate authority and trusted it via",
+    `            NODE_EXTRA_CA_CERTS (${loopbackCaPath(projectDir)}).`,
+    "            Why: it lets a WebFetch served from Golem's cache render as a normal",
+    "            (green) tool call instead of a denied one.",
+    "            Scope: the CA carries a DNS name constraint, so it CANNOT issue a",
+    "            certificate for api.anthropic.com or any other host — only for",
+    "            127.0.0.1. It also cannot create sub-CAs.",
+    "            Takes effect right away in most sessions (§125 — measured: a running",
+    "            session picked the CA up without restarting). If served fetches still",
+    "            show as denied, restart Claude Code. Either way nothing breaks: a",
+    "            session without the trust behaves exactly as before.",
+    "            Decline with: golem init --no-loopback-cert",
+    "",
+  ].join("\n");
+}
+
 export default function register(program: Command): void {
   program
     .command("init")
@@ -78,6 +105,10 @@ export default function register(program: Command): void {
     .option("--foundry <url>", "front an Azure AI Foundry resource base URL")
     .option("--upstream <url>", "front a generic Anthropic-compatible gateway (e.g. OpenRouter)")
     .option("--start-proxy", "start the proxy daemon after wiring", false)
+    .option(
+      "--no-loopback-cert",
+      "don't generate or trust Golem's loopback CA (cache-served WebFetches keep showing as denied/red)",
+    )
     .action(
       async (opts: {
         dir: string;
@@ -85,6 +116,7 @@ export default function register(program: Command): void {
         foundry?: string;
         upstream?: string;
         startProxy: boolean;
+        loopbackCert: boolean;
       }) => {
         try {
           const report = await golemInit({
@@ -92,9 +124,22 @@ export default function register(program: Command): void {
             dryRun: opts.dryRun,
             ...(opts.foundry !== undefined ? { foundry: opts.foundry } : {}),
             ...(opts.upstream !== undefined ? { upstream: opts.upstream } : {}),
+            // commander maps `--no-loopback-cert` onto `loopbackCert: false`
+            ...(opts.loopbackCert === false ? { noLoopbackCert: true } : {}),
           });
           printReport(report);
           if (report.dryRun) return;
+          if (opts.loopbackCert !== false) {
+            process.stdout.write(loopbackCertNotice(opts.dir));
+          }
+          // R9.13: `golem init` is what people run after an upgrade, so it is the
+          // other honest place to bring the settings files up to date. After the
+          // init report, since `init` may have just created `.golem/`.
+          for (const line of (
+            await migrateOnVersionChange({ projectDir: opts.dir, version: VERSION })
+          ).lines) {
+            process.stdout.write(`  config   ${line}\n`);
+          }
           if (opts.startProxy) {
             const { settings } = await loadConfig({ projectDir: opts.dir });
             await writeProxyDesired(opts.dir, "running", new Date().toISOString());

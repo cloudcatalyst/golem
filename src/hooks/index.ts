@@ -52,9 +52,11 @@ export {
   DEFAULT_MAX_INLINE_CHARS,
   DIGEST_HEAD_CHARS,
   DIGEST_TAIL_CHARS,
+  findTextSlot,
   HOOK_EVENT_NAME,
   runPostToolUseHook,
   SKELETON_CHARS,
+  servedFetchLabel,
   stripReadLineNumbers,
 } from "./post-tool-use.js";
 export type { RedactFn } from "./redact.js";
