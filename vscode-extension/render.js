@@ -193,7 +193,7 @@ function buildModel(stats, status, update, accounts, surface) {
     localModelReachable: !!(st.local_model && st.local_model.reachable),
     // `inference.coder_enabled`. Absent on an older CLI → assume enabled,
     // matching the CLI statusline's fail-open reading of the same setting.
-    localCoderEnabled:
+    coderEnabled:
       st.local_model && typeof st.local_model.coder_enabled === "boolean"
         ? st.local_model.coder_enabled
         : true,
@@ -206,12 +206,12 @@ function buildModel(stats, status, update, accounts, surface) {
       (st.local_model && typeof st.local_model.coder_enabled === "boolean"
         ? st.local_model.coder_enabled
         : true),
-    localCoderModel:
+    coderModel:
       st.local_model && typeof st.local_model.coder_model === "string"
         ? st.local_model.coder_model
         : null,
     // R9.4 — the model behind `inference.coder_target`, when set and resolvable.
-    // Wins over localCoderModel: a configured target is what `coder` will
+    // Wins over coderModel: a configured target is what `coder` will
     // actually draft on, local or not. Absent on an older CLI → null, i.e. the
     // pre-R9.4 local-only display.
     // R9.4 — one row per tool worker with a configured target. A row whose
@@ -317,7 +317,7 @@ const ROLE_MARKS = {
  * that cannot serve a draft is the R8.32 failure in miniature.
  */
 function workerModels(model) {
-  const localModel = model.localModelActive ? model.localCoderModel || "local" : null;
+  const localModel = model.localModelActive ? model.coderModel || "local" : null;
   // No `workers` at all (a hand-built model, or an older CLI) → the implicit
   // coder-on-the-local-model row, which is the pre-R9.4 behaviour.
   const rows = model.workers && model.workers.length > 0 ? model.workers : [{ worker: "coder" }];
@@ -326,7 +326,7 @@ function workerModels(model) {
     // carries none, and the worker is then omitted rather than advertised.
     if (w.target) return { worker: w.worker, model: w.model || null };
     // No configured target → the local model, which has to actually be up.
-    if (model.localCoderEnabled === false && w.worker === "coder") {
+    if (model.coderEnabled === false && w.worker === "coder") {
       return { worker: w.worker, model: null };
     }
     return { worker: w.worker, model: localModel };
@@ -552,8 +552,8 @@ function renderHtml(model, nonce) {
   }</span></div>
   <div class="row"><span>Inference</span><span class="sub">${
     model.localModelActive
-      ? `local + upstream${model.localCoderModel ? ` · coder ${esc(model.localCoderModel)}` : ""}`
-      : model.localCoderEnabled === false
+      ? `local + upstream${model.coderModel ? ` · coder ${esc(model.coderModel)}` : ""}`
+      : model.coderEnabled === false
         ? "upstream only · local coder disabled"
         : "upstream only"
   }</span></div>

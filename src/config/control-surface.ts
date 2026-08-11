@@ -399,24 +399,24 @@ async function runtimeControlGroup(shared: {
   };
 
   // Accounts: the synthetic default (clears default_target) plus each registered
-  // entry. Credentials are never read here — `useAccount` does the preflight.
-  const registered = settings.proxy.accounts ?? [];
+  // gateway. Credentials are never read here — `useAccount` does the preflight.
+  const registered = settings.proxy.gateways ?? [];
   const defaultId = settings.proxy.upstream_provider;
-  const accountEntry = provenance["proxy.default_target"];
+  const accountEntry = provenance["inference.default_target"];
   const accountLocked = accountEntry?.layer === "env" ? ENV_LOCKED(accountEntry.source) : undefined;
   const accountControl: Control = {
     id: "runtime:account",
     family: "runtime",
-    label: "Active account",
-    summary: "Which upstream account the proxy fronts",
+    label: "Active gateway",
+    summary: "Which upstream gateway the proxy fronts",
     detail:
       "Switching runs a credential preflight and restarts a running proxy. Credentials live " +
-      "in the OS store — add accounts with `golem account add` / `golem account login`.",
+      "in the OS store — add gateways with `golem account add` / `golem account login`.",
     kind: "enum",
-    value: settings.proxy.default_target ?? defaultId,
+    value: settings.inference.default_target ?? defaultId,
     options: [
       { value: defaultId, label: `${defaultId} (default upstream config)` },
-      ...registered.map((a) => ({ value: a.id, label: `${a.id} (${a.provider})` })),
+      ...registered.map((g) => ({ value: g.id, label: `${g.id} (${g.provider})` })),
     ],
     layer: accountEntry?.layer ?? "default",
     ...(accountEntry?.source !== undefined && { source: accountEntry.source }),

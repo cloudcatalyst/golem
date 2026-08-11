@@ -192,9 +192,9 @@ export function buildProxyFromSettings(
           settings.proxy.upstream_auth_scheme,
         ),
       },
-      ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
-      ...(settings.proxy.default_target !== undefined
-        ? { activeAccount: settings.proxy.default_target }
+      ...(settings.proxy.gateways !== undefined ? { gateways: settings.proxy.gateways } : {}),
+      ...(settings.inference.default_target !== undefined
+        ? { activeAccount: settings.inference.default_target }
         : {}),
       knownTargetIds: listTargets(settings.proxy).map((t) => t.id),
       legacyApiKey: process.env.GOLEM_UPSTREAM_API_KEY,

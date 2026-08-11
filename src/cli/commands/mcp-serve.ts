@@ -17,16 +17,16 @@ import { createTargetDispatcher } from "../../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase } from "../../interfaces/index.js";
 import {
   listTargets,
-  perAccountEnvVar,
+  perGatewayEnvVar,
   resolveUpstreamDisplay,
   upstreamAssumesCaching,
 } from "../../providers/index.js";
 import { readServedModel } from "../../proxy/served-model.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
 import { FederatedWikiReader, FileWikiStore } from "../../wiki/index.js";
-import { credentialEnvForProxy } from "../accounts.js";
 import { ensureProjectIndexed } from "../auto-index.js";
 import { buildKnowledgeStack } from "../build-knowledge.js";
+import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
 import { mcpCompressionService } from "../mcp-compression.js";
 import { defaultUserWikiDir, resolveWikiDir, wikiSourcePrefix } from "../wiki.js";
@@ -61,7 +61,7 @@ function resolveTargetCredential(
   return async (accountId) => {
     pending ??= credentialEnvForProxy(projectDir);
     const creds = await pending;
-    return creds[accountId === null ? DEFAULT_KEY_ENV : perAccountEnvVar(accountId)];
+    return creds[accountId === null ? DEFAULT_KEY_ENV : perGatewayEnvVar(accountId)];
   };
 }
 
@@ -122,13 +122,6 @@ export default function register(program: Command): void {
           }
         }
         const telemetry = openTelemetryStore(opts.dir);
-        const coderInference =
-          settings.inference.coder_enabled && inference !== undefined ? inference : undefined;
-        if (settings.inference.coder_enabled === false) {
-          process.stderr.write(
-            "golem mcp serve: local coder disabled by inference.coder_enabled\n",
-          );
-        }
         const { JsonFileSliderStore, serveStdio } = await import("../../mcp/index.js");
         const lspBridge =
           settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
@@ -181,15 +174,15 @@ export default function register(program: Command): void {
               }
             : {}),
           ...(inference !== undefined ? { inference } : {}),
-          ...(coderInference !== undefined ? { coder: coderInference } : {}),
+          ...(inference !== undefined ? { coder: inference } : {}),
           // R9.3: `coder` may draft on any declared target. Only wired when
           // there is more than the synthetic default to choose from — with one
           // target the `target` parameter would be a schema cost with no choice
           // behind it, and `coder`'s definition bills on every request (§110).
-          ...(coderInference !== undefined && listTargets(settings.proxy).length > 1
+          ...(inference !== undefined && listTargets(settings.proxy).length > 1
             ? {
                 targetDispatcher: createTargetDispatcher({
-                  inference: coderInference,
+                  inference: inference,
                   settings: settings.proxy,
                   workerTargets: settings.inference.worker_targets,
                   resolveKey: resolveTargetCredential(opts.dir),

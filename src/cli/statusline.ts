@@ -106,12 +106,12 @@ export interface GolemState {
   /** Whether a local model is reachable — renders "local+upstream" (Decision 30), if known and enabled. */
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
-  readonly localCoderModel?: string;
+  readonly coderModel?: string;
   /** Whether the `coder` MCP tool is enabled (`inference.coder_enabled`). */
-  readonly localCoderEnabled?: boolean;
+  readonly coderEnabled?: boolean;
   /**
    * R9.4 — the model behind `inference.coder_target`, when that is set and
-   * resolves. Wins over {@link localCoderModel}: a configured target is what
+   * resolves. Wins over {@link coderModel}: a configured target is what
    * `coder` will actually draft on, local or not.
    */
   /**
@@ -120,7 +120,11 @@ export interface GolemState {
    * line: it fails closed on every dispatch, so naming a model would advertise
    * something that can never run.
    */
-  readonly workers?: readonly { readonly worker: string; readonly model?: string }[];
+  readonly workers?: readonly {
+    readonly worker: string;
+    readonly model?: string;
+    readonly gateway?: string;
+  }[];
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
 }
@@ -250,43 +254,33 @@ function workerMark(worker: string): string {
  */
 function workerRows(golem: GolemState): readonly { worker: string; model?: string }[] {
   if (golem.workers !== undefined) return golem.workers;
-  if (golem.localCoderEnabled === false || golem.localModelReachable !== true) return [];
+  if (golem.coderEnabled === false || golem.localModelReachable !== true) return [];
   const model =
-    golem.localCoderModel !== undefined && golem.localCoderModel !== ""
-      ? golem.localCoderModel
-      : "local";
+    golem.coderModel !== undefined && golem.coderModel !== "" ? golem.coderModel : "local";
   return [{ worker: "coder", model }];
 }
 
 /**
- * The one-liner destination, naming the chat model plus **only the workers whose
- * model differs from it** (R9.1–R9.4):
+ * The one-liner destination, naming the default gateway (model) plus each
+ * worker that diverges from it:
  *
- *   `✎ qwen3-14b · ◆ claude-opus-5[1m]`
- *   `◆ claude-opus-5[1m]`            ← every worker on the chat model
+ *   `⚙ openrouter (qwen3-14b) + ✎ anthropic (claude-sonnet-5)`
  *
- * Showing a worker that agrees with chat costs width and tells the reader
- * nothing; the interesting fact is always a *divergence*. This is also what
- * keeps the line bounded as workers are added — with one glyph each, the line
- * only grows when the user has actually pointed a worker somewhere else.
- *
- * The old shape (`local (…) + anthropic (…)`) hard-coded the assumption this
- * work removed — that drafting is local and only the upstream is a real choice.
- * Model ids stay verbatim (Decision 49): never a prettified family name. When
- * the chat model is unknown the segment degrades to the upstream label alone,
- * which is still true.
- *
- * A worker whose target does not resolve is **omitted**, not shown: it fails
- * closed on every dispatch, so naming its model would advertise something that
- * can never run (the R8.32 failure in miniature). `golem status` reports it.
+ * Model ids stay verbatim (Decision 49). A worker whose target does not
+ * resolve is omitted: it fails closed on every dispatch.
  */
 export function destinationLabel(golem: GolemState): string {
   const chatModel = upstreamModelLabel(golem);
-  const chatSeg = `${ROLE_MARKS.chat} ${chatModel ?? golem.upstreamLabel}`;
+  const chatGateway = golem.upstreamLabel;
+  const chatSeg = `${ROLE_MARKS.chat} ${chatGateway}${chatModel !== undefined ? ` (${chatModel})` : ""}`;
   const diverging = workerRows(golem)
     .filter((w) => w.model !== undefined && w.model !== "" && w.model !== chatModel)
-    .map((w) => `${workerMark(w.worker)} ${w.model}`);
-  return diverging.length === 0 ? chatSeg : `${diverging.join(" · ")} · ${chatSeg}`;
+    .map((w) => {
+      const g = (w as { gateway?: string }).gateway;
+      const model = w.model as string;
+      return `${workerMark(w.worker)} ${g !== undefined ? `${g} ` : ""}${model}`;
+    });
+  return diverging.length === 0 ? chatSeg : `${diverging.join(" + ")} · ${chatSeg}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -335,38 +329,21 @@ export function renderStatusLine(
   // chose, this is a misconfiguration they almost certainly did not.
   const unwired = golem.proxyInPath === false;
   const brand = unwired ? yellow("⬡ Golem") : active ? green("⬢ Golem") : dim("⬡ Golem");
-  // "Passthrough" whenever Golem isn't transforming traffic: the proxy is down,
-  // it's unwired, the pipeline is off (golem off), or level 0.
-  const passthrough = !active || unwired || golem.sliderLevel === 0;
-  // §103: name the level that is RUNNING, not the one that was set. The nominal
-  // level still gets said — as a badge below — but it must not be the headline
-  // when the pipeline is doing something else.
   const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
-  const label = unwired
-    ? "Unwired"
-    : passthrough
-      ? "Passthrough"
-      : levelName(inert ? (golem.effectiveLevel as number) : golem.sliderLevel);
 
-  // Brand · Level → destination. The destination names each backend with its
-  // own model id verbatim (`local (qwen2.5-coder:7b) + anthropic
-  // (claude-opus-5[1m])`); `local` is present only when a local model is
-  // reachable (Decision 30).
+  // Brand · Level → destination
   parts.push(brand);
-  parts.push(`${cyan(label)} ${dim("→")} ${cyan(destinationLabel(golem))}`);
+  parts.push(`${dim("→")} ${cyan(destinationLabel(golem))}`);
 
-  // Decision 52: brevity changes how the MODEL talks, so it must be visible
-  // wherever Golem's state is — otherwise a terse assistant looks like a model
-  // regression rather than a dial someone set. Shown only when pipeline is
-  // active, so the default (off) costs no width.
-  if (golem.brevity !== undefined && golem.brevity !== "off" && !unwired) {
-    parts.push(yellow(`✂ ${golem.brevity}`));
-  }
-  // The set-but-inert level, said explicitly so the difference is visible rather
-  // than merely absent. Costs width only in the degraded case.
-  if (inert && !passthrough) {
-    parts.push(yellow(`⚠ ${golem.sliderLevel} inert`));
-  }
+  // Compression level — always shown with icon
+  const compLabel = levelName(
+    inert ? (golem.effectiveLevel as number) : golem.sliderLevel,
+  ).toLowerCase();
+  parts.push(`${dim("🗜")} ${compLabel}`);
+
+  // Brevity level — always shown with icon (even "off")
+  const brevLabel = golem.brevity ?? "off";
+  parts.push(`${dim("✂")} ${brevLabel}`);
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
@@ -388,7 +365,7 @@ export async function collectGolemState(
   let brevity = "off";
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
-  let coderEnabled = true;
+  const coderEnabled = true;
   let providers: readonly LocalProviderEntry[] | undefined;
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
@@ -407,7 +384,7 @@ export async function collectGolemState(
         ? resolveBrevity(settings.slider.level, "auto")
         : settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
-    coderEnabled = settings.inference.coder_enabled;
+
     providers = settings.inference.providers as readonly LocalProviderEntry[];
     // R9.4: `coder` may default to any declared target. Resolve it from settings
     // already in hand — no extra I/O on a per-prompt surface. An unknown id
@@ -422,11 +399,22 @@ export async function collectGolemState(
       .filter((worker) => isKnownWorker(worker))
       .map((worker) => {
         const hit = listTargets(settings.proxy).find((t) => t.id === configured[worker]);
-        return { worker, ...(hit?.model !== undefined ? { model: hit.model } : {}) };
+        return {
+          worker,
+          ...(hit?.model !== undefined ? { model: hit.model } : {}),
+          ...(hit?.accountId !== null ? { gateway: hit?.accountId } : {}),
+        };
       });
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
-    const upstream = resolveUpstreamDisplay(settings.proxy);
+    // R9.23: default_target moved from proxy to inference — spread it onto
+    // the proxy settings so resolveUpstreamDisplay can find it.
+    const upstream = resolveUpstreamDisplay({
+      ...settings.proxy,
+      ...(settings.inference.default_target !== undefined
+        ? { default_target: settings.inference.default_target }
+        : {}),
+    });
     label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
     provider = upstream.provider;
     model = upstream.model;
@@ -457,7 +445,7 @@ export async function collectGolemState(
     sliderLevel,
     brevity,
     upstreamLabel: label,
-    localCoderEnabled: coderEnabled,
+    coderEnabled: coderEnabled,
     ...(effectiveLevel !== undefined ? { effectiveLevel } : {}),
     ...(provider !== undefined ? { upstreamProvider: provider } : {}),
     ...(model !== undefined ? { upstreamModel: model } : {}),
@@ -474,7 +462,7 @@ export async function collectGolemState(
       state = {
         ...state,
         localModelReachable: info.reachable,
-        ...(info.coderModel !== undefined ? { localCoderModel: info.coderModel } : {}),
+        ...(info.coderModel !== undefined ? { coderModel: info.coderModel } : {}),
       };
     } catch {
       // local-model probe is best-effort; leave the field unknown
@@ -561,14 +549,14 @@ function resolveWorkerModels(
 ): readonly { worker: string; model?: string }[] {
   const localModel =
     state.localModelReachable === true
-      ? state.localCoderModel !== undefined && state.localCoderModel !== ""
-        ? state.localCoderModel
+      ? state.coderModel !== undefined && state.coderModel !== ""
+        ? state.coderModel
         : "local"
       : undefined;
   return KNOWN_WORKERS.map((worker) => {
     // Only `coder` has an enable flag today; a future worker without one is
     // simply always offered.
-    if (worker === "coder" && state.localCoderEnabled === false) return { worker };
+    if (worker === "coder" && state.coderEnabled === false) return { worker };
     const hit = configured.find((c) => c.worker === worker);
     if (hit !== undefined) return hit;
     return { worker, ...(localModel !== undefined ? { model: localModel } : {}) };

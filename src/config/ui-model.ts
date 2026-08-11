@@ -220,9 +220,15 @@ export const SETTING_META = {
     advanced: true,
     restart: "proxy",
   },
-  "proxy.accounts": {
-    label: "Account registry",
-    summary: "Non-secret upstream identities — managed by `golem account`",
+  "proxy.default_target": {
+    label: "Default target (deprecated)",
+    summary: "Moved to inference.default_target",
+    detail: "R9.23: use inference.default_target instead",
+    restart: "proxy",
+  },
+  "proxy.gateways": {
+    label: "Gateway registry",
+    summary: "Non-secret upstream connection config — managed by `golem account`",
     detail:
       "Credentials live in the OS credential store, never here. Add and remove entries " +
       "with `golem account add` / `golem account remove`.",
@@ -232,12 +238,12 @@ export const SETTING_META = {
     label: "Target registry",
     summary: "Every model Golem can reach, local or upstream — managed by `golem target`",
     detail:
-      "A target is non-secret: it names an endpoint and model, and points at an account id " +
-      "for the credential. Several targets may share one account. Inert until R9.2/R9.3 " +
-      "route on it. Entries in the account registry already appear in `golem target list`.",
+      "A target is non-secret: it names a model id and a gateway reference. Several targets " +
+      "may share one gateway. Inert until R9.2/R9.3 route on it. Entries in the gateway " +
+      "registry already appear in `golem target list`.",
     kind: "opaque",
   },
-  "proxy.default_target": {
+  "inference.default_target": {
     label: "Default target",
     summary: "Which target serves a request that names none",
     detail:
@@ -273,12 +279,6 @@ export const SETTING_META = {
       "Bounds the WHOLE completion (local generation here is non-streaming), so a cold " +
       "model load plus a grounded draft can legitimately take a minute-plus.",
     advanced: true,
-  },
-  "inference.coder_enabled": {
-    label: "Local coder tool",
-    summary: "Offer the `coder` MCP tool so Claude drafts code on the local model",
-    detail: "Ollama must also be reachable for it to work. Independent of rerank/local-answer.",
-    restart: "mcp",
   },
   "inference.worker_targets": {
     label: "Worker targets",

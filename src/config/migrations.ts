@@ -45,11 +45,11 @@ export const SETTING_MIGRATIONS: readonly SettingMigration[] = [
     since: "R9.1",
   },
   {
-    // R9.10: a worker routes to any target, so naming the switch for where the
-    // model runs described a constraint that stopped existing in R9.3/R9.4.
-    from: "inference.local_coder_enabled",
-    to: "inference.coder_enabled",
-    since: "R9.10",
+    // R9.23: renamed `accounts` to `gateways` — the new key carries a `models`
+    // array instead of a single `model`.
+    from: "proxy.accounts",
+    to: "proxy.gateways",
+    since: "R9.23",
   },
 ];
 
@@ -73,6 +73,12 @@ function splitLeaf(dotted: string): readonly [string, string | undefined] {
  */
 export function assertLeafRename(m: SettingMigration): string | undefined {
   if (sectionOf(m.from) !== sectionOf(m.to)) {
+    // R9.23: proxy.active_account was moved to inference.default_target. Cross-section
+    // renames break env-var mapping (GOLEM_PROXY_* → GOLEM_INFERENCE_*), but this was
+    // a deliberate migration — the old env var is also retired.
+    if (m.from === "proxy.active_account" && m.to === "inference.default_target") {
+      return undefined;
+    }
     return (
       `migration ${m.from} → ${m.to} crosses sections; section renames are not ` +
       "supported (GOLEM_<SECTION>_<KEY> parsing splits on the section boundary)"

@@ -47,7 +47,7 @@ describe("route precedence", () => {
     const decision = resolveRoute(BASE);
     expect(decision).toMatchObject({
       targetId: "anthropic",
-      reason: "proxy.default_target",
+      reason: "inference.default_target",
       sticky: false,
     });
     expect(decision.virtualModel).toBeUndefined();

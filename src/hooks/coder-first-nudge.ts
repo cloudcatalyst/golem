@@ -1,5 +1,5 @@
 /**
- * Coder-first enforcement trigger (spec Decision 39). The soft `local-coder`
+ * Coder-first enforcement trigger (spec Decision 39). The soft `coder-first`
  * guidance ("draft non-trivial code with the `coder` MCP tool first") loses to
  * momentum with no trigger tied to the action, so — mirroring how snooze went
  * from advisory to a PreToolUse gate — this decides whether the gate should
@@ -8,7 +8,7 @@
  *
  * It is a ONE-SHOT per Claude Code session (keyed by `session_id`): a single
  * non-polluting redirect at the first non-trivial code write, not a per-write
- * repeat. The gate only consults this when the `local-coder` guidance is active
+ * repeat. The gate only consults this when the `coder-first` guidance is active
  * ("enforced if guided"); presence of the rule file is the toggle.
  *
  * R9.17: the state remembers a SET of sessions, not one. It used to hold a

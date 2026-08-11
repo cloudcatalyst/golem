@@ -7,21 +7,9 @@
  */
 
 import type { Command } from "commander";
-import {
-  TARGET_TRUST_LEVELS,
-  type TargetTrust,
-  UPSTREAM_AUTH_SCHEMES,
-  UPSTREAM_PROVIDERS,
-} from "../../providers/index.js";
+import { TARGET_TRUST_LEVELS, type TargetTrust } from "../../providers/index.js";
 import { InitError } from "../init.js";
-import {
-  addTarget,
-  collectTargets,
-  type NewTarget,
-  renderTargets,
-  showTarget,
-  testTarget,
-} from "../targets.js";
+import { addTarget, collectTargets, renderTargets, showTarget, testTarget } from "../targets.js";
 
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -89,14 +77,11 @@ export default function register(program: Command): void {
       "Register a target in proxy.targets (non-secret config only — credentials stay with 'account login')",
     )
     .argument("<id>", "new target id (e.g. coder, cheap)")
-    .requiredOption("--provider <name>", `provider (${UPSTREAM_PROVIDERS.join(" | ")})`)
-    .requiredOption("--base-url <url>", "endpoint base URL")
-    .option("--model <id>", "model id to send (omit to forward the client's own)")
-    .option("--account <id>", "proxy.accounts id whose stored credential backs this target")
-    .option(
-      "--auth-scheme <scheme>",
-      `credential header scheme (${UPSTREAM_AUTH_SCHEMES.join(" | ")})`,
+    .requiredOption(
+      "--gateway <id>",
+      "proxy.gateways id whose config and credential backs this target",
     )
+    .option("--model <id>", "model id to send (omit to forward the client's own)")
     .option(
       "--trust <level>",
       `how much context this target is trusted with (${TARGET_TRUST_LEVELS.join(" | ")}); omit for a conservative default`,
@@ -106,26 +91,13 @@ export default function register(program: Command): void {
       async (
         id: string,
         opts: {
-          provider: string;
-          baseUrl: string;
+          gateway: string;
           model?: string;
-          account?: string;
-          authScheme?: string;
           trust?: string;
           dir: string;
         },
       ) => {
         try {
-          const provider = opts.provider as NewTarget["provider"];
-          if (!UPSTREAM_PROVIDERS.includes(provider))
-            throw new InitError(
-              `unknown provider "${opts.provider}"; valid: ${UPSTREAM_PROVIDERS.join(", ")}`,
-            );
-          const authScheme = opts.authScheme as NonNullable<NewTarget["auth_scheme"]>;
-          if (opts.authScheme !== undefined && !UPSTREAM_AUTH_SCHEMES.includes(authScheme))
-            throw new InitError(
-              `unknown auth scheme "${opts.authScheme}"; valid: ${UPSTREAM_AUTH_SCHEMES.join(", ")}`,
-            );
           const trust = opts.trust as TargetTrust;
           if (opts.trust !== undefined && !TARGET_TRUST_LEVELS.includes(trust))
             throw new InitError(
@@ -135,20 +107,17 @@ export default function register(program: Command): void {
             opts.dir,
             {
               id,
-              provider,
-              base_url: opts.baseUrl,
+              gateway: opts.gateway,
               ...(opts.model !== undefined ? { model: opts.model } : {}),
-              ...(opts.account !== undefined ? { account: opts.account } : {}),
-              ...(opts.authScheme !== undefined ? { auth_scheme: authScheme } : {}),
               ...(opts.trust !== undefined ? { trust } : {}),
             },
             new Date().toISOString(),
           );
-          const note = result.overrides_account
-            ? ` It overrides the account-derived target of the same id (that account's credential still backs it).`
+          const note = result.overrides_gateway
+            ? ` It overrides the gateway-derived target of the same id (that gateway's credential still backs it).`
             : "";
           process.stdout.write(
-            `registered target "${id}" (${provider} ${opts.baseUrl}).${note}\n` +
+            `registered target "${id}" (gateway: ${opts.gateway}).${note}\n` +
               `Nothing routes on it yet — the registry is inert until proxy routing (R9.2) and coder dispatch (R9.3) land.\n`,
           );
         } catch (err) {

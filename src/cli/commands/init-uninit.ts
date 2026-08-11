@@ -7,8 +7,8 @@ import { findProjectDir, loadConfig, migrateOnVersionChange } from "../../config
 import { VERSION } from "../../index.js";
 import { createProbeRunner, detectCapability, embedModelFor } from "../../inference/index.js";
 import { loopbackCaPath } from "../../proxy/loopback-cert.js";
-import { credentialEnvForProxy } from "../accounts.js";
 import { ollamaHasModel } from "../build-knowledge.js";
+import { credentialEnvForProxy } from "../gateways.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "../init.js";
 import { startDetached } from "../proxy-daemon.js";
 

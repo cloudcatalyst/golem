@@ -53,8 +53,8 @@ const REPORT: StatusReport = {
   config: {},
   local_model: {
     reachable: true,
-    coder_model: "qwen2.5-coder:7b",
-    coder_enabled: true,
+    model: "qwen2.5-coder:7b",
+
     base_url: "http://localhost:11434",
   },
   warnings: [],
@@ -255,9 +255,12 @@ describe("headerLines", () => {
 
   it("describes the local model's three states", () => {
     expect(headerLines(REPORT)[2]?.[0]?.value).toContain("qwen2.5-coder:7b");
-    const off = { ...REPORT, local_model: { ...REPORT.local_model, coder_enabled: false } };
+    const off = { ...REPORT, local_model: { ...REPORT.local_model, reachable: false } };
     expect(headerLines(off)[2]?.[0]?.value).toContain("coder disabled");
-    const down = { ...REPORT, local_model: { ...REPORT.local_model, reachable: false } };
+    const down = {
+      ...REPORT,
+      local_model: { ...REPORT.local_model, reachable: undefined as unknown as boolean },
+    };
     expect(headerLines(down)[2]?.[0]?.value).toContain("unreachable");
   });
 

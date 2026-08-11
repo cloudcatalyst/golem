@@ -28,9 +28,9 @@ import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
-import { credentialEnvForProxy } from "../accounts.js";
 import { resolvePersistedEmbedMode } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
+import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
 import {
   portInUse,

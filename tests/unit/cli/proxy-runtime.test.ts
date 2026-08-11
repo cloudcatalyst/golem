@@ -110,15 +110,17 @@ describe("buildProxyFromSettings — resolved-upstream reporting", () => {
         proxy: {
           upstream_base_url: "https://api.anthropic.com",
           upstream_provider: "anthropic",
-          accounts: [
+          gateways: [
             {
               id: "openrouter-laguna",
               provider: "openrouter",
               base_url: "https://openrouter.ai/api/v1",
-              model: "poolside/laguna-s-2.1:free",
+              models: ["poolside/laguna-s-2.1:free"],
               auth_scheme: "bearer",
             },
           ],
+        },
+        inference: {
           default_target: "openrouter-laguna",
         },
       },

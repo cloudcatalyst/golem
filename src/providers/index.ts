@@ -18,21 +18,21 @@
  * The credential itself is a secret and is NEVER a settings leaf — the CLI
  * resolves it from the OS credential store (`golem account login`) and hands it
  * to the proxy process at spawn. Setting it via an environment variable was
- * removed in Decision 47; {@link perAccountEnvVar} names only that internal
+ * removed in Decision 47; {@link perGatewayEnvVar} names only that internal
  * handoff channel.
  */
 
 export {
+  type GatewayEntry,
   type LegacyUpstream,
-  perAccountEnvVar,
+  perGatewayEnvVar,
   type ResolvedUpstream,
   type ResolveResult,
   resolveActiveUpstream,
   resolveUpstreamDisplay,
-  type UpstreamAccount,
   type UpstreamDisplay,
   type UpstreamDisplaySettings,
-} from "./accounts.js";
+} from "./gateways.js";
 export { createGeminiToAnthropicSSE, GeminiSSETranslator } from "./gemini-stream.js";
 export {
   anthropicToGemini,

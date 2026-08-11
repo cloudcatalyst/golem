@@ -1,15 +1,15 @@
 /**
- * R6.2 v1 — account resolution (spec Decision 21d; ADR-0003). Pure resolver:
- * legacy passthrough, active-account selection with per-account env secret, and
- * fail-closed handling of an unknown active account.
+ * R6.2 v1 / R9.23 — gateway resolution (spec Decision 21d; ADR-0003, amended).
+ * Pure resolver: legacy passthrough, active-gateway selection with per-gateway env
+ * secret, and fail-closed handling of an unknown active gateway.
  */
 
 import { describe, expect, it } from "vitest";
 import {
-  perAccountEnvVar,
+  type GatewayEntry,
+  perGatewayEnvVar,
   resolveActiveUpstream,
   resolveUpstreamDisplay,
-  type UpstreamAccount,
   type UpstreamDisplaySettings,
 } from "../../../src/providers/index.js";
 
@@ -19,27 +19,27 @@ const legacy = {
   auth_scheme: "inherit" as const,
 };
 
-const accounts: UpstreamAccount[] = [
-  { id: "work", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-5.2" },
+const gateways: GatewayEntry[] = [
+  { id: "work", provider: "openai", base_url: "https://api.openai.com/v1", models: ["gpt-5.2"] },
   {
     id: "local",
     provider: "ollama",
     base_url: "http://gpubox.lan:11434/v1",
-    model: "qwen2.5-coder:7b",
+    models: ["qwen2.5-coder:7b"],
   },
 ];
 
-describe("perAccountEnvVar", () => {
+describe("perGatewayEnvVar", () => {
   it("uppercases and sanitizes the id", () => {
-    expect(perAccountEnvVar("work")).toBe("GOLEM_UPSTREAM_API_KEY__WORK");
-    expect(perAccountEnvVar("my-acct 2")).toBe("GOLEM_UPSTREAM_API_KEY__MY_ACCT_2");
+    expect(perGatewayEnvVar("work")).toBe("GOLEM_UPSTREAM_API_KEY__WORK");
+    expect(perGatewayEnvVar("my-acct 2")).toBe("GOLEM_UPSTREAM_API_KEY__MY_ACCT_2");
   });
 });
 
 describe("resolveActiveUpstream", () => {
-  it("uses the legacy top-level config when no account is active", () => {
+  it("uses the legacy top-level config when no gateway is active", () => {
     const { resolved, warning } = resolveActiveUpstream(
-      { legacy, accounts, legacyApiKey: "sk-legacy" },
+      { legacy, gateways, legacyApiKey: "sk-legacy" },
       {},
     );
     expect(warning).toBeUndefined();
@@ -53,9 +53,9 @@ describe("resolveActiveUpstream", () => {
     });
   });
 
-  it("selects the active account and its per-account env secret + resolved auth", () => {
+  it("selects the active gateway and its per-gateway env secret + resolved auth", () => {
     const { resolved, warning } = resolveActiveUpstream(
-      { legacy, accounts, activeAccount: "work", legacyApiKey: "sk-legacy" },
+      { legacy, gateways, activeAccount: "work", legacyApiKey: "sk-legacy" },
       { GOLEM_UPSTREAM_API_KEY__WORK: "sk-work" },
     );
     expect(warning).toBeUndefined();
@@ -69,10 +69,10 @@ describe("resolveActiveUpstream", () => {
     });
   });
 
-  it("does NOT leak another account's key or the legacy key to the active account", () => {
-    // Only the legacy key is in the env; the active account's var is unset.
+  it("does NOT leak another gateway's key or the legacy key to the active gateway", () => {
+    // Only the legacy key is in the env; the active gateway's var is unset.
     const { resolved } = resolveActiveUpstream(
-      { legacy, accounts, activeAccount: "local", legacyApiKey: "sk-legacy" },
+      { legacy, gateways, activeAccount: "local", legacyApiKey: "sk-legacy" },
       { GOLEM_UPSTREAM_API_KEY: "sk-legacy", GOLEM_UPSTREAM_API_KEY__WORK: "sk-work" },
     );
     expect(resolved.accountId).toBe("local");
@@ -81,12 +81,12 @@ describe("resolveActiveUpstream", () => {
 
   it("falls back to legacy + a warning for a selector in neither registry (no silent switch)", () => {
     const { resolved, warning } = resolveActiveUpstream(
-      { legacy, accounts, activeAccount: "ghost", legacyApiKey: "sk-legacy" },
+      { legacy, gateways, activeAccount: "ghost", legacyApiKey: "sk-legacy" },
       {},
     );
     expect(resolved.accountId).toBeNull();
     expect(resolved.provider).toBe("anthropic");
-    expect(warning).toMatch(/in neither proxy\.accounts nor proxy\.targets/);
+    expect(warning).toMatch(/in neither proxy\.gateways nor proxy\.targets/);
   });
 });
 
@@ -95,10 +95,10 @@ describe("resolveUpstreamDisplay", () => {
     upstream_provider: "anthropic",
     upstream_base_url: "https://api.anthropic.com",
     upstream_auth_scheme: "inherit",
-    accounts,
+    gateways,
   };
 
-  it("returns the legacy provider/URL and no model when no account is active", () => {
+  it("returns the legacy provider/URL and no model when no gateway is active", () => {
     const d = resolveUpstreamDisplay(base);
     expect(d).toEqual({
       accountId: null,
@@ -108,7 +108,7 @@ describe("resolveUpstreamDisplay", () => {
     });
   });
 
-  it("reflects the ACTIVE account's provider/base/model (never a secret)", () => {
+  it("reflects the ACTIVE gateway's provider/base/model (never a secret)", () => {
     const d = resolveUpstreamDisplay({ ...base, default_target: "work" });
     expect(d).toEqual({
       accountId: "work",
@@ -121,7 +121,7 @@ describe("resolveUpstreamDisplay", () => {
     expect(Object.keys(d)).not.toContain("authScheme");
   });
 
-  it("surfaces the configured legacy model when set (translating provider, no account)", () => {
+  it("surfaces the configured legacy model when set (translating provider, no gateway)", () => {
     const d = resolveUpstreamDisplay({
       upstream_provider: "openai",
       upstream_base_url: "https://api.moonshot.ai/v1",
@@ -137,6 +137,6 @@ describe("resolveUpstreamDisplay", () => {
     const d = resolveUpstreamDisplay({ ...base, default_target: "ghost" });
     expect(d.accountId).toBeNull();
     expect(d.provider).toBe("anthropic");
-    expect(d.warning).toMatch(/in neither proxy\.accounts nor proxy\.targets/);
+    expect(d.warning).toMatch(/in neither proxy\.gateways nor proxy\.targets/);
   });
 });

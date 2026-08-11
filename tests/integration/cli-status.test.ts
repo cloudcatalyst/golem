@@ -194,12 +194,25 @@ describe("collectStatus", () => {
       localProbe: async () => ({ reachable: true, coderModel: "qwen2.5-coder:7b" }),
     });
     expect(report.local_model.reachable).toBe(true);
-    expect(report.local_model.coder_model).toBe("qwen2.5-coder:7b");
-    expect(report.local_model.coder_enabled).toBe(true);
+    expect(report.local_model.model).toBe("qwen2.5-coder:7b");
+    expect(report.local_model.reachable).toBe(true);
   });
 
-  it("reports coder_enabled false when inference.local_coder_enabled is false", async () => {
-    await writeSetting("local", "inference.local_coder_enabled", false, { projectDir });
+  it("reports the default upstream when inference.default_target is not set", async () => {
+    await writeSetting(
+      "local",
+      "proxy.gateways",
+      [
+        {
+          id: "anthropic",
+          provider: "anthropic",
+          base_url: "https://api.anthropic.com",
+          models: ["claude-opus-5[1m]"],
+          auth_scheme: "x-api-key",
+        },
+      ],
+      { projectDir },
+    );
     const report = await collectStatus({
       projectDir,
       version: VERSION,
@@ -208,7 +221,7 @@ describe("collectStatus", () => {
       localProbe: async () => ({ reachable: true, coderModel: "qwen2.5-coder:7b" }),
     });
     expect(report.local_model.reachable).toBe(true);
-    expect(report.local_model.coder_enabled).toBe(false);
+    expect(report.upstream.provider).toBe("anthropic");
   });
 });
 
@@ -273,7 +286,7 @@ describe("renderStatus", () => {
       "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: true, coder_enabled: true, base_url: "http://localhost:11434" },
+    local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
     warnings: [],
   };
 
@@ -314,7 +327,7 @@ describe("renderStatus", () => {
       "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
-    local_model: { reachable: false, coder_enabled: true, base_url: "http://localhost:11434" },
+    local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
     warnings: ["config file .golem/settings.json is malformed JSON; using defaults"],
   };
 
@@ -436,8 +449,7 @@ describe("renderStatus", () => {
       ...healthyReport,
       local_model: {
         reachable: true,
-        coder_enabled: true,
-        coder_model: "qwen2.5-coder:7b",
+        model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
     });
@@ -449,7 +461,7 @@ describe("renderStatus", () => {
       ...healthyReport,
       local_model: {
         reachable: false,
-        coder_enabled: true,
+        model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
       // R9.10: workers are top-level — a worker's target need not be local.
@@ -468,8 +480,7 @@ describe("renderStatus", () => {
       ...healthyReport,
       local_model: {
         reachable: true,
-        coder_enabled: true,
-        coder_model: "qwen2.5-coder:7b",
+        model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
       workers: [{ worker: "coder", target: "ghost", target_unknown: true }],
@@ -478,18 +489,17 @@ describe("renderStatus", () => {
     expect(output).not.toContain("coder qwen2.5-coder:7b");
   });
 
-  it("shows upstream only when local coder is disabled", () => {
+  it("shows coder on the local model when reachable with no worker targets", () => {
     const output = renderStatus({
       ...healthyReport,
       local_model: {
         reachable: true,
-        coder_enabled: false,
-        coder_model: "qwen2.5-coder:7b",
+        model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
     });
-    expect(output).toContain("coder: disabled (inference.coder_enabled)");
-    expect(output).not.toContain("coder qwen");
+    expect(output).toContain("coder: qwen2.5-coder:7b (local)");
+    expect(output).not.toContain("unavailable");
   });
 
   describe("renderUpstream", () => {

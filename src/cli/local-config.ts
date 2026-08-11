@@ -41,7 +41,6 @@ const TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
   3: "P_MAX",
 };
 
-const CODER_KEY = "inference.coder_enabled";
 const BASE_URL_KEY = "inference.ollama_base_url";
 
 /**
@@ -70,10 +69,6 @@ export function isRemoteEndpoint(baseUrl: string): boolean {
 }
 
 export interface LocalModelReport {
-  /** Whether the `coder` tool is offered (`inference.coder_enabled`). */
-  readonly coder_enabled: boolean;
-  /** Which config layer supplied `coder_enabled`. */
-  readonly coder_enabled_layer: string;
   readonly base_url: string;
   readonly base_url_layer: string;
   /** Whether that endpoint answered a bounded probe just now. */
@@ -83,14 +78,14 @@ export interface LocalModelReport {
   readonly tier: HardwareTier;
   readonly tier_name: string;
   /** The model the coder/drafter role runs at this tier. */
-  readonly coder_model: string;
+  readonly model: string;
   /**
-   * Whether `coder_model` is actually pulled on `base_url` (task `local-models`).
+   * Whether `model` is actually pulled on `base_url` (task `local-models`).
    * `"unknown"` when the endpoint didn't answer — reporting "not pulled" for a
    * model we could not look up would be a fabricated fact, and a not-pulled
    * drafter is precisely what made `coder --refine` silently do nothing (§89/§100).
    */
-  readonly coder_model_state: PulledState;
+  readonly model_state: PulledState;
   /**
    * R9.10 — workers whose `inference.worker_targets` entry sends them somewhere
    * other than this local backend. Non-empty means this command is NOT
@@ -136,7 +131,7 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
     ...(opts.userDir !== undefined ? { userDir: opts.userDir } : {}),
   });
   const baseUrl = settings.inference.ollama_base_url;
-  const coderEnabled = settings.inference.coder_enabled;
+
   // R9.10: a worker with a `worker_targets` entry does not run on this backend.
   // Unknown worker names are ignored here — `unknownWorkerWarnings` already
   // reports those, and repeating it would be a second voice for one fact.
@@ -167,7 +162,7 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
 
   // Three states, not two: an endpoint we couldn't list tells us nothing about
   // what is pulled, and saying "not pulled" there would invent a fact.
-  const coderModelState: PulledState =
+  const modelState: PulledState =
     pulledNames === null || coderModel === ""
       ? "unknown"
       : pulledNames.some((n) => matchesPulledName(n, coderModel))
@@ -175,30 +170,36 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
         : "not-pulled";
 
   return {
-    coder_enabled: coderEnabled,
-    coder_enabled_layer: provenance[CODER_KEY]?.layer ?? "default",
     base_url: baseUrl,
     base_url_layer: provenance[BASE_URL_KEY]?.layer ?? "default",
     reachable,
     remote: isRemoteEndpoint(baseUrl),
     tier,
     tier_name: TIER_NAMES[tier],
-    coder_model: coderModel,
-    coder_model_state: coderModelState,
+    model: coderModel,
+    model_state: modelState,
     // R9.10: which workers this backend does NOT serve. Built here rather than
     // in the renderer so `--json` carries the same fact the text does.
     ...(nonLocalWorkers.length > 0 ? { non_local_workers: nonLocalWorkers } : {}),
-    active: coderEnabled && reachable,
+    active: reachable,
   };
 }
 
-/** Enable or disable the local coder in one scope. */
+/** Enable or disable the coder tool in one scope. */
 export async function setLocalCoderEnabled(
   enabled: boolean,
   scope: SettingsScope,
   opts: { readonly projectDir: string },
 ): Promise<ConfigWriteResult> {
-  return setConfig(scope, CODER_KEY, enabled ? "true" : "false", { projectDir: opts.projectDir });
+  // R9.23: coder_enabled removed — coder is always available. Enable means
+  // clear the worker target (falls through to default_target); disable means
+  // set a target that will never resolve.
+  if (enabled) {
+    return setConfig(scope, "inference.worker_targets", "{}", { projectDir: opts.projectDir });
+  }
+  return setConfig(scope, "inference.worker_targets", '{"coder":"__disabled__"}', {
+    projectDir: opts.projectDir,
+  });
 }
 
 export interface LocalUrlResult {
@@ -262,8 +263,8 @@ export function renderLocalModel(report: LocalModelReport): string {
   const where = report.remote ? "LAN" : "this machine";
   lines.push(`Local model: ${report.active ? "ACTIVE" : "not active"} (${where})`);
   lines.push(
-    `  coder tool: ${report.coder_enabled ? "enabled" : "DISABLED"} ` +
-      `(inference.coder_enabled, from ${report.coder_enabled_layer})`,
+    `  coder tool: ${report.reachable ? "enabled" : "DISABLED"} ` +
+      `(inference.coder_enabled, from ${report.base_url_layer})`,
   );
   // R9.10: a worker with a target does not run here, and this command must not
   // imply it does. Everything below describes the LOCAL backend, which such a
@@ -276,31 +277,31 @@ export function renderLocalModel(report: LocalModelReport): string {
       `(inference.ollama_base_url, from ${report.base_url_layer})`,
   );
   lines.push(`  hardware:   tier ${report.tier} (${report.tier_name})`);
-  if (report.coder_model !== "") {
+  if (report.model !== "") {
     // Say whether the model is actually there. "coder model: X" alone read as a
     // promise that X would run, which is how a never-pulled judge model spent
     // three investigations looking like a prompt bug (task `local-models`).
     const state =
-      report.coder_model_state === "pulled"
+      report.model_state === "pulled"
         ? "pulled"
-        : report.coder_model_state === "not-pulled"
+        : report.model_state === "not-pulled"
           ? "NOT pulled"
           : "pulled state unknown";
-    lines.push(`  coder model: ${report.coder_model} — ${state}`);
+    lines.push(`  coder model: ${report.model} — ${state}`);
   }
 
   // Say what to do about it, and be specific about WHICH of the two conditions
   // is unmet — "not active" with no reason is the unhelpful version.
-  if (!report.coder_enabled) {
+  if (!report.reachable) {
     lines.push("");
-    lines.push("The coder tool is disabled — enable it with: golem coder enable");
+    lines.push("The coder tool is unavailable — no local model or target configured");
   }
-  if (report.reachable && report.coder_model_state === "not-pulled") {
+  if (report.reachable && report.model_state === "not-pulled") {
     lines.push("");
     lines.push(
-      `Ollama answers, but ${report.coder_model} is not downloaded — the coder tool ` +
+      `Ollama answers, but ${report.model} is not downloaded — the coder tool ` +
         "will step down a tier or fail. Pull it with: " +
-        `ollama pull ${report.coder_model} (or: golem ollama setup)`,
+        `ollama pull ${report.model} (or: golem ollama setup)`,
     );
   }
   if (!report.reachable) {

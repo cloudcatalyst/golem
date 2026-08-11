@@ -41,7 +41,7 @@ import {
   isTranslatingProvider,
   listTargets,
   makeAuthMapper,
-  perAccountEnvVar,
+  perGatewayEnvVar,
   type ResolvedTarget,
   resolveDefaultTargetId,
   resolveTarget,
@@ -478,7 +478,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
           ? await options.resolveKey(target.accountId)
           : target.accountId === null
             ? env.GOLEM_UPSTREAM_API_KEY
-            : env[perAccountEnvVar(target.accountId)];
+            : env[perGatewayEnvVar(target.accountId)];
       const mapper = makeAuthMapper(target.authScheme, apiKey);
       // A credentialed target with no resolvable key would otherwise dispatch
       // with NO auth header and come back as a bare 401 — a failure that names
