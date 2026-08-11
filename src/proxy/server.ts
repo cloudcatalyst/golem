@@ -93,6 +93,25 @@ const MAX_POOLED_ORIGINS = 32;
 
 export class GolemProxy {
   readonly config: ProxyConfig;
+
+  /**
+   * Toggle: when false, the proxy forwards every request as a raw passthrough
+   * (identity pipeline, no redaction/compression/brevity). The toggle is
+   * in-process — no process restart needed — so `golem off` is instant and
+   * does not affect the URL wired into Claude Code. True by default after
+   * construction; changed via {@link setPipelineEnabled} or on an admin
+   * request to `/__golem/pipeline/<enabled>`.
+   */
+  #pipelineEnabled = true;
+
+  setPipelineEnabled(enabled: boolean): void {
+    this.#pipelineEnabled = enabled;
+  }
+
+  pipelineEnabled(): boolean {
+    return this.#pipelineEnabled;
+  }
+
   private readonly server: Server;
   /**
    * R9.2 — one `Pool` per upstream origin, created lazily and all closed in
@@ -160,6 +179,20 @@ export class GolemProxy {
   }
 
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    // R9.23 — admin endpoint for the pipeline toggle (`golem on`/`golem off`).
+    if (req.url === "/__golem/pipeline/true" && req.method === "POST") {
+      this.#pipelineEnabled = true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ pipeline_enabled: true }));
+      return;
+    }
+    if (req.url === "/__golem/pipeline/false" && req.method === "POST") {
+      this.#pipelineEnabled = false;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ pipeline_enabled: false }));
+      return;
+    }
+
     // Low-latency streaming: disable Nagle on the client socket.
     res.socket?.setNoDelay(true);
 
@@ -222,8 +255,9 @@ export class GolemProxy {
 
     // A3 seam: redaction -> compression. FAIL-OPEN — a pipeline error must
     // never break the session: fall back to forwarding the ORIGINAL request
-    // byte-faithfully (CLAUDE.md proxy-fidelity rule). Bypass skips it too.
-    if (!isBypassRequest(req.headers)) {
+    // byte-faithfully (CLAUDE.md proxy-fidelity rule). Pipeline-disabled or
+    // bypass-header skips it (both forward the body untouched).
+    if (this.#pipelineEnabled && !isBypassRequest(req.headers)) {
       try {
         forward = await this.config.pipeline.process(forward);
       } catch (err) {

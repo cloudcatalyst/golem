@@ -16,7 +16,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { commandOnPath } from "../ext/detect.js";
+import { commandOnPath } from "../pkg/detect.js";
 
 export interface GitResult {
   /** Exit code, or `null` when the process could not be spawned at all. */

@@ -16,7 +16,6 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { estimateTokens } from "../compression/tokens.js";
-import type { LspBridge } from "../ext/index.js";
 import type {
   Chunk,
   Hit,
@@ -29,6 +28,7 @@ import type {
 } from "../interfaces/index.js";
 import { HardwareTier } from "../interfaces/index.js";
 import { createGolemMcpServer, createStandaloneDeps } from "../mcp/index.js";
+import type { LspBridge } from "../pkg/index.js";
 
 /** One tool as the model actually receives it. */
 export interface CatalogTool {
@@ -103,7 +103,7 @@ function catalogDeps() {
  * language server as a side effect of counting tokens.
  */
 async function catalogLspBridge(): Promise<LspBridge> {
-  const { LspBridge: Bridge } = await import("../ext/index.js");
+  const { LspBridge: Bridge } = await import("../pkg/index.js");
   return new Bridge({ root: process.cwd(), resolveCommand: () => null });
 }
 

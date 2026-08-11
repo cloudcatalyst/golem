@@ -36,7 +36,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { commandOnPath } from "../ext/detect.js";
+import { commandOnPath } from "../pkg/detect.js";
 
 /** Minimal shape of `child_process.spawn`, so a test can inject one. */
 export type SpawnLike = typeof spawn;

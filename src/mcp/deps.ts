@@ -6,7 +6,6 @@
  */
 
 import type { EffectiveCompression } from "../compression/effective-level.js";
-import type { LspBridge } from "../ext/index.js";
 import type { TargetDispatcher } from "../inference/target-dispatcher.js";
 import type {
   CompressionService,
@@ -16,6 +15,7 @@ import type {
   WikiReader,
   WikiStore,
 } from "../interfaces/index.js";
+import type { LspBridge } from "../pkg/index.js";
 import type { TelemetryStore } from "../telemetry/index.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";

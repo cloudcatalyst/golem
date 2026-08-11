@@ -175,7 +175,6 @@ export async function collectSessionStateReport(
     proxy: {
       running: golem?.proxyRunning ?? null,
       upstream: golem?.upstreamLabel ?? upstreamLabel("https://api.anthropic.com"),
-      ...(golem?.proxyBypass === true ? { bypass: true } : {}),
     },
     slider: { level, name, redaction_off: level === 0 },
     local_model: { reachable: golem?.localModelReachable ?? null },

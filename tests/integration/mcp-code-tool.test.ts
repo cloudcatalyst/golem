@@ -18,13 +18,13 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { LspBridge } from "../../src/ext/index.js";
 import { clearRepoMapCache } from "../../src/knowledge/index.js";
 import {
   createGolemMcpServer,
   createStandaloneDeps,
   type GolemMcpServerDeps,
 } from "../../src/mcp/index.js";
+import { LspBridge } from "../../src/pkg/index.js";
 import { rmTemp } from "../helpers/tmp.js";
 
 let root: string;
