@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { SETTINGS_LEAVES } from "../../../src/config/schema.js";
-import { EXT_MANIFESTS, extManifest } from "../../../src/ext/index.js";
+import { PKG_MANIFESTS, pkgManifest } from "../../../src/pkg/index.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -25,41 +25,41 @@ async function exists(relative: string): Promise<boolean> {
   }
 }
 
-describe("EXT_MANIFESTS", () => {
+describe("PKG_MANIFESTS", () => {
   it("is not empty", () => {
-    expect(EXT_MANIFESTS.length).toBeGreaterThan(0);
+    expect(PKG_MANIFESTS.length).toBeGreaterThan(0);
   });
 
   it("has unique, kebab-case ids", () => {
-    const ids = EXT_MANIFESTS.map((m) => m.id);
+    const ids = PKG_MANIFESTS.map((m) => m.id);
     expect(new Set(ids).size).toBe(ids.length);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9-]*$/);
   });
 
-  it("finds every row by id via extManifest", () => {
-    for (const manifest of EXT_MANIFESTS) {
-      expect(extManifest(manifest.id)).toBe(manifest);
+  it("finds every row by id via pkgManifest", () => {
+    for (const manifest of PKG_MANIFESTS) {
+      expect(pkgManifest(manifest.id)).toBe(manifest);
     }
-    expect(extManifest("no-such-tool")).toBeUndefined();
+    expect(pkgManifest("no-such-tool")).toBeUndefined();
   });
 
   it("resolves every `requires` id to another row", () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       for (const required of manifest.requires ?? []) {
-        expect(extManifest(required), `${manifest.id} requires ${required}`).toBeDefined();
+        expect(pkgManifest(required), `${manifest.id} requires ${required}`).toBeDefined();
       }
     }
   });
 
   it("never requires itself", () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       expect(manifest.requires ?? []).not.toContain(manifest.id);
     }
   });
 
   it("points every `enabledBy` at a real settings leaf", () => {
     const leaves = SETTINGS_LEAVES as unknown as Record<string, Record<string, unknown>>;
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       if (manifest.enabledBy === undefined) continue;
       const dot = manifest.enabledBy.indexOf(".");
       expect(dot, `${manifest.id}: enabledBy must be "section.key"`).toBeGreaterThan(0);
@@ -75,7 +75,7 @@ describe("EXT_MANIFESTS", () => {
   });
 
   it("keeps tier-3b and `bundled` detection in lockstep", () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       expect(
         manifest.tier === "tier-3b",
         `${manifest.id}: tier-3b iff detect.kind === "bundled"`,
@@ -84,7 +84,7 @@ describe("EXT_MANIFESTS", () => {
   });
 
   it("gives every row a non-empty degrade path (criterion 3 of the admission bar)", () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       expect(
         manifest.degrade.length,
         `${manifest.id}: degrade must say what happens`,
@@ -93,14 +93,14 @@ describe("EXT_MANIFESTS", () => {
   });
 
   it("cites an https upstream and a licence for every row", () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       expect(manifest.upstream, manifest.id).toMatch(/^https:\/\//);
       expect(manifest.licence.length, manifest.id).toBeGreaterThan(0);
     }
   });
 
   it("points every declared adapter at a path that exists", async () => {
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       if (manifest.adapter === undefined) continue;
       expect(await exists(manifest.adapter), `${manifest.id}: missing ${manifest.adapter}`).toBe(
         true,
@@ -116,7 +116,7 @@ describe("EXT_MANIFESTS", () => {
       dependencies?: Record<string, string>;
     };
     const mandatory = Object.keys(pkg.dependencies ?? {});
-    for (const manifest of EXT_MANIFESTS) {
+    for (const manifest of PKG_MANIFESTS) {
       if (manifest.detect.kind !== "module") continue;
       expect(
         mandatory,

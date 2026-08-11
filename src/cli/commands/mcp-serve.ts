@@ -133,7 +133,7 @@ export default function register(program: Command): void {
         const lspBridge =
           settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
             ? await (async () => {
-                const { LspBridge } = await import("../../ext/index.js");
+                const { LspBridge } = await import("../../pkg/index.js");
                 const bridge = new LspBridge({
                   root: opts.dir,
                   requestTimeoutMs: settings.knowledge.lsp_timeout_ms,

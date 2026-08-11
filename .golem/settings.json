@@ -1,5 +1,8 @@
 {
   "inference": {
-    "coder_enabled": true
+    "coder_enabled": false
+  },
+  "snooze": {
+    "enforce": false
   }
 }

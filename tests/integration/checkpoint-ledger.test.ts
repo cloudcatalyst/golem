@@ -25,7 +25,7 @@ import {
   restoreCheckpoint,
   runGit,
 } from "../../src/checkpoint/index.js";
-import { commandOnPath } from "../../src/ext/detect.js";
+import { commandOnPath } from "../../src/pkg/detect.js";
 import { rmTemp } from "../helpers/tmp.js";
 
 const hasGit = commandOnPath("git") !== null;

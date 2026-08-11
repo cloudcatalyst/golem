@@ -1,8 +1,8 @@
 /**
- * Detection primitives for the managed-tool registry (spec Decision 53).
+ * Detection primitives for the managed-package registry (spec Decision 53).
  *
  * Deliberately **spawn-free**: detection walks `PATH` and asks Node's resolver,
- * so `golem ext list` costs a few `stat` calls rather than a process per tool.
+ * so `golem pkg list` costs a few `stat` calls rather than a process per tool.
  * That matters because this is the surface people run to answer "is it even
  * installed?", and because Decision 51 made CLI startup a standing constraint.
  *
@@ -14,6 +14,7 @@
 
 import { statSync } from "node:fs";
 import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import path from "node:path";
 
 /** Default Windows executable extensions when `PATHEXT` is unset. */
@@ -81,6 +82,31 @@ export function commandOnPath(
 export function moduleOnDisk(specifier: string): string | null {
   try {
     return createRequire(import.meta.url).resolve(specifier);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check for a Claude Code plugin under the plugins cache
+ * (`~/.claude/plugins/cache/<marketplace>/<name>/`). Returns the path to the
+ * plugin directory when installed, or `null` when absent.
+ *
+ * A plugin is considered present when a version directory exists under
+ * `<homedir>/.claude/plugins/cache/{marketplace}/{name}/` for the named
+ * plugin. The marketplace defaults to the plugin name itself (common for
+ * git-repo plugins like Caveman), but can be overridden.
+ */
+export function pluginOnDisk(
+  name: string,
+  marketplace?: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | null {
+  const home =
+    env.HOME ?? (env.HOMEDRIVE && env.HOMEPATH ? `${env.HOMEDRIVE}${env.HOMEPATH}` : homedir());
+  const pluginDir = path.join(home, ".claude", "plugins", "cache", marketplace ?? name, name);
+  try {
+    return statSync(pluginDir).isDirectory() ? pluginDir : null;
   } catch {
     return null;
   }

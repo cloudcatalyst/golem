@@ -22,7 +22,6 @@ import {
 } from "../accounts.js";
 import { InitError } from "../init.js";
 import { portInUse, startDetached, stopProxy, waitForPortFree } from "../proxy-daemon.js";
-import { writeProxyDesired } from "../proxy-state.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -50,7 +49,6 @@ async function restartProxyDetached(
   dir: string,
   portOpt?: string,
 ): Promise<{ pid: number; port: number; upstream: string }> {
-  await writeProxyDesired(dir, "running", new Date().toISOString());
   const { port, upstream } = await resolvePort(dir, portOpt);
   await stopProxy(dir);
   await waitForPortFree(port);

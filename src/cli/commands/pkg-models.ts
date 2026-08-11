@@ -1,5 +1,10 @@
 /**
- * golem ext / models — extracted from program.ts (R8.27).
+ * golem pkg / models — extracted from program.ts (R8.27).
+ *
+ * `golem pkg` manages tools Golem can interact with — spawned or detected,
+ * never shipped (spec Decision 53). Named `pkg` to avoid confusion with
+ * `golem plugin` (future in-process pipeline plugins) and `src/tools/`
+ * (the tool-selection benchmark harness).
  */
 
 import type { Command } from "commander";
@@ -11,9 +16,9 @@ import {
   mergeCatalogs,
   writeModelCatalog,
 } from "../../telemetry/model-catalog.js";
-import { collectExt, renderExt } from "../ext.js";
 import { InitError } from "../init.js";
 import { renderModelCatalog, renderRefreshResult } from "../models.js";
+import { collectPkg, pkgInstall, renderPkg } from "../pkg.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -23,26 +28,38 @@ function _fail(err: unknown): never {
 }
 
 export default function register(program: Command): void {
-  const extCmd = program
-    .command("ext")
+  const pkgCmd = program
+    .command("pkg")
     .description(
-      "External tools Golem can use — spawned or detected, never shipped (spec Decision 53)",
+      "External packages Golem can use — spawned or detected, never shipped (spec Decision 53)",
     );
-  extCmd
+  pkgCmd
     .command("list", { isDefault: true })
     .alias("status")
-    .description(
-      "Show every managed tool: tier, whether it is installed, whether it is on, and what breaks without it",
-    )
+    .description("Show every package: tier, installed, enabled, and what degrades without it")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)
     .option("--verbose", "also show purpose, install instructions, upstream and adapter", false)
     .action(async (opts: { dir: string; json: boolean; verbose: boolean }) => {
       try {
-        const report = await collectExt(opts.dir);
+        const report = await collectPkg(opts.dir);
         process.stdout.write(
-          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderExt(report, opts.verbose),
+          opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderPkg(report, opts.verbose),
         );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  pkgCmd
+    .command("install")
+    .description("Install a package (delegates to the tool's own installer)")
+    .argument("<id>", "package id from `golem pkg list`")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .action(async (id: string, opts: { dir: string }) => {
+      try {
+        const output = await pkgInstall(id, opts.dir);
+        process.stdout.write(`${output}\n`);
       } catch (err) {
         _fail(err);
       }

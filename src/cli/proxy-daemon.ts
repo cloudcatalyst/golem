@@ -39,13 +39,6 @@ export interface ProxyPidInfo {
   readonly pid: number;
   readonly port: number;
   readonly ts: string;
-  /**
-   * Decision 56: this listener is the redaction-only bypass shim, not the
-   * pipeline. Recorded here because the pid file is the "what is running right
-   * now" truth — every display that used to print "proxy off" needs to tell the
-   * two apart, and inferring it from the desired-state file would drift.
-   */
-  readonly shim?: boolean;
 }
 
 export function proxyPidPath(projectDir: string): string {
@@ -79,7 +72,6 @@ export async function readProxyPid(projectDir: string): Promise<ProxyPidInfo | n
       pid: o.pid,
       port: o.port,
       ts: typeof o.ts === "string" ? o.ts : "",
-      ...(o.shim === true ? { shim: true } : {}),
     };
   } catch {
     return null;
@@ -158,12 +150,6 @@ export interface ProxyStatus {
   readonly pid?: number;
   readonly port?: number;
   readonly source: "pidfile" | "port" | "none";
-  /**
-   * Decision 56: what is listening is the bypass shim (pipeline off, redaction
-   * on). Only knowable from the pid file — a bare port probe cannot tell the two
-   * apart, so this is absent when `source` is `"port"`.
-   */
-  readonly shim?: boolean;
 }
 
 /**
@@ -211,7 +197,6 @@ export async function proxyStatus(
       pid: info.pid,
       port: info.port,
       source: "pidfile",
-      ...(info.shim === true ? { shim: true } : {}),
     };
   }
   if (await portInUse(port)) return { running: true, port, source: "port" };
@@ -274,13 +259,9 @@ export async function startDetached(
   port: number,
   scriptPath: string,
   env: Readonly<Record<string, string>> = {},
-  opts: { readonly shim?: boolean; readonly waitMs?: number } = {},
+  opts: { readonly waitMs?: number } = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
-  // Decision 56: the bypass shim is the same daemon with the pipeline pinned to
-  // level 1 — one flag, not a second executable, so the pid file, port
-  // resolution and credential injection all stay single-sourced.
-  if (opts.shim === true) args.push("--shim");
   // R9.8: keep the daemon's diagnostics instead of discarding them. Falls back
   // to "ignore" if the log cannot be opened — a proxy that will not start
   // because of a log file would be a worse bug than the one being fixed.

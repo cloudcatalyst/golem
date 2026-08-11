@@ -1,5 +1,5 @@
 /**
- * Live status for each managed-tool registry row (spec Decision 53).
+ * Live status for each managed-package registry row (spec Decision 53).
  *
  * Pure over its inputs: detection is injectable and settings are passed in, so
  * every state below is reachable in a unit test without installing anything.
@@ -12,11 +12,11 @@
  */
 
 import type { GolemSettings } from "../config/schema.js";
-import { commandOnPath, moduleOnDisk } from "./detect.js";
-import { EXT_MANIFESTS, type ExtManifest } from "./manifest.js";
+import { commandOnPath, moduleOnDisk, pluginOnDisk } from "./detect.js";
+import { PKG_MANIFESTS, type PkgManifest } from "./manifest.js";
 
 /** Coarse state, in the order a reader cares about. */
-export type ExtState =
+export type PkgState =
   /** Golem's own bundled data (tier-3b) — nothing to install or enable. */
   | "bundled"
   /** Not present on this machine. Its `degrade` behaviour is in effect. */
@@ -30,9 +30,9 @@ export type ExtState =
   /** Present, and it has no on/off setting (it is a peer, or a prerequisite). */
   | "present";
 
-export interface ExtStatus {
+export interface PkgStatus {
   readonly id: string;
-  readonly manifest: ExtManifest;
+  readonly manifest: PkgManifest;
   /** Whether detection found it. Always true for `bundled`. */
   readonly installed: boolean;
   /** Where it was found (executable path or resolved module), when known. */
@@ -43,22 +43,27 @@ export interface ExtStatus {
   readonly settingValue: string | null;
   /** Ids of `requires` rows that are not installed. */
   readonly missingRequirements: readonly string[];
-  readonly state: ExtState;
+  readonly state: PkgState;
 }
 
 /** Injectable probes, so tests never touch the real PATH or `node_modules`. */
-export interface ExtProbes {
+export interface PkgProbes {
   readonly command: (name: string) => string | null;
   readonly module: (specifier: string) => string | null;
+  readonly plugin: (name: string, marketplace?: string) => string | null;
 }
 
-const DEFAULT_PROBES: ExtProbes = { command: commandOnPath, module: moduleOnDisk };
+const DEFAULT_PROBES: PkgProbes = {
+  command: commandOnPath,
+  module: moduleOnDisk,
+  plugin: pluginOnDisk,
+};
 
-export interface ResolveExtOptions {
+export interface ResolvePkgOptions {
   /** Effective settings, for `enabledBy` resolution. Omit to report `null`. */
   readonly settings?: GolemSettings;
-  readonly manifests?: readonly ExtManifest[];
-  readonly probes?: ExtProbes;
+  readonly manifests?: readonly PkgManifest[];
+  readonly probes?: PkgProbes;
 }
 
 /** Read a `section.key` path out of settings without widening its type. */
@@ -91,20 +96,22 @@ function renderValue(value: unknown): string | null {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-function detectOne(manifest: ExtManifest, probes: ExtProbes): string | null {
+function detectOne(manifest: PkgManifest, probes: PkgProbes): string | null {
   switch (manifest.detect.kind) {
     case "command":
       return probes.command(manifest.detect.command);
     case "module":
       return probes.module(manifest.detect.specifier);
+    case "plugin":
+      return probes.plugin(manifest.detect.name, manifest.detect.marketplace);
     case "bundled":
       return null;
   }
 }
 
 /** Resolve every registry row against this machine and these settings. */
-export function resolveExtStatuses(options: ResolveExtOptions = {}): readonly ExtStatus[] {
-  const manifests = options.manifests ?? EXT_MANIFESTS;
+export function resolvePkgStatuses(options: ResolvePkgOptions = {}): readonly PkgStatus[] {
+  const manifests = options.manifests ?? PKG_MANIFESTS;
   const probes = options.probes ?? DEFAULT_PROBES;
 
   // First pass: presence only, so `requires` can be resolved against it.
@@ -118,7 +125,7 @@ export function resolveExtStatuses(options: ResolveExtOptions = {}): readonly Ex
     return manifest.detect.kind === "bundled" || found.get(id) !== null;
   };
 
-  return manifests.map((manifest): ExtStatus => {
+  return manifests.map((manifest): PkgStatus => {
     const bundled = manifest.detect.kind === "bundled";
     const where = found.get(manifest.id) ?? null;
     const installed = bundled || where !== null;
@@ -131,7 +138,7 @@ export function resolveExtStatuses(options: ResolveExtOptions = {}): readonly Ex
 
     const missingRequirements = (manifest.requires ?? []).filter((id) => !isPresent(id));
 
-    const state: ExtState = bundled
+    const state: PkgState = bundled
       ? "bundled"
       : !installed
         ? "not-installed"

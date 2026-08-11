@@ -41,7 +41,7 @@ import {
   type ProviderEntry as LocalProviderEntry,
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
-import { proxyLogPath, readProxyPid } from "./proxy-daemon.js";
+import { proxyLogPath } from "./proxy-daemon.js";
 import {
   claudeLocalSettingsPath,
   claudeSettingsPath,
@@ -174,12 +174,6 @@ export interface StatusReport {
     readonly port: number;
     readonly url: string;
     readonly reachable: boolean;
-    /**
-     * Decision 56: reachable, but what answers is the redaction-only bypass shim
-     * rather than the pipeline. Optional so a renderer that predates this field
-     * degrades to "reachable" — incomplete, never wrong.
-     */
-    readonly bypass?: boolean;
     /**
      * R8.32 — who owns `.claude/settings.json`'s `ANTHROPIC_BASE_URL`:
      * `"golem"` (us), `"foreign"` (another gateway — never touched), `"none"`.
@@ -440,7 +434,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const upstream = resolveUpstreamDisplay(settings.proxy);
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
-  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel, pidInfo] =
+  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
     await Promise.all([
       golemInitStatus(projectDir, settings.proxy.port),
       probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
@@ -455,10 +449,6 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         settings.inference.providers as readonly LocalProviderEntry[],
       ).catch((): LocalModelInfo => ({ reachable: false })),
       servedModelFor(projectDir, upstream.accountId).catch(() => null),
-      // Decision 56: a network probe cannot tell the bypass shim from the full
-      // pipeline — both accept connections. The pid file is the only honest
-      // source, so read it alongside the probe.
-      readProxyPid(projectDir).catch(() => null),
     ]);
 
   // R9.2: per-target rows, each carrying what that target last served. Read from
@@ -578,7 +568,6 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       port: settings.proxy.port,
       url: `http://localhost:${settings.proxy.port}`,
       reachable,
-      ...(reachable && pidInfo?.shim === true ? { bypass: true } : {}),
       wiring: wiring.owner,
       wiring_base_url: wiring.baseUrl,
       in_path: reachable && wiring.owner === "golem",
@@ -790,11 +779,9 @@ export function renderStatus(report: StatusReport): string {
 
   lines.push(
     `Proxy: ${report.proxy.url} — ${
-      report.proxy.bypass === true
-        ? "BYPASS shim (pipeline off, redaction on; restore with `golem proxy start --detach`)"
-        : report.proxy.reachable
-          ? "reachable"
-          : "not running (start with `golem proxy`)"
+      report.proxy.reachable
+        ? "reachable (run `golem off` to passthrough, `golem on` to re-enable)"
+        : "not running — the SessionStart hook restarts it on project open"
     }`,
   );
   // R8.32: the `[--] .claude/settings.json` checkbox above and this "reachable"

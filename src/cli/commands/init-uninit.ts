@@ -11,7 +11,6 @@ import { credentialEnvForProxy } from "../accounts.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "../init.js";
 import { startDetached } from "../proxy-daemon.js";
-import { writeProxyDesired } from "../proxy-state.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -42,16 +41,17 @@ async function ollamaEmbedReady(dir: string): Promise<boolean> {
   }
 }
 
-async function initSummary(dir: string, proxyStarted: boolean): Promise<string> {
+async function initSummary(dir: string): Promise<string> {
   const lines: string[] = ["\nDone."];
-  lines.push(
-    proxyStarted
-      ? "Proxy is running. Restart Claude Code in this project to pick up the wiring."
-      : "Start the proxy with `golem proxy start --detach`, then restart Claude Code here.",
-  );
+  lines.push("Proxy is running. Restart Claude Code in this project to pick up the wiring.");
   lines.push(
     "The status line is in your terminal; a VS Code panel installs automatically when VS Code",
     "is present — reload the window (Developer: Reload Window) to activate it.",
+    "",
+    "Usage:",
+    "  golem on   — pipeline on (redaction, compression, brevity).",
+    "  golem off  — pipeline off (proxy still forwards requests raw).",
+    "  golem uninit — remove Golem from this project.",
   );
   const [hasUv, hasEmbedModel] = await Promise.all([commandExists("uv"), ollamaEmbedReady(dir)]);
   const hints: string[] = [];
@@ -104,7 +104,6 @@ export default function register(program: Command): void {
     .option("--dry-run", "show what would change without writing", false)
     .option("--foundry <url>", "front an Azure AI Foundry resource base URL")
     .option("--upstream <url>", "front a generic Anthropic-compatible gateway (e.g. OpenRouter)")
-    .option("--start-proxy", "start the proxy daemon after wiring", false)
     .option(
       "--no-loopback-cert",
       "don't generate or trust Golem's loopback CA (cache-served WebFetches keep showing as denied/red)",
@@ -115,7 +114,6 @@ export default function register(program: Command): void {
         dryRun: boolean;
         foundry?: string;
         upstream?: string;
-        startProxy: boolean;
         loopbackCert: boolean;
       }) => {
         try {
@@ -132,30 +130,28 @@ export default function register(program: Command): void {
           if (opts.loopbackCert !== false) {
             process.stdout.write(loopbackCertNotice(opts.dir));
           }
-          // R9.13: `golem init` is what people run after an upgrade, so it is the
-          // other honest place to bring the settings files up to date. After the
-          // init report, since `init` may have just created `.golem/`.
+          // R9.13: config migration after init
           for (const line of (
             await migrateOnVersionChange({ projectDir: opts.dir, version: VERSION })
           ).lines) {
             process.stdout.write(`  config   ${line}\n`);
           }
-          if (opts.startProxy) {
-            const { settings } = await loadConfig({ projectDir: opts.dir });
-            await writeProxyDesired(opts.dir, "running", new Date().toISOString());
-            const pid = await startDetached(
-              opts.dir,
-              settings.proxy.port,
-              process.argv[1] ?? "",
-              await credentialEnvForProxy(opts.dir),
-            );
+          // R9.23: always start the proxy daemon after wiring
+          const { settings } = await loadConfig({ projectDir: opts.dir });
+          const pid = await startDetached(
+            opts.dir,
+            settings.proxy.port,
+            process.argv[1] ?? "",
+            await credentialEnvForProxy(opts.dir),
+          );
+          if (pid === null) {
+            process.stdout.write("golem proxy: failed to start — port in use or daemon crashed\n");
+          } else {
             process.stdout.write(
-              pid === null
-                ? "golem proxy: failed to start — run `golem proxy start --detach` manually\n"
-                : `golem proxy: started (pid ${pid}) on port ${settings.proxy.port}\n`,
+              `golem proxy: started (pid ${pid}) on port ${settings.proxy.port}\n`,
             );
           }
-          process.stdout.write(await initSummary(opts.dir, opts.startProxy));
+          process.stdout.write(await initSummary(opts.dir));
         } catch (err) {
           _fail(err);
         }

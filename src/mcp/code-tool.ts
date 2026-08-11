@@ -4,12 +4,12 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { LSP_MODES, type LspBridge, type LspMode } from "../ext/index.js";
 import {
   buildRepoMap,
   DEFAULT_MAP_BUDGET_TOKENS,
   MAX_MAP_BUDGET_TOKENS,
 } from "../knowledge/repo-map.js";
+import { LSP_MODES, type LspBridge, type LspMode } from "../pkg/index.js";
 import { instrumented, type ToolTelemetry } from "./shared.js";
 
 /**

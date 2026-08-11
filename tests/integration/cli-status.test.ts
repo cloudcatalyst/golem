@@ -411,7 +411,7 @@ describe("renderStatus", () => {
     expect(output).toContain("[--] /golem/* skills installed");
     expect(output).toContain("[--] .golem/settings.json present");
     expect(output).toContain(
-      "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
+      "Proxy: http://localhost:4653 — not running — the SessionStart hook restarts it on project open",
     );
     // No active account, no configured model, host label == provider → just the provider.
     expect(output).toMatch(/Upstream: anthropic(\n| —|$)/m);
@@ -558,7 +558,7 @@ describe("renderStatus", () => {
       expect(output).toContain("Project wiring (run `golem init`)");
       expect(output).toContain("[--] .claude/settings.json -> proxy base URL");
       expect(output).toContain(
-        "Proxy: http://localhost:4653 — not running (start with `golem proxy`)",
+        "Proxy: http://localhost:4653 — not running — the SessionStart hook restarts it on project open",
       );
       expect(output).toContain("Slider: level 1 (lossless) — set by default");
       expect(output).toContain("slider.level = 1 — default");

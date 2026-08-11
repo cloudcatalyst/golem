@@ -1,7 +1,13 @@
 /**
- * golem proxy — extracted from program.ts (R8.27).
+ * golem on / off / proxy — simplified surface for the pipeline toggle.
+ *
+ * R9.23: the daemon is always running once `golem init` finishes. `golem on`
+ * and `golem off` toggle the pipeline (redaction/compression/brevity) via an
+ * in-process admin endpoint — no restart, no wire changes, no dead sockets.
+ * `golem proxy` shows status; all other proxy subcommands are removed.
  */
 
+import { request } from "node:http";
 import type { Command } from "commander";
 import {
   findProjectDir,
@@ -36,16 +42,7 @@ import {
   writeProxyPid,
 } from "../proxy-daemon.js";
 import { buildProxyFromSettings } from "../proxy-runtime.js";
-import { writeProxyDesired } from "../proxy-state.js";
-import {
-  ENV_BASE_URL,
-  ENV_TOOL_SEARCH,
-  proxyBaseUrl,
-  readWiringState,
-  unwireProxyEnv,
-  wireProxyEnv,
-  wiringGap,
-} from "../proxy-wiring.js";
+import { proxyBaseUrl, readWiringState, wiringGap } from "../proxy-wiring.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -70,77 +67,74 @@ async function resolvePort(
   };
 }
 
-async function restartProxyDetached(
-  dir: string,
-  portOpt?: string,
-): Promise<{ pid: number; port: number; upstream: string }> {
-  await writeProxyDesired(dir, "running", new Date().toISOString());
-  const { port, upstream } = await resolvePort(dir, portOpt);
-  await stopProxy(dir);
-  // R9.18: this result used to be discarded. When the port is still held, the
-  // daemon we are about to spawn exits immediately with "already running", and
-  // whether the restart then *looks* successful depends on whether the old
-  // listener happens to outlive `waitForPort` — a coin toss reported as fact.
-  // Say what is actually true instead of starting a process that cannot win.
-  if (!(await waitForPortFree(port))) {
+/** POST to the proxy's admin endpoint — does NOT need a restart or reload. */
+async function togglePipeline(dir: string, enabled: boolean, portOpt?: string): Promise<void> {
+  const { port } = await resolvePort(dir, portOpt);
+  if (!(await portInUse(port))) {
     throw new InitError(
-      `port ${port} is still in use after stopping the proxy — something else is holding it. ` +
-        "Check with `golem proxy status`, then retry.",
+      `proxy is not running on port ${port}. Start it first with \`golem init\` or ` +
+        "via the SessionStart hook (reopen the project).",
     );
   }
-  const credEnv = await credentialEnvForProxy(dir);
-  const pid = await startDetached(dir, port, process.argv[1] ?? "", credEnv);
-  if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
-  return { pid, port, upstream };
+  return new Promise((resolve, reject) => {
+    const body = "";
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port,
+        path: `/__golem/pipeline/${enabled}`,
+        method: "POST",
+        headers: { "content-length": Buffer.byteLength(body) },
+        timeout: 2000,
+      },
+      (res) => {
+        res.resume();
+        resolve();
+      },
+    );
+    req.on("error", (err) => reject(new InitError(`could not reach the proxy: ${err.message}`)));
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new InitError("proxy did not respond in time — is it running?"));
+    });
+    req.end(body);
+  });
 }
 
 /**
- * Decision 56: stop the pipeline but keep the port bound, by replacing the
- * running daemon with the redaction-only shim. Claude Code's
- * `ANTHROPIC_BASE_URL` cannot be un-set without a window reload
- * (verification-notes §112b), so leaving the socket dead is the defect; this is
- * the fix. Returns the shim's pid.
+ * The SessionStart hook's auto-recovery: read the URL from `.claude/settings.json`.
+ * If it points at Golem's port and nothing is listening, restart the daemon.
+ * Also defined here so `golem on` can share the same recovery path.
  */
-async function startShimDetached(
+export async function ensureProxyRunning(
   dir: string,
-  portOpt?: string,
+  port: number,
 ): Promise<{ pid: number; port: number }> {
-  const { port } = await resolvePort(dir, portOpt);
-  await stopProxy(dir);
-  await waitForPortFree(port);
+  const st = await proxyStatus(dir, port);
+  if (st.running) return { pid: st.pid ?? 0, port: st.port ?? port };
+  const wiring = await readWiringState(dir, proxyBaseUrl(port));
+  if (wiring.owner !== "golem") {
+    throw new InitError(
+      `project is not wired to Golem — ${wiring.baseUrl ? `another gateway owns ANTHROPIC_BASE_URL (${wiring.baseUrl})` : "no ANTHROPIC_BASE_URL is set"}. Run \`golem init\` to wire it.`,
+    );
+  }
+  // Daemon died — restart it
   const pid = await startDetached(
     dir,
     port,
     process.argv[1] ?? "",
     await credentialEnvForProxy(dir),
-    { shim: true },
   );
-  if (pid === null) {
-    // Loud, not silent: falling back to a dead port is precisely the state this
-    // command exists to prevent, so the user must be told the wiring is stale.
-    throw new InitError(
-      `the bypass shim did not come up on port ${port}. Claude Code is still wired to that port and will fail to connect — run \`golem proxy start --detach\` to restore the pipeline, or \`golem proxy unwire\` to send Claude Code direct.`,
-    );
-  }
+  if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
   return { pid, port };
 }
 
-async function runProxyForeground(dir: string, portOpt?: string, shim = false): Promise<void> {
-  // R9.13: first start under a new version — rewrite retired setting names in
-  // every scope, then load. Before the load, so this run already reads the fixed
-  // files and the warnings below describe what is still wrong rather than what
-  // was just fixed. Best-effort inside; it cannot throw.
+async function runProxyForeground(dir: string, portOpt?: string): Promise<void> {
+  // R9.13: first start under a new version — rewrite retired setting names.
   for (const line of (await migrateOnVersionChange({ projectDir: dir, version: VERSION })).lines) {
     process.stderr.write(`golem config: ${line}\n`);
   }
   const { settings, warnings } = await loadConfig({ projectDir: dir });
-  // R9.6: config warnings — a renamed key, an unknown key, an unrecognized
-  // GOLEM_* var — used to surface only in `golem status`, which nobody runs
-  // after an upgrade that appears to work. The proxy is the thing that consumes
-  // these settings, so it is the honest place to say the file names something
-  // that no longer takes effect. Since R9.8 the detached daemon's stderr lands
-  // in .golem/proxy.log rather than being discarded, so this actually reaches
-  // someone.
   for (const warning of warnings) {
     process.stderr.write(`golem proxy: ${warning}\n`);
   }
@@ -194,7 +188,6 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
     sliderStore,
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
-    ...(shim ? { shim: true } : {}),
   });
   if (semantic !== undefined) {
     process.stdout.write(
@@ -206,20 +199,14 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
     pid: process.pid,
     port: addr.port,
     ts: new Date().toISOString(),
-    ...(shim ? { shim: true } : {}),
   });
   const via = upstream.accountId === null ? "" : ` [account ${upstream.accountId}]`;
   const model = upstream.model === undefined ? "" : ` model ${upstream.model}`;
   process.stdout.write(
-    shim
-      ? `golem proxy: BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)\n`
-      : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
+    `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
   );
-  // R9.12: the loopback stub endpoint that would let a cache-served WebFetch
-  // render green. OFF unless explicitly switched on: §123 measured that Claude
-  // Code (Bun/BoringSSL) rejects the `CA:FALSE` leaf anchor this depends on, so
-  // the endpoint has nothing to serve today and the hook never rewrites to it.
-  // Best-effort even when on — a failure here must never stop the proxy.
+
+  // Loopback serve for green WebFetch
   let loopback: Awaited<ReturnType<typeof startLoopbackServe>> | null = null;
   try {
     const cert = await ensureLoopbackCert(dir);
@@ -229,9 +216,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       keyPem: cert.leafKeyPem,
       certPath: cert.caPath,
     });
-    process.stdout.write(
-      `golem proxy: loopback serve on https://127.0.0.1:${loopback.port} — cache-served WebFetches render green in sessions started with NODE_EXTRA_CA_CERTS=${cert.caPath}\n`,
-    );
+    process.stdout.write(`golem proxy: loopback serve on https://127.0.0.1:${loopback.port}\n`);
   } catch (err) {
     process.stderr.write(
       `golem proxy: loopback serve unavailable (${
@@ -254,178 +239,47 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
 }
 
 export default function register(program: Command): void {
+  // `golem on` — enable the pipeline on the running proxy
+  program
+    .command("on")
+    .description("Enable the proxy pipeline (redaction, compression, brevity)")
+    .option("--dir <path>", "project directory", process.cwd())
+    .action(async (opts: { dir: string }) => {
+      try {
+        const { port } = await resolvePort(opts.dir);
+        await ensureProxyRunning(opts.dir, port);
+        await togglePipeline(opts.dir, true);
+        process.stdout.write(`golem on — pipeline enabled on http://localhost:${port}\n`);
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  // `golem off` — disable the pipeline (proxy still forwards, no processing)
+  program
+    .command("off")
+    .description("Disable the proxy pipeline (pass-through forwarding, no redaction/compression)")
+    .option("--dir <path>", "project directory", process.cwd())
+    .action(async (opts: { dir: string }) => {
+      try {
+        const { port } = await resolvePort(opts.dir);
+        await ensureProxyRunning(opts.dir, port);
+        await togglePipeline(opts.dir, false);
+        process.stdout.write(
+          `golem off — pipeline disabled on http://localhost:${port}; proxy still forwards requests raw\n`,
+        );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
   const proxyCmd = program
     .command("proxy")
-    .description("Golem proxy (Claude Code's ANTHROPIC_BASE_URL target)");
+    .description("Golem proxy (Claude Code's ANTHROPIC_BASE_URL target) — status and lifecycle");
 
   proxyCmd
-    .command("start", { isDefault: true })
-    .description("Start the proxy (foreground; --detach runs it as a background daemon)")
-    .option("--dir <path>", "project directory (for .golem/ config)", _DEFAULT_DIR)
-    .option("--port <port>", "listen port (overrides config)")
-    .option("--detach", "run in the background, surviving this shell", false)
-    // Internal: how `proxy stop` re-launches the daemon as the Decision 56
-    // bypass shim. Not for direct use — `golem proxy stop` is the surface.
-    .option("--shim", "run as the redaction-only bypass shim (internal)", false)
-    .action(async (opts: { dir: string; port?: string; detach: boolean; shim: boolean }) => {
-      try {
-        if (opts.shim) {
-          await runProxyForeground(opts.dir, opts.port, true);
-          return;
-        }
-        await writeProxyDesired(opts.dir, "running", new Date().toISOString());
-        if (opts.detach) {
-          const { port, upstream } = await resolvePort(opts.dir, opts.port);
-          if (await portInUse(port)) {
-            process.stdout.write(`golem proxy: already running on port ${port}\n`);
-            return;
-          }
-          const pid = await startDetached(
-            opts.dir,
-            port,
-            process.argv[1] ?? "",
-            await credentialEnvForProxy(opts.dir),
-          );
-          if (pid === null) _fail(new InitError(`proxy did not come up on port ${port}`));
-          process.stdout.write(
-            `golem proxy started (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
-          );
-          return;
-        }
-        await runProxyForeground(opts.dir, opts.port);
-      } catch (err) {
-        _fail(err);
-      }
-    });
-
-  proxyCmd
-    .command("stop")
-    .description("Stop the pipeline, keeping the port served by a redaction-only shim")
-    .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .option("--port <port>", "listen port (overrides config)")
-    .option(
-      "--hard",
-      "also release the port — Claude Code will fail to connect until it is unwired or restarted",
-      false,
-    )
-    .action(async (opts: { dir: string; port?: string; hard: boolean }) => {
-      try {
-        // --hard is the pre-Decision-56 behaviour, kept for "get off my port"
-        // and made explicit about what it costs.
-        if (opts.hard) {
-          await writeProxyDesired(opts.dir, "stopped", new Date().toISOString());
-          const pid = await stopProxy(opts.dir);
-          process.stdout.write(
-            pid === null
-              ? "golem proxy: not running\n"
-              : `golem proxy stopped (pid ${pid}); port released\n`,
-          );
-          const { port } = await resolvePort(opts.dir, opts.port);
-          const wiring = await readWiringState(opts.dir, proxyBaseUrl(port));
-          if (wiring.owner === "golem") {
-            process.stdout.write(
-              `golem proxy: Claude Code is still wired to ${wiring.baseUrl} and nothing is listening there.\n  \`golem proxy unwire\` sends it direct (needs a window reload), \`golem proxy start --detach\` brings the pipeline back.\n`,
-            );
-          }
-          return;
-        }
-        await writeProxyDesired(opts.dir, "bypass", new Date().toISOString());
-        const { pid, port } = await startShimDetached(opts.dir, opts.port);
-        process.stdout.write(
-          `golem proxy: pipeline OFF — bypass shim serving port ${port} (pid ${pid}).\n  Redaction still runs; compression, brevity and local-answer are off.\n  \`golem proxy start --detach\` restores the pipeline; \`golem proxy unwire\` takes Golem out of the path entirely.\n`,
-        );
-      } catch (err) {
-        _fail(err);
-      }
-    });
-
-  proxyCmd
-    .command("unwire")
-    .description("Remove Golem from .claude/settings.json so Claude Code talks direct")
-    .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .option("--port <port>", "listen port (overrides config)")
-    .option("--dry-run", "report what would change without writing", false)
-    .action(async (opts: { dir: string; port?: string; dryRun: boolean }) => {
-      try {
-        const { port } = await resolvePort(opts.dir, opts.port);
-        const result = await unwireProxyEnv(opts.dir, proxyBaseUrl(port), {
-          dryRun: opts.dryRun,
-        });
-        if (result.foreignBaseUrl !== undefined) {
-          process.stdout.write(
-            `golem proxy: left ANTHROPIC_BASE_URL=${result.foreignBaseUrl} alone — Golem does not own it.\n`,
-          );
-          return;
-        }
-        if (!result.changed) {
-          process.stdout.write("golem proxy: already unwired — Claude Code talks direct.\n");
-          return;
-        }
-        process.stdout.write(
-          `golem proxy: unwired${opts.dryRun ? " (dry run)" : ""} — removed ${ENV_BASE_URL} and ${ENV_TOOL_SEARCH} from .claude/settings.json.\n  Claude Code does NOT reload env settings — reload the window (or restart the CLI) for this to take effect.\n  \`golem proxy wire\` puts it back.\n`,
-        );
-      } catch (err) {
-        _fail(err);
-      }
-    });
-
-  proxyCmd
-    .command("wire")
-    .description("Point Claude Code back at the local proxy (inverse of unwire)")
-    .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .option("--port <port>", "listen port (overrides config)")
-    .option("--dry-run", "report what would change without writing", false)
-    .action(async (opts: { dir: string; port?: string; dryRun: boolean }) => {
-      try {
-        const { port } = await resolvePort(opts.dir, opts.port);
-        const result = await wireProxyEnv(opts.dir, proxyBaseUrl(port), { dryRun: opts.dryRun });
-        if (result.foreignBaseUrl !== undefined) {
-          _fail(
-            new InitError(
-              `.claude/settings.json already sets ${ENV_BASE_URL}=${result.foreignBaseUrl}. Another proxy or gateway owns this project's traffic — remove that setting before wiring Golem back in.`,
-            ),
-          );
-        }
-        if (!result.changed) {
-          process.stdout.write(`golem proxy: already wired to http://localhost:${port}.\n`);
-          return;
-        }
-        process.stdout.write(
-          `golem proxy: wired${opts.dryRun ? " (dry run)" : ""} — Claude Code will use http://localhost:${port}.\n  Reload the window (or restart the CLI) for this to take effect.\n`,
-        );
-      } catch (err) {
-        _fail(err);
-      }
-    });
-
-  proxyCmd
-    .command("restart")
-    .description("Reliably stop then start the proxy as a background daemon")
-    .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .option("--port <port>", "listen port (overrides config)")
-    .option("--foreground", "restart in the foreground instead of detached", false)
-    .action(async (opts: { dir: string; port?: string; foreground: boolean }) => {
-      try {
-        if (opts.foreground) {
-          await writeProxyDesired(opts.dir, "running", new Date().toISOString());
-          const { port } = await resolvePort(opts.dir, opts.port);
-          await stopProxy(opts.dir);
-          await waitForPortFree(port);
-          await runProxyForeground(opts.dir, opts.port);
-          return;
-        }
-        const { pid, port, upstream } = await restartProxyDetached(opts.dir, opts.port);
-        process.stdout.write(
-          `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
-        );
-      } catch (err) {
-        _fail(err);
-      }
-    });
-
-  proxyCmd
-    .command("status")
-    .description("Show whether the proxy is running")
+    .command("status", { isDefault: true })
+    .description("Show whether the proxy is running and whether the pipeline is active")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)
     .action(async (opts: { dir: string; json: boolean }) => {
@@ -434,9 +288,8 @@ export default function register(program: Command): void {
         const st = await proxyStatus(opts.dir, port);
         const ourBaseUrl = proxyBaseUrl(port);
         const wiring = await readWiringState(opts.dir, ourBaseUrl);
+
         if (opts.json) {
-          // R8.32: `running` alone was never the question a caller is asking —
-          // `in_path` is. Both are reported so the two can disagree visibly.
           process.stdout.write(
             `${JSON.stringify({
               ...st,
@@ -449,30 +302,62 @@ export default function register(program: Command): void {
           return;
         }
         if (!st.running) {
-          // Decision 56: a dead port with live wiring is the defect — say so here
-          // rather than leaving the user to discover it as a failed request.
           process.stdout.write("golem proxy: not running\n");
           if (wiring.owner === "golem") {
             process.stdout.write(
-              `  ⚠ Claude Code is wired to ${wiring.baseUrl} and nothing is listening there.\n    \`golem proxy start --detach\` restores the pipeline; \`golem proxy unwire\` sends it direct.\n`,
+              `  ⚠ Claude Code is wired to ${wiring.baseUrl} and nothing is listening there.\n    The SessionStart hook will restart it on the next project open.\n`,
             );
           }
           return;
         }
         process.stdout.write(
-          st.shim === true
-            ? `golem proxy: BYPASS shim${st.pid ? ` (pid ${st.pid})` : ""} on port ${st.port ?? port} -> ${upstream}\n  pipeline off; redaction still on. \`golem proxy start --detach\` restores it.\n`
-            : `golem proxy: running${st.pid ? ` (pid ${st.pid})` : ""} on port ${st.port ?? port} -> ${upstream}\n`,
+          `golem proxy: running (pid ${st.pid ?? "?"}) on port ${st.port ?? port} -> ${upstream}\n`,
         );
-        // R8.32: the daemon being up says nothing about whether traffic reaches
-        // it. Reported after the pid line so the contradiction is impossible to
-        // miss — a bare "running" here is exactly what hid the defect.
+        // R9.23: pipeline state is an in-process toggle, not a separate binary.
+        process.stdout.write(
+          "  Pipeline is active. Run `golem off` to disable (pass-through); `golem on` to re-enable.\n",
+        );
         const gap = wiringGap(wiring, ourBaseUrl);
         if (gap !== null) {
           process.stdout.write(
             `  ⚠ ${gap.problem}\n${gap.remedy === null ? "" : `    ${gap.remedy}\n`}`,
           );
         }
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  proxyCmd
+    .command("restart")
+    .description("Reliably stop then start the proxy daemon (for crash recovery)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--foreground", "restart in the foreground instead of detached", false)
+    .action(async (opts: { dir: string; foreground: boolean }) => {
+      try {
+        const { port, upstream } = await resolvePort(opts.dir);
+        await stopProxy(opts.dir);
+        if (!(await waitForPortFree(port))) {
+          _fail(
+            new InitError(
+              `port ${port} is still in use after stopping — something else is holding it.`,
+            ),
+          );
+        }
+        if (opts.foreground) {
+          await runProxyForeground(opts.dir);
+          return;
+        }
+        const pid = await startDetached(
+          opts.dir,
+          port,
+          process.argv[1] ?? "",
+          await credentialEnvForProxy(opts.dir),
+        );
+        if (pid === null) _fail(new InitError(`proxy did not come up on port ${port}`));
+        process.stdout.write(
+          `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
+        );
       } catch (err) {
         _fail(err);
       }

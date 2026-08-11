@@ -9,20 +9,21 @@
 
 import { describe, expect, it } from "vitest";
 import type { GolemSettings } from "../../../src/config/schema.js";
-import type { ExtManifest, ExtProbes } from "../../../src/ext/index.js";
-import { resolveExtStatuses } from "../../../src/ext/index.js";
+import type { PkgManifest, PkgProbes } from "../../../src/pkg/index.js";
+import { resolvePkgStatuses } from "../../../src/pkg/index.js";
 
-const NOTHING: ExtProbes = { command: () => null, module: () => null };
-const EVERYTHING: ExtProbes = {
+const NOTHING: PkgProbes = { command: () => null, module: () => null, plugin: () => null };
+const EVERYTHING: PkgProbes = {
   command: (name) => `/usr/bin/${name}`,
   module: (spec) => `/node_modules/${spec}`,
+  plugin: () => null,
 };
 
 function settings(tree: Record<string, Record<string, unknown>>): GolemSettings {
   return tree as unknown as GolemSettings;
 }
 
-const CALLABLE: ExtManifest = {
+const CALLABLE: PkgManifest = {
   id: "thing",
   title: "Thing",
   what: "does a thing",
@@ -36,14 +37,14 @@ const CALLABLE: ExtManifest = {
   degrade: "nothing happens",
 };
 
-const NEEDS_LAUNCHER: ExtManifest = {
+const NEEDS_LAUNCHER: PkgManifest = {
   ...CALLABLE,
   id: "needy",
   detect: { kind: "command", command: "needy" },
   requires: ["launcher"],
 };
 
-const LAUNCHER: ExtManifest = {
+const LAUNCHER: PkgManifest = {
   id: "launcher",
   title: "Launcher",
   what: "launches",
@@ -56,7 +57,7 @@ const LAUNCHER: ExtManifest = {
   degrade: "nothing launches",
 };
 
-const BUNDLED: ExtManifest = {
+const BUNDLED: PkgManifest = {
   id: "bundled-thing",
   title: "Bundled",
   what: "our own data",
@@ -69,9 +70,9 @@ const BUNDLED: ExtManifest = {
   degrade: "n/a",
 };
 
-describe("resolveExtStatuses", () => {
+describe("resolvePkgStatuses", () => {
   it("reports not-installed when detection fails, and keeps the degrade text", () => {
-    const [row] = resolveExtStatuses({ manifests: [CALLABLE], probes: NOTHING });
+    const [row] = resolvePkgStatuses({ manifests: [CALLABLE], probes: NOTHING });
     expect(row?.state).toBe("not-installed");
     expect(row?.installed).toBe(false);
     expect(row?.where).toBeNull();
@@ -79,7 +80,7 @@ describe("resolveExtStatuses", () => {
   });
 
   it("reports enabled when present and the setting is true", () => {
-    const [row] = resolveExtStatuses({
+    const [row] = resolvePkgStatuses({
       manifests: [CALLABLE],
       probes: EVERYTHING,
       settings: settings({ compression: { headroom_sidecar: true } }),
@@ -91,7 +92,7 @@ describe("resolveExtStatuses", () => {
   });
 
   it("reports disabled when present and the setting is false", () => {
-    const [row] = resolveExtStatuses({
+    const [row] = resolvePkgStatuses({
       manifests: [CALLABLE],
       probes: EVERYTHING,
       settings: settings({ compression: { headroom_sidecar: false } }),
@@ -101,18 +102,19 @@ describe("resolveExtStatuses", () => {
   });
 
   it("reports present (not enabled/disabled) when the row has no on/off setting", () => {
-    const [row] = resolveExtStatuses({ manifests: [LAUNCHER], probes: EVERYTHING });
+    const [row] = resolvePkgStatuses({ manifests: [LAUNCHER], probes: EVERYTHING });
     expect(row?.state).toBe("present");
     expect(row?.enabled).toBeNull();
     expect(row?.settingValue).toBeNull();
   });
 
   it("reports blocked when a required row is missing, even if it is itself installed", () => {
-    const probes: ExtProbes = {
+    const probes: PkgProbes = {
       command: (name) => (name === "launcher" ? null : `/usr/bin/${name}`),
       module: () => null,
+      plugin: () => null,
     };
-    const rows = resolveExtStatuses({
+    const rows = resolvePkgStatuses({
       manifests: [LAUNCHER, NEEDS_LAUNCHER],
       probes,
       settings: settings({ compression: { headroom_sidecar: true } }),
@@ -124,7 +126,7 @@ describe("resolveExtStatuses", () => {
   });
 
   it("clears missingRequirements once the requirement is present", () => {
-    const rows = resolveExtStatuses({
+    const rows = resolvePkgStatuses({
       manifests: [LAUNCHER, NEEDS_LAUNCHER],
       probes: EVERYTHING,
       settings: settings({ compression: { headroom_sidecar: true } }),
@@ -134,20 +136,20 @@ describe("resolveExtStatuses", () => {
   });
 
   it("treats bundled rows as always present and never installable", () => {
-    const [row] = resolveExtStatuses({ manifests: [BUNDLED], probes: NOTHING });
+    const [row] = resolvePkgStatuses({ manifests: [BUNDLED], probes: NOTHING });
     expect(row?.state).toBe("bundled");
     expect(row?.installed).toBe(true);
   });
 
   it("reports enabled = null when no settings are supplied", () => {
-    const [row] = resolveExtStatuses({ manifests: [CALLABLE], probes: EVERYTHING });
+    const [row] = resolvePkgStatuses({ manifests: [CALLABLE], probes: EVERYTHING });
     expect(row?.enabled).toBeNull();
     expect(row?.state).toBe("present");
   });
 
   describe("setting interpretation", () => {
     const withValue = (value: unknown) =>
-      resolveExtStatuses({
+      resolvePkgStatuses({
         manifests: [{ ...CALLABLE, enabledBy: "brevity.level" }],
         probes: EVERYTHING,
         settings: settings({ brevity: { level: value } }),
@@ -172,7 +174,7 @@ describe("resolveExtStatuses", () => {
     });
 
     it("reads a missing key as enabled = null", () => {
-      const row = resolveExtStatuses({
+      const row = resolvePkgStatuses({
         manifests: [{ ...CALLABLE, enabledBy: "brevity.level" }],
         probes: EVERYTHING,
         settings: settings({ brevity: {} }),

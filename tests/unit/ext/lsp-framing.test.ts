@@ -13,7 +13,7 @@ import {
   LspProtocolError,
   MAX_HEADER_BYTES,
   MessageBuffer,
-} from "../../../src/ext/lsp/framing.js";
+} from "../../../src/pkg/lsp/framing.js";
 
 function frame(
   body: string,

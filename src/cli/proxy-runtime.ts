@@ -13,7 +13,7 @@ import { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { CcrStore, LocalDirBlobStore, NativeLosslessCompression } from "../compression/index.js";
 import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
-import { SliderLevel, sliderPolicyForLevel } from "../interfaces/policy.js";
+import { sliderPolicyForLevel } from "../interfaces/policy.js";
 import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
 import { KnowledgeLocalAnswerService } from "../knowledge/local-answer.js";
 import { contentHashIndex, WebCache, webCacheDir } from "../knowledge/web-cache.js";
@@ -48,16 +48,6 @@ import {
 } from "../telemetry/index.js";
 import type { TelemetryStore } from "../telemetry/types.js";
 import { buildUpstreamTransport, createRouteResolver } from "./route-resolver.js";
-
-/**
- * The bypass shim's fixed policy (Decision 56): slider level 1 — redaction ON,
- * lossless, brevity `off`. `sliderPolicyForLevel`'s defaults already mean exactly
- * this (`brevity` defaults to `off`, `compression` tracks the level), so the shim
- * needs no new dial and no frozen-contract change; it is one pinned policy value.
- *
- * Frozen at module scope precisely so it cannot be reached by the live slider.
- */
-const SHIM_POLICY = sliderPolicyForLevel(SliderLevel.Lossless);
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
@@ -110,23 +100,6 @@ export interface BuildProxyOptions {
    * eligible request.
    */
   readonly suppressLocalAnswer?: boolean;
-  /**
-   * Decision 56 — build the **bypass shim** rather than the full pipeline.
-   *
-   * `golem proxy stop` keeps the project port bound so Claude Code never dials a
-   * dead socket (its `ANTHROPIC_BASE_URL` cannot be un-set without a window
-   * reload — verification-notes §112b). This flag is what "pipeline off" means
-   * concretely: the live slider store is ignored and the policy is pinned to
-   * **level 1**, local-answer is suppressed, and the Headroom sidecar is never
-   * constructed.
-   *
-   * **Level 1, deliberately NOT level 0.** Level 0 / `x-golem-bypass` forwards
-   * untouched, i.e. with redaction OFF — the single sanctioned redaction-off path,
-   * which CLAUDE.md permits only when it is never the default and always surfaced
-   * loudly. A Stop button that quietly routed unredacted prompts upstream would
-   * breach that hard rule while looking like a convenience. So the shim redacts.
-   */
-  readonly shim?: boolean;
 }
 
 /**
@@ -147,12 +120,9 @@ export function buildProxyFromSettings(
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   // Decision 53: the opaque `headroom_config` bag rides through to the worker, so
   // Headroom options Golem has never heard of are reachable from settings alone.
-  // Decision 56: the bypass shim runs no compression at all, so the sidecar is
-  // never constructed for it (and `headroomCcrStore` below stays undefined too).
-  const semantic =
-    settings.compression.headroom_sidecar && build.shim !== true
-      ? new HeadroomSidecar({ config: settings.compression.headroom_config })
-      : undefined;
+  const semantic = settings.compression.headroom_sidecar
+    ? new HeadroomSidecar({ config: settings.compression.headroom_config })
+    : undefined;
   // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
   // writes to, shared by both the R2.4 Headroom backfill and R2.2 context
   // substitution below, so `expand` recovers either kind of marker uniformly.
@@ -176,9 +146,7 @@ export function buildProxyFromSettings(
   // `headroom_sidecar` above — this is an opt-in gate, not something the live
   // slider ever toggles (Decision 31: the slider stays a pure compression dial).
   const localAnswer =
-    settings.knowledge.local_answer_enabled &&
-    build.suppressLocalAnswer !== true &&
-    build.shim !== true // Decision 56: the shim answers nothing locally
+    settings.knowledge.local_answer_enabled && build.suppressLocalAnswer !== true
       ? {
           service: new KnowledgeLocalAnswerService(
             openKnowledgeBase({
@@ -197,10 +165,6 @@ export function buildProxyFromSettings(
   // there is a (rare, documented) race if the level changes between a
   // request and its response — acceptable for a batch/alternating A/B.
   const resolvePolicy = async () => {
-    // Decision 56: pinned, and deliberately ignores the live slider store — a
-    // shim that tracked the slider could be moved to level 0 (redaction off)
-    // while presenting itself as "stopped".
-    if (build.shim === true) return SHIM_POLICY;
     if (sliderStore === undefined) return policyFromSettings(settings);
     const level = await sliderStore.get();
     // Decision 52: the runtime slider store owns the LEVEL only; the two dial
@@ -372,7 +336,7 @@ export function buildProxyFromSettings(
     // — with one target the resolver would decide the same thing on every
     // request, so leaving it absent keeps the single-upstream path byte-for-byte
     // the code it has always been.
-    ...(listTargets(settings.proxy).length > 1 && build.shim !== true
+    ...(listTargets(settings.proxy).length > 1
       ? {
           resolveRoute: createRouteResolver({
             settings: settings.proxy,

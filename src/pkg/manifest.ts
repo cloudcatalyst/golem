@@ -1,17 +1,12 @@
 /**
- * The managed-tool registry (spec Decision 53).
+ * The managed-package registry (spec Decision 53).
  *
- * Golem integrates external tools by **spawning or detecting** them, never by
+ * Golem integrates external packages by **spawning or detecting** them, never by
  * shipping their bytes. Three integrations arrived at that shape independently
  * (Headroom, Ollama, Caveman) before it was written down; this file is the
- * written-down version, and it is data — one row per tool, no behaviour.
+ * written-down version, and it is data — one row per package, no behaviour.
  *
- * A row answers the questions that were previously only answerable by grepping
- * the process table: what tier is it, is it installed, is it turned on, what
- * happens when it is missing, and — the one that actually caused confusion —
- * does "enabled" mean "running"? (For Headroom it does not; see `gate`.)
- *
- * **Admission bar.** A tool belongs here only if all four hold:
+ * **Admission bar.** A package belongs here only if all four hold:
  *   1. it does something Golem should not reimplement;
  *   2. it has a stable, pinnable invocation contract;
  *   3. its absence degrades to a no-op, never an error path;
@@ -21,14 +16,14 @@
  */
 
 /**
- * Where a tool sits on the dependency ladder (Decision 53).
+ * Where a package sits on the dependency ladder (Decision 53).
  *
  * `tier-1` is not represented here: those are Golem's own npm `dependencies`,
- * which are not managed tools. `unpdf` and `web-tree-sitter` are `tier-2`
+ * which are not managed packages. `unpdf` and `web-tree-sitter` are `tier-2`
  * because they are optional and absence-tolerant, even though npm may install
  * them for you.
  */
-export type ExtTier =
+export type PkgTier =
   /** Spawned or resolved on demand at an exact pin; user provides it; off by default. */
   | "tier-2"
   /** A peer that acts on the same surface independently; Golem detects and defers. */
@@ -36,8 +31,8 @@ export type ExtTier =
   /** Golem re-implemented the idea as its own data/code, citing the source, copying nothing. */
   | "tier-3b";
 
-/** How Golem relates to the tool — determines what "manage" can even mean. */
-export type ExtShape =
+/** How Golem relates to the package — determines what "manage" can even mean. */
+export type PkgShape =
   /** Golem invokes it (subprocess or HTTP service). Full wrap is possible. */
   | "callable"
   /** It acts on the same surface independently. Coordinate; never drive. */
@@ -46,30 +41,37 @@ export type ExtShape =
   | "in-process";
 
 /** How presence is detected — all spawn-free (see detect.ts). */
-export type ExtDetect =
+export type PkgDetect =
   /** An executable on `PATH` (Windows `PATHEXT`-aware). */
   | { readonly kind: "command"; readonly command: string }
   /** An optional npm module that must merely resolve. */
   | { readonly kind: "module"; readonly specifier: string }
+  /**
+   * A Claude Code plugin installed under the user's plugin cache
+   * (`~/.claude/plugins/cache/<marketplace>/<name>/`). Used for plugins
+   * that are installed via `claude plugin install` (e.g. Caveman) rather
+   * than as standalone binaries on PATH.
+   */
+  | { readonly kind: "plugin"; readonly name: string; readonly marketplace?: string }
   /** Golem's own bundled data — always present by construction (tier-3b). */
   | { readonly kind: "bundled" };
 
-export interface ExtManifest {
+export interface PkgManifest {
   /** Stable id used by the CLI and the JSON output. */
   readonly id: string;
   /** Human title as its own project spells it. */
   readonly title: string;
   /** One line: what it does for Golem. */
   readonly what: string;
-  readonly tier: ExtTier;
-  readonly shape: ExtShape;
+  readonly tier: PkgTier;
+  readonly shape: PkgShape;
   /** Upstream home, so a row is traceable to a real project. */
   readonly upstream: string;
   /** Upstream licence, recorded because Golem redistributes nothing. */
   readonly licence: string;
   /** Exact version Golem targets, where it pins one. */
   readonly pin?: string;
-  readonly detect: ExtDetect;
+  readonly detect: PkgDetect;
   /** Other registry ids that must also be present (e.g. Headroom needs uv). */
   readonly requires?: readonly string[];
   /** How a human installs it. Golem does NOT run this (read-only surface). */
@@ -93,7 +95,7 @@ export interface ExtManifest {
  * pins from `src/compression/index.ts`, settings keys from
  * `src/config/schema.ts`, adapters from the paths named.
  */
-export const EXT_MANIFESTS: readonly ExtManifest[] = [
+export const PKG_MANIFESTS: readonly PkgManifest[] = [
   {
     id: "uv",
     title: "uv",
@@ -226,13 +228,13 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
       "npm i -g typescript-language-server typescript — Golem spawns it, never installs it. " +
       "Any other server (gopls, rust-analyzer, pyright) is a `knowledge.lsp_servers` row, not a release.",
     enabledBy: "knowledge.lsp_enabled",
-    adapter: "src/ext/lsp/",
+    adapter: "src/pkg/lsp/",
     degrade:
       "The `code` tool's LSP modes report `available: false` with the reason and the session " +
       "continues; `map` mode is unaffected.",
     gate:
       "Enabled does NOT mean running. The server is spawned lazily on the first LSP-mode call, " +
-      "pooled, and evicted after an idle period — so `golem ext status` can say [on] while no " +
+      "pooled, and evicted after an idle period — so `golem pkg status` can say [on] while no " +
       "process exists. It is also per-file-type: a row only answers for the extensions it claims.",
   },
   {
@@ -259,9 +261,9 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
     shape: "peer",
     upstream: "https://github.com/JuliusBrussee/caveman",
     licence: "MIT",
-    detect: { kind: "command", command: "caveman" },
+    detect: { kind: "plugin", name: "caveman", marketplace: "caveman" },
     install:
-      "Not recommended alongside Golem — see `degrade`. Installing it makes Golem's brevity dial stand down.",
+      "`golem pkg install caveman` — or manually: `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman`.",
     degrade:
       "Golem's own brevity dial covers it, from the proxy, for every client, with zero dependencies.",
     gate:
@@ -290,6 +292,6 @@ export const EXT_MANIFESTS: readonly ExtManifest[] = [
 ] as const;
 
 /** Look up one manifest by id. */
-export function extManifest(id: string): ExtManifest | undefined {
-  return EXT_MANIFESTS.find((m) => m.id === id);
+export function pkgManifest(id: string): PkgManifest | undefined {
+  return PKG_MANIFESTS.find((m) => m.id === id);
 }

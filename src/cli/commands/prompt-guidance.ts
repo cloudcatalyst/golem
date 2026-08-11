@@ -36,7 +36,7 @@ import {
 import { buildKnowledgeStack } from "../build-knowledge.js";
 import { InitError } from "../init.js";
 import { proxyStatus, startDetached } from "../proxy-daemon.js";
-import { readProxyDesired } from "../proxy-state.js";
+import { proxyBaseUrl, readWiringState } from "../proxy-wiring.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -339,7 +339,7 @@ export default function register(program: Command): void {
 
   hookCmd
     .command("session-start")
-    .description("SessionStart handler: auto-start the proxy if it was running for this project")
+    .description("SessionStart handler: auto-start the proxy if this project is wired to Golem")
     .action(async () => {
       try {
         let cwd = process.cwd();
@@ -349,20 +349,14 @@ export default function register(program: Command): void {
         } catch {
           /* no/!json payload */
         }
-        // Decision 56: `bypass` is restored too. A project left with the
-        // pipeline off is still WIRED to its port, so reopening it without the
-        // shim would recreate the dead-socket defect this state exists to avoid.
-        const desired = await readProxyDesired(cwd);
-        if (desired !== "running" && desired !== "bypass") return;
         const { settings } = await loadConfig({ projectDir: cwd });
-        if ((await proxyStatus(cwd, settings.proxy.port)).running) return;
-        await startDetached(
-          cwd,
-          settings.proxy.port,
-          process.argv[1] ?? "",
-          {},
-          desired === "bypass" ? { shim: true } : {},
-        );
+        const port = settings.proxy.port;
+        // R9.23: if the URL is in settings, the daemon should be alive.
+        // If it's not, restart it — no separate state file needed.
+        const wiring = await readWiringState(cwd, proxyBaseUrl(port));
+        if (wiring.owner !== "golem") return;
+        if ((await proxyStatus(cwd, port)).running) return;
+        await startDetached(cwd, port, process.argv[1] ?? "", {});
       } catch {
         /* fail-safe */
       }
