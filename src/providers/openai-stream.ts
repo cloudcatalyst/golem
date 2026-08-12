@@ -18,6 +18,13 @@
 import { Transform, type TransformCallback } from "node:stream";
 import { mapStopReason } from "./openai-translate.js";
 
+/** Anthropic `tool_use.id` pattern: `^[a-zA-Z0-9_-]+$`. */
+const TOOL_ID_BAD = /[^a-zA-Z0-9_-]/g;
+
+function sanitizeToolId(id: string): string {
+  return id.replace(TOOL_ID_BAD, "_");
+}
+
 function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
@@ -166,7 +173,10 @@ export class OpenAIChatSSETranslator extends Transform {
       const oaiIndex = tc.index;
       const prev = this.#toolMeta.get(oaiIndex) ?? { id: this.#id, name: "" };
       const meta = {
-        id: typeof tc.id === "string" && tc.id.length > 0 ? tc.id : prev.id,
+        id:
+          typeof tc.id === "string" && tc.id.length > 0
+            ? sanitizeToolId(tc.id)
+            : prev.id,
         name:
           typeof tc.function?.name === "string" && tc.function.name.length > 0
             ? tc.function.name

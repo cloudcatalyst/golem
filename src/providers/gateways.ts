@@ -20,6 +20,13 @@
  */
 
 import { resolveAuthScheme, type UpstreamAuthScheme, type UpstreamProvider } from "./index.js";
+// Direct import, not the barrel: the barrel re-exports this module, and
+// importing ourselves through it would be a circular dependency.
+import {
+  listTargets,
+  resolveDefaultTargetId,
+  type TargetRegistrySettings,
+} from "./targets.js";
 
 /** A non-secret gateway entry (from `proxy.gateways`). */
 export interface GatewayEntry {
@@ -164,6 +171,31 @@ export interface UpstreamDisplaySettings {
  * the env is irrelevant (no key is surfaced), so an empty env is passed.
  */
 export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): UpstreamDisplay {
+  // R9.23: the selector may name a compound TARGET id (e.g.
+  // `openrouter:deepseek/...`), which is how `inference.default_target` is
+  // normally set. Routing resolves it through the target registry
+  // (`resolveDefaultTargetId`), so display must too — treating it as a gateway
+  // id falls back to the legacy config and reports the wrong upstream. A bare
+  // gateway id (e.g. `openrouter`) resolves via the gateway path below.
+  const registrySettings: TargetRegistrySettings = {
+    upstream_provider: settings.upstream_provider,
+    upstream_base_url: settings.upstream_base_url,
+    ...(settings.upstream_model !== undefined ? { upstream_model: settings.upstream_model } : {}),
+    upstream_auth_scheme: settings.upstream_auth_scheme,
+    ...(settings.gateways !== undefined ? { gateways: settings.gateways } : {}),
+    ...(settings.default_target !== undefined ? { default_target: settings.default_target } : {}),
+  };
+  const targetId = resolveDefaultTargetId(registrySettings);
+  const target = listTargets(registrySettings).find((t) => t.id === targetId);
+  if (target !== undefined && target.origin !== "default") {
+    return {
+      accountId: target.accountId,
+      provider: target.provider,
+      baseUrl: target.baseUrl,
+      model: target.model,
+    };
+  }
+
   const { resolved, warning } = resolveActiveUpstream(
     {
       legacy: {

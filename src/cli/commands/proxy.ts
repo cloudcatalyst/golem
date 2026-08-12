@@ -329,6 +329,15 @@ export default function register(program: Command): void {
     });
 
   proxyCmd
+    .command("start")
+    .description("Start the proxy in the foreground (detached daemon entry-point)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--port <port>", "port number")
+    .action(async (opts: { dir: string; port: string | undefined }) => {
+      await runProxyForeground(opts.dir, opts.port);
+    });
+
+  proxyCmd
     .command("restart")
     .description("Reliably stop then start the proxy daemon (for crash recovery)")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)

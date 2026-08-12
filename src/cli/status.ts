@@ -429,7 +429,14 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // Resolved before the reads below because the last-served-model lookup is
   // scoped to this account (a snapshot from the previous upstream must not be
   // reported as the current model).
-  const upstream = resolveUpstreamDisplay(settings.proxy);
+  // R9.23: default_target moved from proxy to inference — merge it so the
+  // display reflects the actual default target (e.g. openrouter:deepseek/...).
+  const upstream = resolveUpstreamDisplay({
+    ...settings.proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  });
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
   const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
@@ -451,9 +458,17 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
 
   // R9.2: per-target rows, each carrying what that target last served. Read from
   // the same snapshot the proxy writes, so status never has to reach the daemon.
+  // R9.23: default_target moved to inference — merge it so
+  // resolveDefaultTargetId and listTargets see the live value.
+  const proxyWithDefault = {
+    ...settings.proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  };
   const allServed = await readServedModel(projectDir).catch(() => null);
-  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
-  const targetRows = listTargets(settings.proxy).map((t) => {
+  const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
+  const targetRows = listTargets(proxyWithDefault).map((t) => {
     const seen = allServed?.targets?.[t.id];
     return {
       id: t.id,
