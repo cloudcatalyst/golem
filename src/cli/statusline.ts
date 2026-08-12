@@ -107,7 +107,11 @@ export interface GolemState {
   readonly localModelReachable?: boolean;
   /** The concrete local coder model (e.g. `qwen2.5-coder:7b`), when reachable. */
   readonly coderModel?: string;
-  /** Whether the `coder` MCP tool is enabled (`inference.coder_enabled`). */
+  /**
+   * Whether the `coder` MCP tool can actually be served. Since R9.23 removed
+   * `inference.coder_enabled` the tool is always offered, so this reflects
+   * whether something can serve it, not a user toggle.
+   */
   readonly coderEnabled?: boolean;
   /**
    * R9.4 — the model behind `inference.coder_target`, when that is set and
