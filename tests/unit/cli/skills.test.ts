@@ -142,6 +142,7 @@ describe("P0 skill registry", () => {
       "context-hygiene",
       "fresh-eyes",
       "checkpoint",
+      "first-pancake",
     ]) {
       expect(P0_SKILLS[name], `missing skill: ${name}`).toBeDefined();
     }
@@ -172,6 +173,25 @@ describe("P0 skill registry", () => {
     expect(skill).toContain("Comment/doc should change");
     expect(skill).toContain("Agree / confirmed");
     // Read-only: it proposes, never writes.
+    expect(skill.toLowerCase()).toContain("writes nothing");
+  });
+
+  it("first-pancake keeps recipe, scraps the throwaway, and resets for the real release", () => {
+    const skill = P0_SKILLS["first-pancake"];
+    if (skill === undefined) throw new Error("expected a first-pancake skill");
+    // Keep list (recipe + ingredients) comes first, before the scrap pass.
+    expect(skill.indexOf("settle what the recipe actually is")).toBeLessThan(
+      skill.indexOf("eat the first pancake critically"),
+    );
+    // Scrap pass precedes cleaning the pan / preparing pancake #2.
+    expect(skill.indexOf("eat the first pancake critically")).toBeLessThan(
+      skill.indexOf("## Pass 3 — clean the pan"),
+    );
+    // The three actioned labels.
+    expect(skill).toContain("KEEP");
+    expect(skill).toContain("SCRAP");
+    expect(skill).toContain("REFACTOR");
+    // Review-first: it sorts and proposes, it does not edit on its own.
     expect(skill.toLowerCase()).toContain("writes nothing");
   });
 
