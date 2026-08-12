@@ -12,13 +12,10 @@
 
 import { randomUUID } from "node:crypto";
 import { estimateTokens } from "../compression/index.js";
+import { isRecord } from "../shared/json.js";
 
 /** Synthetic model id — never impersonates a real Claude model name. */
 export const LOCAL_ANSWER_MODEL_ID = "golem-local-answer";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function extractPlainText(content: unknown): string | undefined {
   if (typeof content === "string") return content;

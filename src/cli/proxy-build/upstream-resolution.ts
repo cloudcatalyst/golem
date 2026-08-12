@@ -32,6 +32,7 @@ import {
   targetWarnings,
   type UpstreamProvider,
   upstreamAssumesCaching,
+  withDefaultTarget,
 } from "../../providers/index.js";
 import type { UpstreamTranslator } from "../../proxy/index.js";
 import { buildUpstreamTransport } from "../route-resolver.js";
@@ -87,12 +88,7 @@ export function resolveProxyUpstream(settings: GolemSettings): ResolvedProxyUpst
   // (R9.2); say so at startup rather than on the first request that needs it.
   // R9.23: default_target moved to inference, merge it into the proxy settings
   // so resolveDefaultTargetId sees the live value.
-  const proxyWithDefault = {
-    ...settings.proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
-  };
+  const proxyWithDefault = withDefaultTarget(settings);
   const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
   if (!listTargets(proxyWithDefault).some((t) => t.id === defaultTargetId)) {
     process.stderr.write(

@@ -34,6 +34,7 @@ import {
   resolveUpstreamDisplay,
   type UpstreamProvider,
   upstreamAssumesCaching,
+  withDefaultTarget,
 } from "../providers/index.js";
 // `../proxy/served-model.js`, not the `../proxy/index.js` barrel: the barrel reaches
 // server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
@@ -413,12 +414,7 @@ export async function collectGolemState(
     // just the top-level base URL (env-less resolution — the label needs no key).
     // R9.23: default_target moved from proxy to inference — spread it onto
     // the proxy settings so resolveUpstreamDisplay can find it.
-    const upstream = resolveUpstreamDisplay({
-      ...settings.proxy,
-      ...(settings.inference.default_target !== undefined
-        ? { default_target: settings.inference.default_target }
-        : {}),
-    });
+    const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
     label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
     provider = upstream.provider;
     model = upstream.model;

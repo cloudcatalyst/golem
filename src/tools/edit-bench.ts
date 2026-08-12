@@ -39,6 +39,7 @@
  *    separate, gated decision (ADR-0002).
  */
 
+import { caseResolution, pct, worstCaseRate } from "../bench/stats.js";
 import { estimateTokens } from "../compression/tokens.js";
 import type { InferenceService, Role } from "../interfaces/index.js";
 import type { EditStatus, MatchStrategy } from "./edit-apply.js";
@@ -397,11 +398,16 @@ export async function benchEdits(options: EditBenchOptions): Promise<EditBenchRe
      * error the way that hurts the candidate most and see whether the verdict
      * survives. A bar cleared only because three attempts errored out was never
      * cleared.
+     *
+     * The re-scoring is `src/bench/stats.ts`'s {@link worstCaseRate}, shared
+     * with `benchRepoMap`. What follows it is NOT shared: this gate asks
+     * whether an adverse rate still clears a pre-registered bar, while
+     * `benchRepoMap` asks whether an adverse delta keeps its sign. Same guard,
+     * different question.
      */
     if (best.errors > 0) {
-      const total = best.scored + best.errors;
-      const adverseSemantic = best.semantic / total;
-      const adverseApply = best.applied / total;
+      const adverseSemantic = worstCaseRate(best.semantic, best.scored, best.errors) ?? 0;
+      const adverseApply = worstCaseRate(best.applied, best.scored, best.errors) ?? 0;
       const adverseVerdict: EditVerdict =
         adverseSemantic >= EDIT_BAR.shipSemantic && adverseApply >= EDIT_BAR.shipApply
           ? "ship"
@@ -441,7 +447,7 @@ export async function benchEdits(options: EditBenchOptions): Promise<EditBenchRe
     }
   }
 
-  const resolution = cases.length === 0 ? 1 : 1 / cases.length;
+  const resolution = caseResolution(cases.length);
   if (best !== null && best.semanticRate !== null) {
     const margin = Math.abs(best.semanticRate - EDIT_BAR.shipSemantic);
     if (margin < resolution) {
@@ -500,10 +506,6 @@ export async function benchEdits(options: EditBenchOptions): Promise<EditBenchRe
     notes,
     bar: EDIT_BAR,
   };
-}
-
-function pct(value: number | null): string {
-  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
 }
 
 /** Render the report: cost and accuracy in one view, never one without the other. */

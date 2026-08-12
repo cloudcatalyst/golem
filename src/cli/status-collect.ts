@@ -23,6 +23,7 @@ import {
   resolveDefaultTargetId,
   resolveUpstreamDisplay,
   upstreamAssumesCaching,
+  withDefaultTarget,
 } from "../providers/index.js";
 // Narrow modules rather than `../proxy/index.js`: that barrel reaches server.ts,
 // which imports `undici` (~270ms), and both of these only read a JSON file.
@@ -154,12 +155,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // reported as the current model).
   // R9.23: default_target moved from proxy to inference — merge it so the
   // display reflects the actual default target (e.g. openrouter:deepseek/...).
-  const upstream = resolveUpstreamDisplay({
-    ...settings.proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
-  });
+  const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
   const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
@@ -183,12 +179,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // the same snapshot the proxy writes, so status never has to reach the daemon.
   // R9.23: default_target moved to inference — merge it so
   // resolveDefaultTargetId and listTargets see the live value.
-  const proxyWithDefault = {
-    ...settings.proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
-  };
+  const proxyWithDefault = withDefaultTarget(settings);
   const allServed = await readServedModel(projectDir).catch(() => null);
   const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
   const targetRows = listTargets(proxyWithDefault).map((t) => {

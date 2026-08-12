@@ -41,6 +41,7 @@ import {
   type TargetOrigin,
   type TargetTrust,
   targetWarnings,
+  withDefaultTarget,
 } from "../providers/index.js";
 import { InitError } from "./init.js";
 
@@ -106,12 +107,7 @@ export async function collectTargets(
   const targets = listTargets(proxy);
   // R9.23: default_target moved to inference, but proxy may still carry it
   // via the migration table (proxy.active_account → proxy.default_target).
-  const defaultId = resolveDefaultTargetId({
-    ...proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
-  });
+  const defaultId = resolveDefaultTargetId(withDefaultTarget(settings));
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
   // Config-level warnings are computed once for the whole registry, then

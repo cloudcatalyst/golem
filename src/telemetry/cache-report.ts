@@ -18,6 +18,7 @@
  * health score" would hide exactly the distinction a user needs.
  */
 
+import { pct } from "../bench/stats.js";
 import { LOOKBACK_WINDOW_BLOCKS } from "../proxy/cache-prefix.js";
 import type { TelemetryEvent } from "./types.js";
 
@@ -184,10 +185,6 @@ export function aggregateCacheStats(
     busts: { tools, system, messages, lookback, unattributed },
     worstMessageBust,
   };
-}
-
-function pct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
 }
 
 function num(value: number): string {

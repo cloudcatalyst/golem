@@ -42,6 +42,7 @@ import {
 } from "../proxy/cache-prefix.js";
 import { buildContextLedger, type ContextLedgerCore } from "../proxy/context-ledger.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
+import { isRecord } from "../shared/json.js";
 import { applyBrevity } from "./brevity.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
 import { redactRequestBody } from "./redaction.js";
@@ -258,10 +259,6 @@ const MESSAGES_PATH_RE = /^\/(?:[a-z0-9-]+\/)?v1\/messages(?:\?.*)?$/;
 
 function isMessagesRequest(request: ProxyRequest): boolean {
   return request.method.toUpperCase() === "POST" && MESSAGES_PATH_RE.test(request.url);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

@@ -51,6 +51,7 @@ export {
   type OpenAIChatRequest,
   openAIChatToAnthropic,
 } from "./openai-translate.js";
+export { withDefaultTarget } from "./target-settings.js";
 export {
   accountsReferencedByTargets,
   defaultTargetId,
