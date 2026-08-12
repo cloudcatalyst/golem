@@ -42,7 +42,13 @@ import {
   writeProxyPid,
 } from "../proxy-daemon.js";
 import { buildProxyFromSettings } from "../proxy-runtime.js";
-import { proxyBaseUrl, readWiringState, wiringGap } from "../proxy-wiring.js";
+import {
+  proxyBaseUrl,
+  readWiringState,
+  unwireProxyEnv,
+  wireProxyEnv,
+  wiringGap,
+} from "../proxy-wiring.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -370,6 +376,95 @@ export default function register(program: Command): void {
         process.stdout.write(
           `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
         );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  /**
+   * `golem proxy wire` / `unwire` — point Claude Code at the proxy, or stop.
+   *
+   * These were specified but never registered. `golem status` and the control
+   * panel have been telling people to run `golem proxy wire` for releases —
+   * a test even pins that it "names `golem proxy wire`, not the far heavier
+   * `golem init`" — while the CLI answered "unknown command" and commander fell
+   * through to `status`. The engine (`wireProxyEnv`/`unwireProxyEnv`, Decision
+   * 56) was written and unit-tested the whole time; only the surface was
+   * missing.
+   *
+   * Deliberately narrow, which is the point of offering it over `golem init`:
+   * it edits ONLY the `ANTHROPIC_BASE_URL` / `ENABLE_TOOL_SEARCH` pair, touching
+   * no skills, hooks, MCP registration or certificates. It also never clobbers a
+   * base URL somebody else owns (§121-C) — a foreign gateway is reported and
+   * left alone.
+   */
+  proxyCmd
+    .command("wire")
+    .description("Point Claude Code's ANTHROPIC_BASE_URL at this project's proxy")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--dry-run", "report what would change without writing", false)
+    .action(async (opts: { dir: string; dryRun: boolean }) => {
+      try {
+        const { port } = await resolvePort(opts.dir);
+        const baseUrl = proxyBaseUrl(port);
+        const result = await wireProxyEnv(opts.dir, baseUrl, { dryRun: opts.dryRun });
+        if (result.foreignBaseUrl !== undefined) {
+          _fail(
+            new InitError(
+              `ANTHROPIC_BASE_URL is already set to ${result.foreignBaseUrl}, which Golem does ` +
+                "not own — refusing to overwrite it. Clear it yourself first if that is intended.",
+            ),
+          );
+        }
+        if (!result.changed) {
+          process.stdout.write(`golem proxy: already wired to ${baseUrl}\n`);
+          return;
+        }
+        process.stdout.write(
+          opts.dryRun
+            ? `golem proxy: would wire ANTHROPIC_BASE_URL -> ${baseUrl} (nothing written)\n`
+            : `golem proxy: wired ANTHROPIC_BASE_URL -> ${baseUrl}\n`,
+        );
+        // `env` is read once at startup (§13/§112b), so a wire that reports plain
+        // success leaves the user proxied-in-settings and unproxied-in-fact.
+        if (!opts.dryRun && result.needsReload) {
+          process.stdout.write("  Reload the window (Developer: Reload Window) to pick it up.\n");
+        }
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  proxyCmd
+    .command("unwire")
+    .description("Remove Golem's ANTHROPIC_BASE_URL wiring (Claude Code talks upstream directly)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--dry-run", "report what would change without writing", false)
+    .action(async (opts: { dir: string; dryRun: boolean }) => {
+      try {
+        const { port } = await resolvePort(opts.dir);
+        const result = await unwireProxyEnv(opts.dir, proxyBaseUrl(port), {
+          dryRun: opts.dryRun,
+        });
+        if (result.foreignBaseUrl !== undefined) {
+          process.stdout.write(
+            `golem proxy: ANTHROPIC_BASE_URL is ${result.foreignBaseUrl}, which Golem does not ` +
+              "own — left untouched.\n",
+          );
+          return;
+        }
+        if (!result.changed) {
+          process.stdout.write("golem proxy: nothing wired — no change\n");
+          return;
+        }
+        process.stdout.write(
+          opts.dryRun
+            ? "golem proxy: would remove Golem's ANTHROPIC_BASE_URL wiring (nothing written)\n"
+            : "golem proxy: removed Golem's ANTHROPIC_BASE_URL wiring\n",
+        );
+        if (!opts.dryRun && result.needsReload) {
+          process.stdout.write("  Reload the window (Developer: Reload Window) to pick it up.\n");
+        }
       } catch (err) {
         _fail(err);
       }
