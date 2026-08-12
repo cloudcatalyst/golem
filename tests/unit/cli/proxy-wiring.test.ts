@@ -185,6 +185,21 @@ describe("wireProxyEnv", () => {
     await unwireProxyEnv(projectDir, OURS);
     expect((await readWiringState(projectDir, OURS)).owner).toBe("none");
   });
+
+  // R10.1. This used to destroy the file: the read swallowed the parse failure,
+  // fell back to `{}`, and wrote that — so a stray trailing comma cost a user
+  // every other key in their `.claude/settings.json`. `golem init` had always
+  // refused to clobber a file it could not parse; `wire` did the opposite.
+  it("refuses to overwrite a MALFORMED settings file, leaving its bytes untouched", async () => {
+    const dir = path.join(projectDir, ".claude");
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, "settings.json");
+    const original = '{ "env": { "MY_VAR": "keep me" },, }';
+    await writeFile(file, original, "utf8");
+
+    await expect(wireProxyEnv(projectDir, OURS)).rejects.toThrow(/not valid JSON/);
+    expect(await readFile(file, "utf8")).toBe(original);
+  });
 });
 
 describe("readWiringState", () => {

@@ -22,9 +22,14 @@
  * that signal.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path, { resolve } from "node:path";
 import { loopbackCaPath } from "../proxy/loopback-cert.js";
+import {
+  type JsonObject,
+  readJsonObject,
+  readJsonObjectOrNull,
+  writeJsonObject,
+} from "./json-file.js";
 
 export const ENV_BASE_URL = "ANTHROPIC_BASE_URL";
 export const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
@@ -37,8 +42,6 @@ export const ENV_TOOL_SEARCH = "ENABLE_TOOL_SEARCH";
 export const ENV_EXTRA_CA = "NODE_EXTRA_CA_CERTS";
 export const ENV_USE_FOUNDRY = "CLAUDE_CODE_USE_FOUNDRY";
 export const ENV_FOUNDRY_BASE_URL = "ANTHROPIC_FOUNDRY_BASE_URL";
-
-type JsonObject = Record<string, unknown>;
 
 /** `http://localhost:<port>` — the base URL init writes for a given proxy port. */
 export function proxyBaseUrl(port: number): string {
@@ -158,22 +161,6 @@ export interface WiringState {
   readonly baseUrl: string | null;
 }
 
-async function readJson(file: string): Promise<JsonObject | null> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(file, "utf8"));
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as JsonObject)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-async function writeJson(file: string, value: JsonObject): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
 function envOf(settings: JsonObject | null): JsonObject | null {
   const env = settings?.env;
   return typeof env === "object" && env !== null && !Array.isArray(env)
@@ -181,9 +168,16 @@ function envOf(settings: JsonObject | null): JsonObject | null {
     : null;
 }
 
-/** Is this project currently wired to OUR proxy, someone else's, or nothing? */
+/**
+ * Is this project currently wired to OUR proxy, someone else's, or nothing?
+ *
+ * Read-only, and on the `golem status` / statusline path — so it uses the quiet
+ * reader: an unparseable settings file reports "not wired" rather than throwing
+ * at someone who only asked for status. The WRITE paths below deliberately use
+ * the loud one.
+ */
 export async function readWiringState(projectDir: string, baseUrl: string): Promise<WiringState> {
-  const env = envOf(await readJson(claudeSettingsPath(projectDir)));
+  const env = envOf(await readJsonObjectOrNull(claudeSettingsPath(projectDir)));
   const current = env?.[ENV_BASE_URL];
   if (typeof current !== "string") return { owner: "none", baseUrl: null };
   return { owner: current === baseUrl ? "golem" : "foreign", baseUrl: current };
@@ -253,7 +247,7 @@ export async function unwireProxyEnv(
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<UnwireResult> {
   const file = claudeSettingsPath(projectDir);
-  const settings = await readJson(file);
+  const settings = await readJsonObject(file);
   const env = envOf(settings);
 
   const current = env?.[ENV_BASE_URL];
@@ -271,7 +265,7 @@ export async function unwireProxyEnv(
     committedChanged = removeGolemEnv(env, baseUrl, loopbackCaPath(projectDir));
     if (committedChanged) {
       if (Object.keys(env).length === 0) delete settings.env;
-      if (opts.dryRun !== true) await writeJson(file, settings);
+      if (opts.dryRun !== true) await writeJsonObject(file, settings);
     }
   }
 
@@ -291,7 +285,7 @@ export async function removeLocalCaTrust(
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<boolean> {
   const file = claudeLocalSettingsPath(projectDir);
-  const settings = await readJson(file);
+  const settings = await readJsonObject(file);
   const env = envOf(settings);
   if (settings === null || env === null) return false;
 
@@ -302,7 +296,7 @@ export async function removeLocalCaTrust(
 
   delete env[ENV_EXTRA_CA];
   if (Object.keys(env).length === 0) delete settings.env;
-  if (opts.dryRun !== true) await writeJson(file, settings);
+  if (opts.dryRun !== true) await writeJsonObject(file, settings);
   return true;
 }
 
@@ -338,8 +332,8 @@ export async function writeLocalCaTrust(
 ): Promise<LocalCaTrustResult> {
   const localFile = claudeLocalSettingsPath(projectDir);
   const committedFile = claudeSettingsPath(projectDir);
-  const localSettings = (await readJson(localFile)) ?? {};
-  const committedSettings = await readJson(committedFile);
+  const localSettings = (await readJsonObject(localFile)) ?? {};
+  const committedSettings = await readJsonObject(committedFile);
 
   const ownedByUs = (value: unknown): value is string =>
     typeof value === "string" &&
@@ -363,7 +357,7 @@ export async function writeLocalCaTrust(
     delete committedEnv[ENV_EXTRA_CA];
     if (Object.keys(committedEnv).length === 0) delete committedSettings.env;
     healedCommitted = true;
-    if (opts.dryRun !== true) await writeJson(committedFile, committedSettings);
+    if (opts.dryRun !== true) await writeJsonObject(committedFile, committedSettings);
   }
 
   const currentLocal = localEnv?.[ENV_EXTRA_CA];
@@ -372,7 +366,7 @@ export async function writeLocalCaTrust(
     const env = localEnv ?? {};
     env[ENV_EXTRA_CA] = caPath;
     localSettings.env = env;
-    if (opts.dryRun !== true) await writeJson(localFile, localSettings);
+    if (opts.dryRun !== true) await writeJsonObject(localFile, localSettings);
   }
   return { wrote: !alreadySet, healedCommitted };
 }
@@ -396,7 +390,12 @@ export async function wireProxyEnv(
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<WireResult> {
   const file = claudeSettingsPath(projectDir);
-  const settings = (await readJson(file)) ?? {};
+  // The loud reader, on purpose. This used to swallow a parse failure and fall
+  // back to `{}` — which then got WRITTEN, replacing a user's whole
+  // `.claude/settings.json` with nothing but an env block. `golem init` has
+  // always refused to clobber a file it cannot parse; `golem proxy wire`
+  // silently did the opposite.
+  const settings = (await readJsonObject(file)) ?? {};
   const existing = envOf(settings);
   const env: JsonObject = existing ?? {};
 
@@ -411,6 +410,6 @@ export async function wireProxyEnv(
   env[ENV_BASE_URL] = baseUrl;
   env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
   settings.env = env;
-  if (opts.dryRun !== true) await writeJson(file, settings);
+  if (opts.dryRun !== true) await writeJsonObject(file, settings);
   return { changed: true, needsReload: true };
 }

@@ -54,6 +54,16 @@ import {
 } from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
 import { ensureLoopbackCert, loopbackCaPath } from "../proxy/loopback-cert.js";
+import { InitError } from "./init-error.js";
+import {
+  type JsonObject,
+  objectEntry,
+  pathExists,
+  readJsonObject,
+  rel,
+  stringArrayEntry,
+  writeJsonObject,
+} from "./json-file.js";
 import {
   classifyManaged,
   ownedDetail,
@@ -199,7 +209,10 @@ export interface InitReport {
 }
 
 /** A conflict or precondition failure with a user-actionable message. */
-export class InitError extends Error {}
+// Re-exported (not declared here) so `json-file.ts` can throw it without
+// importing init.ts — see init-error.ts. Every existing
+// `import { InitError } from "../init.js"` keeps working.
+export { InitError };
 
 const DEFAULT_PROXY_PORT = 4653;
 const MCP_SERVER_KEY = "golem";
@@ -321,67 +334,6 @@ async function ensureGitignored(
     path: ".gitignore",
     detail: `ignore ${entry}`,
   };
-}
-
-/** Does a path exist? (module-level; the probe has its own scoped copy.) */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function rel(projectDir: string, abs: string): string {
-  return path.relative(projectDir, abs).split(path.sep).join("/");
-}
-
-type JsonObject = Record<string, unknown>;
-
-/** Read a JSON object file; missing -> null; malformed -> InitError (never clobber). */
-async function readJsonObject(file: string): Promise<JsonObject | null> {
-  let raw: string;
-  try {
-    raw = await readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new InitError(`${file} is not valid JSON — fix or remove it, then re-run golem init`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new InitError(`${file} must contain a JSON object`);
-  }
-  return parsed as JsonObject;
-}
-
-async function writeJsonObject(file: string, value: JsonObject): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function objectEntry(obj: JsonObject, key: string): JsonObject {
-  const existing = obj[key];
-  if (typeof existing === "object" && existing !== null && !Array.isArray(existing)) {
-    return existing as JsonObject;
-  }
-  const fresh: JsonObject = {};
-  obj[key] = fresh;
-  return fresh;
-}
-
-/** Like {@link objectEntry} but for a string[] value (permission allow/ask lists). */
-function stringArrayEntry(obj: JsonObject, key: string): string[] {
-  const existing = obj[key];
-  if (Array.isArray(existing)) return existing as string[];
-  const fresh: string[] = [];
-  obj[key] = fresh;
-  return fresh;
 }
 
 /** Push a create/modify/skip action for the .claude/settings.json env block. */
