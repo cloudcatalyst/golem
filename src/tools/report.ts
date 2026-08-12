@@ -9,7 +9,7 @@
 
 import { pct, signedPct } from "../bench/stats.js";
 import type { ToolCensus } from "./catalog.js";
-import type { CatalogComparison } from "./selection.js";
+import type { CatalogComparison } from "./compare-catalogs.js";
 import type { ShrinkMode } from "./shrink.js";
 
 export interface ToolBenchReport {
