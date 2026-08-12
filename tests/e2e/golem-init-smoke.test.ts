@@ -25,7 +25,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { golemInit, type InitProbe } from "../../src/cli/init.js";
 import { buildProxyFromSettings } from "../../src/cli/proxy-runtime.js";
 import { loadConfig } from "../../src/config/index.js";
@@ -33,6 +33,23 @@ import { openTelemetryStore } from "../../src/telemetry/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 
 // R10.2: one recursive delete for the file instead of two per test.
+
+// R10.2 — a LOCAL ceiling, with the measurement that justifies it.
+//
+// `golemInit` costs 298ms on an idle machine (measured 2026-08-13: 10 calls in
+// 2981ms). A test here does one or two of them. When one of these tests trips
+// the 20s budget under a full parallel run, that is a 66x slowdown of work that
+// is small and real — not a hung test and not a slow code path. The cause is
+// environmental: ~15 vitest workers doing filesystem work on Windows, where
+// every file creation is a virus-scanner event.
+//
+// The structural fixes are already applied (R10.2: one temp-tree delete per
+// file rather than per test; atomic settings writes). This raises the ceiling
+// only for the two init-heaviest files rather than globally, so the 20s default
+// still guards everything else — the same targeted approach, and the same
+// reasoning, as checkpoint-ledger.test.ts.
+vi.setConfig({ testTimeout: 90_000 });
+
 const newTempDir = useTempDirs("golem-e2e");
 
 import { NON_STREAMING_TOOL_USE_RESPONSE } from "../integration/helpers/anthropic-fixtures.js";
