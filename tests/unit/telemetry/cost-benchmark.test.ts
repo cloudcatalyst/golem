@@ -4,10 +4,7 @@
  * the CLAUDE.md leanness check. Plus the raw event reader the benchmark needs.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ModelCatalog, TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
   buildCostBenchmark,
@@ -18,7 +15,7 @@ import {
   renderCostBenchmark,
   windowStartMs,
 } from "../../../src/telemetry/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const NOW = Date.parse("2026-07-23T12:00:00.000Z");
 const DAY = 86_400_000;
@@ -33,6 +30,8 @@ function ev(over: Partial<TelemetryEvent>): TelemetryEvent {
     ...over,
   };
 }
+
+const newTempDir = useTempDirs("golem-bench-");
 
 describe("windowStartMs", () => {
   it("subtracts the window; all-time is null", () => {
@@ -317,10 +316,7 @@ describe("renderCostBenchmark", () => {
 describe("readTelemetryEvents", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-bench-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("returns [] when nothing was ever recorded", async () => {

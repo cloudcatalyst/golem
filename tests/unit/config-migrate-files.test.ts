@@ -10,10 +10,9 @@
  * had gone empty.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config/index.js";
 import {
   backupPath,
@@ -26,7 +25,7 @@ import {
   writeVersionStamp,
 } from "../../src/config/migrate-files.js";
 import { SETTING_MIGRATIONS } from "../../src/config/migrations.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 const VERSION = "9.9.9";
 
@@ -56,15 +55,13 @@ async function readJson(file: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
 }
 
+const newTempDir = useTempDirs("golem-migrate-files-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-migrate-files-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
   await mkdir(path.join(projectDir, ".golem"), { recursive: true });
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 describe("sweepSettingsFiles", () => {

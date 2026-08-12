@@ -3,10 +3,9 @@
  * the nudge decision, the reason text, and the one-shot state round-trip.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
@@ -18,7 +17,7 @@ import {
   writeSnoozeNudgeState,
 } from "../../../src/hooks/snooze-nudge.js";
 import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const NOW_MS = Date.parse("2026-07-18T00:00:00.000Z");
 const FUTURE = "2026-07-18T02:00:00.000Z";
@@ -28,6 +27,8 @@ const PAST = "2026-07-17T22:00:00.000Z";
 function prediction(utilization: number, resetAtIso: string | null): LimitPrediction {
   return { observedAtIso: "2026-07-18T00:00:00.000Z", fiveHour: { utilization, resetAtIso } };
 }
+
+const newTempDir = useTempDirs("golem-nudge-");
 
 describe("decideSnoozeNudge", () => {
   it("parks when near-limit with a future reset, not yet nudged", () => {
@@ -189,10 +190,7 @@ describe("snoozeEnforceReason", () => {
 describe("snooze nudge state round-trip", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-nudge-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("writes then reads back both one-shot markers", async () => {

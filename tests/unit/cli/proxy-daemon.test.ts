@@ -6,12 +6,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultProjectPort,
   isProcessAlive,
@@ -28,7 +27,7 @@ import {
   waitForPortFree,
   writeProxyPid,
 } from "../../../src/cli/proxy-daemon.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 /** Grab a currently-free loopback port by letting the OS assign one, then releasing it. */
 async function getFreePort(): Promise<number> {
@@ -49,11 +48,10 @@ async function getFreePort(): Promise<number> {
 }
 
 let dir: string;
+const newTempDir = useTempDirs("golem-daemon-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-daemon-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("pid file", () => {

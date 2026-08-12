@@ -1,7 +1,6 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   checkForUpdate,
   detectInstallMethod,
@@ -9,7 +8,9 @@ import {
   semverGt,
   upgradeCommand,
 } from "../../../src/update/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-update-");
 
 describe("semverGt", () => {
   it("compares by field, numerically", () => {
@@ -68,10 +69,7 @@ describe("upgradeCommand", () => {
 describe("checkForUpdate", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-update-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("reports an available update and caches it", async () => {

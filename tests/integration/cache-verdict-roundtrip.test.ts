@@ -11,10 +11,7 @@
  * and assert. Any future `TelemetryEvent` field should get a case here.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { aggregateCacheStats } from "../../src/telemetry/cache-report.js";
 import {
   BUILTIN_MODEL_CATALOG,
@@ -23,16 +20,14 @@ import {
   readTelemetryEvents,
 } from "../../src/telemetry/index.js";
 import type { TelemetryEvent } from "../../src/telemetry/types.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-verdict-rt-"));
-});
+const newTempDir = useTempDirs("golem-verdict-rt-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 function pipelineEvent(over: Partial<TelemetryEvent> = {}): TelemetryEvent {

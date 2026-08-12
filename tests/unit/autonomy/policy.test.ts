@@ -2,10 +2,9 @@
  * R5.4 — autonomy level persistence + fail-closed read (ADR-0002).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   autonomyStatePath,
   DEFAULT_AUTONOMY_GATE_ENABLED,
@@ -17,15 +16,14 @@ import {
   setAutonomyGateEnabled,
   writeAutonomyLevel,
 } from "../../../src/autonomy/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-autonomy-");
 
 describe("autonomy policy", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-autonomy-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("defaults to manual when nothing is persisted", async () => {

@@ -4,10 +4,9 @@
  * URLs through. Uses the real WebCache + hashing KB (no network, no Ollama).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { CcrStore, LocalDirBlobStore } from "../../../src/compression/index.js";
 import { type HookIo, runWebFetchPost, runWebFetchPre } from "../../../src/hooks/index.js";
 import { MAX_SERVED_CHARS } from "../../../src/hooks/web-fetch.js";
@@ -20,14 +19,13 @@ import {
 } from "../../../src/knowledge/index.js";
 import { generateLoopbackPair } from "../../../src/proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../../src/proxy/loopback-serve.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-webfetch-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-webfetch-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 function fakeIo(input: string): HookIo & { out: string[]; err: string[] } {

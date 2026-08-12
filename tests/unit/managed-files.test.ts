@@ -7,10 +7,9 @@
  * the real question is "did the USER change it, or did Golem's text move on?"
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   classifyManaged,
   forgetManaged,
@@ -20,7 +19,7 @@ import {
   rememberManaged,
   removeManagedState,
 } from "../../src/cli/managed-files.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let dir: string;
 const FILE = (): string => path.join(dir, ".claude", "skills", "golem", "ship", "SKILL.md");
@@ -30,12 +29,10 @@ async function put(file: string, content: string): Promise<void> {
   await writeFile(file, content, "utf8");
 }
 
-beforeEach(async () => {
-  dir = await mkdtemp(path.join(os.tmpdir(), "golem-managed-"));
-});
+const newTempDir = useTempDirs("golem-managed-");
 
-afterEach(async () => {
-  await rm(dir, rmTemp);
+beforeEach(async () => {
+  dir = await newTempDir();
 });
 
 describe("classifyManaged", () => {

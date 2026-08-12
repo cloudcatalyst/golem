@@ -1,11 +1,10 @@
 /** E1: invalid config fails with path-specific messages; unknown keys warn. */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig } from "../../src/config/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -19,14 +18,12 @@ async function writeRaw(file: string, text: string): Promise<void> {
   await writeFile(file, text, "utf8");
 }
 
+const newTempDir = useTempDirs("golem-validate-test-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-validate-test-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 const load = () => loadConfig({ projectDir, userDir, env: {} });

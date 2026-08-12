@@ -21,7 +21,8 @@
  * user who only asked for status ({@link readJsonObjectOrNull}).
  */
 
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { InitError } from "./init-error.js";
 
@@ -89,10 +90,32 @@ export async function readJsonObjectOrNull(file: string): Promise<JsonObject | n
   }
 }
 
-/** Write a JSON object, creating the parent directory, with a trailing newline. */
+/**
+ * Write a JSON object, creating the parent directory, with a trailing newline.
+ *
+ * The write goes to a sibling temp file and is then renamed over the target,
+ * which replaces atomically (on Windows too). A plain `writeFile` leaves a
+ * window in which the file exists but holds a prefix of the new content — and
+ * `.claude/settings.json` is read back several times DURING a single
+ * `golem init`, so a reader landing in that window sees truncated JSON and
+ * init dies with "not valid JSON" against a file it wrote itself. The same
+ * window is what would corrupt a user's settings if the process died mid-write.
+ *
+ * `src/config/file-io.ts` reached this conclusion for `.golem/settings*.json`
+ * already; this is the `.claude/`-side equivalent. The two are separate on
+ * purpose — this one deals in `InitAction` reporting and the config one in
+ * `ConfigError` — but they must not disagree about durability.
+ */
 export async function writeJsonObject(file: string, value: JsonObject): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await rename(tmp, file);
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => {});
+    throw err;
+  }
 }
 
 /**

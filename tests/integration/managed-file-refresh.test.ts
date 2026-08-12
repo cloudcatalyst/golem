@@ -7,10 +7,9 @@
  * that must not regress: a rule the user disabled is never resurrected.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { rememberManaged } from "../../src/cli/managed-files.js";
 import {
   GUIDANCE_FEATURES,
@@ -20,15 +19,14 @@ import {
   seedDefaultGuidance,
   writeGuidanceRule,
 } from "../../src/hooks/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let projectDir: string;
 
+const newTempDir = useTempDirs("golem-managed-refresh-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-managed-refresh-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 const read = (p: string) => readFile(p, "utf8");

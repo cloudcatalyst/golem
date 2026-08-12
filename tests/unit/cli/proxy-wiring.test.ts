@@ -9,10 +9,9 @@
  * gets clobbered.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   ENV_BASE_URL,
   ENV_EXTRA_CA,
@@ -26,19 +25,17 @@ import {
   wiringGap,
   writeLocalCaTrust,
 } from "../../../src/cli/proxy-wiring.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const OURS = proxyBaseUrl(4653);
 const FOREIGN = "http://localhost:9999";
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-proxy-wiring-"));
-});
+const newTempDir = useTempDirs("golem-proxy-wiring-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 async function writeClaudeSettings(value: unknown): Promise<void> {

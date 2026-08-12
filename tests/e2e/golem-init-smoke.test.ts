@@ -23,15 +23,18 @@
  *   signal `golem stats` reads (tests/integration/cli-stats.test.ts).
  */
 
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { golemInit, type InitProbe } from "../../src/cli/init.js";
 import { buildProxyFromSettings } from "../../src/cli/proxy-runtime.js";
 import { loadConfig } from "../../src/config/index.js";
 import { openTelemetryStore } from "../../src/telemetry/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
+
+// R10.2: one recursive delete for the file instead of two per test.
+const newTempDir = useTempDirs("golem-e2e");
+
 import { NON_STREAMING_TOOL_USE_RESPONSE } from "../integration/helpers/anthropic-fixtures.js";
 import {
   type FakeUpstream,
@@ -64,13 +67,8 @@ let projectDir: string;
 let fakeUserDir: string;
 
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-e2e-project-"));
-  fakeUserDir = path.join(await mkdtemp(path.join(tmpdir(), "golem-e2e-home-")), ".golem");
-});
-
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
-  await rm(path.dirname(fakeUserDir), rmTemp);
+  projectDir = await newTempDir();
+  fakeUserDir = path.join(await newTempDir(), ".golem");
 });
 
 describe("golem init -> Claude Code smoke (T-C2)", () => {

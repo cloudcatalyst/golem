@@ -3,10 +3,7 @@
  * injected (fake), so no real Ollama is required.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { distillNoteCapture } from "../../../src/cli/distill-note.js";
 import { InitError } from "../../../src/cli/init.js";
 import { appendNote } from "../../../src/cli/notes.js";
@@ -20,7 +17,7 @@ import type {
   Vector,
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 class FakeInferenceService implements InferenceService {
   constructor(private readonly draft: Record<string, unknown>) {}
@@ -59,11 +56,10 @@ const fakeDraft = {
 };
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-distill-note-cli-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-distill-note-cli-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 describe("distillNoteCapture", () => {

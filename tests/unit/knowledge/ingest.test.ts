@@ -4,10 +4,9 @@
  * path + a deterministic lexical embedder standing in for WS-D until C3).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type EmbedFn,
   GolemKnowledgeBase,
@@ -17,7 +16,7 @@ import {
   type VectorDriver,
 } from "../../../src/knowledge/index.js";
 import { describeKnowledgeBaseContract } from "../../contract/knowledge-contract.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 /**
  * Deterministic lexical embedder: hashes tokens into a fixed-dim bag-of-words
@@ -43,11 +42,10 @@ function lexicalEmbed(dim = 256): EmbedFn {
 }
 
 let dir: string;
+const newTempDir = useTempDirs("golem-ingest-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-ingest-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("planIngest traversal", () => {

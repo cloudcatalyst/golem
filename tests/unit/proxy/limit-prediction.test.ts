@@ -3,10 +3,9 @@
  * `anthropic-ratelimit-unified-*` response headers and the state round-trip.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type LimitPrediction,
   limitStatePath,
@@ -14,7 +13,7 @@ import {
   readLimitState,
   writeLimitState,
 } from "../../../src/proxy/limit-prediction.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const NOW_ISO = "2026-07-18T00:00:00.000Z";
 
@@ -27,6 +26,8 @@ const FULL = {
   "anthropic-ratelimit-unified-7d-reset": "1784710800",
   "anthropic-ratelimit-unified-7d-status": "allowed",
 } as const;
+
+const newTempDir = useTempDirs("golem-limit-");
 
 describe("parseLimitPrediction", () => {
   it("parses both windows, converting epoch-second resets to ISO", () => {
@@ -86,10 +87,7 @@ describe("parseLimitPrediction", () => {
 describe("limit state round-trip", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-limit-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("writes then reads back an equal prediction", async () => {

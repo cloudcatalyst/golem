@@ -2,10 +2,7 @@
  * R5.5 (spike) — prompt translation + accepted-example style store.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   CapabilityUnavailableError,
   type ChatMessage,
@@ -20,7 +17,7 @@ import {
   translatePrompt,
   writeLastSuggestion,
 } from "../../../src/prompt/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 function fakeInference(
   text: string,
@@ -42,6 +39,8 @@ function fakeInference(
     capabilities: () => 2,
   };
 }
+
+const newTempDir = useTempDirs("golem-style-");
 
 describe("translatePrompt", () => {
   it("returns a suggestion (never an action)", async () => {
@@ -90,10 +89,7 @@ describe("translatePrompt", () => {
 describe("style store", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-style-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("round-trips the last suggestion → accepted example", async () => {

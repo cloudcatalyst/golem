@@ -4,10 +4,9 @@
  * openKnowledgeBase({ inference }), exercising the actual adapter path.
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   type ChatResult,
   HardwareTier,
@@ -20,7 +19,7 @@ import {
   inferenceEmbedFn,
   openKnowledgeBase,
 } from "../../../src/knowledge/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 /** Fake InferenceService: deterministic lexical embeddings; chat unused here. */
 class FakeInference implements InferenceService {
@@ -59,11 +58,10 @@ class FakeInference implements InferenceService {
 }
 
 let dir: string;
+const newTempDir = useTempDirs("golem-c3-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-c3-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("inferenceEmbedFn", () => {
