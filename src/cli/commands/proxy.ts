@@ -199,6 +199,9 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     pid: process.pid,
     port: addr.port,
     ts: new Date().toISOString(),
+    // Stamp the build we are actually running, so every later "is the proxy
+    // running" check can also answer "is it THIS build" (see ProxyStatus.stale).
+    version: VERSION,
   });
   const via = upstream.accountId === null ? "" : ` [account ${upstream.accountId}]`;
   const model = upstream.model === undefined ? "" : ` model ${upstream.model}`;

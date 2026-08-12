@@ -39,7 +39,7 @@ import {
   type ProviderEntry as LocalProviderEntry,
   probeAndCacheLocalModelInfo,
 } from "./local-model.js";
-import { proxyLogPath } from "./proxy-daemon.js";
+import { proxyLogPath, proxyStatus } from "./proxy-daemon.js";
 import {
   claudeLocalSettingsPath,
   claudeSettingsPath,
@@ -158,10 +158,14 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
-  const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
+  const [init, reachable, daemon, slider, brevityDial, compressionDial, localInfo, servedModel] =
     await Promise.all([
       golemInitStatus(projectDir, settings.proxy.port),
       probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
+      // Which BUILD is answering, not just whether something is. A daemon serves
+      // the code and config it started with, so a rebuild since then has not
+      // reached it — and every other field here would still look healthy.
+      proxyStatus(projectDir, settings.proxy.port),
       getSliderInfo(sliderOpts),
       // Decision 52: the slider is a preset over two dials, so status must report
       // BOTH and say which of them the slider is actually driving.
@@ -302,6 +306,11 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // They now land here, so name the file — a diagnostic nobody can find is
       // the same as no diagnostic.
       log: proxyLogPath(projectDir),
+      // "Reachable" answered "is something listening", never "is it the build
+      // you just installed". A daemon keeps serving its startup code and config,
+      // so those are different questions and both get reported.
+      ...(daemon.version !== undefined ? { running_version: daemon.version } : {}),
+      ...(daemon.stale === true ? { stale: true } : {}),
     },
     upstream: {
       provider: upstream.provider,

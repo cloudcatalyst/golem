@@ -94,6 +94,19 @@ export interface StatusReport {
      * spawned with `stdio: "ignore"` and every proxy diagnostic was discarded.
      */
     readonly log?: string;
+    /**
+     * The build the RUNNING daemon was started from, when it can be known.
+     * Absent when nothing is running, or when something holds the port without
+     * a pid file.
+     */
+    readonly running_version?: string;
+    /**
+     * True when the running daemon is not this build. It still answers probes
+     * and still reports `reachable`, but it serves the code AND the config it
+     * started with — so a rebuild or a settings change since then has not
+     * reached it. Restart with `golem proxy restart`.
+     */
+    readonly stale?: boolean;
   };
   /**
    * The active upstream's non-secret identity (R6.2 display): the account /

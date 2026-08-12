@@ -16,6 +16,9 @@ import type { FileHandle } from "node:fs/promises";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
 import path from "node:path";
+// `../version.js`, not `../index.js`: this module is on the per-prompt
+// statusline path and the barrel re-exports every interface.
+import { VERSION } from "../version.js";
 
 /** Base of the per-project proxy port range, and its span. */
 export const PROXY_PORT_BASE = 4653;
@@ -39,6 +42,21 @@ export interface ProxyPidInfo {
   readonly pid: number;
   readonly port: number;
   readonly ts: string;
+  /**
+   * The Golem version the RUNNING daemon was built from, stamped when it starts
+   * listening.
+   *
+   * A daemon reads its config once at startup and then keeps serving whatever
+   * code it was launched with, so `npm run build` does not change what a live
+   * proxy does — it only changes what the NEXT one will do. Without this stamp
+   * there is nothing to compare, and "the proxy is running" reads as "the proxy
+   * is current" when it may be hours of rebuilds behind.
+   *
+   * Optional because a daemon started before this field existed has no stamp.
+   * Absent is treated as stale (it is, by definition, an older build) — see
+   * {@link ProxyStatus.stale}.
+   */
+  readonly version?: string;
 }
 
 export function proxyPidPath(projectDir: string): string {
@@ -72,6 +90,10 @@ export async function readProxyPid(projectDir: string): Promise<ProxyPidInfo | n
       pid: o.pid,
       port: o.port,
       ts: typeof o.ts === "string" ? o.ts : "",
+      // Absent in a pid file written before the stamp existed; left undefined
+      // rather than defaulted, so "unknown build" stays distinguishable from
+      // "some particular build".
+      ...(typeof o.version === "string" ? { version: o.version } : {}),
     };
   } catch {
     return null;
@@ -150,6 +172,24 @@ export interface ProxyStatus {
   readonly pid?: number;
   readonly port?: number;
   readonly source: "pidfile" | "port" | "none";
+  /**
+   * The version the running daemon was built from, when it can be known.
+   * Absent for a `source: "port"` hit (something is listening but wrote no pid
+   * file) and for a daemon started before the stamp existed.
+   */
+  readonly version?: string;
+  /**
+   * True when the running daemon is NOT this build — either its stamp differs
+   * from {@link VERSION}, or it has no stamp at all (which means it predates
+   * the stamp, so it is older by definition).
+   *
+   * Undefined when nothing is running. A stale daemon still answers a port
+   * probe and still looks healthy in every other check, which is exactly why
+   * this is reported separately from {@link running}: it serves old code with
+   * the config it read at startup, so a rebuild or a settings change since then
+   * has had no effect on it.
+   */
+  readonly stale?: boolean;
 }
 
 /**
@@ -182,13 +222,21 @@ export function buildSpawnEnv(
 }
 
 /**
- * Is a Golem proxy running for this project? Prefers the PID file (exact),
- * falls back to a port probe (catches a proxy started without a pid file).
+ * Is a Golem proxy running for this project, and is it THIS build? Prefers the
+ * PID file (exact), falls back to a port probe (catches a proxy started without
+ * a pid file).
+ *
+ * The second question is not decoration. A daemon keeps serving the code it was
+ * launched with and the config it read at startup, so "running" alone answered
+ * "yes" for an 18-hour-old process that was routing every request to a target
+ * the current config no longer names — while every other check looked healthy.
+ * {@link ProxyStatus.stale} is that gap, reported rather than inferred.
  */
 export async function proxyStatus(
   projectDir: string,
   port: number,
   aliveFn: (pid: number) => boolean = isProcessAlive,
+  currentVersion: string = VERSION,
 ): Promise<ProxyStatus> {
   const info = await readProxyPid(projectDir);
   if (info && aliveFn(info.pid)) {
@@ -197,9 +245,15 @@ export async function proxyStatus(
       pid: info.pid,
       port: info.port,
       source: "pidfile",
+      ...(info.version !== undefined ? { version: info.version } : {}),
+      // No stamp => started before the stamp existed => older than this build.
+      stale: info.version !== currentVersion,
     };
   }
-  if (await portInUse(port)) return { running: true, port, source: "port" };
+  // A port hit tells us something is listening, not what it is. Unknowable
+  // rather than assumed-good: reported as stale so a daemon that lost its pid
+  // file cannot masquerade as current.
+  if (await portInUse(port)) return { running: true, port, source: "port", stale: true };
   return { running: false, source: "none" };
 }
 

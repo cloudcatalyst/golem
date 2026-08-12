@@ -144,6 +144,21 @@ export function renderStatus(report: StatusReport): string {
         : "not running — the SessionStart hook restarts it on project open"
     }`,
   );
+  // A running daemon serves the code AND the config it started with, so
+  // "reachable" was true for an 18-hour-old process still routing to a target
+  // the current config no longer named. Same lesson as the R8.32 note below:
+  // say it on the proxy line the eye lands on, not somewhere it must be inferred.
+  if (report.proxy.reachable && report.proxy.stale === true) {
+    const built =
+      report.proxy.running_version !== undefined
+        ? `build ${report.proxy.running_version}`
+        : "an unknown build";
+    lines.push(
+      `  ⚠ running ${built}, not ${report.version} — it is still serving the code and ` +
+        "config it started with.",
+    );
+    lines.push("    Fix: `golem proxy restart`");
+  }
   // R8.32: the `[--] .claude/settings.json` checkbox above and this "reachable"
   // line could contradict each other two lines apart, and the reader was left to
   // notice. Say it here, attached to the proxy line the eye actually lands on.
