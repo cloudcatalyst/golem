@@ -166,9 +166,6 @@ export function isSymbolExtractable(ext: string): boolean {
   return ext in GRAMMAR_BY_EXT;
 }
 
-/** Extensions the symbol extractor understands — the map's file filter. */
-export const SYMBOL_EXTS: readonly string[] = Object.keys(GRAMMAR_BY_EXT);
-
 /** Signature lines are one-liners; anything longer is elided with `…`. */
 const MAX_SIGNATURE_CHARS = 160;
 

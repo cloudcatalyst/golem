@@ -194,14 +194,6 @@ export async function probeAndCacheLocalModelInfo(
   return { reachable, ...(coderModel !== "" ? { coderModel } : {}) };
 }
 
-export async function probeAndCacheLocalModel(
-  projectDir: string,
-  baseUrl: string,
-  providers?: readonly ProviderEntry[],
-): Promise<boolean> {
-  return (await probeAndCacheLocalModelInfo(projectDir, baseUrl, providers)).reachable;
-}
-
 /**
  * Reachability + coder model for the per-turn status line: use a fresh cache if
  * present, else probe once (bounded) and refresh the cache. Never throws.
@@ -219,16 +211,4 @@ export async function localModelInfoCached(
     };
   }
   return probeAndCacheLocalModelInfo(projectDir, baseUrl, providers);
-}
-
-/**
- * Reachability for the per-turn status line: use a fresh cache if present, else
- * probe once (bounded) and refresh the cache. Never throws.
- */
-export async function localModelReachableCached(
-  projectDir: string,
-  baseUrl: string,
-  providers?: readonly ProviderEntry[],
-): Promise<boolean> {
-  return (await localModelInfoCached(projectDir, baseUrl, providers)).reachable;
 }

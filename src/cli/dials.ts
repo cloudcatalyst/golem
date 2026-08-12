@@ -109,24 +109,6 @@ export function describeDial(info: DialInfo): string {
   return `${label} ${info.effective} (pinned)`;
 }
 
-/**
- * Compact suffix for dense displays (status line, status header): emitted ONLY
- * when a dial is doing something other than silently following the slider, so
- * the common case adds no noise.
- */
-export function dialBadges(dials: readonly DialInfo[]): string {
-  const parts: string[] = [];
-  for (const dial of dials) {
-    if (dial.kind === "brevity" && dial.effective !== "off") {
-      parts.push(`brevity ${dial.effective}${dial.pinned ? "*" : ""}`);
-    }
-    if (dial.kind === "compression" && dial.pinned) {
-      parts.push(`compression ${dial.effective}*`);
-    }
-  }
-  return parts.join(" · ");
-}
-
 export class DialError extends Error {
   constructor(message: string) {
     super(message);

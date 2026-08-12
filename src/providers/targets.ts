@@ -175,20 +175,6 @@ function lookupGateway(
 }
 
 /**
- * Parse a compound target reference like `"openrouter:qwen/qwen3-14b"` into
- * gateway id and model id parts. A bare `"openrouter"` returns just the gateway.
- * A bare model name like `"qwen3"` (no colon) returns just the model.
- */
-export function parseTargetRef(ref: string): {
-  readonly gateway?: string;
-  readonly model?: string;
-} {
-  const colon = ref.indexOf(":");
-  if (colon <= 0) return { model: ref };
-  return { gateway: ref.slice(0, colon), model: ref.slice(colon + 1) };
-}
-
-/**
  * Find targets by model name across all gateways. Case-insensitive substring
  * match (e.g. `"qwen3"` matches `"qwen/qwen3.7-flash"` and
  * `"qwen/qwen3-14b"`). Returns all matching targets, or empty array.
