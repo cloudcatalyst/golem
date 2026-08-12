@@ -192,9 +192,9 @@ export function buildProxyFromSettings(
           settings.proxy.upstream_auth_scheme,
         ),
       },
-      ...(settings.proxy.accounts !== undefined ? { accounts: settings.proxy.accounts } : {}),
-      ...(settings.proxy.default_target !== undefined
-        ? { activeAccount: settings.proxy.default_target }
+      ...(settings.proxy.gateways !== undefined ? { gateways: settings.proxy.gateways } : {}),
+      ...(settings.inference.default_target !== undefined
+        ? { activeAccount: settings.inference.default_target }
         : {}),
       knownTargetIds: listTargets(settings.proxy).map((t) => t.id),
       legacyApiKey: process.env.GOLEM_UPSTREAM_API_KEY,
@@ -211,8 +211,16 @@ export function buildProxyFromSettings(
   }
   // A default_target naming an id in neither registry fails closed downstream
   // (R9.2); say so at startup rather than on the first request that needs it.
-  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
-  if (!listTargets(settings.proxy).some((t) => t.id === defaultTargetId)) {
+  // R9.23: default_target moved to inference, merge it into the proxy settings
+  // so resolveDefaultTargetId sees the live value.
+  const proxyWithDefault = {
+    ...settings.proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  };
+  const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
+  if (!listTargets(proxyWithDefault).some((t) => t.id === defaultTargetId)) {
     process.stderr.write(
       `golem proxy: default target "${defaultTargetId}" is in neither proxy.targets nor ` +
         "proxy.accounts — no substitute will be used.\n",
@@ -336,10 +344,10 @@ export function buildProxyFromSettings(
     // — with one target the resolver would decide the same thing on every
     // request, so leaving it absent keeps the single-upstream path byte-for-byte
     // the code it has always been.
-    ...(listTargets(settings.proxy).length > 1
+    ...(listTargets(proxyWithDefault).length > 1
       ? {
           resolveRoute: createRouteResolver({
-            settings: settings.proxy,
+            settings: proxyWithDefault,
             onRoute: ({ targetId, reason, sticky }) => {
               // ADR-0003 invariant 5: every (request → target, why) selection is
               // attributable. Non-secret by construction.

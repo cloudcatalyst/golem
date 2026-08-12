@@ -398,7 +398,7 @@ describe("golem init", () => {
 
   it("uninit removes the seeded guidance rules", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const rule = path.join(projectDir, ".claude", "rules", "golem-local-coder.md");
+    const rule = path.join(projectDir, ".claude", "rules", "golem-coder-first.md");
     await expect(readFile(rule, "utf8")).resolves.toContain("coder");
     await golemUninit({ projectDir, probe: okProbe });
     await expect(readFile(rule, "utf8")).rejects.toMatchObject({ code: "ENOENT" });

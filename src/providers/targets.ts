@@ -30,7 +30,7 @@
  * for, which is the one failure mode a target registry must not have.
  */
 
-import type { UpstreamAccount } from "./accounts.js";
+import type { GatewayEntry } from "./gateways.js";
 import {
   doubledVersionSegment,
   isTranslatingProvider,
@@ -60,13 +60,14 @@ export type TargetTrust = (typeof TARGET_TRUST_LEVELS)[number];
 /** A non-secret target entry (from `proxy.targets`). */
 export interface TargetEntry {
   readonly id: string;
-  readonly provider: UpstreamProvider;
-  readonly base_url: string;
+  /**
+   * R9.23: which `proxy.gateways` entry backs this target. The gateway entry
+   * carries the provider, base_url, and credential reference; several targets
+   * may share one gateway (one key backing several model ids).
+   */
+  readonly gateway: string;
   /** Model id to send. Omit on a byte-faithful target to forward the client's own id. */
   readonly model?: string;
-  /** `proxy.accounts` id whose stored credential backs this target. Omit to inherit client auth. */
-  readonly account?: string;
-  readonly auth_scheme?: UpstreamAuthScheme;
   /** Omit to take {@link defaultTrustFor}, which errs toward MORE redaction. */
   readonly trust?: TargetTrust;
   /**
@@ -90,8 +91,8 @@ export interface TargetEntry {
 export type TargetOrigin =
   /** An explicit `proxy.targets` entry. */
   | "target"
-  /** Derived from a `proxy.accounts` entry, so an existing config needs no edit. */
-  | "account"
+  /** Derived from a `proxy.gateways` entry (was `proxy.accounts` in R9.22 and earlier). */
+  | "gateway"
   /** The synthetic default: the top-level `proxy.upstream_*` config. */
   | "default";
 
@@ -104,7 +105,7 @@ export interface ResolvedTarget {
   readonly authScheme: UpstreamAuthScheme;
   readonly trust: TargetTrust;
   /**
-   * The `proxy.accounts` id whose credential backs this target, or null when it
+   * The `proxy.gateways` id whose credential backs this target, or null when it
    * inherits the client's own auth (the Anthropic default path).
    */
   readonly accountId: string | null;
@@ -121,7 +122,8 @@ export interface TargetRegistrySettings {
   readonly upstream_base_url: string;
   readonly upstream_model?: string;
   readonly upstream_auth_scheme: UpstreamAuthScheme;
-  readonly accounts?: readonly UpstreamAccount[];
+  /** R9.23: renamed from `accounts`. */
+  readonly gateways?: readonly GatewayEntry[];
   readonly targets?: readonly TargetEntry[];
   readonly default_target?: string;
 }
@@ -157,86 +159,128 @@ export function defaultTrustFor(provider: UpstreamProvider, baseUrl: string): Ta
 /**
  * The id of the synthetic default target — the top-level `proxy.upstream_*`
  * config. It is the provider name (e.g. `anthropic`), matching the synthetic
- * default *account* id so the two registries agree on what the cleared state is
+ * default gateway id so the two registries agree on what the cleared state is
  * called rather than inventing a second name for one thing.
  */
 export function defaultTargetId(provider: UpstreamProvider): string {
   return provider;
 }
 
+/** Look up a gateway by id; returns undefined when missing. */
+function lookupGateway(
+  gateways: readonly GatewayEntry[] | undefined,
+  id: string,
+): GatewayEntry | undefined {
+  return gateways?.find((g) => g.id === id);
+}
+
+/**
+ * Parse a compound target reference like `"openrouter:qwen/qwen3-14b"` into
+ * gateway id and model id parts. A bare `"openrouter"` returns just the gateway.
+ * A bare model name like `"qwen3"` (no colon) returns just the model.
+ */
+export function parseTargetRef(ref: string): {
+  readonly gateway?: string;
+  readonly model?: string;
+} {
+  const colon = ref.indexOf(":");
+  if (colon <= 0) return { model: ref };
+  return { gateway: ref.slice(0, colon), model: ref.slice(colon + 1) };
+}
+
+/**
+ * Find targets by model name across all gateways. Case-insensitive substring
+ * match (e.g. `"qwen3"` matches `"qwen/qwen3.7-flash"` and
+ * `"qwen/qwen3-14b"`). Returns all matching targets, or empty array.
+ */
+export function resolveModel(
+  settings: TargetRegistrySettings,
+  name: string,
+): readonly ResolvedTarget[] {
+  const targets = listTargets(settings);
+  const lower = name.toLowerCase();
+  return targets.filter((t) => t.model?.toLowerCase().includes(lower) === true);
+}
+
+/**
+ * Build a ResolvedTarget from a gateway + optional model override.
+ * The target's id is `<gateway>:<model>` when a model is given, else `<gateway>`.
+ */
 function toResolved(
-  entry: TargetEntry,
+  id: string,
+  gateway: GatewayEntry,
+  model: string | undefined,
+  trust: TargetTrust | undefined,
   origin: TargetOrigin,
-  accountId: string | null,
 ): ResolvedTarget {
   return {
-    id: entry.id,
-    provider: entry.provider,
-    baseUrl: entry.base_url,
-    model: entry.model,
-    authScheme: resolveAuthScheme(entry.provider, entry.auth_scheme ?? "inherit"),
-    trust: entry.trust ?? defaultTrustFor(entry.provider, entry.base_url),
-    accountId,
+    id,
+    provider: gateway.provider,
+    baseUrl: gateway.base_url,
+    model: model ?? gateway.models?.[0],
+    authScheme: resolveAuthScheme(gateway.provider, gateway.auth_scheme ?? "inherit"),
+    trust: trust ?? defaultTrustFor(gateway.provider, gateway.base_url),
+    accountId: gateway.id,
     origin,
   };
 }
 
 /**
  * The whole registry, in display order: the synthetic default, then every
- * `proxy.accounts` entry, then every explicit `proxy.targets` entry.
+ * target derived from `proxy.gateways`, then every explicit `proxy.targets` entry.
  *
- * **Accounts are surfaced as targets so an existing config needs no edit.** This
- * is not a greenfield registry — a real `.golem/settings.local.json` already
- * holds several accounts that are exactly the shape a target expresses (five
- * sharing one OpenRouter credential while naming different models, which is
- * precisely the many-targets-one-account case the split exists for). Deriving
- * them means `golem target list` is honest on day one instead of reporting an
- * empty table while the proxy happily serves those accounts.
+ * **Gateways are surfaced as targets so an existing config needs no edit.** A
+ * gateway with `models: ["claude-sonnet-5", "claude-haiku-5"]` produces two
+ * derived targets (one per model). A gateway with no models or omitted models
+ * produces one derived target with no fixed model (the old single-account
+ * behaviour).
  *
  * An explicit `proxy.targets` entry **replaces** a derived row of the same id,
- * in place, so adopting a target for an account you already have does not
+ * in place, so adopting a target for a gateway you already have does not
  * duplicate it or reorder the table.
  */
 export function listTargets(settings: TargetRegistrySettings): readonly ResolvedTarget[] {
   const rows: ResolvedTarget[] = [];
 
-  rows.push(
-    toResolved(
+  // 1. Synthetic default from the top-level config
+  rows.push({
+    ...toResolved(
+      defaultTargetId(settings.upstream_provider),
       {
         id: defaultTargetId(settings.upstream_provider),
         provider: settings.upstream_provider,
         base_url: settings.upstream_base_url,
-        ...(settings.upstream_model !== undefined ? { model: settings.upstream_model } : {}),
         auth_scheme: settings.upstream_auth_scheme,
+        // Default target has no explicit models — it forwards the client's own id
       },
+      settings.upstream_model,
+      undefined, // default trust computed from provider + base_url
       "default",
-      null,
     ),
-  );
+    // The synthetic default uses the legacy global env var, not per-gateway creds
+    accountId: null,
+  });
 
-  for (const account of settings.accounts ?? []) {
-    rows.push(
-      toResolved(
-        {
-          id: account.id,
-          provider: account.provider,
-          base_url: account.base_url,
-          ...(account.model !== undefined ? { model: account.model } : {}),
-          ...(account.auth_scheme !== undefined ? { auth_scheme: account.auth_scheme } : {}),
-        },
-        "account",
-        account.id,
-      ),
-    );
+  // 2. One target per model per gateway
+  for (const gateway of settings.gateways ?? []) {
+    if (gateway.models !== undefined && gateway.models.length > 0) {
+      for (const model of gateway.models) {
+        rows.push(toResolved(`${gateway.id}:${model}`, gateway, model, undefined, "gateway"));
+      }
+    } else {
+      // No explicit models — derive a single target from the gateway itself
+      rows.push(toResolved(gateway.id, gateway, undefined, undefined, "gateway"));
+    }
   }
 
+  // 3. Explicit proxy.targets entries (may replace derived rows)
   for (const entry of settings.targets ?? []) {
-    // An explicit target with no `account` still needs a credential story: fall
-    // back to an account of the same id when one exists, so `[[proxy.targets]]`
-    // can adopt an already-logged-in account without restating the reference.
-    const accountId =
-      entry.account ?? ((settings.accounts ?? []).some((a) => a.id === entry.id) ? entry.id : null);
-    const resolved = toResolved(entry, "target", accountId);
+    const gw = lookupGateway(settings.gateways, entry.gateway);
+    if (gw === undefined) {
+      // Unknown gateway reference — skip; the CLI warns at startup
+      continue;
+    }
+    const resolved = toResolved(entry.id, gw, entry.model, entry.trust, "target");
     const existing = rows.findIndex((r) => r.id === entry.id);
     if (existing >= 0) rows[existing] = resolved;
     else rows.push(resolved);
@@ -251,9 +295,28 @@ export function listTargets(settings: TargetRegistrySettings): readonly Resolved
  * R9.6: the `active_account` fallback that used to live here is now a declarative
  * entry in `src/config/migrations.ts`, applied by the loader — so this reads one
  * key and the rename is handled in exactly one place.
+ *
+ * R9.23: `default_target` may reference a gateway id (e.g. `"openrouter"`) rather
+ * than a full compound target id (e.g. `"openrouter:qwen/qwen3-14b"`). It may
+ * also be a bare model name (e.g. `"qwen3"`) which is resolved via
+ * {@link resolveModel}. When the selector does not match any target id directly,
+ * it is resolved to the first target derived from that gateway. This preserves
+ * backward compatibility for settings files that name a gateway.
  */
 export function resolveDefaultTargetId(settings: TargetRegistrySettings): string {
-  return settings.default_target ?? defaultTargetId(settings.upstream_provider);
+  const raw = settings.default_target ?? defaultTargetId(settings.upstream_provider);
+  // Try the raw value as a target id first (fast path for compound ids).
+  // This does NOT call listTargets unconditionally to avoid an extra list pass
+  // when no resolution is needed.
+  if (settings.default_target !== undefined && settings.gateways !== undefined) {
+    const targets = listTargets(settings);
+    if (!targets.some((t) => t.id === raw)) {
+      // Raw value is not a target id — check if it's a gateway id
+      const first = targets.find((t) => t.accountId === raw);
+      if (first !== undefined) return first.id;
+    }
+  }
+  return raw;
 }
 
 /** The outcome of a lookup. Fail-closed: an unknown id yields no target at all. */
@@ -278,22 +341,22 @@ export function resolveTarget(settings: TargetRegistrySettings, id: string): Tar
   return {
     ok: false,
     reason:
-      `unknown target "${id}" — it is in neither proxy.targets nor proxy.accounts. ` +
+      `unknown target "${id}" — it is in neither proxy.targets nor proxy.gateways. ` +
       `Configured targets: ${known.join(", ") || "(none)"}. No substitute was used.`,
     known,
   };
 }
 
 /**
- * Every `proxy.accounts` id referenced by some target (plus the resolved default
- * target's own account, if it has one).
+ * Every `proxy.gateways` id referenced by some target (plus the resolved default
+ * target's own gateway, if it has one).
  *
  * This is what generalizes the spawn-time credential preflight from the single
- * active account to N: `perAccountEnvVar` was already designed per-account
- * (Decision 47), so no new secret mechanism is needed — the CLI still owns
- * resolution and injects at spawn. The daemon's environment does now carry N
- * credentials instead of 1; that is accepted, and recorded as a widened blast
- * radius rather than discovered later.
+ * active account to N: `perGatewayEnvVar` (was `perAccountEnvVar`, renamed in
+ * R9.23) was already designed per-gateway (Decision 47), so no new secret
+ * mechanism is needed — the CLI still owns resolution and injects at spawn. The
+ * daemon's environment does now carry N credentials instead of 1; that is
+ * accepted, and recorded as a widened blast radius rather than discovered later.
  */
 export function accountsReferencedByTargets(settings: TargetRegistrySettings): readonly string[] {
   const ids = new Set<string>();

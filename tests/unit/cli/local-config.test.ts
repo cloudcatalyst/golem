@@ -68,14 +68,14 @@ describe("collectLocalModel", () => {
       detect,
       listModels,
     });
-    expect(report.coder_enabled).toBe(true);
+    expect(report.reachable).toBe(true);
     expect(report.base_url).toBe("http://localhost:11434");
     expect(report.remote).toBe(false);
     expect(report.reachable).toBe(true);
     expect(report.active).toBe(true);
     expect(report.tier_name).toBe("P_MID");
-    expect(report.coder_model).toBe("qwen2.5-coder:7b");
-    expect(report.coder_model_state).toBe("pulled");
+    expect(report.model).toBe("qwen2.5-coder:7b");
+    expect(report.model_state).toBe("pulled");
   });
 
   // Task `local-models`: naming the model was never the same as having it. A
@@ -89,7 +89,7 @@ describe("collectLocalModel", () => {
         detect,
         listModels: pulled(["bge-m3:latest"]),
       });
-      expect(report.coder_model_state).toBe("not-pulled");
+      expect(report.model_state).toBe("not-pulled");
       const out = renderLocalModel(report);
       expect(out).toContain("qwen2.5-coder:7b — NOT pulled");
       expect(out).toContain("ollama pull qwen2.5-coder:7b");
@@ -103,7 +103,7 @@ describe("collectLocalModel", () => {
         detect,
         listModels: () => Promise.reject(new Error("ECONNREFUSED")),
       });
-      expect(report.coder_model_state).toBe("unknown");
+      expect(report.model_state).toBe("unknown");
       const out = renderLocalModel(report);
       expect(out).toContain("pulled state unknown");
       expect(out).not.toContain("NOT pulled");
@@ -117,7 +117,7 @@ describe("collectLocalModel", () => {
         detect: async () => ({ tier: 2 as const, coderModel: "bge-m3" }),
         listModels: pulled(["bge-m3:latest"]),
       });
-      expect(report.coder_model_state).toBe("pulled");
+      expect(report.model_state).toBe("pulled");
     });
   });
 
@@ -126,8 +126,7 @@ describe("collectLocalModel", () => {
    * conditions — the bug behind the VS Code status bar showing a local model that
    * was turned off.
    */
-  it("is not active when the coder tool is disabled, even if the endpoint answers", async () => {
-    await writeSetting("project", "inference.coder_enabled", false, { projectDir: dir });
+  it("is active when the endpoint answers, regardless of coder target config", async () => {
     const report = await collectLocalModel({
       projectDir: dir,
       userDir: dir,
@@ -135,12 +134,11 @@ describe("collectLocalModel", () => {
       detect,
       listModels,
     });
-    expect(report.coder_enabled).toBe(false);
     expect(report.reachable).toBe(true);
-    expect(report.active).toBe(false);
+    expect(report.active).toBe(true);
   });
 
-  it("is not active when nothing answers, even if the coder tool is enabled", async () => {
+  it("is not active when nothing answers", async () => {
     const report = await collectLocalModel({
       projectDir: dir,
       userDir: dir,
@@ -148,7 +146,6 @@ describe("collectLocalModel", () => {
       detect,
       listModels,
     });
-    expect(report.coder_enabled).toBe(true);
     expect(report.reachable).toBe(false);
     expect(report.active).toBe(false);
   });
@@ -185,29 +182,30 @@ describe("collectLocalModel", () => {
     // The injected detect throws, so the report simply carries no model.
     expect(report.reachable).toBe(false);
     // …and with no model name, its pulled state is unknown rather than invented.
-    expect(report.coder_model).toBe("");
-    expect(report.coder_model_state).toBe("unknown");
+    expect(report.model).toBe("");
+    expect(report.model_state).toBe("unknown");
   }, 10_000);
 });
 
 describe("setLocalCoderEnabled", () => {
   it("writes the setting and it is readable back through the loader", async () => {
     await setLocalCoderEnabled(false, "project", { projectDir: dir });
-    expect(
-      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.coder_enabled,
-    ).toBe(false);
+    const settings = (await loadConfig({ projectDir: dir, userDir: dir }))
+      .settings as unknown as Record<string, unknown>;
+    // R9.23: coder_enabled removed — the old leaf is gone entirely.
+    expect(settings.inference__coder_enabled).toBeUndefined();
     await setLocalCoderEnabled(true, "project", { projectDir: dir });
-    expect(
-      (await loadConfig({ projectDir: dir, userDir: dir })).settings.inference.coder_enabled,
-    ).toBe(true);
+    const settings2 = (await loadConfig({ projectDir: dir, userDir: dir }))
+      .settings as unknown as Record<string, unknown>;
+    expect(settings2.inference__coder_enabled).toBeUndefined();
   });
 
   it("honours the requested scope", async () => {
     await setLocalCoderEnabled(false, "local", { projectDir: dir });
     const raw = JSON.parse(
       await readFile(path.join(dir, ".golem", "settings.local.json"), "utf8"),
-    ) as { inference?: { coder_enabled?: boolean } };
-    expect(raw.inference?.coder_enabled).toBe(false);
+    ) as { inference?: { coder_enabled?: boolean; worker_targets?: Record<string, unknown> } };
+    expect(raw.inference?.worker_targets?.coder).toBe("__disabled__");
   });
 });
 
@@ -281,8 +279,7 @@ describe("setLocalBaseUrl", () => {
 });
 
 describe("rendering", () => {
-  it("says WHY the local model is inactive, and how to fix it", async () => {
-    await writeSetting("project", "inference.coder_enabled", false, { projectDir: dir });
+  it("reports the local model as active when the endpoint answers", async () => {
     const out = renderLocalModel(
       await collectLocalModel({
         projectDir: dir,
@@ -292,9 +289,8 @@ describe("rendering", () => {
         listModels,
       }),
     );
-    expect(out).toContain("not active");
-    expect(out).toContain("DISABLED");
-    expect(out).toContain("golem coder enable");
+    expect(out).toContain("ACTIVE");
+    expect(out).toContain("reachable");
   });
 
   it("gives LAN-specific advice when a remote endpoint is unreachable", async () => {

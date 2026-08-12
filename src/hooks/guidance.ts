@@ -17,7 +17,6 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
 import { classifyManaged, ownedDetail, rememberManaged } from "../cli/managed-files.js";
-import { loadConfig } from "../config/index.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
 export type GuidanceScope = "project" | "user";
@@ -140,7 +139,7 @@ const LOCAL_CODER = [
   "`inference.coder_enabled` is true (the default): the PreToolUse gate",
   "denies the first non-trivial hand-written code Write/Edit of a session and",
   "redirects you here (a one-shot reminder — if you already drafted with `coder`,",
-  "say so and proceed). Disable the guidance with `golem guidance disable local-coder`;",
+  "say so and proceed). Disable the guidance with `golem guidance disable coder-first`;",
   "disable the tool itself with `golem coder disable`. `golem coder status` shows",
   "whether it is on and which target each worker uses; `golem local url <url>`",
   "points the LOCAL backend at a LAN machine, which matters only for a worker with",
@@ -228,8 +227,8 @@ export const GUIDANCE_FEATURES: readonly GuidanceFeature[] = [
     snippet: WIKI_KB_FIRST,
   },
   {
-    name: "local-coder",
-    summary: "Draft non-trivial code with the local `coder` model first",
+    name: "coder-first",
+    summary: "Draft non-trivial code with the `coder` tool first",
     seededByDefault: true,
     snippet: LOCAL_CODER,
   },
@@ -286,7 +285,7 @@ export function guidanceRuleBody(feature: GuidanceFeature): string {
  *
  * Use this (not {@link guidanceEnabled}) when reporting state to a user: a
  * settings UI must show which scope a rule is enabled at, and must not report
- * `local-coder` as "off" merely because `inference.coder_enabled` is false
+ * `coder-first` as "off" merely because `inference.coder_enabled` is false
  * — that is a separate toggle with its own row.
  */
 export async function guidanceRuleExists(
@@ -306,36 +305,17 @@ export async function guidanceRuleExists(
  * Whether a guidance feature is active for a project — i.e. its rule file is
  * present in either scope (presence *is* the toggle; `golem guidance
  * enable/disable` add/remove it). Used to gate enforcement on "if guided".
- *
- * For the `local-coder` feature, the rule file is necessary but not sufficient:
- * the `inference.coder_enabled` setting must also be true. When the local
- * coder is disabled via `golem config set inference.coder_enabled false`,
- * the guidance text is still present but enforcement is bypassed (the agent is
- * not told to draft with a tool that is not enabled).
  */
 export async function guidanceEnabled(projectDir: string, name: string): Promise<boolean> {
   for (const scope of ["project", "user"] as const) {
     try {
       await readFile(guidanceRulePath(projectDir, name, scope), "utf8");
-      if (name === "local-coder" && !(await localCoderEnabled(projectDir))) {
-        return false;
-      }
       return true;
     } catch {
       // not present in this scope
     }
   }
   return false;
-}
-
-/** Read the effective `inference.coder_enabled` setting; fail-open true. */
-async function localCoderEnabled(projectDir: string): Promise<boolean> {
-  try {
-    const { settings } = await loadConfig({ projectDir });
-    return settings.inference.coder_enabled;
-  } catch {
-    return true;
-  }
 }
 
 const rel = (projectDir: string, abs: string): string =>

@@ -13,7 +13,7 @@
  * | 1 | virtual model id in the body — `model: "golem/coder"` | user / sub-agent definition |
  * | 2 | header `x-golem-target: <id>` | hook / config |
  * | 3 | conversation binding (an optimisation over levels 1–2) | derived |
- * | 4 | `proxy.default_target` | user config |
+ * | 4 | `inference.default_target` | user config |
  *
  * **There is deliberately no rules engine and no suggestion channel.** Both were
  * dropped when diversion moved out-of-band. In particular, do not reintroduce a
@@ -51,7 +51,7 @@ export interface RouteInputs {
    * re-sends the same model id every turn.
    */
   readonly boundTarget?: string | undefined;
-  /** `proxy.default_target`, already resolved (including the `active_account` shim). */
+  /** `inference.default_target`, already resolved (including the `active_account` shim). */
   readonly defaultTarget: string;
 }
 
@@ -123,7 +123,7 @@ export function resolveRoute(inputs: RouteInputs): RouteDecision {
 
   return {
     targetId: inputs.defaultTarget,
-    reason: "proxy.default_target",
+    reason: "inference.default_target",
     sticky: false,
   };
 }

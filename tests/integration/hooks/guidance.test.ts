@@ -39,7 +39,7 @@ const exists = async (p: string) =>
 describe("guidance feature registry", () => {
   it("covers base defaults (seeded) and opt-in features", () => {
     const byName = new Map(GUIDANCE_FEATURES.map((g) => [g.name, g]));
-    for (const n of ["ccr-refs", "wiki-kb-first", "local-coder", "local-answer", "snooze-hold"]) {
+    for (const n of ["ccr-refs", "wiki-kb-first", "coder-first", "local-answer", "snooze-hold"]) {
       expect(byName.get(n)?.seededByDefault).toBe(true);
     }
     for (const n of ["prompt-translation", "durable-tasks"]) {
@@ -77,13 +77,13 @@ describe("guidance feature registry", () => {
     expect(snip.toLowerCase()).toContain("never escalate silently");
   });
 
-  it("local-coder names a concrete threshold + the coder-first enforcement", () => {
-    const snip = guidanceFeature("local-coder")?.snippet ?? "";
+  it("coder-first names a concrete threshold + the coder-first enforcement", () => {
+    const snip = guidanceFeature("coder-first")?.snippet ?? "";
     expect(snip).toContain("`coder`");
     expect(snip).toContain("240"); // concrete non-trivial threshold
     expect(snip.toLowerCase()).toContain("self-check");
     expect(snip).toContain("ENFORCES"); // the PreToolUse gate backs the guidance
-    expect(snip).toContain("golem guidance disable local-coder");
+    expect(snip).toContain("golem guidance disable coder-first");
   });
 
   it("returns null for an unknown feature", () => {
@@ -93,38 +93,36 @@ describe("guidance feature registry", () => {
 
 describe("guidanceEnabled (presence is the toggle)", () => {
   it("is false when no rule file exists, true once written (either scope)", async () => {
-    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
-    const f = guidanceFeature("local-coder");
-    if (f === undefined || f === null) throw new Error("expected local-coder");
+    expect(await guidanceEnabled(projectDir, "coder-first")).toBe(false);
+    const f = guidanceFeature("coder-first");
+    if (f === undefined || f === null) throw new Error("expected coder-first");
     await writeGuidanceRule(projectDir, f, "project");
-    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(true);
+    expect(await guidanceEnabled(projectDir, "coder-first")).toBe(true);
   });
 
   it("detects the personal (.local.md / user) scope too", async () => {
-    const f = guidanceFeature("local-coder");
-    if (f === undefined || f === null) throw new Error("expected local-coder");
+    const f = guidanceFeature("coder-first");
+    if (f === undefined || f === null) throw new Error("expected coder-first");
     await writeGuidanceRule(projectDir, f, "user");
-    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(true);
+    expect(await guidanceEnabled(projectDir, "coder-first")).toBe(true);
   });
 
   it("goes back to false after the rule is removed", async () => {
-    const f = guidanceFeature("local-coder");
-    if (f === undefined || f === null) throw new Error("expected local-coder");
+    const f = guidanceFeature("coder-first");
+    if (f === undefined || f === null) throw new Error("expected coder-first");
     await writeGuidanceRule(projectDir, f, "project");
-    await removeGuidanceRule(projectDir, "local-coder", "both");
-    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
+    await removeGuidanceRule(projectDir, "coder-first", "both");
+    expect(await guidanceEnabled(projectDir, "coder-first")).toBe(false);
   });
 
-  it("is false for local-coder when inference.local_coder_enabled is false", async () => {
-    const f = guidanceFeature("local-coder");
-    if (f === undefined || f === null) throw new Error("expected local-coder");
+  it("is true for coder-first when the rule file is present", async () => {
+    const f = guidanceFeature("coder-first");
+    if (f === undefined || f === null) throw new Error("expected coder-first");
     await writeGuidanceRule(projectDir, f, "project");
     await mkdir(path.join(projectDir, ".golem"), { recursive: true });
-    await writeFile(
-      path.join(projectDir, ".golem", "settings.json"),
-      JSON.stringify({ inference: { local_coder_enabled: false } }),
-    );
-    expect(await guidanceEnabled(projectDir, "local-coder")).toBe(false);
+    // R9.23: coder_enabled removed — coder is always available when a target
+    // or local model can serve it, so the guidance is active based on the rule file.
+    expect(await guidanceEnabled(projectDir, "coder-first")).toBe(true);
   });
 });
 
@@ -186,7 +184,7 @@ describe("seedDefaultGuidance (seed-once)", () => {
     const actions = await seedDefaultGuidance(projectDir);
     expect(actions.every((a) => a.kind === "create")).toBe(true);
     expect(await exists(guidanceRulePath(projectDir, "wiki-kb-first", "project"))).toBe(true);
-    expect(await exists(guidanceRulePath(projectDir, "local-coder", "project"))).toBe(true);
+    expect(await exists(guidanceRulePath(projectDir, "coder-first", "project"))).toBe(true);
     // Opt-in features are NOT seeded.
     expect(await exists(guidanceRulePath(projectDir, "prompt-translation", "project"))).toBe(false);
   });
@@ -206,7 +204,7 @@ describe("seedDefaultGuidance (seed-once)", () => {
     expect(disabled?.detail).toMatch(/disabled — not re-seeded/);
     expect(await exists(guidanceRulePath(projectDir, "wiki-kb-first", "project"))).toBe(false);
     // ...while a rule the user kept is left in place (already current here).
-    expect(await exists(guidanceRulePath(projectDir, "local-coder", "project"))).toBe(true);
+    expect(await exists(guidanceRulePath(projectDir, "coder-first", "project"))).toBe(true);
   });
 
   it("dry-run writes nothing", async () => {

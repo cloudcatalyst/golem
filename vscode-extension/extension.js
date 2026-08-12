@@ -372,9 +372,9 @@ async function refresh() {
     // hover explains why the status bar shows no `local` segment.
     const localLine = model.localModelActive
       ? `\nLocal: ${model.localBaseUrl || "local"}${
-          model.localCoderModel ? ` (${model.localCoderModel})` : ""
+          model.coderModel ? ` (${model.coderModel})` : ""
         }`
-      : model.localCoderEnabled === false
+      : model.coderEnabled === false
         ? "\nLocal: disabled (golem local enable)"
         : "";
     const upstreamFull = model.lastServedModel || model.defaultModel;

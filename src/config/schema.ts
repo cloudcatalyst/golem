@@ -26,8 +26,8 @@
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
 import type {
+  GatewayEntry,
   TargetEntry,
-  UpstreamAccount,
   UpstreamAuthScheme,
   UpstreamProvider,
 } from "../providers/index.js";
@@ -82,7 +82,7 @@ export const SETTINGS_LEAVES = {
      * `x-api-key`, `api-key` (Azure Foundry), or `bearer` (OpenRouter /
      * Azure Entra). `inherit` on a non-Anthropic provider falls back to that
      * provider's default scheme. The credential itself is NOT a setting (it is
-     * a secret): set it with `golem account login <provider>`, which stores it
+     * a secret): set it with `golem gateway login <provider>`, which stores it
      * in the OS credential store (Decisions 46/47 — there is no env-var path).
      */
     upstream_auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES),
@@ -113,17 +113,17 @@ export const SETTINGS_LEAVES = {
      * between the user's own accounts/providers. Each entry is NON-SECRET
      * identity only (id, provider, base_url, optional model/auth_scheme); the
      * credential for account `<id>` lives in the OS credential store, set with
-     * `golem account login <id>` (Decisions 46/47) — secrets are never a setting
+     * `golem gateway login <id>` (Decisions 46/47) — secrets are never a setting
      * and never an env var. Legitimate switching only; there is no automated
      * quota-evasion (ADR-0003 ToS scope).
      */
-    accounts: z
+    gateways: z
       .array(
         z.object({
           id: z.string().min(1),
           provider: z.enum(UPSTREAM_PROVIDERS),
           base_url: z.string().url(),
-          model: z.string().min(1).optional(),
+          models: z.array(z.string().min(1)).optional(),
           auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
         }),
       )
@@ -137,7 +137,7 @@ export const SETTINGS_LEAVES = {
      * a target whose provider is `ollama`.
      *
      * A target is **entirely non-secret**: it answers *which endpoint + model*,
-     * and points at a `proxy.accounts` id for *whose credential*. Several targets
+     * and points at a `proxy.gateways` id for *whose credential*. Several targets
      * may share one account (one key backing several model ids), which is why the
      * two registries are separate. There is deliberately no key field — a secret
      * here would be a plaintext secret in settings, which ADR-0003 invariant 1
@@ -149,36 +149,30 @@ export const SETTINGS_LEAVES = {
      * more redaction.
      *
      * Inert in R9.1: nothing routes on this yet (R9.2/R9.3 consume it). Entries
-     * in `proxy.accounts` already appear in `golem target list` without being
+     * in `proxy.gateways` already appear in `golem target list` without being
      * restated here.
      */
     targets: z
       .array(
         z.object({
           id: z.string().min(1),
-          provider: z.enum(UPSTREAM_PROVIDERS),
-          base_url: z.string().url(),
+          gateway: z.string().min(1),
           model: z.string().min(1).optional(),
-          account: z.string().min(1).optional(),
-          auth_scheme: z.enum(UPSTREAM_AUTH_SCHEMES).optional(),
           trust: z.enum(TARGET_TRUST_LEVELS).optional(),
           agent_selectable: z.boolean().optional(),
         }),
       )
       .optional(),
-    /**
-     * R9.1: which target serves a request that names none. Supersedes the
-     * retired `proxy.active_account` (spec Decision 21d). R9.6 moved that
-     * fallback out of `resolveDefaultTargetId` and into the declarative
-     * migration table (`src/config/migrations.ts`), so an existing file naming
-     * the old key still works, says so exactly once, and reports the old key as
-     * its provenance. Unknown id → fail-closed (no silent substitution).
-     */
-    default_target: z.string().min(1).optional(),
+
     /** End-to-end request timeout (generous: long SSE streams). */
     request_timeout_ms: timeoutMsSchema,
     /** Upstream TCP/TLS connect timeout. */
     connect_timeout_ms: timeoutMsSchema,
+    /**
+     * R9.23: DEPRECATED — moved to `inference.default_target`. Kept as a
+     * valid leaf so the migration table can forward old settings files.
+     */
+    default_target: z.string().min(1).optional(),
   },
   inference: {
     /** OpenAI-compatible local inference endpoint (Ollama default). */
@@ -192,20 +186,7 @@ export const SETTINGS_LEAVES = {
      * slow boxes; env override `GOLEM_INFERENCE_REQUEST_TIMEOUT_MS`.
      */
     request_timeout_ms: timeoutMsSchema,
-    /**
-     * Whether the `coder` MCP tool is offered. Default true.
-     *
-     * R9.10 renamed this from `coder_enabled`: since R9.3/R9.4 a worker
-     * dispatches to whatever `inference.worker_targets` names — local tiered
-     * inference only when it names nothing — so a switch named for WHERE the
-     * model runs was describing a constraint that no longer exists. The old key
-     * still works (see `src/config/migrations.ts`).
-     *
-     * This gates the TOOL, not the backend: with no worker target, `coder` needs
-     * Ollama reachable; with one, it needs that target's credential. Independent
-     * of rerank/local-answer.
-     */
-    coder_enabled: z.boolean(),
+
     /**
      * R9.4 — which `proxy.targets` id each **tool worker** defaults to, keyed by
      * worker name (`{ coder = "openrouter-qwen3" }`). A worker with no entry
@@ -231,6 +212,10 @@ export const SETTINGS_LEAVES = {
      * every dispatch (R9.3), so setting this never weakens redaction.
      */
     worker_targets: z.record(z.string().min(1), z.string().min(1)).default({}),
+    /**
+     * R9.23: moved from `proxy.default_target` to `inference.default_target`.
+     */
+    default_target: z.string().min(1).optional(),
     /**
      * OPT-IN (R8.7, default **false**): offer `coder`'s `edit` mode — the local
      * model rewrites one small file, Golem validates the result (syntax must
@@ -579,19 +564,21 @@ export interface ProxySettings {
   readonly upstream_model?: string;
   readonly upstream_reasoning_effort?: "low" | "high" | "max";
   readonly map_reasoning_to_thinking: boolean;
-  readonly accounts?: readonly UpstreamAccount[];
+  readonly gateways?: readonly GatewayEntry[];
   readonly targets?: readonly TargetEntry[];
-  readonly default_target?: string;
   readonly request_timeout_ms: number;
   readonly connect_timeout_ms: number;
+  /** R9.23: DEPRECATED — moved to `inference.default_target`. */
+  readonly default_target?: string;
 }
 
 export interface InferenceSettings {
   readonly ollama_base_url: string;
   readonly request_timeout_ms: number;
-  readonly coder_enabled: boolean;
   /** R9.4: worker name → target id (see `inference/workers.ts`). */
   readonly worker_targets: Readonly<Record<string, string>>;
+  /** R9.23 */
+  readonly default_target?: string;
   readonly local_editor_enabled: boolean;
   /** R8.15: user-declared provider table for local-model role routing. */
   readonly providers: readonly {
@@ -704,7 +691,6 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   inference: {
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
-    coder_enabled: true,
     worker_targets: {},
     local_editor_enabled: false,
     providers: [],

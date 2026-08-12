@@ -20,11 +20,11 @@ program.addHelpText(
   `\nControl panel:\n  golem                     open the interactive control panel\n  golem --dir <path>        open it for another project\n  golem --no-pet            hide the pet in the header\n  golem --advanced          show advanced controls on open`,
 );
 
-import register_account from "./commands/account.js";
 import register_autonomy from "./commands/autonomy.js";
 import register_bench from "./commands/bench.js";
 import register_checkpoint from "./commands/checkpoint.js";
 import register_config from "./commands/config.js";
+import registerGatewayCommands from "./commands/gateway.js";
 import register_init_uninit from "./commands/init-uninit.js";
 import register_local_ollama from "./commands/local-ollama.js";
 import register_mcp_serve from "./commands/mcp-serve.js";
@@ -49,7 +49,7 @@ register_slider_dials_stats(program);
 register_bench(program);
 register_checkpoint(program);
 register_pkg_models(program);
-register_account(program);
+registerGatewayCommands(program);
 register_target(program);
 register_note_dashboard_watch(program);
 register_tasks(program);

@@ -1,12 +1,15 @@
 /**
- * R6.2 v1 + Decisions 46/47 — `golem account` CLI: registry listing (never
- * leaking secrets), fail-closed switching, logout-on-remove, and the ADR-0003
- * audit log.
+ * R6.2 v1 + Decisions 46/47 / R9.23 — `golem account` CLI: registry listing
+ * (never leaking secrets), fail-closed switching, logout-on-remove, and the
+ * ADR-0003 audit log.
  *
  * Credentials come from an INJECTED store (a plaintext file backend under a temp
  * dir), not the machine's real keychain and — since Decision 47 removed the env
  * backend — not from environment variables either. The `env` arguments that
  * remain only drive non-secret `GOLEM_<SECTION>_<KEY>` settings overrides.
+ *
+ * R9.23: `proxy.accounts` renamed to `proxy.gateways`; gateway entries carry
+ * `models[]` (plural) instead of a single `model`.
  */
 
 import { mkdtemp, readFile, rm } from "node:fs/promises";
@@ -44,14 +47,19 @@ beforeEach(async () => {
   store = createCredentialStore({ userDir: credDir, platform: "sunos" });
   await writeSetting(
     "project",
-    "proxy.accounts",
+    "proxy.gateways",
     [
-      { id: "work", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-5.2" },
+      {
+        id: "work",
+        provider: "openai",
+        base_url: "https://api.openai.com/v1",
+        models: ["gpt-5.2"],
+      },
       {
         id: "local",
         provider: "ollama",
         base_url: "http://gpubox.lan:11434/v1",
-        model: "qwen2.5-coder:7b",
+        models: ["qwen2.5-coder:7b"],
       },
     ],
     { projectDir: dir },
@@ -66,10 +74,10 @@ describe("collectAccounts", () => {
   it("lists accounts with key-set flags (never the key); the default is active by default", async () => {
     await seedKey("work", "sk-x");
     const report = await collectAccounts(dir, {}, { store_backend: store });
-    // No named account selected → the synthetic default (top-level anthropic) is active.
+    // No named gateway selected → the synthetic default (top-level anthropic) is active.
     expect(report.active).toBe("anthropic");
     expect(report.active_unknown).toBe(false);
-    // Default row is first, plus the two named accounts.
+    // Default row is first, plus the two named gateways.
     expect(report.accounts).toHaveLength(3);
     const dflt = report.accounts[0];
     expect(dflt).toMatchObject({
@@ -116,7 +124,7 @@ describe("useAccount", () => {
   it("rejects an unknown account id (fail-closed, no silent creation)", async () => {
     await expect(
       useAccount(dir, "ghost", "2026-07-23T00:00:00.000Z", { store_backend: store }),
-    ).rejects.toThrow(/unknown account/);
+    ).rejects.toThrow(/unknown gateway/);
     expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 
@@ -148,11 +156,6 @@ describe("useAccount", () => {
     expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("work");
   });
 
-  /**
-   * The stale-model bug: the last-served-model snapshot describes the upstream we
-   * just left, so a switch must drop it — otherwise every display surface keeps
-   * showing the PREVIOUS model until the new upstream happens to serve a request.
-   */
   it("clears the last-served-model snapshot so no display shows the previous model", async () => {
     await writeServedModel(dir, {
       model: "claude-opus-4-8",
@@ -195,15 +198,15 @@ describe("addAccount", () => {
         id: "gemini",
         provider: "gemini",
         base_url: "https://generativelanguage.googleapis.com",
-        model: "gemini-2.5-pro",
+        models: ["gemini-2.5-pro"],
       },
       "2026-07-26T00:00:00.000Z",
     );
     const { settings } = await loadConfig({ projectDir: dir });
-    const ids = (settings.proxy.accounts ?? []).map((a) => a.id);
+    const ids = (settings.proxy.gateways ?? []).map((g) => g.id);
     expect(ids).toEqual(["work", "local", "gemini"]); // existing preserved, new appended
-    const added = (settings.proxy.accounts ?? []).find((a) => a.id === "gemini");
-    expect(added).toMatchObject({ provider: "gemini", model: "gemini-2.5-pro" });
+    const added = (settings.proxy.gateways ?? []).find((g) => g.id === "gemini");
+    expect(added).toMatchObject({ provider: "gemini", models: ["gemini-2.5-pro"] });
 
     const log = await readFile(path.join(dir, ".golem", "state", "account-log.jsonl"), "utf8");
     expect(log).toContain('"action":"add"');
@@ -220,7 +223,7 @@ describe("addAccount", () => {
     ).rejects.toThrow(/already exists/);
     // The original entry is untouched (the beforeEach seeds work → api.openai.com/v1).
     const { settings } = await loadConfig({ projectDir: dir });
-    expect((settings.proxy.accounts ?? []).find((a) => a.id === "work")?.base_url).toBe(
+    expect((settings.proxy.gateways ?? []).find((g) => g.id === "work")?.base_url).toBe(
       "https://api.openai.com/v1",
     );
   });
@@ -232,7 +235,7 @@ describe("addAccount", () => {
         { id: "anthropic", provider: "anthropic", base_url: "https://x.example" },
         "2026-07-26T00:00:00.000Z",
       ),
-    ).rejects.toThrow(/default account/);
+    ).rejects.toThrow(/default gateway/);
   });
 
   it("rejects an invalid entry via the schema (missing base_url shape)", async () => {
@@ -246,9 +249,6 @@ describe("addAccount", () => {
   });
 
   it("warns that --model is inert on a byte-faithful provider (Decision 48)", async () => {
-    // A byte-faithful upstream forwards the client's own `claude-*` id, so a
-    // configured model never reaches the wire. Registering it silently is how an
-    // account ends up unable to serve the model its own config names.
     const warnings: string[] = [];
     const original = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
@@ -261,14 +261,14 @@ describe("addAccount", () => {
         { id: "foundry", provider: "azure-foundry", base_url: "https://x.example/anthropic" },
         "2026-07-26T00:00:00.000Z",
       );
-      expect(warnings.join("")).toBe(""); // no model → nothing to warn about
+      expect(warnings.join("")).toBe(""); // no models → nothing to warn about
       await addAccount(
         dir,
         {
           id: "foundry-pinned",
           provider: "azure-foundry",
           base_url: "https://x.example/anthropic",
-          model: "claude-opus-5",
+          models: ["claude-opus-5"],
         },
         "2026-07-26T00:00:00.000Z",
       );
@@ -278,7 +278,7 @@ describe("addAccount", () => {
     }
     // The account is still registered — this is a warning, not a rejection.
     const { settings } = await loadConfig({ projectDir: dir });
-    expect((settings.proxy.accounts ?? []).map((a) => a.id)).toContain("foundry-pinned");
+    expect((settings.proxy.gateways ?? []).map((g) => g.id)).toContain("foundry-pinned");
   });
 
   it("warns when the base URL composes into a doubled version segment", async () => {
@@ -314,7 +314,7 @@ describe("addAccount", () => {
           id: "openrouter-laguna",
           provider: "openrouter",
           base_url: "https://openrouter.ai/api/v1",
-          model: "poolside/laguna-s-2.1:free",
+          models: ["poolside/laguna-s-2.1:free"],
           auth_scheme: "bearer",
         },
         "2026-07-26T00:00:00.000Z",
@@ -325,10 +325,10 @@ describe("addAccount", () => {
     expect(warnings.join("")).toBe("");
   });
 
-  it("writes to the LOCAL scope so a pre-existing local-layer accounts array cannot mask it", async () => {
-    // Regression: a `proxy.accounts` array in a higher-precedence layer
+  it("writes to the LOCAL scope so a pre-existing local-layer gateways array cannot mask it", async () => {
+    // Regression: a `proxy.gateways` array in a higher-precedence layer
     // wholesale-replaces lower layers, so writing to project settings.json left
-    // the new account invisible to the very merge the proxy reads.
+    // the new gateway invisible to the very merge the proxy reads.
     await addAccount(
       dir,
       { id: "gemini", provider: "gemini", base_url: "https://generativelanguage.googleapis.com" },
@@ -337,14 +337,14 @@ describe("addAccount", () => {
     const localRaw = JSON.parse(
       await readFile(path.join(dir, ".golem", "settings.local.json"), "utf8"),
     ) as {
-      proxy?: { accounts?: { id: string }[] };
+      proxy?: { gateways?: { id: string }[] };
     };
-    // The beforeEach seeded accounts into settings.local.json; the add must
+    // The beforeEach seeded gateways into settings.local.json; the add must
     // merge into THAT layer (preserving work+local), not the project file.
-    expect((localRaw.proxy?.accounts ?? []).map((a) => a.id)).toEqual(["work", "local", "gemini"]);
+    expect((localRaw.proxy?.gateways ?? []).map((g) => g.id)).toEqual(["work", "local", "gemini"]);
     // And the merged view the proxy reads sees it too.
     const { settings } = await loadConfig({ projectDir: dir });
-    expect((settings.proxy.accounts ?? []).map((a) => a.id)).toContain("gemini");
+    expect((settings.proxy.gateways ?? []).map((g) => g.id)).toContain("gemini");
   });
 });
 
@@ -356,13 +356,9 @@ describe("removeAccount", () => {
     expect(account).toBe("local");
     expect(was_active).toBe(false);
     const { settings } = await loadConfig({ projectDir: dir });
-    expect((settings.proxy.accounts ?? []).map((a) => a.id)).toEqual(["work"]);
+    expect((settings.proxy.gateways ?? []).map((g) => g.id)).toEqual(["work"]);
   });
 
-  /**
-   * The point of the change: de-registering an account must not leave its secret
-   * behind in the store, reachable by nobody and remembered by no one.
-   */
   it("logs the account out first, deleting its stored credential", async () => {
     await seedKey("local", "sk-local");
     expect(await store.resolve("local")).not.toBeNull();
@@ -400,15 +396,11 @@ describe("removeAccount", () => {
     expect(await store.resolve("local")).not.toBeNull();
   });
 
-  /**
-   * Order matters: the credential's store id is derived from the registry entry,
-   * so a remove that edited settings first would lose the ability to find the key.
-   */
   it("does not delete a credential when the id is unknown (fail-closed, nothing touched)", async () => {
     await seedKey("local", "sk-local");
     await expect(
       removeAccount(dir, "ghost", "2026-07-26T00:00:00.000Z", { store_backend: store }),
-    ).rejects.toThrow(/unknown account/);
+    ).rejects.toThrow(/unknown gateway/);
     expect(await store.resolve("local")).not.toBeNull();
   });
 
@@ -419,7 +411,7 @@ describe("removeAccount", () => {
     });
     expect(was_active).toBe(true);
     const { settings } = await loadConfig({ projectDir: dir });
-    expect(settings.proxy.default_target).toBeUndefined();
+    expect(settings.inference.default_target).toBeUndefined();
     expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 });
@@ -451,7 +443,6 @@ describe("credentialEnvForProxy (Decisions 46/47 — the daemon handoff)", () =>
   });
 
   it("hands the default account's credential over on the plain var", async () => {
-    // No active account → the top-level config → the reserved `default` store id.
     await seedKey("default", "sk-default");
     const env = await credentialEnvForProxy(dir, {}, { store_backend: store });
     expect(env).toEqual({ GOLEM_UPSTREAM_API_KEY: "sk-default" });
@@ -462,10 +453,6 @@ describe("credentialEnvForProxy (Decisions 46/47 — the daemon handoff)", () =>
     expect(env).toEqual({});
   });
 
-  /**
-   * The handoff must be sourced from the STORE, not from an ambient var — else
-   * removing the env backend would have changed nothing in practice.
-   */
   it("does not pass through an ambient env var that has no stored credential", async () => {
     process.env.GOLEM_UPSTREAM_API_KEY = "sk-ambient";
     try {

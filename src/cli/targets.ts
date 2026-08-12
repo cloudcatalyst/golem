@@ -32,9 +32,6 @@ import {
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import {
-  doubledVersionSegment,
-  isSpawnProvider,
-  isTranslatingProvider,
   listTargets,
   type ResolvedTarget,
   resolveDefaultTargetId,
@@ -107,7 +104,14 @@ export async function collectTargets(
   const { settings } = await loadConfig({ projectDir, env });
   const proxy = settings.proxy;
   const targets = listTargets(proxy);
-  const defaultId = resolveDefaultTargetId(proxy);
+  // R9.23: default_target moved to inference, but proxy may still carry it
+  // via the migration table (proxy.active_account → proxy.default_target).
+  const defaultId = resolveDefaultTargetId({
+    ...proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  });
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
   // Config-level warnings are computed once for the whole registry, then
@@ -170,11 +174,12 @@ export async function showTarget(
 /** Input for {@link addTarget}. All fields are NON-SECRET (ADR-0003 invariant 1). */
 export interface NewTarget {
   readonly id: string;
-  readonly provider: TargetEntry["provider"];
-  readonly base_url: string;
+  /**
+   * R9.23: which `proxy.gateways` entry backs this target. The gateway entry
+   * carries the provider, base_url, auth_scheme, models, and credential reference.
+   */
+  readonly gateway: string;
   readonly model?: string;
-  readonly account?: string;
-  readonly auth_scheme?: TargetEntry["auth_scheme"];
   readonly trust?: TargetTrust;
 }
 
@@ -186,18 +191,18 @@ export interface NewTarget {
  * wholesale-replaces lower ones, so writing anywhere lower would let a
  * pre-existing local-layer `targets` silently mask the change.
  *
- * Fail-closed on a duplicate explicit id and on an `account` reference that does
- * not exist — a target pointing at a missing account can never authenticate, and
+ * Fail-closed on a duplicate explicit id and on a `gateway` reference that does
+ * not exist — a target pointing at a missing gateway can never authenticate, and
  * catching that here is much cheaper than a 401 on the first routed request.
- * Overriding an ACCOUNT-derived row of the same id is allowed and reported: that
- * is the documented way to adopt an existing account as a target (adding a
- * `trust` level or a different model) without restating its credential.
+ * Overriding a GATEWAY-derived row of the same id is allowed and reported:
+ * that is the documented way to adopt an existing gateway as a target (adding
+ * a `trust` level or a different model) without restating its credential.
  */
 export async function addTarget(
   projectDir: string,
   input: NewTarget,
   nowIso: string,
-): Promise<{ readonly target: string; readonly overrides_account: boolean }> {
+): Promise<{ readonly target: string; readonly overrides_gateway: boolean }> {
   const { settings } = await loadConfig({ projectDir });
   const proxy: ProxySettings = settings.proxy;
   const targets = [...(proxy.targets ?? [])];
@@ -208,53 +213,30 @@ export async function addTarget(
         "and re-add.",
     );
   }
-  if (input.account !== undefined && !(proxy.accounts ?? []).some((a) => a.id === input.account)) {
-    const ids = (proxy.accounts ?? []).map((a) => a.id).join(", ") || "(none configured)";
+  if (!(proxy.gateways ?? []).some((g) => g.id === input.gateway)) {
+    const ids = (proxy.gateways ?? []).map((g) => g.id).join(", ") || "(none configured)";
     throw new InitError(
-      `target "${input.id}" references account "${input.account}", which is not in ` +
-        `proxy.accounts; configured accounts: ${ids}. Register it first with ` +
-        `\`golem account add ${input.account} …\`, then \`golem account login ${input.account}\`.`,
+      `target "${input.id}" references gateway "${input.gateway}", which is not in ` +
+        `proxy.gateways; configured gateways: ${ids}. Register it first with ` +
+        `\`golem account add ${input.gateway} …\`, then \`golem account login ${input.gateway}\`.`,
     );
   }
 
-  // Same two registration-time checks `account add` makes, for the same reason:
-  // both fail on the FIRST request otherwise, one of them with an HTML 404.
-  // R9.15: `claude-cli` is neither byte-faithful nor translating — the model id
-  // becomes the spawned client's `--model`, so it is very much used on the wire.
-  // Without this exclusion `target add` printed a warning that was simply false.
-  if (
-    input.model !== undefined &&
-    !isTranslatingProvider(input.provider) &&
-    !isSpawnProvider(input.provider)
-  ) {
-    process.stderr.write(
-      `warning: provider "${input.provider}" is byte-faithful (it forwards the client's own ` +
-        `model id unchanged), so model "${input.model}" will be IGNORED on the wire — it is ` +
-        "recorded for display only.\n",
-    );
-  }
-  const doubled = doubledVersionSegment(input.provider, input.base_url);
-  if (doubled !== undefined) {
-    process.stderr.write(
-      `warning: base URL "${input.base_url}" composes into ${doubled} — the API version ` +
-        "segment is repeated, so requests will 404. Drop the trailing version segment.\n",
-    );
-  }
-
-  const overridesAccount = (proxy.accounts ?? []).some((a) => a.id === input.id);
+  // R9.23: detect if the new target's id matches a GATEWAY-DERIVED target
+  // (compound id `<gateway>/<model>`). The gateway-derived target is what
+  // `listTargets` produces, so use it to determine whether this add overrides.
+  const derived = listTargets(proxy);
+  const overridesGateway = derived.some((t) => t.id === input.id && t.origin === "gateway");
   const entry: TargetEntry = {
     id: input.id,
-    provider: input.provider,
-    base_url: input.base_url,
+    gateway: input.gateway,
     ...(input.model !== undefined ? { model: input.model } : {}),
-    ...(input.account !== undefined ? { account: input.account } : {}),
-    ...(input.auth_scheme !== undefined ? { auth_scheme: input.auth_scheme } : {}),
     ...(input.trust !== undefined ? { trust: input.trust } : {}),
   };
   // writeSetting validates the WHOLE array against the targets leaf schema.
   await writeSetting("local", "proxy.targets", [...targets, entry], { projectDir });
   await appendAudit(projectDir, { action: "target-add", target: input.id }, nowIso);
-  return { target: input.id, overrides_account: overridesAccount };
+  return { target: input.id, overrides_gateway: overridesGateway };
 }
 
 /** The verdict from {@link testTarget} — a credential probe scoped to one target. */
@@ -317,7 +299,7 @@ export async function testTarget(
 
 const ORIGIN_TAG: Readonly<Record<TargetOrigin, string>> = {
   target: "",
-  account: " (from account)",
+  gateway: " (from gateway)",
   default: " (default upstream config)",
 };
 
@@ -346,7 +328,7 @@ export function renderTargets(report: TargetsReport): string {
   if (report.default_unknown) {
     lines.push(
       `default target: ${report.default_target} — WARNING: that id is in neither ` +
-        "proxy.targets nor proxy.accounts. Requests naming no target fail closed rather " +
+        "proxy.targets nor proxy.gateways. Requests naming no target fail closed rather " +
         "than silently using a different one.",
     );
   } else {
