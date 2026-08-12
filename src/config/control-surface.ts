@@ -702,11 +702,11 @@ async function applyRuntime(
 }
 
 /**
- * `useAccount` lives in cli/accounts.ts, which pulls in the credential stores.
+ * `useGateway` lives in cli/gateways.ts, which pulls in the credential stores.
  * Imported lazily so merely *rendering* the panel never loads them (and so the
- * OS keychain is only consulted when an account is actually switched).
+ * OS keychain is only consulted when a gateway is actually switched).
  *
- * Named `switchAccount`, not `useAccountLazy`: a `use`-prefixed function trips
+ * Named `switchAccount`, not `useGatewayLazy`: a `use`-prefixed function trips
  * Biome's react/useHookAtTopLevel rule, which this file (now that the repo
  * compiles JSX) is checked by.
  */
@@ -715,8 +715,8 @@ async function switchAccount(
   id: string | null,
   options: ApplyControlOptions,
 ): Promise<{ readonly active: string | null }> {
-  const { useAccount } = await import("../cli/accounts.js");
-  return useAccount(projectDir, id, options.nowIso ?? new Date().toISOString(), {
+  const { useGateway } = await import("../cli/gateways.js");
+  return useGateway(projectDir, id, options.nowIso ?? new Date().toISOString(), {
     ...(options.assumeYes !== undefined && { assumeYes: options.assumeYes }),
     ...(options.env !== undefined && { env: options.env }),
   });
