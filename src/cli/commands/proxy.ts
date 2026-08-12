@@ -28,9 +28,9 @@ import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
-import { credentialEnvForProxy } from "../accounts.js";
 import { resolvePersistedEmbedMode } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
+import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
 import {
   portInUse,
@@ -326,6 +326,15 @@ export default function register(program: Command): void {
       } catch (err) {
         _fail(err);
       }
+    });
+
+  proxyCmd
+    .command("start")
+    .description("Start the proxy in the foreground (detached daemon entry-point)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--port <port>", "port number")
+    .action(async (opts: { dir: string; port: string | undefined }) => {
+      await runProxyForeground(opts.dir, opts.port);
     });
 
   proxyCmd

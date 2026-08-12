@@ -50,17 +50,18 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
   };
 
   const local = report.local_model;
-  const localValue = !local.coder_enabled
-    ? "○ coder disabled"
-    : local.reachable
-      ? `● ${local.coder_model ?? "reachable"}`
-      : "○ unreachable";
+  const localValue =
+    local.reachable === false
+      ? "○ coder disabled"
+      : local.reachable
+        ? `● ${local.model ?? "reachable"}`
+        : "○ unreachable";
 
   const line3: HeaderSegment[] = [
     {
       label: "Local",
       value: localValue,
-      tone: local.coder_enabled && local.reachable ? "ok" : undefined,
+      tone: local.reachable ? "ok" : undefined,
     },
   ];
   if (report.limits !== undefined) {

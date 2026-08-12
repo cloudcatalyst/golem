@@ -1,8 +1,1 @@
-{
-  "inference": {
-    "coder_enabled": false
-  },
-  "snooze": {
-    "enforce": false
-  }
-}
+{}

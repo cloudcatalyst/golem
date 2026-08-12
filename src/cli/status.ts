@@ -285,10 +285,8 @@ export interface StatusReport {
      * reachable. R9.10: this is the LOCAL runtime's model, which is only what
      * `coder` reaches when no worker target is configured — see `workers`.
      */
-    readonly coder_model?: string;
+    readonly model?: string;
     /** Whether `inference.coder_enabled` is true (default). */
-    readonly coder_enabled: boolean;
-    /** The local (Ollama) base URL the probe targeted — for the hover summary's `Local:` line. */
     readonly base_url: string;
   };
   /**
@@ -431,7 +429,14 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // Resolved before the reads below because the last-served-model lookup is
   // scoped to this account (a snapshot from the previous upstream must not be
   // reported as the current model).
-  const upstream = resolveUpstreamDisplay(settings.proxy);
+  // R9.23: default_target moved from proxy to inference — merge it so the
+  // display reflects the actual default target (e.g. openrouter:deepseek/...).
+  const upstream = resolveUpstreamDisplay({
+    ...settings.proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  });
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
   const [init, reachable, slider, brevityDial, compressionDial, localInfo, servedModel] =
@@ -453,9 +458,17 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
 
   // R9.2: per-target rows, each carrying what that target last served. Read from
   // the same snapshot the proxy writes, so status never has to reach the daemon.
+  // R9.23: default_target moved to inference — merge it so
+  // resolveDefaultTargetId and listTargets see the live value.
+  const proxyWithDefault = {
+    ...settings.proxy,
+    ...(settings.inference.default_target !== undefined
+      ? { default_target: settings.inference.default_target }
+      : {}),
+  };
   const allServed = await readServedModel(projectDir).catch(() => null);
-  const defaultTargetId = resolveDefaultTargetId(settings.proxy);
-  const targetRows = listTargets(settings.proxy).map((t) => {
+  const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
+  const targetRows = listTargets(proxyWithDefault).map((t) => {
     const seen = allServed?.targets?.[t.id];
     return {
       id: t.id,
@@ -595,8 +608,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     config,
     local_model: {
       reachable: localInfo.reachable,
-      coder_enabled: settings.inference.coder_enabled,
-      ...(localInfo.coderModel !== undefined ? { coder_model: localInfo.coderModel } : {}),
+
+      ...(localInfo.coderModel !== undefined ? { model: localInfo.coderModel } : {}),
       base_url: settings.inference.ollama_base_url,
     },
     // R9.10: top-level, because a worker's target need not be local.
@@ -862,12 +875,12 @@ export function renderStatus(report: StatusReport): string {
   // Rendered generically over N workers so a new one needs no change here.
   lines.push(`Inference: chat ${chatModel ?? report.upstream.provider}`);
   const workers = report.workers ?? [];
-  const localModel = report.local_model.coder_model ?? "local";
+  const localModel = report.local_model.model ?? "local";
   for (const worker of KNOWN_WORKERS) {
     // Only `coder` has an enabled flag today; a future worker without one is
     // simply always offered.
-    if (worker === "coder" && !report.local_model.coder_enabled) {
-      lines.push("  coder: disabled (inference.coder_enabled)");
+    if (worker === "coder" && report.local_model.reachable === false && workers.length === 0) {
+      lines.push("  coder: unavailable — no local model or target configured");
       continue;
     }
     const configured = workers.find((w) => w.worker === worker);
@@ -885,7 +898,7 @@ export function renderStatus(report: StatusReport): string {
     if (configured.target_unknown === true) {
       lines.push(
         `  ${worker}: FAILS CLOSED — target "${configured.target}" is in neither proxy.targets ` +
-          "nor proxy.accounts, and it will not fall back to the local model. " +
+          "nor proxy.gateways, and it will not fall back to the local model. " +
           "Fix it or unset it: golem target list",
       );
       continue;

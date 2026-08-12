@@ -42,7 +42,7 @@
 import { spawn } from "node:child_process";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { perAccountEnvVar } from "../providers/index.js";
+import { perGatewayEnvVar } from "../providers/index.js";
 
 /** Which mechanism a credential lives in. */
 export type CredentialBackendId = "keychain" | "file";
@@ -101,12 +101,12 @@ export const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
  * than making the daemon reach for the keychain itself.
  *
  * {@link DEFAULT_ACCOUNT_ID} maps to plain `GOLEM_UPSTREAM_API_KEY`; every
- * other id delegates to {@link perAccountEnvVar} so there is exactly ONE
+ * other id delegates to {@link perGatewayEnvVar} so there is exactly ONE
  * definition of the `GOLEM_UPSTREAM_API_KEY__<ID>` spelling in the codebase
  * (a divergence here would break the handoff silently).
  */
 export function envVarForAccount(id: string): string {
-  return id === DEFAULT_ACCOUNT_ID ? DEFAULT_KEY_ENV : perAccountEnvVar(id);
+  return id === DEFAULT_ACCOUNT_ID ? DEFAULT_KEY_ENV : perGatewayEnvVar(id);
 }
 
 /** Filesystem-safe form of an account id, for the on-disk backends. */

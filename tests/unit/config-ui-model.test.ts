@@ -97,8 +97,8 @@ describe("deriveKind", () => {
   });
 
   it("treats a structured array as opaque, not an editable list", () => {
-    // proxy.accounts is an array of objects — `golem account` owns it.
-    expect(kindOf("proxy", "accounts")).toBe("opaque");
+    // proxy.gateways is an array of objects — `golem account` owns it (R9.23: renamed from proxy.accounts).
+    expect(kindOf("proxy", "gateways")).toBe("opaque");
   });
 
   it("lets metadata override a derivation zod can't express", () => {

@@ -49,11 +49,18 @@ const CLI_TARGET: TargetRegistrySettings = {
   upstream_provider: "anthropic",
   upstream_base_url: "https://api.anthropic.com",
   upstream_auth_scheme: "inherit",
-  targets: [
+  gateways: [
     {
       id: "subscription",
       provider: "claude-cli",
       base_url: "https://api.anthropic.com",
+      models: ["claude-sonnet-5"],
+    },
+  ],
+  targets: [
+    {
+      id: "subscription",
+      gateway: "subscription",
       model: "claude-sonnet-5",
       trust: "vendor",
     },

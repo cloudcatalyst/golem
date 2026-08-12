@@ -35,7 +35,7 @@ import {
   listTargets,
   makeAuthMapper,
   openAIChatToAnthropic,
-  perAccountEnvVar,
+  perGatewayEnvVar,
   preservesVendorPrefix,
   type ResolvedTarget,
   resolveDefaultTargetId,
@@ -152,7 +152,7 @@ function apiKeyForTarget(
 ): string | undefined {
   return target.accountId === null
     ? env.GOLEM_UPSTREAM_API_KEY
-    : env[perAccountEnvVar(target.accountId)];
+    : env[perGatewayEnvVar(target.accountId)];
 }
 
 export interface RouteResolverOptions {

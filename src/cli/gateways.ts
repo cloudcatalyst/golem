@@ -48,7 +48,7 @@ import { InitError } from "./init.js";
  * from {@link ProxySettings} (adding the `id` the array element carries).
  */
 type RegistryGateway = NonNullable<ProxySettings["gateways"]>[number];
-export interface AccountTarget {
+export interface GatewayTarget {
   readonly id: string;
   readonly provider: ProxySettings["upstream_provider"];
   readonly base_url: string;
@@ -56,7 +56,7 @@ export interface AccountTarget {
   readonly auth_scheme: NonNullable<RegistryGateway["auth_scheme"]>;
 }
 
-export interface AccountRow {
+export interface GatewayRow {
   readonly id: string;
   readonly provider: string;
   readonly base_url: string;
@@ -75,12 +75,12 @@ export interface AccountRow {
   /**
    * True for the synthetic DEFAULT account — the top-level upstream config the
    * proxy falls back to when no named account is active. It is not a
-   * `proxy.accounts` entry; selecting it just clears `active_account`.
+   * `proxy.gateways` entry; selecting it just clears `active_account`.
    */
   readonly is_default?: boolean;
 }
 
-export interface AccountsReport {
+export interface GatewaysReport {
   /**
    * The active account id: a named account, or the synthetic default id (the
    * top-level provider, e.g. `anthropic`) when no named account is active.
@@ -89,7 +89,7 @@ export interface AccountsReport {
   readonly active: string;
   /** True when `active_account` is set but not present in the registry (misconfig). */
   readonly active_unknown: boolean;
-  readonly accounts: readonly AccountRow[];
+  readonly gateways: readonly GatewayRow[];
 }
 
 /**
@@ -116,12 +116,12 @@ const DEFAULT_STORE_ID = DEFAULT_ACCOUNT_ID;
  * top-level upstream config). Shared by the credential commands so they probe
  * and store against exactly what the proxy would use.
  */
-async function resolveAccountTarget(
+async function resolveGatewayTarget(
   projectDir: string,
   id: string,
 ): Promise<{
   readonly storeId: string;
-  readonly account: AccountTarget;
+  readonly account: GatewayTarget;
   readonly isDefault: boolean;
 }> {
   const { settings } = await loadConfig({ projectDir });
@@ -167,11 +167,11 @@ async function resolveAccountTarget(
  * OS store, never the environment (Decision 47), so on a machine with a stored
  * key the `key_set` flags are true regardless of what `env` says.
  */
-export async function collectAccounts(
+export async function collectGateways(
   projectDir: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
   opts: { readonly store_backend?: CredentialStore } = {},
-): Promise<AccountsReport> {
+): Promise<GatewaysReport> {
   const { settings } = await loadConfig({ projectDir, env });
   const selected = settings.inference.default_target ?? null;
   const gateways = settings.proxy.gateways ?? [];
@@ -182,7 +182,7 @@ export async function collectAccounts(
   // selection names the default id itself.
   const defaultActive = selected === null || selected === defaultId;
   const defStatus = await store.status(DEFAULT_STORE_ID);
-  const defaultRow: AccountRow = {
+  const defaultRow: GatewayRow = {
     id: defaultId,
     provider: settings.proxy.upstream_provider,
     base_url: settings.proxy.upstream_base_url,
@@ -194,7 +194,7 @@ export async function collectAccounts(
     is_default: true,
   };
 
-  const namedRows: AccountRow[] = await Promise.all(
+  const namedRows: GatewayRow[] = await Promise.all(
     gateways.map(async (g) => {
       const st = await store.status(g.id);
       return {
@@ -216,7 +216,7 @@ export async function collectAccounts(
     selected !== null && selected !== defaultId && !gateways.some((g) => g.id === selected);
   const active = defaultActive || activeUnknown ? defaultId : selected;
 
-  return { active, active_unknown: activeUnknown, accounts: [defaultRow, ...namedRows] };
+  return { active, active_unknown: activeUnknown, gateways: [defaultRow, ...namedRows] };
 }
 
 /** Append a non-secret event to the audit log (ADR-0003). Fire-and-forget safe. */
@@ -233,7 +233,7 @@ async function appendAudit(
 /**
  * Switch the active account. `id: null`, `"none"` (handled by the caller), or
  * the synthetic default id (the top-level provider) all clear `active_account`
- * and revert to the top-level config. Any other id must be in `proxy.accounts`
+ * and revert to the top-level config. Any other id must be in `proxy.gateways`
  * (fail-closed — an unknown id is rejected). Records an audit line.
  *
  * **Credential preflight (Decision 46).** Before switching, resolve the target's
@@ -242,7 +242,7 @@ async function appendAudit(
  * there is no silent switch onto an account that cannot authenticate. This is
  * the check that turns "set the key first" from advice into a guarantee.
  */
-export async function useAccount(
+export async function useGateway(
   projectDir: string,
   id: string | null,
   nowIso: string,
@@ -306,7 +306,7 @@ export async function useAccount(
   return { active: target };
 }
 
-/** Options for {@link loginAccount}. */
+/** Options for {@link loginGateway}. */
 export interface LoginOptions {
   /** Probe the upstream and refuse to store a rejected key (default true). */
   readonly probe?: boolean;
@@ -334,7 +334,7 @@ export interface LoginOptions {
  * there is no env-var backend (Decision 47), so it is the CI/headless story; the
  * secret still never touches argv.
  */
-export async function loginAccount(
+export async function loginGateway(
   projectDir: string,
   id: string,
   nowIso: string,
@@ -346,7 +346,7 @@ export async function loginAccount(
   /** The URL real traffic will go to — printed so the route is verifiable, not assumed. */
   readonly request_url?: string;
 }> {
-  const { account, storeId } = await resolveAccountTarget(projectDir, id);
+  const { account, storeId } = await resolveGatewayTarget(projectDir, id);
   const store = opts.store_backend ?? createCredentialStore({});
 
   // 1. Get the secret: the caller may supply it (tests/pipes); otherwise prompt.
@@ -415,7 +415,7 @@ export async function loginAccount(
  * opted-in plaintext file). Since Decision 47 there is no environment-variable
  * backend, so a logout is complete — there is no un-unsettable copy left behind.
  */
-export async function logoutAccount(
+export async function logoutGateway(
   projectDir: string,
   id: string,
   nowIso: string,
@@ -424,15 +424,15 @@ export async function logoutAccount(
   readonly account: string;
   readonly removed: readonly string[];
 }> {
-  const { storeId } = await resolveAccountTarget(projectDir, id);
+  const { storeId } = await resolveGatewayTarget(projectDir, id);
   const store = opts.store_backend ?? createCredentialStore({});
   const removed = await store.forget(storeId);
   await appendAudit(projectDir, { action: "logout", account: storeId }, nowIso);
   return { account: id, removed: removed.map((l) => l.label) };
 }
 
-/** Input for {@link addAccount}. All fields are NON-SECRET (ADR-0003 invariant 1). */
-export interface NewAccount {
+/** Input for {@link addGateway}. All fields are NON-SECRET (ADR-0003 invariant 1). */
+export interface NewGateway {
   readonly id: string;
   readonly provider: RegistryGateway["provider"];
   readonly base_url: string;
@@ -441,26 +441,26 @@ export interface NewAccount {
 }
 
 /**
- * Register a new account in `proxy.accounts`. This is the registration leg the
+ * Register a new account in `proxy.gateways`. This is the registration leg the
  * credential commands depend on: until an id exists here, `account login <id>`
  * and `account use <id>` both reject it as unknown.
  *
  * Written to the **local** scope (`settings.local.json`) — the top file layer —
- * because the proxy reads the MERGED config and a `proxy.accounts` array in any
+ * because the proxy reads the MERGED config and a `proxy.gateways` array in any
  * higher-precedence layer wholesale-replaces lower ones. Writing anywhere lower
- * would let a pre-existing local-layer `accounts` mask the change. Local scope
+ * would let a pre-existing local-layer `gateways` mask the change. Local scope
  * also keeps machine-specific account registrations out of the committable
  * project settings file.
  *
  * Fail-closed and non-destructive: refuses a duplicate id, refuses to shadow
  * the synthetic default's id, preserves every existing entry and its key order
  * (read-modify-write of the whole array through the schema-validated
- * `proxy.accounts` leaf). Never touches a credential — that is `account login`'s
+ * `proxy.gateways` leaf). Never touches a credential — that is `account login`'s
  * job. Audit-logged.
  */
-export async function addAccount(
+export async function addGateway(
   projectDir: string,
-  input: NewAccount,
+  input: NewGateway,
   nowIso: string,
 ): Promise<{ readonly account: string }> {
   const { settings } = await loadConfig({ projectDir });
@@ -517,7 +517,7 @@ export async function addAccount(
 }
 
 /**
- * Remove an account from `proxy.accounts` (local scope — see {@link addAccount}
+ * Remove an account from `proxy.gateways` (local scope — see {@link addGateway}
  * for why local, not project). Fail-closed on an unknown id; if the removed
  * account was active, clears `active_account` back to the default rather than
  * leaving a dangling reference. Audit-logged.
@@ -530,7 +530,7 @@ export async function addAccount(
  * order matters), and reports what it deleted. Pass `keepCredential` to keep the
  * stored key — the escape hatch for re-adding the same account shortly after.
  */
-export async function removeAccount(
+export async function removeGateway(
   projectDir: string,
   id: string,
   nowIso: string,
@@ -559,11 +559,11 @@ export async function removeAccount(
     throw new InitError(`unknown gateway "${id}"; configured gateways: ${ids}`);
   }
 
-  // Log out BEFORE de-registering: logoutAccount resolves the credential's store
+  // Log out BEFORE de-registering: logoutGateway resolves the credential's store
   // id from the registry entry, which is about to disappear.
   let credentialRemoved: readonly string[] = [];
   if (opts.keepCredential !== true) {
-    const logout = await logoutAccount(projectDir, id, nowIso, {
+    const logout = await logoutGateway(projectDir, id, nowIso, {
       ...(opts.store_backend !== undefined ? { store_backend: opts.store_backend } : {}),
     });
     credentialRemoved = logout.removed;
@@ -595,7 +595,7 @@ export async function removeAccount(
  *
  * **R9.1 — this resolves N credentials, not 1.** Every gateway referenced by a
  * target in `proxy.targets` (or derived from `proxy.gateways`) gets its key
- * injected under its own `perGatewayEnvVar` (renamed from `perAccountEnvVar` in
+ * injected under its own `perGatewayEnvVar` (renamed from `perGatewayEnvVar` in
  * R9.23), because with a target registry the proxy may need any of them, not
  * only the active one. No new secret mechanism was required: `perGatewayEnvVar`
  * was already designed per-gateway (Decision 47), and the CLI still owns
@@ -647,11 +647,11 @@ export async function credentialEnvForProxy(
   return out;
 }
 
-/** Human-readable rendering of {@link AccountsReport}. */
-export function renderAccounts(report: AccountsReport): string {
+/** Human-readable rendering of {@link GatewaysReport}. */
+export function renderGateways(report: GatewaysReport): string {
   const lines: string[] = [];
   lines.push("Golem upstream gateways (credential values are never shown):");
-  for (const a of report.accounts) {
+  for (const a of report.gateways) {
     const mark = a.active ? "*" : " ";
     const key = a.key_set
       ? `key set — ${a.key_location ?? "stored"}`

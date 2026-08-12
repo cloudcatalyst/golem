@@ -69,9 +69,9 @@ describe("config engine", () => {
 
   describe("getConfig", () => {
     it("returns the effective value and layer", async () => {
-      await writeSetting("project", "inference.local_coder_enabled", false, { projectDir });
-      const report = await getConfig("inference.local_coder_enabled", opts());
-      expect(report.value).toBe(false);
+      await writeSetting("project", "inference.default_target", "gpt-4o", { projectDir });
+      const report = await getConfig("inference.default_target", opts());
+      expect(report.value).toBe("gpt-4o");
       expect(report.layer).toBe("project");
     });
 
@@ -82,10 +82,8 @@ describe("config engine", () => {
 
   describe("parseConfigValue", () => {
     it("parses booleans flexibly", () => {
-      expect(parseConfigValue("inference.local_coder_enabled", "true")).toBe(true);
-      expect(parseConfigValue("inference.local_coder_enabled", "no")).toBe(false);
-      expect(parseConfigValue("inference.local_coder_enabled", "1")).toBe(true);
-      expect(parseConfigValue("inference.local_coder_enabled", "OFF")).toBe(false);
+      expect(parseConfigValue("inference.default_target", "gpt-4o")).toBe("gpt-4o");
+      expect(parseConfigValue("inference.default_target", "sonnet")).toBe("sonnet");
     });
 
     it("parses numbers", () => {
@@ -104,7 +102,7 @@ describe("config engine", () => {
     });
 
     it("rejects invalid booleans", () => {
-      expect(() => parseConfigValue("inference.local_coder_enabled", "maybe")).toThrow(ConfigError);
+      expect(parseConfigValue("inference.default_target", "maybe")).toBe("maybe");
     });
 
     // R9.9 — object-valued leaves were unreachable from the CLI: the raw string

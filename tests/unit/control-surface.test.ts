@@ -112,7 +112,7 @@ describe("collectControlSurface", () => {
     const tabs = new Set(surface.groups.map((g) => g.tab));
     expect(tabs).toEqual(new Set(["settings", "guidance", "runtime"]));
     expect(ids(surface)).toContain("setting:knowledge.enabled");
-    expect(ids(surface)).toContain("guidance:local-coder");
+    expect(ids(surface)).toContain("guidance:coder-first");
     expect(ids(surface)).toEqual(expect.arrayContaining(["runtime:slider", "runtime:proxy"]));
   });
 
@@ -195,7 +195,8 @@ describe("collectControlSurface", () => {
   });
 
   it("locks a structured value instead of offering to edit it", async () => {
-    const control = find(await collectControlSurface(OPTS()), "setting:proxy.accounts");
+    // R9.23: renamed from proxy.gateways → proxy.gateways
+    const control = find(await collectControlSurface(OPTS()), "setting:proxy.gateways");
     expect(control.kind).toBe("opaque");
     expect(control.locked).toBeDefined();
     expect(control.writableScopes).toEqual([]);
@@ -215,17 +216,17 @@ describe("collectControlSurface", () => {
     expect(slider.writableScopes).toEqual(["local"]);
   });
 
-  it("reads a guidance rule's presence per scope, not the local-coder setting", async () => {
-    await mkdir(path.dirname(rulePath("local-coder")), { recursive: true });
-    await writeFile(rulePath("local-coder"), "# rule\n", "utf8");
+  it("reads a guidance rule's presence per scope, not the coder-first setting", async () => {
+    await mkdir(path.dirname(rulePath("coder-first")), { recursive: true });
+    await writeFile(rulePath("coder-first"), "# rule\n", "utf8");
     // `guidanceEnabled` would report false here because the coder setting is off;
     // the panel must still show the rule as on, since it IS on disk.
     await writeFile(
       projectFile(),
-      JSON.stringify({ inference: { local_coder_enabled: false } }),
+      JSON.stringify({ inference: { local_reachable: false } }),
       "utf8",
     );
-    const control = find(await collectControlSurface(OPTS()), "guidance:local-coder");
+    const control = find(await collectControlSurface(OPTS()), "guidance:coder-first");
     expect(control.value).toBe(true);
     expect(control.layer).toBe("project");
   });

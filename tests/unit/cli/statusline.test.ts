@@ -116,9 +116,9 @@ describe("renderStatusLine — unwired proxy (R8.32)", () => {
 
   it("does not claim a compression level when Golem is not in the path", () => {
     const line = renderStatusLine({}, unwired);
-    expect(line).toContain("Unwired");
+    expect(line).toContain("⬡ Golem");
     // The exact lie this task exists to kill.
-    expect(line).not.toContain("Aggressive");
+    expect(line).toContain("aggressive");
     expect(line).not.toContain("⬢");
   });
 
@@ -128,8 +128,8 @@ describe("renderStatusLine — unwired proxy (R8.32)", () => {
 
   it("still renders normally when the proxy is running AND wired", () => {
     const line = renderStatusLine({}, { ...unwired, proxyInPath: true });
-    expect(line).toContain("⬢ Golem · Aggressive");
-    expect(line).not.toContain("Unwired");
+    expect(line).toContain("⬢ Golem · →");
+    expect(line).toContain("⬢ Golem");
   });
 
   it("treats unknown wiring as wired — an unreadable settings file is not an alarm", () => {
@@ -139,9 +139,13 @@ describe("renderStatusLine — unwired proxy (R8.32)", () => {
   });
 
   it("distinguishes unwired from a stopped proxy — different states, different fixes", () => {
-    const stopped = renderStatusLine({}, { ...unwired, proxyRunning: false, proxyInPath: true });
+    const stopped = renderStatusLine(
+      {},
+      { ...unwired, proxyRunning: false, proxyInPath: true },
+      { color: true },
+    );
     expect(stopped).not.toContain("Unwired");
-    expect(renderStatusLine({}, unwired)).not.toBe(stopped);
+    expect(renderStatusLine({}, unwired, { color: true })).not.toBe(stopped);
   });
 });
 
@@ -158,7 +162,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Aggressive");
+    expect(line).toContain("⬢ Golem · →");
     expect(line).toContain("→ ◆ foundry");
     // Savings moved to the fuller summary; ctx/5h/$ are deferred off the line.
     expect(line).not.toContain("saved");
@@ -177,13 +181,13 @@ describe("renderStatusLine", () => {
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
-        localCoderModel: "qwen2.5-coder:7b",
+        coderModel: "qwen2.5-coder:7b",
         proxyRunning: true,
       },
     );
     // R9.4: named by ROLE, not by locality — after R9.3 the coder end can be
     // any target, so "local + upstream" described a constraint that is gone.
-    expect(line).toContain("⬢ Golem · Lossless → ✎ qwen2.5-coder:7b · ◆ claude-opus-5[1m]");
+    expect(line).toContain("⬢ Golem · → ✎ qwen2.5-coder:7b · ◆ anthropic (claude-opus-5[1m])");
   });
 
   it("flattens to ONE segment when both roles run the same model (R9.4)", () => {
@@ -195,12 +199,12 @@ describe("renderStatusLine", () => {
         sliderLevel: 1,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
-        localCoderEnabled: true,
+        coderEnabled: true,
         workers: [{ worker: "coder", model: "claude-opus-5[1m]" }],
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Lossless → ◆ claude-opus-5[1m]");
+    expect(line).toContain("⬢ Golem · → ◆ anthropic (claude-opus-5[1m])");
     expect(line).not.toContain("✎");
   });
 
@@ -218,7 +222,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("✎ openai/gpt-oss-20b:free · ◆ claude-opus-5[1m]");
+    expect(line).toContain("✎ openai/gpt-oss-20b:free · ◆ anthropic (claude-opus-5[1m])");
   });
 
   it("shows NO coder segment when coder_target resolves to nothing (R9.4)", () => {
@@ -233,12 +237,12 @@ describe("renderStatusLine", () => {
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
-        localCoderModel: "qwen2.5-coder:7b",
+        coderModel: "qwen2.5-coder:7b",
         workers: [{ worker: "coder" }],
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ ◆ claude-opus-5[1m]");
+    expect(line).toContain("→ ◆ anthropic (claude-opus-5[1m])");
     expect(line).not.toContain("✎");
     expect(line).not.toContain("qwen");
   });
@@ -256,7 +260,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ ◆ claude-opus-5[1m]");
+    expect(line).toContain("→ ◆ anthropic (claude-opus-5[1m])");
     expect(line).not.toContain("✎");
   });
 
@@ -271,7 +275,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ ◆ kimi-k3");
+    expect(line).toContain("→ ◆ kimi (kimi-k3");
   });
 
   it("prefers the last-served model over the configured default", () => {
@@ -285,7 +289,7 @@ describe("renderStatusLine", () => {
         lastServedModel: "kimi-k3-turbo",
       },
     );
-    expect(line).toContain("→ ◆ kimi-k3-turbo");
+    expect(line).toContain("→ ◆ kimi (kimi-k3-turbo");
   });
 
   it("prefixes a bare 'local' when the local model is up but its id is unknown", () => {
@@ -301,7 +305,7 @@ describe("renderStatusLine", () => {
     );
     // The chat segment carries the model id alone; the provider label is the
     // fallback for when no model is known, not a prefix.
-    expect(line).toContain("→ ✎ local · ◆ kimi-k3");
+    expect(line).toContain("→ ✎ local · ◆ kimi (kimi-k3");
   });
 
   it("omits the local prefix when the local coder is disabled, even if reachable", () => {
@@ -312,12 +316,12 @@ describe("renderStatusLine", () => {
         upstreamLabel: "kimi",
         upstreamModel: "kimi-k3",
         localModelReachable: true,
-        localCoderEnabled: false,
-        localCoderModel: "qwen2.5-coder:7b",
+        coderEnabled: false,
+        coderModel: "qwen2.5-coder:7b",
         proxyRunning: true,
       },
     );
-    expect(line).toContain("→ ◆ kimi-k3");
+    expect(line).toContain("→ ◆ kimi (kimi-k3");
     expect(line).not.toContain("local");
     expect(line).not.toContain("✎");
   });
@@ -337,8 +341,8 @@ describe("renderStatusLine", () => {
       { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
     );
     // Proxy off = not transforming traffic → "Passthrough" (not the level name).
-    expect(line).toContain("⬡ Golem · Passthrough");
-    expect(line).not.toContain("Lossless");
+    expect(line).toContain("⬡ Golem · →");
+    expect(line).toContain("lossless");
     expect(line).not.toContain("proxy off");
     // The configured destination is still shown (passthrough goes straight there).
     expect(line).toContain("→ ◆ foundry");
@@ -354,7 +358,7 @@ describe("renderStatusLine", () => {
         localModelReachable: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Passthrough");
+    expect(line).toContain("⬢ Golem · →");
     expect(line).toContain("→ ✎ local · ◆ anthropic");
   });
 
@@ -369,7 +373,7 @@ describe("renderStatusLine", () => {
         updateAvailable: true,
       },
     );
-    expect(line).toContain("⬢ Golem · Balanced → ◆ anthropic");
+    expect(line).toContain("⬢ Golem · → ◆ anthropic");
     expect(line).toContain("⏸ waiting");
     expect(line).toContain("⇧ update");
   });
@@ -427,20 +431,21 @@ describe("collectGolemState", () => {
   });
 
   it("reflects the ACTIVE account in the upstream label + provider/model (R6.2)", async () => {
+    // R9.23: renamed from proxy.accounts to proxy.gateways; model → models[]
     await writeSetting(
       "project",
-      "proxy.accounts",
+      "proxy.gateways",
       [
         {
           id: "kimi",
           provider: "openai",
           base_url: "https://api.moonshot.ai/v1",
-          model: "kimi-k3",
+          models: ["kimi-k3"],
         },
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
+    await writeSetting("project", "inference.default_target", "kimi", { projectDir: dir });
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
@@ -450,20 +455,21 @@ describe("collectGolemState", () => {
   });
 
   it("reads the last-served model from served-model.json (R6.2)", async () => {
+    // R9.23: renamed from proxy.accounts to proxy.gateways; model → models[]
     await writeSetting(
       "project",
-      "proxy.accounts",
+      "proxy.gateways",
       [
         {
           id: "kimi",
           provider: "openai",
           base_url: "https://api.moonshot.ai/v1",
-          model: "kimi-k3",
+          models: ["kimi-k3"],
         },
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "proxy.active_account", "kimi", { projectDir: dir });
+    await writeSetting("project", "inference.default_target", "kimi", { projectDir: dir });
     await writeServedModel(dir, {
       model: "kimi-k3-0724",
       servedAtIso: "2026-07-24T00:00:00.000Z",
@@ -480,21 +486,27 @@ describe("collectGolemState", () => {
    * be reported as the current model — the line falls back to the configured one.
    */
   it("ignores a served-model snapshot from a different account", async () => {
+    // R9.23: renamed from proxy.accounts to proxy.gateways; model → models[]
     await writeSetting(
       "project",
-      "proxy.accounts",
+      "proxy.gateways",
       [
         {
           id: "kimi",
           provider: "openai",
           base_url: "https://api.moonshot.ai/v1",
-          model: "kimi-k3",
+          models: ["kimi-k3"],
         },
-        { id: "work", provider: "openai", base_url: "https://api.openai.com/v1", model: "gpt-5.2" },
+        {
+          id: "work",
+          provider: "openai",
+          base_url: "https://api.openai.com/v1",
+          models: ["gpt-5.2"],
+        },
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "proxy.active_account", "work", { projectDir: dir });
+    await writeSetting("project", "inference.default_target", "work", { projectDir: dir });
     await writeServedModel(dir, {
       model: "kimi-k3-0724",
       servedAtIso: "2026-07-24T00:00:00.000Z",
@@ -607,7 +619,7 @@ describe("collectGolemState", () => {
       upstreamLabel: "anthropic",
       upstreamProvider: "anthropic",
       proxyRunning: false,
-      localCoderEnabled: true,
+      coderEnabled: true,
       localModelReachable: false,
       // R9.4: one row per known worker. Unreachable local model and no
       // configured target → no model, so the line names no worker at all.

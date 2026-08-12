@@ -81,6 +81,16 @@ function toolResultText(content: unknown): string {
   return content === undefined ? "" : JSON.stringify(content);
 }
 
+/**
+ * Sanitize a tool_use id for Anthropic's schema: `^[a-zA-Z0-9_-]+$`.
+ * Upstreams (OpenRouter, Gemini) may return IDs with dots, colons, or other
+ * characters Anthropic rejects. Replace each invalid character with `_` so the
+ * id stays readable and unique — stripping would risk collisions.
+ */
+function sanitizeToolId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 /** Parse a tool-call arguments string to an object; `{}` on invalid/empty JSON. */
 function parseArgs(args: string | undefined): Record<string, unknown> {
   if (args === undefined || args === "") return {};
@@ -431,7 +441,7 @@ export function openAIChatToAnthropic(
   for (const tc of choice?.message.tool_calls ?? []) {
     content.push({
       type: "tool_use",
-      id: tc.id ?? fallback.id,
+      id: sanitizeToolId(tc.id ?? fallback.id),
       name: tc.function?.name ?? "",
       input: parseArgs(tc.function?.arguments),
     });

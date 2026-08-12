@@ -95,18 +95,16 @@ const REMOTE: TargetRegistrySettings = {
   upstream_provider: "anthropic",
   upstream_base_url: "https://api.anthropic.com",
   upstream_auth_scheme: "inherit",
+  gateways: [
+    { id: "openrouter", provider: "openrouter", base_url: "https://openrouter.ai/api/v1" },
+  ],
   targets: [
     {
       id: "cheap",
-      provider: "openrouter",
-      base_url: "https://openrouter.ai/api/v1",
+      gateway: "openrouter",
       model: "openai/gpt-oss-20b:free",
-      account: "openrouter",
       trust: "third-party",
     },
-  ],
-  accounts: [
-    { id: "openrouter", provider: "openrouter", base_url: "https://openrouter.ai/api/v1" },
   ],
 };
 
@@ -216,11 +214,18 @@ describe("the local path is unchanged", () => {
       inference,
       settings: {
         ...REMOTE,
+        gateways: [
+          {
+            id: "localgw",
+            provider: "ollama",
+            base_url: "http://localhost:11434/v1",
+            models: ["qwen2.5-coder:7b"],
+          },
+        ],
         targets: [
           {
             id: "local",
-            provider: "ollama",
-            base_url: "http://localhost:11434/v1",
+            gateway: "localgw",
             model: "qwen2.5-coder:7b",
             trust: "local",
           },
@@ -253,18 +258,26 @@ describe("the local path is unchanged", () => {
       inference,
       settings: {
         ...REMOTE,
+        gateways: [
+          {
+            id: "notreallygw",
+            provider: "openai",
+            base_url: "https://api.openai.com/v1",
+            models: ["gpt-5.2"],
+          },
+        ],
         targets: [
           {
             id: "notreallylocal",
-            provider: "openai",
-            base_url: "https://api.openai.com/v1",
+            gateway: "notreallygw",
             model: "gpt-5.2",
             trust: "local",
           },
         ],
       },
       fetchImpl,
-      env: { GOLEM_UPSTREAM_API_KEY: "sk-thekey" },
+      // R9.23: per-gateway env var for a named gateway; GLOBAL key only works for the synthetic default (accountId=null)
+      env: { GOLEM_UPSTREAM_API_KEY__NOTREALLYGW: "sk-thekey" },
     });
 
     await dispatcher.dispatch({
@@ -318,12 +331,19 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       inference: stubInference(),
       settings: {
         ...REMOTE,
+        gateways: [
+          {
+            id: "vendorgw",
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+            models: ["claude-opus-5"],
+          },
+        ],
         targets: [
           ...(REMOTE.targets ?? []),
           {
             id: "vendor",
-            provider: "anthropic",
-            base_url: "https://api.anthropic.com",
+            gateway: "vendorgw",
             model: "claude-opus-5",
           },
         ],
@@ -390,11 +410,18 @@ describe("fail-closed selection", () => {
   it("rejects a target opted out with agent_selectable = false", async () => {
     const settings: TargetRegistrySettings = {
       ...REMOTE,
+      gateways: [
+        {
+          id: "expensivegw",
+          provider: "anthropic",
+          base_url: "https://api.anthropic.com",
+          models: ["claude-opus-5"],
+        },
+      ],
       targets: [
         {
           id: "expensive",
-          provider: "anthropic",
-          base_url: "https://api.anthropic.com",
+          gateway: "expensivegw",
           model: "claude-opus-5",
           agent_selectable: false,
         },
@@ -434,7 +461,8 @@ describe("fail-closed selection", () => {
       inference: stubInference(),
       settings: {
         ...REMOTE,
-        targets: [{ id: "bare", provider: "openai", base_url: "https://api.openai.com/v1" }],
+        gateways: [{ id: "baregw", provider: "openai", base_url: "https://api.openai.com/v1" }],
+        targets: [{ id: "bare", gateway: "baregw" }],
       },
       fetchImpl,
       env: {},
@@ -476,11 +504,18 @@ describe("transport and audit", () => {
       inference: stubInference(),
       settings: {
         ...REMOTE,
+        gateways: [
+          {
+            id: "vendorgw2",
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+            models: ["claude-opus-5"],
+          },
+        ],
         targets: [
           {
             id: "vendor",
-            provider: "anthropic",
-            base_url: "https://api.anthropic.com",
+            gateway: "vendorgw2",
             model: "claude-opus-5",
           },
         ],
@@ -609,13 +644,19 @@ describe("credential resolution without the environment", () => {
       inference: stubInference(),
       settings: {
         ...REMOTE,
+        gateways: [
+          {
+            id: "inheritsgw",
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+            models: ["claude-sonnet-5"],
+          },
+        ],
         targets: [
           {
             id: "inherits",
-            provider: "anthropic",
-            base_url: "https://api.anthropic.com",
+            gateway: "inheritsgw",
             model: "claude-sonnet-5",
-            auth_scheme: "inherit",
             trust: "vendor",
           },
         ],

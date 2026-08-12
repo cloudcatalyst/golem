@@ -166,14 +166,14 @@ export async function runPreToolUseHook(
       }
     }
 
-    // Coder-first enforcement (Decision 39): when the `local-coder` guidance is
+    // Coder-first enforcement (Decision 39): when the `coder-first` guidance is
     // active, DENY the first non-trivial hand-written code Write/Edit of a
     // session and redirect the agent to draft with `coder` first — ONCE per
     // session. "Enforced if guided": skipped entirely when the guidance is off.
     const codeTarget = isCodeDraftTarget(toolName, payload.tool_input);
     if (codeTarget.isCode) {
       const guided = options.isGuidanceEnabled ?? guidanceEnabled;
-      if (await guided(projectDir, "local-coder")) {
+      if (await guided(projectDir, "coder-first")) {
         const nudgedSessions = await readCoderFirstNudgeState(projectDir);
         const decision = decideCoderFirstNudge(codeTarget, nudgedSessions, payload.session_id);
         if (decision.nudge && decision.sessionKey !== undefined) {
