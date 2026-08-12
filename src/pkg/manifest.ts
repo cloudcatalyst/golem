@@ -13,7 +13,13 @@
  *   4. Golem ships none of its bytes.
  *
  * The Caveman *speech skill* deliberately fails (1) — see its row.
+ *
+ * Pins are IMPORTED, never re-typed. `pins.js` is deliberately a narrow module
+ * rather than the compression barrel, so this data file does not drag the CCR
+ * store and sidecar adapter into its module graph.
  */
+
+import { HEADROOM_SIDECAR_PYPI_PIN } from "../compression/pins.js";
 
 /**
  * Where a package sits on the dependency ladder (Decision 53).
@@ -117,7 +123,7 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     shape: "callable",
     upstream: "https://github.com/headroomlabs-ai/headroom",
     licence: "see upstream",
-    pin: "headroom-ai==0.30.0",
+    pin: `headroom-ai==${HEADROOM_SIDECAR_PYPI_PIN}`,
     detect: { kind: "command", command: "uv" },
     requires: ["uv"],
     install: "No install step — `uv run --with headroom-ai==<pin>` fetches it on first use.",
@@ -138,7 +144,7 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     shape: "callable",
     upstream: "https://github.com/headroomlabs-ai/headroom",
     licence: "see upstream",
-    pin: "headroom-ai[memory]==0.30.0",
+    pin: `headroom-ai[memory]==${HEADROOM_SIDECAR_PYPI_PIN}`,
     detect: { kind: "command", command: "uv" },
     requires: ["uv"],
     install:
