@@ -126,7 +126,6 @@ async function resolveAccountTarget(
 }> {
   const { settings } = await loadConfig({ projectDir });
   const p = settings.proxy;
-  const inf = settings.inference;
   if (id === defaultAccountId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
     return {
       storeId: DEFAULT_STORE_ID,
@@ -466,7 +465,6 @@ export async function addAccount(
 ): Promise<{ readonly account: string }> {
   const { settings } = await loadConfig({ projectDir });
   const p = settings.proxy;
-  const inf = settings.inference;
   const gateways = [...(p.gateways ?? [])];
 
   if (input.id === defaultAccountId(p.upstream_provider) || input.id === DEFAULT_STORE_ID) {

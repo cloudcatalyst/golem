@@ -173,10 +173,7 @@ export class OpenAIChatSSETranslator extends Transform {
       const oaiIndex = tc.index;
       const prev = this.#toolMeta.get(oaiIndex) ?? { id: this.#id, name: "" };
       const meta = {
-        id:
-          typeof tc.id === "string" && tc.id.length > 0
-            ? sanitizeToolId(tc.id)
-            : prev.id,
+        id: typeof tc.id === "string" && tc.id.length > 0 ? sanitizeToolId(tc.id) : prev.id,
         name:
           typeof tc.function?.name === "string" && tc.function.name.length > 0
             ? tc.function.name

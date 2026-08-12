@@ -190,23 +190,22 @@ describe("collectLocalModel", () => {
 describe("setLocalCoderEnabled", () => {
   it("writes the setting and it is readable back through the loader", async () => {
     await setLocalCoderEnabled(false, "project", { projectDir: dir });
-    expect(
-      ((await loadConfig({ projectDir: dir, userDir: dir })).settings as any)
-        .inference__coder_enabled,
-    ).toBe(undefined);
+    const settings = (await loadConfig({ projectDir: dir, userDir: dir }))
+      .settings as unknown as Record<string, unknown>;
+    // R9.23: coder_enabled removed — the old leaf is gone entirely.
+    expect(settings.inference__coder_enabled).toBeUndefined();
     await setLocalCoderEnabled(true, "project", { projectDir: dir });
-    expect(
-      ((await loadConfig({ projectDir: dir, userDir: dir })).settings as any)
-        .inference__coder_enabled,
-    ).toBe(undefined);
+    const settings2 = (await loadConfig({ projectDir: dir, userDir: dir }))
+      .settings as unknown as Record<string, unknown>;
+    expect(settings2.inference__coder_enabled).toBeUndefined();
   });
 
   it("honours the requested scope", async () => {
     await setLocalCoderEnabled(false, "local", { projectDir: dir });
     const raw = JSON.parse(
       await readFile(path.join(dir, ".golem", "settings.local.json"), "utf8"),
-    ) as { inference?: { coder_enabled?: boolean } };
-    expect((raw as any).inference?.worker_targets?.coder).toBe("__disabled__");
+    ) as { inference?: { coder_enabled?: boolean; worker_targets?: Record<string, unknown> } };
+    expect(raw.inference?.worker_targets?.coder).toBe("__disabled__");
   });
 });
 

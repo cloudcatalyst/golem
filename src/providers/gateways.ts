@@ -22,11 +22,7 @@
 import { resolveAuthScheme, type UpstreamAuthScheme, type UpstreamProvider } from "./index.js";
 // Direct import, not the barrel: the barrel re-exports this module, and
 // importing ourselves through it would be a circular dependency.
-import {
-  listTargets,
-  resolveDefaultTargetId,
-  type TargetRegistrySettings,
-} from "./targets.js";
+import { listTargets, resolveDefaultTargetId, type TargetRegistrySettings } from "./targets.js";
 
 /** A non-secret gateway entry (from `proxy.gateways`). */
 export interface GatewayEntry {

@@ -117,8 +117,10 @@ describe("collectTargets", () => {
     await writeSetting("project", "inference.default_target", "work:gpt-5.2", { projectDir: dir });
     const settingsPath = path.join(dir, ".golem", "settings.json");
     const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
-    delete (raw as Record<string, any>).inference.default_target;
-    (raw as any).proxy.active_account = "work";
+    const inference = raw.inference as Record<string, unknown> | undefined;
+    if (inference !== undefined) delete inference.default_target;
+    const proxy = raw.proxy as Record<string, unknown>;
+    proxy.active_account = "work";
     await writeFile(
       settingsPath,
       `${JSON.stringify(raw, null, 2)}

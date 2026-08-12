@@ -199,7 +199,7 @@ export function resolveModel(
 ): readonly ResolvedTarget[] {
   const targets = listTargets(settings);
   const lower = name.toLowerCase();
-  return targets.filter((t) => t.model !== undefined && t.model.toLowerCase().includes(lower));
+  return targets.filter((t) => t.model?.toLowerCase().includes(lower) === true);
 }
 
 /**

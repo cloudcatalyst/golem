@@ -17,7 +17,6 @@ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
 import { classifyManaged, ownedDetail, rememberManaged } from "../cli/managed-files.js";
-import { loadConfig } from "../config/index.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
 export type GuidanceScope = "project" | "user";
@@ -306,36 +305,17 @@ export async function guidanceRuleExists(
  * Whether a guidance feature is active for a project — i.e. its rule file is
  * present in either scope (presence *is* the toggle; `golem guidance
  * enable/disable` add/remove it). Used to gate enforcement on "if guided".
- *
- * For the `coder-first` feature, the rule file is necessary but not sufficient:
- * the `inference.coder_enabled` setting must also be true. When the local
- * coder is disabled via `golem config set inference.coder_enabled false`,
- * the guidance text is still present but enforcement is bypassed (the agent is
- * not told to draft with a tool that is not enabled).
  */
 export async function guidanceEnabled(projectDir: string, name: string): Promise<boolean> {
   for (const scope of ["project", "user"] as const) {
     try {
       await readFile(guidanceRulePath(projectDir, name, scope), "utf8");
-      if (name === "coder-first" && !(await coderToolEnabled(projectDir))) {
-        return false;
-      }
       return true;
     } catch {
       // not present in this scope
     }
   }
   return false;
-}
-
-/** Read the effective `inference.coder_enabled` setting; fail-open true. */
-async function coderToolEnabled(projectDir: string): Promise<boolean> {
-  try {
-    const { settings } = await loadConfig({ projectDir });
-    return true;
-  } catch {
-    return true;
-  }
 }
 
 const rel = (projectDir: string, abs: string): string =>

@@ -10,7 +10,6 @@
 import { describe, expect, it } from "vitest";
 import { renderLocalModel } from "../../src/cli/local-config.js";
 import { renderStatus, type StatusReport } from "../../src/cli/status.js";
-import { assertLeafRename, migrationFrom } from "../../src/config/migrations.js";
 import { allLeafPaths, leafSchema } from "../../src/config/schema.js";
 
 describe("the settings leaf", () => {
