@@ -9,8 +9,11 @@ jobs:
   # 10x, Windows at 2x). Cross-OS coverage now comes from local Windows dev + the
   # release workflow's Bun cross-compile — NOT a full CI matrix. To spot-check
   # macOS/Windows, temporarily add them back to `os` below, or run locally.
-  test:
-    name: ubuntu / node ${{ matrix.node }}
+
+  # Lint / typecheck / build / wiki lint run ONCE per node — sharded test jobs must
+  # not duplicate them (that would multiply Actions minutes for the same work).
+  quality:
+    name: quality / node ${{ matrix.node }}
     strategy:
       fail-fast: false
       matrix:
@@ -33,11 +36,50 @@ jobs:
       - name: Type check (strict)
         run: npm run typecheck
 
-      - name: Tests
-        run: npm test
-
       - name: Build
         run: npm run build
 
       - name: Wiki lint (docs/wiki graph integrity)
         run: node dist/cli/main.js wiki check
+
+  # Tests are SHARDED across parallel jobs so the total wall time drops roughly
+  # 1/shard-count (each shard runs its own slice of files on its own runner).
+  #
+  # Vitest's `--shard <index>/<count>` splits by a deterministic file hash and
+  # slices ceil(files/count) per shard. It does NOT balance by test weight, so
+  # where the few I/O-heavy files (checkpoint-ledger ~125s, cli-init ~98s of
+  # git/proxy spawn work) land determines the wall time.
+  #
+  # 10 shards was chosen from the actual hash-slice placement: at this count every
+  # heavy file gets its own shard (checkpoint-ledger alone in 2/10, cli-init alone
+  # in 7/10, cli-status in 8/10, golem-init-smoke in 9/10), so no one shard carries
+  # two of the biggest files. Count-4 bunched two heavy files into one slow shard
+  # (its test shard hit ~80s while peers were ~25s) — exactly what to avoid.
+  #
+  # Trade-off: more shards = lower wall time but more total Actions minutes (each
+  # shard is a separate npm ci + runner; 10 shards x 2 nodes = 20 test jobs). This
+  # repo is minutes-conscious, so 10 is the sweet spot that separates the heavy
+  # files without multiplying jobs further. Lower it to save minutes, raise it to
+  # cut wall time. Fail-fast is off so one shard's failure doesn't cancel the rest.
+  test:
+    name: test / node ${{ matrix.node }} / shard ${{ matrix.shard }}
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Tests (shard ${{ matrix.shard }}/10)
+        run: npm test -- --shard ${{ matrix.shard }}/10
