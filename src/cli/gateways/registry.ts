@@ -1,5 +1,5 @@
 /**
- * R6.2 v1 + Decisions 46/47 — the `golem account` gateway REGISTRY (spec
+ * R6.2 v1 + Decisions 46/47 — the `golem gateway` gateway REGISTRY (spec
  * Decision 21d; ADR-0003, amended). Extracted verbatim from `../gateways.ts`.
  *
  * The read/report half, plus the audit log every mutating command appends to.
@@ -18,7 +18,7 @@ import {
   type CredentialFault,
   type CredentialStore,
   createCredentialStore,
-  DEFAULT_ACCOUNT_ID,
+  DEFAULT_GATEWAY_ID,
 } from "../../credentials/index.js";
 
 /**
@@ -55,7 +55,7 @@ export interface GatewayRow {
   /**
    * True for the synthetic DEFAULT account — the top-level upstream config the
    * proxy falls back to when no named account is active. It is not a
-   * `proxy.gateways` entry; selecting it just clears `active_account`.
+   * `proxy.gateways` entry; selecting it just clears `inference.default_target`.
    */
   readonly is_default?: boolean;
 }
@@ -67,7 +67,7 @@ export interface GatewaysReport {
    * Never null — the default is always a real, selectable identity.
    */
   readonly active: string;
-  /** True when `active_account` is set but not present in the registry (misconfig). */
+  /** True when `inference.default_target` names an id absent from the registry (misconfig). */
   readonly active_unknown: boolean;
   readonly gateways: readonly GatewayRow[];
 }
@@ -76,19 +76,19 @@ export interface GatewaysReport {
  * The id of the synthetic DEFAULT account — the top-level upstream config used
  * when no named account is active. It is simply the top-level provider name
  * (e.g. `anthropic`), so the cleared state reads as a real destination rather
- * than "(none)". Selecting it clears `active_account`.
+ * than "(none)". Selecting it clears `inference.default_target`.
  */
-export function defaultAccountId(provider: string): string {
+export function defaultGatewayId(provider: string): string {
   return provider;
 }
 
 /**
  * The credential-store id for the synthetic default account. The display id is
  * the provider name (`anthropic`); the store id is the reserved
- * {@link DEFAULT_ACCOUNT_ID}, so the top-level upstream config's credential is
+ * {@link DEFAULT_GATEWAY_ID}, so the top-level upstream config's credential is
  * stored under one stable key regardless of which provider it currently names.
  */
-export const DEFAULT_STORE_ID = DEFAULT_ACCOUNT_ID;
+export const DEFAULT_STORE_ID = DEFAULT_GATEWAY_ID;
 
 /**
  * Read the account registry + which is active (best-effort; never reads secret
@@ -105,7 +105,7 @@ export async function collectGateways(
   const { settings } = await loadConfig({ projectDir, env });
   const selected = settings.inference.default_target ?? null;
   const gateways = settings.proxy.gateways ?? [];
-  const defaultId = defaultAccountId(settings.proxy.upstream_provider);
+  const defaultId = defaultGatewayId(settings.proxy.upstream_provider);
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
   // The default is active whenever no named gateway is selected, or the
@@ -168,7 +168,7 @@ export function renderGateways(report: GatewaysReport): string {
     const mark = a.active ? "*" : " ";
     const key = a.key_set
       ? `key set — ${a.key_location ?? "stored"}`
-      : `key MISSING (set it with: golem account login ${a.id})`;
+      : `key MISSING (set it with: golem gateway login ${a.id})`;
     const model = a.model !== null ? ` model=${a.model}` : "";
     const tag = a.is_default === true ? " (default)" : "";
     lines.push(`  ${mark} ${a.id.padEnd(12)} ${a.provider} ${a.base_url}${model}`);

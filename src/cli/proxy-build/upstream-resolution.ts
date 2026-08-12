@@ -52,7 +52,7 @@ export interface ResolvedProxyUpstream {
 export function resolveProxyUpstream(settings: GolemSettings): ResolvedProxyUpstream {
   // R6.2 (ADR-0003): resolve the ACTIVE account (or the legacy top-level config).
   // Secrets are never a setting — the credential comes from the environment.
-  // A named-but-unknown active_account falls back to the top-level config with a
+  // A named-but-unknown default_target falls back to the top-level config with a
   // warning (never a silent switch to a different account — fail-closed).
   const { resolved: upstream, warning: accountWarning } = resolveActiveUpstream(
     {
@@ -141,7 +141,7 @@ export function buildUpstreamWiring(
   ) {
     process.stderr.write(
       `golem proxy: upstream_provider "${upstreamProvider}"${accountLabel} needs a credential — ` +
-        `set it with \`golem account login ${upstream.accountId ?? upstreamProvider}\`; ` +
+        `set it with \`golem gateway login ${upstream.accountId ?? upstreamProvider}\`; ` +
         "forwarding the client's own auth for now.\n",
     );
   }
@@ -174,7 +174,7 @@ export function buildUpstreamWiring(
   ) {
     process.stderr.write(
       'golem proxy: upstream_provider "gemini" needs a credential (sent as the ?key= query ' +
-        `param) — set it with \`golem account login ${upstream.accountId ?? "gemini"}\`; ` +
+        `param) — set it with \`golem gateway login ${upstream.accountId ?? "gemini"}\`; ` +
         "requests will 401 until it is set.\n",
     );
   }

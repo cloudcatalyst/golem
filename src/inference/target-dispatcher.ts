@@ -489,7 +489,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
             (target.accountId === null
               ? " for the default upstream account"
               : ` for account "${target.accountId}"`) +
-            `. Store one with \`golem account login ${target.accountId ?? "anthropic"}\`.`,
+            `. Store one with \`golem gateway login ${target.accountId ?? "anthropic"}\`.`,
         );
       }
       const authHeaders = mapper ? (mapper({}) as Record<string, string>) : {};

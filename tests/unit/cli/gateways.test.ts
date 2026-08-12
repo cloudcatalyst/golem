@@ -1,5 +1,5 @@
 /**
- * R6.2 v1 + Decisions 46/47 / R9.23 — `golem account` CLI: registry listing
+ * R6.2 v1 + Decisions 46/47 / R9.23 — `golem gateway` CLI: registry listing
  * (never leaking secrets), fail-closed switching, logout-on-remove, and the
  * ADR-0003 audit log.
  *
@@ -20,7 +20,7 @@ import {
   addGateway,
   collectGateways,
   credentialEnvForProxy,
-  defaultAccountId,
+  defaultGatewayId,
   logoutGateway,
   removeGateway,
   renderGateways,
@@ -101,8 +101,8 @@ describe("collectGateways", () => {
   });
 
   it("exposes the default id as the top-level provider name", () => {
-    expect(defaultAccountId("anthropic")).toBe("anthropic");
-    expect(defaultAccountId("openrouter")).toBe("openrouter");
+    expect(defaultGatewayId("anthropic")).toBe("anthropic");
+    expect(defaultGatewayId("openrouter")).toBe("openrouter");
   });
 });
 
@@ -144,7 +144,7 @@ describe("useGateway", () => {
   it("remediates a missing credential with account login, never an env var", async () => {
     await expect(
       useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
-    ).rejects.toThrow(/golem account login local/);
+    ).rejects.toThrow(/golem gateway login local/);
     await expect(
       useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
     ).rejects.not.toThrow(/GOLEM_UPSTREAM_API_KEY/);
@@ -495,7 +495,7 @@ describe("renderGateways", () => {
   /** Decision 47: the fix offered for a missing key is `login`, not an export. */
   it("remediates a missing key with account login and names no env var", async () => {
     const out = renderGateways(await collectGateways(dir, {}, { store_backend: store }));
-    expect(out).toContain("golem account login");
+    expect(out).toContain("golem gateway login");
     expect(out).not.toContain("GOLEM_UPSTREAM_API_KEY");
     expect(out).not.toContain("export ");
   });

@@ -92,7 +92,7 @@ describe("collectTargets", () => {
     // R9.23: target id is compound `<gateway>/<model>`
     const work = report.targets.find((t) => t.id === "work:gpt-5.2");
     expect(work?.key_set).toBe(false);
-    expect(work?.warnings.join(" ")).toContain("golem account login work");
+    expect(work?.warnings.join(" ")).toContain("golem gateway login work");
   });
 
   it("does NOT warn about the synthetic default, which inherits the client's auth", async () => {
@@ -242,7 +242,7 @@ describe("testTarget", () => {
     // R9.23: target id is compound `<gateway>/<model>`
     const result = await testTarget(dir, "work:gpt-5.2", {}, { store_backend: store });
     expect(result.verdict).toBe("no-credential");
-    expect(result.detail).toContain("golem account login work");
+    expect(result.detail).toContain("golem gateway login work");
   });
 });
 

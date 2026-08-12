@@ -3,7 +3,7 @@
  *
  * `backends.ts` — one storage mechanism each (OS keychain / plaintext file).
  *                 There is deliberately no environment-variable backend
- *                 (Decision 47) — a key is set with `golem account login`.
+ *                 (Decision 47) — a key is set with `golem gateway login`.
  * `store.ts`    — the resolution chain over those backends, and the only entry
  *                 point the CLI should use.
  * `prompt.ts`   — masked TTY entry, for when no credential is found.
@@ -19,9 +19,9 @@ export {
   type CredentialLocation,
   type CredentialProtection,
   credentialsDir,
-  DEFAULT_ACCOUNT_ID,
+  DEFAULT_GATEWAY_ID,
   DEFAULT_KEY_ENV,
-  envVarForAccount,
+  envVarForGateway,
   fileBackend,
   keychainBackend,
 } from "./backends.js";

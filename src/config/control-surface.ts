@@ -27,7 +27,7 @@
  *   overrides would look successful and change nothing.
  * - A settings leaf with {@link SettingMeta.ownedBy} is omitted from the settings
  *   groups, because a runtime control edits the same key with a better
- *   affordance (slider.level, proxy.active_account).
+ *   affordance (slider.level, inference.default_target).
  */
 
 import path from "node:path";
@@ -411,7 +411,7 @@ async function runtimeControlGroup(shared: {
     summary: "Which upstream gateway the proxy fronts",
     detail:
       "Switching runs a credential preflight and restarts a running proxy. Credentials live " +
-      "in the OS store — add gateways with `golem account add` / `golem account login`.",
+      "in the OS store — add gateways with `golem gateway add` / `golem gateway login`.",
     kind: "enum",
     value: settings.inference.default_target ?? defaultId,
     options: [
@@ -652,7 +652,7 @@ async function applyRuntime(
     case "account": {
       const { settings } = await loadConfig(shared);
       const raw = typeof value === "string" ? value : String(value);
-      // The synthetic default id and "none" both clear `active_account`.
+      // The synthetic default id and "none" both clear `inference.default_target`.
       const target =
         raw === "none" || raw === "" || raw === settings.proxy.upstream_provider ? null : raw;
       const result = await switchAccount(shared.projectDir, target, options);

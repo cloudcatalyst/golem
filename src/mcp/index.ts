@@ -12,6 +12,8 @@
  */
 
 export type { GolemMcpServerDeps } from "./deps.js";
+export type { InMemoryCompressionServiceOptions } from "./in-memory-compression.js";
+export { ccrMarker, InMemoryCompressionService } from "./in-memory-compression.js";
 export type { Grounding, HitAssemblyDeps } from "./search.js";
 export type { GolemHttpServerHandle, ServeHttpOptions } from "./serve.js";
 export { serveHttp, serveStdio } from "./serve.js";
@@ -33,5 +35,3 @@ export {
   LEGACY_SLIDER_LEVEL_KEY,
   SLIDER_LEVEL_SETTINGS_KEY,
 } from "./slider-store.js";
-export type { InMemoryCompressionServiceOptions } from "./stub-compression.js";
-export { ccrMarker, InMemoryCompressionService } from "./stub-compression.js";

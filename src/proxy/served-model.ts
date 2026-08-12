@@ -14,7 +14,7 @@
  * atomic (temp + rename), and a missing/corrupt file reads back as `null`.
  *
  * **It records WHICH upstream served the model.** A snapshot is only meaningful
- * for the account that produced it: after `golem account use <other>` the file
+ * for the account that produced it: after `golem gateway use <other>` the file
  * still described the previous account, so every display surface kept showing the
  * old model name until the new upstream happened to serve a request. The
  * `accountId` field makes that detectable — see {@link servedModelFor}, which is
@@ -136,7 +136,7 @@ export async function readServedModel(projectDir: string): Promise<ServedModel |
 }
 
 /**
- * Delete the snapshot. Called when the upstream changes (`golem account use`),
+ * Delete the snapshot. Called when the upstream changes (`golem gateway use`),
  * because the recorded model belongs to the account being switched away from —
  * keeping it would make every display surface claim the new upstream is serving
  * the old model. Fail-open: a missing file is success.

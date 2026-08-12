@@ -42,7 +42,7 @@ export interface ProxyBuild {
    * not the top-level `proxy.upstream_*` config. Returned so the caller's startup
    * banner reports the truth: it used to print `settings.proxy.upstream_base_url`,
    * which meant a proxy serving an active account still announced
-   * `-> https://api.anthropic.com` and made a working `golem account use` look
+   * `-> https://api.anthropic.com` and made a working `golem gateway use` look
    * like it had not taken effect.
    */
   readonly upstream: {

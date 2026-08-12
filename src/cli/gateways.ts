@@ -1,12 +1,12 @@
 /**
- * R6.2 v1 + Decisions 46/47 — `golem account` CLI (spec Decision 21d; ADR-0003, amended).
+ * R6.2 v1 + Decisions 46/47 — `golem gateway` CLI (spec Decision 21d; ADR-0003, amended).
  *
  * Explicit switching between the user's own configured gateways/providers, plus
  * Golem-managed credentials. ADR-0003 invariants surfaced here:
  * - **No secret is ever printed or stored as a setting.** `list` reports only
  *   WHERE each gateway's credential resolves from (the OS store, or an opted-in
  *   plaintext file) and whether it resolves at all — never its value; switching
- *   writes only the non-secret `proxy.default_target` selector. Stored
+ *   writes only the non-secret `inference.default_target` selector. Stored
  *   credentials live in the OS credential store (Decision 46), never in
  *   settings, `.golem/` state, or an environment variable (Decision 47).
  * - **Fail-closed.** `use <id>` refuses an id that is not in `proxy.gateways`,
@@ -26,7 +26,7 @@ import { logoutGateway } from "./gateways/credentials.js";
 import {
   appendAudit,
   DEFAULT_STORE_ID,
-  defaultAccountId,
+  defaultGatewayId,
   type RegistryGateway,
 } from "./gateways/registry.js";
 import { InitError } from "./init.js";
@@ -42,7 +42,7 @@ export {
 } from "./gateways/credentials.js";
 export {
   collectGateways,
-  defaultAccountId,
+  defaultGatewayId,
   type GatewayRow,
   type GatewaysReport,
   type GatewayTarget,
@@ -51,13 +51,13 @@ export {
 
 /**
  * Switch the active account. `id: null`, `"none"` (handled by the caller), or
- * the synthetic default id (the top-level provider) all clear `active_account`
+ * the synthetic default id (the top-level provider) all clear `inference.default_target`
  * and revert to the top-level config. Any other id must be in `proxy.gateways`
  * (fail-closed — an unknown id is rejected). Records an audit line.
  *
  * **Credential preflight (Decision 46).** Before switching, resolve the target's
  * credential. If none resolves, fail closed with the remediation
- * (`golem account login <id>` or exporting the env var) unless `assumeYes` —
+ * (`golem gateway login <id>` or exporting the env var) unless `assumeYes` —
  * there is no silent switch onto an account that cannot authenticate. This is
  * the check that turns "set the key first" from advice into a guarantee.
  */
@@ -74,11 +74,11 @@ export async function useGateway(
   const env = opts.env ?? process.env;
   const { settings } = await loadConfig({ projectDir, env });
 
-  // Resolve the target: null / the default id both mean "clear active_account
+  // Resolve the target: null / the default id both mean "clear inference.default_target
   // and revert to the top-level config". Any other id must be a known account.
   let target = id;
   if (id !== null) {
-    if (id === defaultAccountId(settings.proxy.upstream_provider)) {
+    if (id === defaultGatewayId(settings.proxy.upstream_provider)) {
       target = null; // selecting the synthetic default = clear
     } else {
       const known = (settings.proxy.gateways ?? []).some((g) => g.id === id);
@@ -103,8 +103,8 @@ export async function useGateway(
     if (hit === null) {
       throw new InitError(
         `no credential is stored for "${target}". Set one first:\n` +
-          `  golem account login ${target}    (prompts, verifies it, stores it in the OS credential store)\n` +
-          `Then retry. To switch anyway (fail-closed override): golem account use ${target} --yes`,
+          `  golem gateway login ${target}    (prompts, verifies it, stores it in the OS credential store)\n` +
+          `Then retry. To switch anyway (fail-closed override): golem gateway use ${target} --yes`,
       );
     }
   }
@@ -161,16 +161,16 @@ export async function addGateway(
   const p = settings.proxy;
   const gateways = [...(p.gateways ?? [])];
 
-  if (input.id === defaultAccountId(p.upstream_provider) || input.id === DEFAULT_STORE_ID) {
+  if (input.id === defaultGatewayId(p.upstream_provider) || input.id === DEFAULT_STORE_ID) {
     throw new InitError(
       `"${input.id}" is the default gateway (the top-level upstream config) — it is not a ` +
         `registered gateway and needs no \`account add\`. Set its credential with ` +
-        `\`golem account login ${input.id}\` or edit proxy.upstream_* directly.`,
+        `\`golem gateway login ${input.id}\` or edit proxy.upstream_* directly.`,
     );
   }
   if (gateways.some((g) => g.id === input.id)) {
     throw new InitError(
-      `gateway "${input.id}" already exists. To change it, \`golem account remove ${input.id}\` ` +
+      `gateway "${input.id}" already exists. To change it, \`golem gateway remove ${input.id}\` ` +
         `and re-add, or edit proxy.gateways directly.`,
     );
   }
@@ -213,7 +213,7 @@ export async function addGateway(
 /**
  * Remove an account from `proxy.gateways` (local scope — see {@link addGateway}
  * for why local, not project). Fail-closed on an unknown id; if the removed
- * account was active, clears `active_account` back to the default rather than
+ * gateway was active, clears `inference.default_target` back to the default rather than
  * leaving a dangling reference. Audit-logged.
  *
  * **Logs the account out first.** De-registering an account used to leave its
@@ -242,7 +242,7 @@ export async function removeGateway(
   const p = settings.proxy;
   const inf = settings.inference;
   const gateways = p.gateways ?? [];
-  if (id === defaultAccountId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
+  if (id === defaultGatewayId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
     throw new InitError(
       `"${id}" is the default gateway (the top-level upstream config) — remove it by editing ` +
         `proxy.upstream_* directly, not via \`account remove\`.`,

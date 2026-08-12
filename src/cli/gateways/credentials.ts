@@ -1,5 +1,5 @@
 /**
- * R6.2 v1 + Decisions 46/47 — the `golem account` CREDENTIAL commands (spec
+ * R6.2 v1 + Decisions 46/47 — the `golem gateway` CREDENTIAL commands (spec
  * Decision 21d; ADR-0003, amended). Extracted verbatim from `../gateways.ts`.
  *
  * Everything that touches the credential store lives here and nowhere else:
@@ -14,14 +14,14 @@ import {
   type CredentialStore,
   canPrompt,
   createCredentialStore,
-  envVarForAccount,
+  envVarForGateway,
   type StoreTarget,
 } from "../../credentials/index.js";
 import { probeCredential } from "../../credentials/probe.js";
 import { PromptCancelled, promptSecret } from "../../credentials/prompt.js";
 import { accountsReferencedByTargets } from "../../providers/index.js";
 import { InitError } from "../init.js";
-import { appendAudit, DEFAULT_STORE_ID, defaultAccountId, type GatewayTarget } from "./registry.js";
+import { appendAudit, DEFAULT_STORE_ID, defaultGatewayId, type GatewayTarget } from "./registry.js";
 
 /**
  * Resolve the (provider, base_url, model, auth_scheme, store id) for an account
@@ -39,12 +39,12 @@ async function resolveGatewayTarget(
 }> {
   const { settings } = await loadConfig({ projectDir });
   const p = settings.proxy;
-  if (id === defaultAccountId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
+  if (id === defaultGatewayId(p.upstream_provider) || id === DEFAULT_STORE_ID) {
     return {
       storeId: DEFAULT_STORE_ID,
       isDefault: true,
       account: {
-        id: defaultAccountId(p.upstream_provider),
+        id: defaultGatewayId(p.upstream_provider),
         provider: p.upstream_provider,
         base_url: p.upstream_base_url,
         ...(p.upstream_model !== undefined ? { model: p.upstream_model } : {}),
@@ -122,7 +122,7 @@ export async function loginGateway(
     if (!canPrompt()) {
       throw new InitError(
         "cannot prompt for a credential: stdin is not a terminal. Either run this in an " +
-          `interactive terminal, or pipe the key in: echo "<key>" | golem account login ${id}`,
+          `interactive terminal, or pipe the key in: echo "<key>" | golem gateway login ${id}`,
       );
     }
     try {
@@ -213,7 +213,7 @@ export async function logoutGateway(
  *
  * **R9.1 — this resolves N credentials, not 1.** Every gateway referenced by a
  * target in `proxy.targets` (or derived from `proxy.gateways`) gets its key
- * injected under its own `perGatewayEnvVar` (renamed from `perGatewayEnvVar` in
+ * injected under its own `perGatewayEnvVar` (was `perAccountEnvVar`, renamed in
  * R9.23), because with a target registry the proxy may need any of them, not
  * only the active one. No new secret mechanism was required: `perGatewayEnvVar`
  * was already designed per-gateway (Decision 47), and the CLI still owns
@@ -233,7 +233,7 @@ export async function credentialEnvForProxy(
 ): Promise<Record<string, string>> {
   const { settings } = await loadConfig({ projectDir, env });
   const selected = settings.inference.default_target ?? null;
-  const defaultId = defaultAccountId(settings.proxy.upstream_provider);
+  const defaultId = defaultGatewayId(settings.proxy.upstream_provider);
   // The default top-level config is in force when nothing is selected or the
   // selection names the default id; its credential rides the plain var.
   const onDefault = selected === null || selected === defaultId;
@@ -254,10 +254,10 @@ export async function credentialEnvForProxy(
   // targets that ARE keyed. `golem target list` reports it.
   const out: Record<string, string> = {};
   const active = await store.resolve(activeStoreId);
-  if (active !== null) out[envVarForAccount(activeStoreId)] = active.secret;
+  if (active !== null) out[envVarForGateway(activeStoreId)] = active.secret;
 
   for (const accountId of accountsReferencedByTargets(settings.proxy)) {
-    const varName = envVarForAccount(accountId);
+    const varName = envVarForGateway(accountId);
     if (out[varName] !== undefined) continue;
     const hit = await store.resolve(accountId);
     if (hit !== null) out[varName] = hit.secret;

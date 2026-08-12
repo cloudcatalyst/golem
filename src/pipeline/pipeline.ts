@@ -218,9 +218,13 @@ export interface GolemPipelineOptions {
    * a stage runs after semantic compression that substitutes any span whose
    * content `lookup` recognizes (e.g. a page already in the project's
    * web-cache) with a compact reference, persisting the original into
-   * `ccrStore` so `expand` can recover it. Gated IDENTICALLY to the semantic
-   * stage — `stages.semanticCompression !== "off"` AND non-caching upstream
-   * — independent of whether a Headroom sidecar (`semantic`) is configured.
+   * `ccrStore` so `expand` can recover it. Shares the semantic stage's gate —
+   * `stages.semanticCompression !== "off"` AND a non-caching upstream —
+   * independent of whether a Headroom sidecar (`semantic`) is configured.
+   * NOT identical, in one respect worth knowing before reading an A/B result:
+   * {@link forceSemanticOnCaching} bypasses the caching gate for the semantic
+   * stage ONLY, so on a caching upstream with that flag set, semantic
+   * compression runs and this stage still does not.
    * `lookup` is a thunk rather than a fixed value so the caller can rebuild
    * it fresh per request as the web-cache grows (see
    * context-substitution.ts's module doc for why that's required, not just
@@ -432,9 +436,12 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
 
       // Stage 4 — context substitution (R2.2, spec Decision 24 sub-mode 1,
       // verification-notes §62). Runs on the already-semantically-compressed
-      // messages. Gated IDENTICALLY to the semantic stage's non-caching-
-      // upstream rule (see context-substitution.ts's module doc for why) —
-      // but independent of whether a Headroom sidecar is configured.
+      // messages. Shares the semantic stage's non-caching-upstream rule (see
+      // context-substitution.ts's module doc for why), and is independent of
+      // whether a Headroom sidecar is configured. Deliberately does NOT honour
+      // `forceSemanticOnCaching`: that flag is scoped to the semantic stage
+      // (see its doc comment), so an R2.6 A/B on a caching upstream measures
+      // semantic compression alone, with this stage still gated off.
       if (
         stages.semanticCompression !== "off" &&
         options.contextSubstitution !== undefined &&

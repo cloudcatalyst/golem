@@ -1,15 +1,23 @@
 /**
- * In-memory CompressionService stub (WS-B task B1).
+ * An in-memory {@link CompressionService} — the one `golem mcp serve` uses when
+ * it runs standalone.
  *
- * Lets the MCP server run standalone — and its tests pass — before WS-A's
- * real implementation (task A2, `src/compression/`) lands. It honors the
- * frozen contract in `src/interfaces/compression.ts` and is registered
- * against `describeCompressionServiceContract` in tests/contract/.
+ * Named "stub" until R10.1, which was a lie by then: it began (WS-B task B1) as
+ * a placeholder so the MCP server and its tests could run before WS-A's real
+ * implementation landed, but WS-A has long since landed and this is still what
+ * `createStandaloneDeps()` wires up. It is a real, contract-conformant
+ * implementation of a deliberately small contract, not scaffolding awaiting
+ * replacement — so it is named for what it is.
  *
- * NOT a compression implementation: level <= 1 is a pure passthrough, and the
- * only transformation ever applied is the level >= 2 tool-result CCR swap
- * (large `tool_result` string content replaced by a deterministic ref marker),
- * which is what `expand` needs to demonstrate end to end.
+ * What it deliberately does NOT do: it is not a compression *algorithm*. Level
+ * <= 1 is a pure passthrough, and the only transformation it ever applies is
+ * the level >= 2 tool-result CCR swap (a large `tool_result` string replaced by
+ * a deterministic ref marker), which is what `expand` needs to work end to end.
+ * The proxy's real lossless stage is `NativeLosslessCompression` in
+ * `src/compression/`.
+ *
+ * It honours the frozen contract in `src/interfaces/compression.ts` and is
+ * registered against `describeCompressionServiceContract` in tests/contract/.
  */
 
 import { createHash } from "node:crypto";

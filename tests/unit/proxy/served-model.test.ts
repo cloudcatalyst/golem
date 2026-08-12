@@ -82,7 +82,7 @@ describe("served-model state", () => {
 });
 
 /**
- * The account-scoped read. The bug it fixes: after `golem account use <other>`
+ * The account-scoped read. The bug it fixes: after `golem gateway use <other>`
  * the snapshot still described the PREVIOUS upstream, so `status`, the statusline,
  * and the VS Code status bar all reported the old model as the current one.
  */

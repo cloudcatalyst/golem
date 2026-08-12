@@ -226,7 +226,7 @@ export async function stopProxy(projectDir: string): Promise<number | null> {
  * `env` is explicit extra environment for the daemon — the resolved upstream
  * credential, injected by the caller under its `GOLEM_UPSTREAM_API_KEY[_…]` var.
  * The daemon does NOT inherit the whole spawning shell's env (see
- * {@link buildSpawnEnv}), so a credential stored via `golem account login`
+ * {@link buildSpawnEnv}), so a credential stored via `golem gateway login`
  * reaches the daemon deterministically and a stray `GOLEM_*` var in one
  * terminal can no longer silently un-configure a working daemon.
  */

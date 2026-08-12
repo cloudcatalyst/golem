@@ -98,10 +98,10 @@ describe("close-out skills (verify + ship)", () => {
 });
 
 describe("footgun-guard skills (upstream + park)", () => {
-  it("upstream switches via golem account, not the model picker", () => {
+  it("upstream switches via golem gateway, not the model picker", () => {
     const skill = P0_SKILLS.upstream;
     if (skill === undefined) throw new Error("expected an upstream skill");
-    expect(skill).toContain("golem account use");
+    expect(skill).toContain("golem gateway use");
     expect(skill.toLowerCase()).toContain("not the claude code model picker");
   });
 

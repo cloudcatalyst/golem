@@ -16,7 +16,7 @@
  * here translates bodies.
  *
  * The credential itself is a secret and is NEVER a settings leaf — the CLI
- * resolves it from the OS credential store (`golem account login`) and hands it
+ * resolves it from the OS credential store (`golem gateway login`) and hands it
  * to the proxy process at spawn. Setting it via an environment variable was
  * removed in Decision 47; {@link perGatewayEnvVar} names only that internal
  * handoff channel.

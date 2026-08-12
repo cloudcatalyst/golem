@@ -11,8 +11,8 @@
  * exported-in-one-terminal key is precisely the failure Decision 46 set out to
  * end, and having it outrank the store meant a stale export could silently
  * shadow a correctly-stored key. Setting a credential now means
- * `golem account login <id>`; the var name lives on only as the internal
- * CLI→daemon handoff (see {@link ../credentials/backends.js envVarForAccount}).
+ * `golem gateway login <id>`; the var name lives on only as the internal
+ * CLI→daemon handoff (see {@link ../credentials/backends.js envVarForGateway}).
  *
  * **Read vs write asymmetry, on purpose.** Resolution *reads* the plaintext
  * `file` backend (otherwise a user who opted into it could not use it), but
@@ -56,7 +56,7 @@ export interface CredentialFault {
 
 /**
  * Non-secret answer to "is this account's credential set, and where?" — the
- * shape `golem account list` and `golem status` render. Carries no secret value,
+ * shape `golem gateway list` and `golem status` render. Carries no secret value,
  * only its location and any backend faults.
  */
 export interface CredentialStatus {

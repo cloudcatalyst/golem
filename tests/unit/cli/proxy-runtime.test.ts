@@ -101,7 +101,7 @@ describe("buildProxyFromSettings — resolved-upstream reporting", () => {
   it("reports the ACTIVE ACCOUNT, not the top-level upstream config", async () => {
     // Regression: the startup banner printed settings.proxy.upstream_base_url, so a
     // proxy genuinely serving an active account still announced
-    // `-> https://api.anthropic.com` — making a working `golem account use` look
+    // `-> https://api.anthropic.com` — making a working `golem gateway use` look
     // like it had not taken effect.
     const { settings } = await loadConfig({
       projectDir,
