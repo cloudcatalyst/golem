@@ -11,17 +11,8 @@
  * so a state-tracking hook can never disrupt a session.
  */
 
-import type { HookIo } from "./post-tool-use.js";
+import { type HookIo, readAll } from "./hook-io.js";
 import { markBlocked, markUnblocked } from "./session-state.js";
-
-async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
-  const decoder = new TextDecoder();
-  let out = "";
-  for await (const chunk of stream) {
-    out += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-  }
-  return out + decoder.decode();
-}
 
 interface Payload {
   readonly cwd?: string;

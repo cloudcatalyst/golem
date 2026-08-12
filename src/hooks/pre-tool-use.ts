@@ -33,7 +33,7 @@ import {
   writeCoderFirstNudgeState,
 } from "./coder-first-nudge.js";
 import { guidanceEnabled } from "./guidance.js";
-import type { HookIo } from "./post-tool-use.js";
+import { type HookIo, readAll } from "./hook-io.js";
 import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
@@ -81,15 +81,6 @@ export interface PreToolUseGateOptions {
   readonly readGateEnabled?: (projectDir: string) => Promise<boolean>;
   /** Inject the snooze-enforce check (tests); default reads `snooze.enforce` config. */
   readonly isSnoozeEnforced?: (projectDir: string) => Promise<boolean>;
-}
-
-async function readAll(stream: AsyncIterable<string | Uint8Array>): Promise<string> {
-  const decoder = new TextDecoder();
-  let out = "";
-  for await (const chunk of stream) {
-    out += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
-  }
-  return out + decoder.decode();
 }
 
 function parsePayload(raw: string): PreToolUsePayload | null {
