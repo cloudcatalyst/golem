@@ -18,6 +18,7 @@ import {
   errorResult,
   GOLEM_MCP_SERVER_NAME,
   GOLEM_MCP_SERVER_VERSION,
+  instrumented,
   LEVEL_NAMES,
   LEVEL_ZERO_IS_CLI_ONLY,
   sliderLevelInput,
@@ -76,6 +77,19 @@ export function createGolemMcpServer(deps: import("./deps.js").GolemMcpServerDep
 }
 
 function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServerDeps): void {
+  // R9.11: built HERE rather than further down, because `expand`/`stats`/`level`
+  // (and `devices`/`snooze`) are registered above where it used to be declared and
+  // were therefore the only tools recording NOTHING. That gap was not visible as a
+  // gap: `stats` reported per-tool call counts for the instrumented tools and
+  // simply omitted the others, so five tools read as "never used" when they were
+  // only never measured. R9.11 asked whether any tool should be demoted to a
+  // skill-only capability and required a call count to justify it — a question the
+  // instrument could not answer for three of its four candidates.
+  const tel: ToolTelemetry | undefined =
+    deps.telemetry !== undefined
+      ? { store: deps.telemetry, projectId: deps.defaultProjectId ?? "default" }
+      : undefined;
+
   server.registerTool(
     "expand",
     {
@@ -98,25 +112,36 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       },
     },
     async ({ ref_id, content_type }) => {
+      const startMs = Date.now();
       try {
         const original = await deps.compression.retrieve({
           refId: ref_id,
           contentType: content_type ?? "text/plain",
           originalTokens: 0,
         });
-        return textResult(original.content);
+        return instrumented(tel, "expand", startMs, textResult(original.content));
       } catch (error) {
         if (error instanceof Error && error.name === "UnknownRefError") {
-          return errorResult(
-            `Unknown or expired CCR ref "${ref_id}". The original content is no ` +
-              "longer in the Golem store; re-run the tool that produced it if the " +
-              "full output is still needed.",
+          return instrumented(
+            tel,
+            "expand",
+            startMs,
+            errorResult(
+              `Unknown or expired CCR ref "${ref_id}". The original content is no ` +
+                "longer in the Golem store; re-run the tool that produced it if the " +
+                "full output is still needed.",
+            ),
           );
         }
-        return errorResult(
-          `Failed to retrieve content for ref "${ref_id}": ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+        return instrumented(
+          tel,
+          "expand",
+          startMs,
+          errorResult(
+            `Failed to retrieve content for ref "${ref_id}": ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
         );
       }
     },
@@ -166,6 +191,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       },
     },
     async ({ project_id }) => {
+      const startMs = Date.now();
       const [stats, level, toolUsage] = await Promise.all([
         project_id === undefined ? deps.compression.stats() : deps.compression.stats(project_id),
         deps.sliderStore.get(),
@@ -192,10 +218,13 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
         ...(toolUsageStructured !== undefined ? { tool_usage: toolUsageStructured } : {}),
       };
       const scope = stats.projectId === null ? "all projects" : `project ${stats.projectId}`;
-      return {
+      // Note the ordering: the counts above were read BEFORE this call is recorded,
+      // so `stats` never reports itself in the same breath as reporting it. That is
+      // the honest reading — a self-inflating counter would be worse than none.
+      return instrumented(tel, "stats", startMs, {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text:
               `Golem stats (${scope}): slider level ${level} (${LEVEL_NAMES[level]}), ` +
               `${stats.requests} requests, ${tokensSaved} tokens saved ` +
@@ -205,7 +234,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
           },
         ],
         structuredContent,
-      };
+      });
     },
   );
 
@@ -228,13 +257,17 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       },
     },
     async ({ level }) => {
+      const startMs = Date.now();
       const sliderLevel = asSliderLevel(level);
       // Second gate behind the schema's `min(1)`. The write is the security
       // boundary (R8.33), so refuse BEFORE it lands rather than persisting and
       // warning afterwards — a warning in a tool result the user never reads is
       // not a control.
       if (sliderLevel === 0) {
-        return errorResult(LEVEL_ZERO_IS_CLI_ONLY);
+        // Recorded too: a refused level-0 attempt is exactly the kind of call the
+        // demotion question needs to see, since `/golem/slider` exists to route
+        // around it.
+        return instrumented(tel, "level", startMs, errorResult(LEVEL_ZERO_IS_CLI_ONLY));
       }
       await deps.sliderStore.set(sliderLevel);
       const gate = deps.compressionGate?.(sliderLevel);
@@ -243,10 +276,10 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
           ? ` ⚠ On this upstream that behaves as level ${gate.effective} ` +
             `(${LEVEL_NAMES[gate.effective]}), not ${sliderLevel}: ${gate.reason ?? ""}`
           : "";
-      return {
+      return instrumented(tel, "level", startMs, {
         content: [
           {
-            type: "text",
+            type: "text" as const,
             text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${inert}`,
           },
         ],
@@ -261,17 +294,12 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
               }
             : {}),
         },
-      };
+      });
     },
   );
 
-  registerDevicesTool(server, deps);
+  registerDevicesTool(server, deps, tel);
   registerSnoozeTool(server, deps);
-
-  const tel: ToolTelemetry | undefined =
-    deps.telemetry !== undefined
-      ? { store: deps.telemetry, projectId: deps.defaultProjectId ?? "default" }
-      : undefined;
 
   if (deps.knowledge !== undefined) {
     registerKnowledgeTools(

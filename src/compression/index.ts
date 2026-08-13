@@ -26,6 +26,7 @@ export type { NativeLosslessOptions } from "./native-lossless.js";
 export {
   CCR_MARKER_RE,
   ccrMarker,
+  DEDUP_EXEMPT_TOOLS,
   DEFAULT_MIN_DEDUP_CHARS,
   NativeLosslessCompression,
   STAGE_COMPACTION,

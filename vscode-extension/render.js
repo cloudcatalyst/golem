@@ -14,6 +14,72 @@ const SLIDER_LEVELS = [
   { level: 3, name: "Aggressive" },
 ];
 
+/**
+ * R10.11 — every `golem status --json` path this file reads, declared once.
+ *
+ * The extension consumes `status --json` as an untyped blob, so a CLI rename is
+ * invisible here until a human notices a wrong label. That is how the
+ * `coder_model` / `coder_enabled` / `accounts` drifts each survived four
+ * releases. `tests/contract/vscode-status-fields.contract.test.ts` resolves these
+ * paths against a REAL `collectStatus` report, so a rename fails at its source
+ * instead of shipping.
+ *
+ * Paths are arrays of keys, not dotted strings, because `config` is keyed BY
+ * dotted name (`config["proxy.upstream_base_url"]`) and escaping that in a dotted
+ * path is a bug waiting to happen.
+ *
+ * Each entry carries exactly one classification:
+ *
+ * - `required` — the CLI always emits it; the contract asserts it is present.
+ * - `stateful` — emitted only in a particular state (traffic seen, probe
+ *   answered, update check cached). The contract drives that state where it can.
+ * - `legacy` — a back-compat read for an OLDER `golem` on the PATH. The current
+ *   CLI deliberately does NOT emit it, and the contract asserts that, so a
+ *   "legacy" label can never quietly become the live shape.
+ * - `unemitted` — read here, emitted by nothing. A genuine gap, named with the
+ *   task that owns it. The contract asserts these are absent, so it trips the
+ *   day the gap is closed and this list has to be updated.
+ */
+const STATUS_FIELDS_READ = [
+  { path: ["version"], required: true },
+  { path: ["proxy", "reachable"], required: true },
+  // Decision 56 — the redaction-only bypass shim. `stopProxy` currently just
+  // kills the pid: there is no shim and no third desired-state, so nothing ever
+  // sets this and the panel can never show "bypass — pipeline off". Tracked by
+  // R10.12; the display code here is kept because it is correct for the state,
+  // not because the state exists yet.
+  { path: ["proxy", "bypass"], unemitted: "R10.12" },
+  { path: ["slider", "level"], required: true },
+  { path: ["slider", "name"], required: true },
+  { path: ["dials", "brevity", "effective"], required: true },
+  { path: ["dials", "brevity", "pinned"], required: true },
+  { path: ["dials", "compression", "effective"], required: true },
+  { path: ["dials", "compression", "pinned"], required: true },
+  { path: ["upstream", "provider"], required: true },
+  { path: ["upstream", "account"], required: true },
+  { path: ["upstream", "base_url"], required: true },
+  { path: ["upstream", "default_model"], required: true },
+  // Only after the proxy has actually served a request.
+  { path: ["upstream", "last_served_model"], stateful: "a request has been served" },
+  { path: ["local_model", "reachable"], required: true },
+  { path: ["local_model", "base_url"], required: true },
+  // Only when the local runtime answered the probe.
+  { path: ["local_model", "model"], stateful: "the local runtime answered the probe" },
+  // R9.10 — top-level, one row per worker.
+  { path: ["workers"], required: true },
+  // Only once `golem update --check` has cached an answer.
+  { path: ["update", "available"], stateful: "an update check is cached" },
+  { path: ["update", "latest"], stateful: "an update check is cached" },
+  { path: ["update", "current"], stateful: "an update check is cached" },
+  // Provenance map, keyed by dotted name — the pre-`upstream`-block fallbacks.
+  { path: ["config", "proxy.upstream_base_url", "value"], required: true },
+  { path: ["config", "inference.ollama_base_url", "value"], required: true },
+  // Back-compat only — see the block comments at each read site.
+  { path: ["local_model", "coder_enabled"], legacy: "R9.23 removed the flag" },
+  { path: ["local_model", "coder_model"], legacy: "the field is `local_model.model`" },
+  { path: ["local_model", "workers"], legacy: "R9.10 moved workers to the top level" },
+];
+
 /** Compact token formatting: 1_520_615 -> "1.5M", 139_560 -> "139.6k". */
 function fmtTokens(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) return "0";
@@ -82,6 +148,30 @@ function dialsSummary(model) {
 }
 
 /**
+ * The rows out of `golem gateway list --json`, whatever shape they arrive in.
+ *
+ * `golem gateway list --json` returns the GatewaysReport OBJECT
+ * (`{active, active_unknown, gateways:[…]}`), not a bare array. Testing only for
+ * an array left the extension's cache permanently `[]`, so the "Switch upstream…"
+ * quick-pick found no cache and re-ran the multi-second CLI call (it probes every
+ * gateway's credential store) on every open.
+ *
+ * R9.23 renamed the key `accounts` -> `gateways`; R10.10 found the extension had
+ * never followed, and R10.11 found `pickAccount`'s cold path in extension.js was
+ * STILL reading `.accounts` directly — a fourth instance of the same drift, and
+ * the reason this normalization lives in one exported function now rather than
+ * being open-coded per call site. Both keys are accepted so a newer extension
+ * paired with an older CLI still works.
+ */
+function gatewayRows(report) {
+  if (Array.isArray(report)) return report;
+  if (!report || typeof report !== "object") return [];
+  if (Array.isArray(report.gateways)) return report.gateways;
+  if (Array.isArray(report.accounts)) return report.accounts;
+  return [];
+}
+
+/**
  * Build the view model from `golem stats --json`, `golem status --json`, and
  * (optionally) `golem update --check --json`. The update arg wins; otherwise we
  * fall back to the `update` block `golem status` embeds from its cached check.
@@ -89,23 +179,9 @@ function dialsSummary(model) {
 function buildModel(stats, status, update, accounts, surface) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
-  // `golem gateway list --json` returns the GatewaysReport OBJECT
-  // (`{active, active_unknown, gateways:[…]}`), not a bare array. Testing only for
-  // an array left this permanently `[]`, so the "Switch upstream…" quick-pick found
-  // no cache and re-ran the ~2.8s CLI call (it probes every gateway's credential
-  // store) on every open. Accept either shape.
-  //
-  // R9.23 renamed the key `accounts` -> `gateways`, and R10.10 found the
-  // extension had never followed: it was still CALLING `golem account list`
-  // (removed, so every poll returned null) and still reading `.accounts`. Both
-  // keys are accepted so a newer extension paired with an older CLI still works.
-  const accountList = Array.isArray(accounts)
-    ? accounts
-    : accounts && Array.isArray(accounts.gateways)
-      ? accounts.gateways
-      : accounts && Array.isArray(accounts.accounts)
-        ? accounts.accounts
-      : [];
+  // See gatewayRows: `gateway list --json` is an object, and the key has been
+  // renamed once. One function knows that, and both call sites use it.
+  const accountList = gatewayRows(accounts);
   // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
   // `golem status --json`.update → {available,latest,current}.
   const up =
@@ -657,6 +733,8 @@ function renderHtml(model, nonce) {
 
 module.exports = {
   SLIDER_LEVELS,
+  STATUS_FIELDS_READ,
+  gatewayRows,
   fmtTokens,
   upstreamLabel,
   levelLabel,

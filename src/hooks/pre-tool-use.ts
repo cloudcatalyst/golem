@@ -59,6 +59,35 @@ async function readSnoozeEnforced(projectDir: string): Promise<boolean> {
   }
 }
 
+/**
+ * Tools the usage-limit park never denies — the escape hatch that makes parking
+ * reachable (R9.23).
+ *
+ * `mcp__golem__snooze` has always been exempt: denying the very call that does
+ * the parking would be self-defeating. The other two were added after the deny
+ * deadlocked live twice (2026-08-10, 2026-08-13):
+ *
+ * - **`ToolSearch`** — `snooze` is a DEFERRED tool, so calling it first requires
+ *   loading its schema, and the only way to do that is `ToolSearch`. Denying it
+ *   means the sole permitted tool cannot be called. This is general: any deferred
+ *   tool needed for parking has the same shape.
+ * - **`mcp__golem__expand`** — the way back from a CCR reference. R9.23 also stops
+ *   tool schemas being elided in the first place
+ *   (`DEDUP_EXEMPT_TOOLS` in `src/compression/native-lossless.ts`), but the two
+ *   fixes are independent on purpose: whenever the agent's only route to parking
+ *   runs through a reference, the tool that resolves references must not be the
+ *   thing standing in the way.
+ *
+ * None of the three spends meaningful budget, which is what makes exempting them
+ * safe: the park exists to stop the session burning through a limit, and reading
+ * one tool schema is not how that happens.
+ */
+export const PARK_EXEMPT_TOOLS: readonly string[] = [
+  "mcp__golem__snooze",
+  "ToolSearch",
+  "mcp__golem__expand",
+];
+
 interface PreToolUsePayload {
   readonly cwd?: string;
   readonly tool_name?: string;
@@ -111,9 +140,10 @@ export async function runPreToolUseHook(
 
     // Document-and-hold nudge (snooze P2b): as the session window fills, redirect
     // the agent to park (document into a durable task → snooze → wait) — ONCE per
-    // reset window, before the autonomy gate. The snooze tool itself is exempt
-    // (never deny the very call that does the parking).
-    if (toolName !== "mcp__golem__snooze") {
+    // reset window, before the autonomy gate. A short list of tools is exempt, so
+    // the park stays reachable rather than becoming a deadlock — see
+    // PARK_EXEMPT_TOOLS for why each one is on it.
+    if (!PARK_EXEMPT_TOOLS.includes(toolName)) {
       const readPrediction = options.readPrediction ?? readLimitState;
       const nowMs = options.now?.() ?? Date.now();
       const prediction = await readPrediction(projectDir);

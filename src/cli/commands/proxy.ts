@@ -37,6 +37,7 @@ import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
 import {
+  CREDENTIALS_INJECTED_ENV,
   portInUse,
   proxyStatus,
   removeProxyPid,
@@ -150,8 +151,15 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
   const { port } = await resolvePort(dir, portOpt);
 
-  for (const [name, secret] of Object.entries(await credentialEnvForProxy(dir))) {
-    process.env[name] ??= secret;
+  // R9.20: skip this entirely when the parent already resolved and injected them
+  // (`startDetached` sets the marker alongside the credentials). The injection
+  // below is `??=`, so a second resolution's results were discarded anyway — it
+  // was pure duplicated cost, and at the measured 6668ms it was most of an ~18s
+  // restart. A hand-run `golem proxy run` has no marker and resolves normally.
+  if (process.env[CREDENTIALS_INJECTED_ENV] === undefined) {
+    for (const [name, secret] of Object.entries(await credentialEnvForProxy(dir))) {
+      process.env[name] ??= secret;
+    }
   }
 
   if (await portInUse(port)) {

@@ -38,6 +38,7 @@ import {
   WEB_FETCH_MATCHER,
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
+  WEB_FETCH_PRE_TIMEOUT_SECONDS,
   writeDefaultMode,
   writeStatusLine,
 } from "../hooks/index.js";
@@ -133,7 +134,12 @@ export async function wireHooks(projectDir: string, dryRun: boolean): Promise<In
         matcher: WEB_FETCH_MATCHER,
         command: WEB_FETCH_PRE_COMMAND,
         async: false,
-        timeoutSeconds: 15,
+        // R9.21 — the SAME constant the hook budgets itself against. The hook
+        // cannot read this value out of its payload, so a literal here would be a
+        // second number that has to agree with the first by hand. It did not: the
+        // raw fetch's own timeout was also 15s, which let it spend the entire
+        // window and get killed before it could serve what it had downloaded.
+        timeoutSeconds: WEB_FETCH_PRE_TIMEOUT_SECONDS,
       },
     ),
   );
