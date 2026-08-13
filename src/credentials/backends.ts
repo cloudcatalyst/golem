@@ -76,6 +76,35 @@ export interface CredentialBackend {
   set(account: string, secret: string): Promise<void>;
   remove(account: string): Promise<void>;
   describe(): CredentialLocation;
+  /**
+   * R9.20 — read several accounts in ONE backend round trip.
+   *
+   * Optional: a backend with a cheap per-account helper (`security`,
+   * `secret-tool`) gains nothing and omits it, and the store then loops `get`.
+   * It exists for Windows DPAPI, where each read is a PowerShell **process
+   * start**: measured at ~0.94s per stored account plus a one-time ~2.6s host
+   * self-test, i.e. **6668ms — 98% of everything the proxy daemon did before
+   * `listen()`** on a project with two keyed gateways.
+   *
+   * Resolves per-account outcomes rather than throwing, so one unreadable blob
+   * cannot deny the proxy the credentials that ARE readable. See
+   * {@link BatchedRead}.
+   */
+  getMany?(accounts: readonly string[]): Promise<Map<string, BatchedRead>>;
+}
+
+/**
+ * One account's outcome in a {@link CredentialBackend.getMany} batch.
+ *
+ * Three states, and the distinction matters: an ABSENT credential is normal (the
+ * gateway simply has no key stored and the proxy starts without it), while a
+ * FAULT is a real backend failure that display surfaces must report rather than
+ * render as "not set". An empty object is "absent" — the same meaning `get`'s
+ * `null` carries.
+ */
+export interface BatchedRead {
+  readonly secret?: string;
+  readonly fault?: Error;
 }
 
 /**
@@ -304,6 +333,42 @@ const DPAPI_DECRYPT =
   "[Runtime.InteropServices.Marshal]::PtrToStringAuto($p); exit 0 " +
   "} catch { exit 1 }";
 
+/**
+ * R9.20 — decrypt EVERY blob in one PowerShell invocation.
+ *
+ * Protocol: one base64 DPAPI blob per stdin line, one result per stdout line, in
+ * the same order. `=<base64 of the UTF-8 secret>` on success, `!` on failure.
+ *
+ * Three properties this shape is chosen for:
+ *
+ * - **Secrets stay off the command line**, exactly as the single-blob path
+ *   requires — everything crosses on stdin/stdout, nothing in argv.
+ * - **Base64 out** guarantees one line per result whatever the secret contains,
+ *   so a key with an unexpected byte cannot desynchronise the mapping back onto
+ *   accounts. It also keeps the plaintext out of any accidental capture of this
+ *   process's stdout.
+ * - **The exit code reports the HOST, not the blobs.** 0 when at least one blob
+ *   decrypted, 3 when there were blobs and none did, 2 for empty input. That is
+ *   the distinction {@link tryDpapiHosts} needs: a PowerShell whose Security
+ *   module fails to autoload throws on every line, and if that exited 0 the
+ *   caller would believe the host worked and report every credential missing.
+ */
+const DPAPI_DECRYPT_BATCH =
+  "$ErrorActionPreference='Stop'; " +
+  "$lines=@(); while ($null -ne ($l=[Console]::In.ReadLine())) { $lines+=$l }; " +
+  "if ($lines.Count -eq 0) { exit 2 }; " +
+  "$ok=0; " +
+  "foreach ($b in $lines) { " +
+  "$t=$b.Trim(); if ($t.Length -eq 0) { Write-Output '!'; continue }; " +
+  "try { " +
+  "$p=[Runtime.InteropServices.Marshal]::SecureStringToBSTR((ConvertTo-SecureString $t)); " +
+  "$s=[Runtime.InteropServices.Marshal]::PtrToStringAuto($p); " +
+  "[Runtime.InteropServices.Marshal]::ZeroFreeBSTR($p); " +
+  "Write-Output ('=' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s))); " +
+  "$ok++ " +
+  "} catch { Write-Output '!' } }; " +
+  "if ($ok -eq 0) { exit 3 }; exit 0";
+
 function powershellArgs(command: string): readonly string[] {
   return ["-NoProfile", "-NonInteractive", "-Command", command];
 }
@@ -345,6 +410,51 @@ function windowsDpapi(userDir: string): CredentialBackend {
     return hostPromise;
   };
 
+  /**
+   * The host that has already done real work in this process, so the second
+   * operation does not re-discover it.
+   */
+  let provenHost: string | null = null;
+
+  /**
+   * R9.20 — run `script` on the first host that SUCCEEDS AT THE REAL WORK, rather
+   * than on the first host a self-test blessed.
+   *
+   * This is what removes the ~2.6s self-test from every read, and it does so
+   * without introducing a cached positive that can go stale — the measurement the
+   * task warned about. A successful decrypt of an actual blob is strictly stronger
+   * evidence than an encrypt→decrypt of a fixed string, and it is evidence we were
+   * about to gather anyway. The self-test therefore stops being a precondition of
+   * reading and becomes what it should always have been: the answer to
+   * {@link CredentialBackend.available}, and the diagnostic that distinguishes
+   * "no working PowerShell" from "this blob belongs to another user or machine"
+   * once the real attempt has already failed.
+   *
+   * Resolves the first exit-0 result; failing that, the last result from a host
+   * that at least RAN (so the caller can report its exit code); `null` only when
+   * no host could be spawned at all.
+   */
+  async function tryDpapiHosts(
+    script: string,
+    stdin: string,
+  ): Promise<{ readonly host: string; readonly result: RunResult } | null> {
+    const order =
+      provenHost === null
+        ? DPAPI_HOSTS
+        : [provenHost, ...DPAPI_HOSTS.filter((h) => h !== provenHost)];
+    let ranButFailed: { host: string; result: RunResult } | null = null;
+    for (const bin of order) {
+      const result = await run(bin, powershellArgs(script), stdin);
+      if (result.spawnFailed) continue; // host not installed — try the next
+      if (result.code === 0) {
+        provenHost = bin;
+        return { host: bin, result };
+      }
+      ranButFailed ??= { host: bin, result };
+    }
+    return ranButFailed;
+  }
+
   const NO_HOST =
     "DPAPI needs a working PowerShell host, and none was found: the inbox " +
     "`powershell.exe` could not load its security module here and `pwsh` (PowerShell 7) " +
@@ -352,37 +462,106 @@ function windowsDpapi(userDir: string): CredentialBackend {
     "(`winget install Microsoft.PowerShell`); (2) opt into UNENCRYPTED file storage with " +
     "`golem gateway login <id> --store file`.";
 
+  /** Read one account's blob, or null when there is nothing stored. */
+  async function readBlob(account: string): Promise<string | null> {
+    let blob: string;
+    try {
+      blob = await readFile(blobPath(account), "utf8");
+    } catch {
+      return null; // no stored credential
+    }
+    return blob.trim() === "" ? null : blob.trim();
+  }
+
+  /**
+   * The error for a decrypt that a WORKING host refused — i.e. the blob itself is
+   * unreadable here. Only reached once the self-test has confirmed a host exists,
+   * so it can say plainly which of the two problems this is.
+   */
+  function blobBoundElsewhere(account: string, code: number | null): Error {
+    return new Error(
+      `DPAPI decrypt failed (exit ${code}) — the stored blob is bound to the user and machine ` +
+        `that created it, so a copied or roamed ${path.basename(blobPath(account))} cannot be ` +
+        `read here. Re-run: golem gateway login ${account}`,
+    );
+  }
+
   return {
     id: "keychain",
     available: async () => (await findHost()) !== null,
     get: async (account) => {
-      let blob: string;
-      try {
-        blob = await readFile(blobPath(account), "utf8");
-      } catch {
-        return null; // no stored credential
-      }
-      if (blob.trim() === "") return null;
-      const host = await findHost();
-      if (host === null) throw new Error(NO_HOST);
-      const r = await run(host, powershellArgs(DPAPI_DECRYPT), blob.trim());
-      if (r.spawnFailed) throw new Error(`could not run ${host}: ${r.stderr}`);
-      if (r.code === 0) {
-        const v = trimOutput(r.stdout);
+      const blob = await readBlob(account);
+      if (blob === null) return null;
+      const attempt = await tryDpapiHosts(DPAPI_DECRYPT, blob);
+      if (attempt !== null && attempt.result.code === 0) {
+        const v = trimOutput(attempt.result.stdout);
         return v === "" ? null : v;
       }
-      throw new Error(
-        `DPAPI decrypt failed (exit ${r.code}) — the stored blob is bound to the user and machine ` +
-          `that created it, so a copied or roamed ${path.basename(blobPath(account))} cannot be ` +
-          `read here. Re-run: golem gateway login ${account}`,
+      // The real attempt failed. NOW pay for the self-test, purely to say which of
+      // the two failures this is — a diagnostic, not a precondition (R9.20).
+      if ((await findHost()) === null) throw new Error(NO_HOST);
+      throw blobBoundElsewhere(account, attempt?.result.code ?? null);
+    },
+    getMany: async (accounts) => {
+      const out = new Map<string, BatchedRead>();
+      // Read the blobs first: an account with nothing stored costs a failed file
+      // open (~1ms) and must never reach PowerShell at all.
+      const pending: { account: string; blob: string }[] = [];
+      for (const account of accounts) {
+        const blob = await readBlob(account);
+        if (blob === null) out.set(account, {});
+        else pending.push({ account, blob });
+      }
+      if (pending.length === 0) return out;
+
+      // ONE process for every stored credential — the whole point of R9.20.
+      const attempt = await tryDpapiHosts(
+        DPAPI_DECRYPT_BATCH,
+        `${pending.map((p) => p.blob).join("\n")}\n`,
       );
+      if (attempt === null || attempt.result.code !== 0) {
+        // Same diagnostic split as `get`, applied once for the whole batch.
+        const fault =
+          (await findHost()) === null
+            ? new Error(NO_HOST)
+            : blobBoundElsewhere(pending[0]?.account ?? "", attempt?.result.code ?? null);
+        for (const p of pending) out.set(p.account, { fault });
+        return out;
+      }
+
+      // Results are positional, so a length mismatch means the protocol broke and
+      // the mapping cannot be trusted. Fault every account rather than risk
+      // handing one gateway another gateway's key.
+      const lines = attempt.result.stdout.split(/\r?\n/).filter((l) => l !== "");
+      if (lines.length !== pending.length) {
+        const fault = new Error(
+          `DPAPI batch decrypt returned ${lines.length} results for ${pending.length} blobs; ` +
+            "refusing to map them. Re-run `golem gateway login <id>` for the affected gateways.",
+        );
+        for (const p of pending) out.set(p.account, { fault });
+        return out;
+      }
+      for (const [i, p] of pending.entries()) {
+        const line = (lines[i] ?? "").trim();
+        if (!line.startsWith("=")) {
+          // One blob among several failed: a fault for THAT account only, so the
+          // proxy still starts with the credentials that did resolve.
+          out.set(p.account, { fault: blobBoundElsewhere(p.account, attempt.result.code) });
+          continue;
+        }
+        const secret = Buffer.from(line.slice(1), "base64").toString("utf8").trim();
+        out.set(p.account, secret === "" ? {} : { secret });
+      }
+      return out;
     },
     set: async (account, secret) => {
-      const host = await findHost();
-      if (host === null) throw new Error(NO_HOST);
-      const r = await run(host, powershellArgs(DPAPI_ENCRYPT), secret);
-      if (r.spawnFailed) throw new Error(`could not run ${host}: ${r.stderr}`);
-      if (r.code !== 0) throw new Error(`DPAPI encrypt failed (exit ${r.code})`);
+      const attempt = await tryDpapiHosts(DPAPI_ENCRYPT, secret);
+      if (attempt === null) throw new Error(NO_HOST);
+      if (attempt.result.code !== 0) {
+        if ((await findHost()) === null) throw new Error(NO_HOST);
+        throw new Error(`DPAPI encrypt failed (exit ${attempt.result.code})`);
+      }
+      const r = attempt.result;
       const blob = trimOutput(r.stdout);
       if (blob === "") throw new Error("DPAPI encrypt produced no output");
       const file = blobPath(account);

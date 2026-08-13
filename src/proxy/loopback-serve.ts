@@ -25,6 +25,7 @@ import { createServer, get as httpsGet, type Server } from "node:https";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { z } from "zod";
+import { recordLoopbackHit } from "./loopback-reach.js";
 
 /** `.golem/state/loopback-serve.json` — how the hook finds a running endpoint. */
 export function loopbackServeStatePath(projectDir: string): string {
@@ -150,6 +151,12 @@ export async function startLoopbackServe(
       }
       if (parsed.pathname === "/w") {
         const target = parsed.searchParams.get("u") ?? "(unknown)";
+        // R9.19 — the third trust signal. A request landing here is positive proof
+        // that a rewritten WebFetch was actually followed, which is the one thing
+        // the hook cannot learn from its own environment (§125: the hook's env
+        // reflects the settings file, not what Claude Code's TLS stack honours).
+        // Fire-and-forget: recording evidence must never delay or fail a serve.
+        void recordLoopbackHit(options.projectDir, new Date().toISOString()).catch(() => {});
         const body = stubBody(target);
         res.writeHead(200, {
           "content-type": "text/plain; charset=utf-8",

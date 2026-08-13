@@ -33,6 +33,7 @@
     "format:check": "biome format .",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:extension": "node --test --test-reporter=spec vscode-extension/render.test.js",
     "verify:deps": "node scripts/verify-deps.mjs",
     "deps:shrinkwrap": "node scripts/make-shrinkwrap.mjs",
     "check": "npm run verify:deps && npm run lint && npm run typecheck && npm run test"

@@ -180,9 +180,65 @@ function permitsUnredactedDispatch(target: ResolvedTarget): boolean {
   return target.trust === "local" && isLoopback(target.baseUrl);
 }
 
+/** Same scheme, host and port — the test for "this target IS that endpoint". */
+function sameOrigin(a: string, b: string): boolean {
+  try {
+    return new URL(a).origin === new URL(b).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * R10.9 — is this target the endpoint {@link TargetDispatcherOptions.inference}
+ * actually serves?
+ *
+ * The question exists because `options.inference` is the **Ollama-backed tiered
+ * service**, not a general local transport. `dispatch()` used to hand every
+ * trusted-local target to it, which silently meant "local ⇒ Ollama" rather than
+ * "local ⇒ the endpoint this target names". A loopback `llamacpp` target on
+ * `:8080` drafted on Ollama at `:11434` instead — or failed outright, if Ollama
+ * was not installed. That was ~true while `ollama` was the only self-hosted
+ * provider; R10.8 added `llamacpp` and made it reachable by following the
+ * documented path.
+ *
+ * The tiered service keeps its special case where it is genuinely the
+ * destination, because it is the only path that maps a ROLE through the hardware
+ * tier catalog — so it can serve a target that declares no model, which the direct
+ * transport cannot.
+ *
+ * `localServiceBaseUrl` is the precise answer. Without it (a caller that did not
+ * wire it) the fallback is the provider name: `InferenceService` is Ollama-backed,
+ * so `ollama` is a sound stand-in that keeps every existing wiring behaving
+ * exactly as before, while the provider the defect was reported against goes to
+ * the endpoint it names. The residual imprecision is narrow and worth stating: two
+ * Ollama servers on different loopback ports are indistinguishable to the
+ * fallback, so the one that is not the tiered service would still be dispatched to
+ * the one that is. Wiring `localServiceBaseUrl` removes even that.
+ */
+function servesLocalTieredService(
+  target: ResolvedTarget,
+  options: Pick<TargetDispatcherOptions, "localServiceBaseUrl">,
+): boolean {
+  if (options.localServiceBaseUrl !== undefined && options.localServiceBaseUrl !== "") {
+    return sameOrigin(target.baseUrl, options.localServiceBaseUrl);
+  }
+  return target.provider === "ollama";
+}
+
 export interface TargetDispatcherOptions {
   /** The frozen, role-based local service. Untouched by this task. */
   readonly inference: InferenceService;
+  /**
+   * R10.9 — the endpoint {@link inference} actually serves
+   * (`inference.ollama_base_url`).
+   *
+   * Needed because "this target is trusted-local" and "this target is the tiered
+   * service" are different facts, and conflating them sent a loopback `llamacpp`
+   * target to Ollama. See {@link servesLocalTieredService} for what happens when
+   * this is omitted.
+   */
+  readonly localServiceBaseUrl?: string | undefined;
   readonly settings: TargetRegistrySettings;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** Injectable for tests; defaults to global fetch. */
@@ -487,9 +543,17 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
         );
       }
 
-      // A local-trust loopback target keeps the direct, unredacted path — that
-      // is the ONE case where nothing leaves the machine.
-      if (permitsUnredactedDispatch(base)) {
+      // A local-trust loopback target keeps the unredacted path — that is the ONE
+      // case where nothing leaves the machine.
+      //
+      // R10.9 splits the two questions this branch used to answer at once.
+      // `permitsUnredactedDispatch` decides WHETHER TO REDACT; it does not decide
+      // where the bytes go. Only a target that IS the tiered service's endpoint is
+      // handed to `options.inference` — every other trusted-local target is
+      // dispatched to the endpoint it names, by its own provider's transport, like
+      // every other target in this function.
+      const unredacted = permitsUnredactedDispatch(base);
+      if (unredacted && servesLocalTieredService(base, options)) {
         const result = await options.inference.chat(request.role, messages);
         options.audit?.({
           targetId: base.id,
@@ -549,7 +613,28 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
       // ── The egress boundary. Everything past this line may leave the machine,
       // so redaction happens HERE and there is no other non-local path. A spawn
       // is an egress like any other: the child talks to Anthropic.
-      const redacted = redactReversibleText(request.prompt);
+      //
+      // R10.9 — the ONE exception, and the whole of it: a target that
+      // `permitsUnredactedDispatch` certified (declares `trust: "local"` AND its
+      // endpoint really is loopback) but which is not the tiered service's own
+      // endpoint. It reaches a socket on this machine and nowhere else, which is
+      // the same guarantee the `InferenceService` path above has always had —
+      // that path also POSTs an unredacted prompt to a loopback port. So this is
+      // the existing local class generalised from one hard-coded endpoint to any
+      // endpoint that passed the same check, NOT a new class of egress.
+      //
+      // A spawn is excluded unconditionally, whatever its trust says: the child
+      // process talks to Anthropic, so "loopback base URL" would certify nothing
+      // about where the bytes actually go.
+      const staysOnThisMachine = unredacted && !isSpawnProvider(target.provider);
+      const redacted = staysOnThisMachine
+        ? // Pass-through, shaped exactly like the real thing so there is still ONE
+          // downstream path. Widening the set of targets that reach this branch
+          // means widening `permitsUnredactedDispatch`, which is a deliberate act
+          // with its own review (R10.8's reservation) — not something that can
+          // happen as a side effect of adding a provider.
+          { text: request.prompt, count: 0, restore: (reply: string) => reply }
+        : redactReversibleText(request.prompt);
 
       if (isSpawnProvider(target.provider)) {
         const reply = await dispatchSpawned(options, target, redacted.text);
@@ -617,7 +702,13 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
         trust: target.trust,
         route,
         redactedCount: redacted.count,
-        reason: `${via} → non-local target (trust=${target.trust}) — redacted before dispatch`,
+        // R10.9: the audit line is how the gate is proven, so it must name the
+        // endpoint for a local dispatch. "went to the target it names" is the
+        // whole claim, and `targetId` alone does not evidence it.
+        reason: staysOnThisMachine
+          ? `${via} → loopback target (trust=${target.trust}) at ${target.baseUrl} — ` +
+            "direct transport, not the tiered service; unredacted (never leaves this machine)"
+          : `${via} → non-local target (trust=${target.trust}) — redacted before dispatch`,
       });
 
       return {

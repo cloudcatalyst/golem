@@ -209,6 +209,64 @@ describe("runPreToolUseHook", () => {
     expect(snooze.stdout.text).toBe("");
   });
 
+  /**
+   * R9.23 — the deadlock. Hit live twice (2026-08-10, 2026-08-13): enforcement
+   * denied everything except `mcp__golem__snooze`, which is a DEFERRED tool — so
+   * calling it needs `ToolSearch` to load its schema first, and that was denied.
+   * The only permitted tool could not be called, so the agent could not park and
+   * the note meant to survive the session was never written.
+   *
+   * `expand` is on the list for the same reason one level along: it is the way back
+   * from a CCR reference, and it too is deferred.
+   */
+  it("enforce mode: permits the tools needed to REACH the park (R9.23)", async () => {
+    const enforced = { isSnoozeEnforced: () => Promise.resolve(true) };
+    for (const tool of ["ToolSearch", "mcp__golem__expand"]) {
+      const h = io(payload(tool, { query: "select:mcp__golem__snooze" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("manual"),
+        ...withPrediction(nearLimit),
+        ...enforced,
+      });
+      expect(h.stdout.text, `${tool} must not be denied — it is how snooze is reached`).toBe("");
+    }
+  });
+
+  it("enforce mode: the exemption is a short list, not a hole", async () => {
+    // The park still has to bite. A neighbouring MCP tool is denied like any other.
+    const enforced = { isSnoozeEnforced: () => Promise.resolve(true) };
+    for (const tool of ["mcp__golem__search", "mcp__golem__coder", "Read"]) {
+      const h = io(payload(tool, {}, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("manual"),
+        ...withPrediction(nearLimit),
+        ...enforced,
+      });
+      expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+    }
+  });
+
+  it("enforce mode: the deny reason names the parameters AND the escape hatch", async () => {
+    // Both halves matter. The 2026-08-13 session escaped the deadlock only because
+    // it knew `until`/`note` from a project rule file — which is a workaround that
+    // works solely for projects shipping that rule. The reason text has to carry
+    // them itself, and say a schema can still be loaded.
+    const h = io(payload("Read", {}, dir));
+    await runPreToolUseHook(h, {
+      projectDir: dir,
+      ...level("manual"),
+      ...withPrediction(nearLimit),
+      isSnoozeEnforced: () => Promise.resolve(true),
+    });
+    const reason = JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecisionReason;
+    expect(reason).toContain("until=");
+    expect(reason).toContain("note=");
+    expect(reason).toContain("ToolSearch");
+    expect(reason).toContain("mcp__golem__expand");
+  });
+
   it("warns once when the rate-limit feed is stale (auto-park is blind)", async () => {
     // Observed ~24h before NOW → well past the staleness window (the feed went
     // cold, e.g. an account switch), even though the recorded reset is future.

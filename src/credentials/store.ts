@@ -74,6 +74,18 @@ export type StoreTarget = "auto" | "keychain" | "file";
 export interface CredentialStore {
   /** Resolve the account's secret, or null when no backend has one. */
   resolve(account: string): Promise<ResolvedCredential | null>;
+  /**
+   * R9.20 — resolve SEVERAL accounts, using a backend's batched read where it has
+   * one. Same chain, same precedence, same silent-absence semantics as
+   * {@link resolve}; the only difference is how many processes it costs.
+   *
+   * Exists because `credentialEnvForProxy` needs N credentials and, on Windows,
+   * each one was a PowerShell process start — 6668ms of the proxy daemon's
+   * pre-`listen()` time, 98% of the total. Every returned entry is `resolve`'s
+   * answer for that account, so a caller cannot tell the two apart except by
+   * timing.
+   */
+  resolveMany(accounts: readonly string[]): Promise<Map<string, ResolvedCredential | null>>;
   /** Non-secret presence/location report for display surfaces. */
   status(account: string): Promise<CredentialStatus>;
   /** Persist a secret. Returns where it landed. Throws if the target is unusable. */
@@ -87,6 +99,17 @@ export interface CredentialStore {
 export interface CredentialStoreOptions {
   readonly userDir?: string;
   readonly platform?: NodeJS.Platform;
+  /**
+   * Substitute the OS-backed backend. `null` means "this platform has none",
+   * which is how the no-keychain chain is exercised.
+   *
+   * The module doc has always said "every dependency is injectable so the chain is
+   * unit-testable without touching the real keychain"; until R9.20 that was true
+   * of `userDir` and `platform` but not of the backend itself, so a test could
+   * only select a real implementation by platform name. Batched reads are backend
+   * behaviour, so testing them needed the seam the doc already promised.
+   */
+  readonly keychain?: CredentialBackend | null;
 }
 
 /**
@@ -97,7 +120,8 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
   const userDir = options.userDir ?? defaultUserDir();
   const platform = options.platform ?? process.platform;
 
-  const keychainB = keychainBackend(platform, userDir);
+  const keychainB =
+    options.keychain !== undefined ? options.keychain : keychainBackend(platform, userDir);
   const fileB = fileBackend(userDir, platform);
 
   /** Read order. `file` is last and read-only-by-default (see module doc). */
@@ -153,8 +177,97 @@ export function createCredentialStore(options: CredentialStoreOptions = {}): Cre
     return keychainB;
   }
 
+  /**
+   * R9.20 — the batched half of {@link consult}, with identical precedence.
+   *
+   * The keychain backend is asked for everything at once when it can be (`getMany`
+   * on Windows DPAPI); accounts it did not resolve then fall through the rest of
+   * the chain one at a time, exactly as `consult` would have taken them. Falling
+   * through per-account is cheap by construction: the remaining backend is a plain
+   * file read.
+   *
+   * A batched FAULT is recorded and the account still falls through, mirroring
+   * `consult`'s rule that a broken keychain must not hide an opted-in plaintext
+   * file.
+   */
+  async function consultMany(
+    accounts: readonly string[],
+  ): Promise<Map<string, { hit: ResolvedCredential | null; faults: CredentialFault[] }>> {
+    const out = new Map<string, { hit: ResolvedCredential | null; faults: CredentialFault[] }>();
+    const unique = [...new Set(accounts)];
+    const carriedFaults = new Map<string, CredentialFault[]>();
+    let remaining = unique;
+
+    if (keychainB !== null && keychainB.getMany !== undefined) {
+      let batch: Map<string, import("./backends.js").BatchedRead>;
+      try {
+        batch = await keychainB.getMany(unique);
+      } catch (err) {
+        // A batch that fails wholesale is one fault against every account, and
+        // then the chain continues — never an abort.
+        batch = new Map();
+        const fault = {
+          backend: keychainB.id,
+          message: err instanceof Error ? err.message : String(err),
+        };
+        for (const account of unique) carriedFaults.set(account, [fault]);
+      }
+      const stillUnresolved: string[] = [];
+      for (const account of unique) {
+        const entry = batch.get(account);
+        if (entry?.secret !== undefined) {
+          out.set(account, {
+            hit: { secret: entry.secret, location: keychainB.describe() },
+            faults: [],
+          });
+          continue;
+        }
+        if (entry?.fault !== undefined) {
+          carriedFaults.set(account, [
+            ...(carriedFaults.get(account) ?? []),
+            { backend: keychainB.id, message: entry.fault.message },
+          ]);
+        }
+        stillUnresolved.push(account);
+      }
+      remaining = stillUnresolved;
+    }
+
+    for (const account of remaining) {
+      // The keychain has already answered (or faulted) for these, so consulting
+      // the whole chain again would re-pay its cost. Ask only what is left.
+      const skipKeychain = keychainB !== null && keychainB.getMany !== undefined;
+      const chain = skipKeychain ? readChain.filter((b) => b !== keychainB) : readChain;
+      const faults: CredentialFault[] = [...(carriedFaults.get(account) ?? [])];
+      let hit: ResolvedCredential | null = null;
+      for (const backend of chain) {
+        try {
+          const secret = await backend.get(account);
+          if (secret !== null) {
+            hit = { secret, location: backend.describe() };
+            break;
+          }
+        } catch (err) {
+          faults.push({
+            backend: backend.id,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      out.set(account, { hit, faults });
+    }
+    return out;
+  }
+
   return {
     resolve: async (account) => (await consult(account)).hit,
+
+    resolveMany: async (accounts) => {
+      const consulted = await consultMany(accounts);
+      const out = new Map<string, ResolvedCredential | null>();
+      for (const [account, { hit }] of consulted) out.set(account, hit);
+      return out;
+    },
 
     status: async (account) => {
       const { hit, faults } = await consult(account);

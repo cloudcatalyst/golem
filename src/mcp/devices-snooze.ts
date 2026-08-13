@@ -18,7 +18,7 @@ import {
 } from "../inference/index.js";
 import type { HardwareTier } from "../interfaces/index.js";
 import type { GolemMcpServerDeps } from "./deps.js";
-import { errorResult } from "./shared.js";
+import { errorResult, instrumented, type ToolTelemetry } from "./shared.js";
 import { abortableSleep, DEFAULT_SNOOZE_MAX_MS, runSnooze, SnoozeInputError } from "./snooze.js";
 import { persistSnoozeNote } from "./snooze-note.js";
 
@@ -37,7 +37,14 @@ const DEVICE_TIER_NAMES: Readonly<Record<HardwareTier, string>> = {
  * always-available hardware-probe functions, and `detectCapability` never
  * throws (every failure path degrades to P_CPU).
  */
-export function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps): void {
+export function registerDevicesTool(
+  server: McpServer,
+  deps: GolemMcpServerDeps,
+  // R9.11: `devices` recorded nothing, so it read as "never called" when it was
+  // only never measured — and it is one of the demotion candidates whose call
+  // count was supposed to decide its fate.
+  tel?: ToolTelemetry,
+): void {
   server.registerTool(
     "devices",
     {
@@ -68,6 +75,7 @@ export function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps)
       },
     },
     async () => {
+      const startMs = Date.now();
       const facts = await detectCapability(createProbeRunner());
       const models = modelsForTier(facts.tier);
       const tierName = DEVICE_TIER_NAMES[facts.tier];
@@ -91,8 +99,8 @@ export function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps)
       }
       const warning = availabilityWarning(availability);
       if (warning !== null) lines.push("", warning);
-      return {
-        content: [{ type: "text", text: lines.join("\n") }],
+      return instrumented(tel, "devices", startMs, {
+        content: [{ type: "text" as const, text: lines.join("\n") }],
         structuredContent: {
           tier: facts.tier,
           tier_name: tierName,
@@ -110,7 +118,7 @@ export function registerDevicesTool(server: McpServer, deps: GolemMcpServerDeps)
           ...(facts.device !== undefined ? { device: facts.device } : {}),
           ...(facts.memoryMiB !== undefined ? { memory_mib: facts.memoryMiB } : {}),
         },
-      };
+      });
     },
   );
 }

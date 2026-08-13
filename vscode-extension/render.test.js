@@ -7,6 +7,7 @@ const {
   fmtTokens,
   upstreamLabel,
   levelLabel,
+  gatewayRows,
   buildModel,
   statusBarText,
   renderHtml,
@@ -77,11 +78,32 @@ test("buildModel normalizes an unusable accounts payload to an empty list", () =
   assert.deepStrictEqual(buildModel({}, {}, null, { accounts: "nope" }).accounts, []);
 });
 
-test("buildModel unwraps the AccountsReport object golem account list --json returns", () => {
-  // The bug this pins: `golem account list --json` emits the report OBJECT
+test("gatewayRows unwraps the live gateways key golem gateway list --json emits", () => {
+  // R10.11: the LIVE shape. R9.23 renamed `accounts` -> `gateways`, and the
+  // extension's `pickAccount` cold path was still reading `.accounts` directly —
+  // so the first open of the picker on a fresh window said "no upstream accounts
+  // configured" on a project with several. One helper knows the shape now.
+  const gateways = [
+    { id: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", active: true, is_default: true, key_set: true },
+    { id: "openrouter-qwen3", provider: "openrouter", base_url: "https://openrouter.ai/api/v1", active: false, key_set: true },
+  ];
+  const report = { active: "anthropic", active_unknown: false, gateways };
+  assert.deepStrictEqual(gatewayRows(report), gateways);
+  assert.deepStrictEqual(buildModel({}, {}, null, report).accounts, gateways);
+  // A bare array (a hand-built cache) and the legacy `accounts` key both work.
+  assert.deepStrictEqual(gatewayRows(gateways), gateways);
+  assert.deepStrictEqual(gatewayRows({ accounts: gateways }), gateways);
+  // Anything unusable normalizes to an empty list rather than throwing.
+  for (const bad of [null, undefined, "nope", 7, {}, { gateways: "nope" }]) {
+    assert.deepStrictEqual(gatewayRows(bad), []);
+  }
+});
+
+test("buildModel unwraps the legacy AccountsReport object an older CLI returns", () => {
+  // The bug this pins: `golem account list --json` emitted the report OBJECT
   // (`{active, active_unknown, accounts:[…]}`), not a bare array. Testing only for
   // an array left the cache permanently empty, so "Switch upstream…" re-ran the
-  // ~2.8s CLI call (it probes every account's credential store) on every open.
+  // multi-second CLI call (it probes every account's credential store) on every open.
   const accounts = [
     { id: "anthropic", provider: "anthropic", base_url: "https://api.anthropic.com", active: false, is_default: true, key_set: false },
     { id: "openrouter-laguna", provider: "openrouter", base_url: "https://openrouter.ai/api/v1", model: "poolside/laguna-s-2.1:free", active: true, key_set: true },
@@ -91,32 +113,45 @@ test("buildModel unwraps the AccountsReport object golem account list --json ret
 });
 
 test("buildModel surfaces local_model reachability + coder model from status --json", () => {
+  // R10.11: the fixture is the shape the CLI ACTUALLY emits today —
+  // `local_model: {reachable, model, base_url}`. It used to say `coder_model`
+  // and `coder_enabled`, neither of which the CLI has ever emitted / still
+  // emits, and it asserted `m.localCoderModel` against a `buildModel` that
+  // returns `coderModel`. Rotted fixture, rotted expectation, red suite nobody
+  // ran — see the task doc.
   const status = {
     slider: { level: 3, name: "aggressive" },
     proxy: { reachable: true },
-    local_model: { reachable: true, coder_enabled: true, coder_model: "qwen2.5-coder:7b" },
+    local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
   };
   const m = buildModel({}, status);
   assert.equal(m.localModelReachable, true);
-  assert.equal(m.localCoderEnabled, true);
+  assert.equal(m.coderEnabled, true); // no flag emitted -> the coder tool is always offered
   assert.equal(m.localModelActive, true);
-  assert.equal(m.localCoderModel, "qwen2.5-coder:7b");
+  assert.equal(m.coderModel, "qwen2.5-coder:7b");
 });
 
-test("buildModel reports the local model inactive when the coder tool is disabled", () => {
+test("buildModel honours a pre-R9.23 CLI's coder_enabled: false", () => {
+  // Back-compat ONLY: R9.23 removed `inference.coder_enabled`, so no current CLI
+  // sends this. `buildModel` still honours it (an older `golem` on the PATH with a
+  // newer extension), and this pins that branch rather than the live shape.
   const status = {
     proxy: { reachable: true },
     local_model: { reachable: true, coder_enabled: false, coder_model: "qwen2.5-coder:7b" },
   };
   const m = buildModel({}, status);
   assert.equal(m.localModelReachable, true); // Ollama IS up — that stays honest
-  assert.equal(m.localCoderEnabled, false);
+  assert.equal(m.coderEnabled, false);
   assert.equal(m.localModelActive, false); // but nothing local is on offer
+  assert.equal(m.coderModel, "qwen2.5-coder:7b"); // the legacy key is still read
 });
 
-test("buildModel assumes the coder tool is enabled when an older CLI omits the flag", () => {
+test("buildModel assumes the coder tool is enabled when the flag is absent", () => {
+  // The CURRENT shape: R9.23 deleted the flag, so this is the live path, not a
+  // legacy one. `coderEnabled` must default true or the status bar hides a local
+  // backend that is in fact on offer.
   const m = buildModel({}, { local_model: { reachable: true } });
-  assert.equal(m.localCoderEnabled, true);
+  assert.equal(m.coderEnabled, true);
   assert.equal(m.localModelActive, true);
 });
 
@@ -281,7 +316,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       slider: 1,
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
-      localCoderModel: "qwen2.5-coder:7b",
+      coderModel: "qwen2.5-coder:7b",
     }),
     "⬢ Golem · L1 → ✎ qwen2.5-coder:7b · ◆ anthropic (claude-opus-5[1m])",
   );
@@ -297,9 +332,9 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
       slider: 1,
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelReachable: true,
-      localCoderEnabled: false,
+      coderEnabled: false,
       localModelActive: false,
-      localCoderModel: "qwen2.5-coder:7b",
+      coderModel: "qwen2.5-coder:7b",
     }),
     "⬢ Golem · L1 → ◆ anthropic (claude-opus-5[1m])",
   );
@@ -322,7 +357,7 @@ test("buildModel surfaces the savings window and local base URL for the hover su
   };
   const status = {
     proxy: { reachable: true },
-    local_model: { reachable: true, coder_model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
+    local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
   };
   const m = buildModel(stats, status);
   assert.equal(m.savingsWindow, "7d"); // window_applied wins over requested window

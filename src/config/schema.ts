@@ -534,8 +534,9 @@ export const SETTINGS_LEAVES = {
      * Enforce the document-and-hold park at the usage limit (spec Decision 45).
      * **Default true (USER decision).** When true it is ENFORCING — while the
      * session (5h) window is at/above the threshold on a FRESH reading, every
-     * non-`snooze` tool call is denied until the agent parks (calls
-     * `mcp__golem__snooze`) or the window resets. Set false for ADVISORY — a
+     * tool call outside `PARK_EXEMPT_TOOLS` (`src/hooks/pre-tool-use.ts` —
+     * `mcp__golem__snooze` plus the `ToolSearch`/`expand` pair needed to reach it,
+     * R9.23) is denied until the agent parks or the window resets. Set false for ADVISORY — a
      * single one-shot redirect to `snooze` per window that the agent can work
      * past. Only ever fires on a fresh prediction — a stale/cold feed never hard-blocks
      * (it still just warns once). NOTE: a PreToolUse deny cannot stop the model
