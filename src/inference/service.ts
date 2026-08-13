@@ -60,6 +60,21 @@ export class HaikuFallbackRequired extends Error {
 
 export interface OllamaInferenceOptions {
   readonly fallback?: FallbackPolicy;
+  /**
+   * R10.4 — PIN the embedding model, overriding the tier catalog for `embed()`
+   * only (`chat()` and `capabilities()` still report/route the detected tier).
+   *
+   * The embedder is normally chosen by the DETECTED HARDWARE TIER, so a probe
+   * hiccup that degrades the tier silently changes the embedding model — and
+   * therefore the vector width — under an index that was built with the other
+   * one. A caller querying an EXISTING index must embed in the space that index
+   * was built in, which is a recorded fact about the index and not a fact about
+   * this machine's current tier. Set this to that recorded model.
+   */
+  readonly embedModels?: {
+    readonly text?: string;
+    readonly code?: string;
+  };
 }
 
 /** InferenceService backed by an Ollama-compatible endpoint. */
@@ -68,12 +83,14 @@ export class OllamaInferenceService implements InferenceService {
   readonly #tier: HardwareTier;
   readonly #stepDownTier: boolean;
   readonly #allowHaiku: boolean;
+  readonly #embedModels: { readonly text?: string; readonly code?: string };
 
   constructor(client: OllamaClient, facts: CapabilityFacts, options: OllamaInferenceOptions = {}) {
     this.#client = client;
     this.#tier = facts.tier;
     this.#stepDownTier = options.fallback?.stepDownTier ?? true;
     this.#allowHaiku = options.fallback?.allowHaiku ?? false;
+    this.#embedModels = options.embedModels ?? {};
   }
 
   capabilities(): HardwareTier {
@@ -128,7 +145,10 @@ export class OllamaInferenceService implements InferenceService {
   }
 
   async embed(texts: readonly string[], kind: "text" | "code"): Promise<Vector[]> {
-    const model = embedModelFor(this.#tier, kind);
+    // A PINNED model wins over the tier catalog (R10.4): when the caller is
+    // querying an existing index, the index's recorded embedder — not this
+    // machine's currently-detected tier — decides the vector space.
+    const model = this.#embedModels[kind] ?? embedModelFor(this.#tier, kind);
     return this.#client.embed(model, texts);
   }
 }

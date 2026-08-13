@@ -15,13 +15,14 @@
 
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { embedModelFor } from "../inference/index.js";
+import { embedDimFor, embedModelFor } from "../inference/index.js";
 import type { HardwareTier } from "../interfaces/inference.js";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
 import {
   collectionDir,
   type FileState,
   knowledgeDir,
+  readCollectionDim,
   scanFiles,
   supportsIncremental,
 } from "../knowledge/index.js";
@@ -35,11 +36,27 @@ interface PersistedFileState {
   readonly s: number;
 }
 
+/**
+ * The embedder identity recorded alongside an index (R10.4). Redundant with
+ * {@link IndexManifest.signature}, which already encodes the same model — this
+ * is the PARSED, self-describing form, so a reader never has to know the
+ * signature's grammar or consult the tier catalog to learn what built the index.
+ */
+interface PersistedEmbedderRecord {
+  readonly mode: EmbedMode;
+  /** Ollama model for a semantic index; null for the lexical hashing embedder. */
+  readonly model: string | null;
+  /** Vector width the index actually stores; null when not yet known. */
+  readonly dim: number | null;
+}
+
 interface IndexManifest {
   readonly signature: string;
   readonly ts?: string;
   readonly paths?: readonly string[];
   readonly files?: Readonly<Record<string, PersistedFileState>>;
+  /** R10.4 — added by writeManifest; absent on manifests written before it. */
+  readonly embedder?: PersistedEmbedderRecord;
 }
 
 /**
@@ -49,6 +66,22 @@ interface IndexManifest {
  */
 export function embedderSignature(mode: EmbedMode, tier: HardwareTier): string {
   return mode === "semantic" ? `semantic:${embedModelFor(tier, "text")}` : "lexical:hash-v1-512";
+}
+
+/**
+ * Split an {@link embedderSignature} back into mode + model. Returns null for an
+ * unrecognized signature (a newer/older writer), which callers must treat as
+ * "unknown", never as "matches".
+ */
+export function parseEmbedderSignature(
+  signature: string,
+): { mode: EmbedMode; model: string | null } | null {
+  if (signature.startsWith("semantic:")) {
+    const model = signature.slice("semantic:".length);
+    return { mode: "semantic", model: model === "" ? null : model };
+  }
+  if (signature.startsWith("lexical:")) return { mode: "lexical", model: null };
+  return null;
 }
 
 /** Paths to auto-index: configured `watch_paths` (relative → project-rooted), else the project root. */
@@ -78,13 +111,131 @@ export async function resolvePersistedEmbedMode(
   projectDir: string,
   projectId: string,
 ): Promise<EmbedMode | null> {
-  const dir = collectionDir(knowledgeDir(projectDir), projectId);
-  const manifest = await readManifest(dir);
-  const signature = manifest?.signature;
-  if (typeof signature !== "string") return null;
-  if (signature.startsWith("semantic:")) return "semantic";
-  if (signature.startsWith("lexical:")) return "lexical";
-  return null;
+  return (await resolvePersistedEmbedder(projectDir, projectId))?.mode ?? null;
+}
+
+/**
+ * The full embedder identity an EXISTING project index was built with (R10.4).
+ *
+ * The embedder is otherwise chosen by the DETECTED HARDWARE TIER, and
+ * `detectCapability` degrades to the CPU tier on any probe failure — so a
+ * transient hiccup, a briefly-down Ollama, or a loaded machine silently swaps
+ * the embedding model, and therefore the vector WIDTH, under an index that
+ * cannot accept it. The index's embedder is the fact that matters; the tier is
+ * only an implementation detail of having once picked one. Query-side callers
+ * compare against THIS rather than probing "can I run an embedder?" — an
+ * availability answer that is true for the wrong model too.
+ *
+ * Sources, most authoritative first:
+ *  - `manifest.embedder` — written since R10.4, self-describing;
+ *  - `manifest.signature` — the model an older manifest encodes;
+ *  - the driver's `meta.json` `dim` — the width the index ACTUALLY stores,
+ *    present for every index this driver has ever written, which is what makes
+ *    a pre-R10.4 index checkable at all rather than merely "unknown".
+ *
+ * Returns null when there is no index yet, or the manifest is
+ * missing/unreadable/unrecognized.
+ */
+export async function resolvePersistedEmbedder(
+  projectDir: string,
+  projectId: string,
+): Promise<PersistedEmbedderRecord | null> {
+  const base = knowledgeDir(projectDir);
+  const manifest = await readManifest(collectionDir(base, projectId));
+  if (manifest === null) return null;
+  const parsed =
+    typeof manifest.signature === "string" ? parseEmbedderSignature(manifest.signature) : null;
+  const mode = manifest.embedder?.mode ?? parsed?.mode;
+  if (mode === undefined) return null;
+  const model = manifest.embedder?.model ?? parsed?.model ?? null;
+  // Prefer the width the index really stores over anything recorded about it.
+  const dim = (await readCollectionDim(base, projectId)) ?? manifest.embedder?.dim ?? null;
+  return { mode, model, dim };
+}
+
+/**
+ * What a query-side caller should do about the semantic embedder, given what
+ * built the index (R10.4). See {@link planQueryEmbedder}.
+ */
+export type QueryEmbedderPlan =
+  /** No semantic index (or none at all) — use the pure-TS lexical embedder. */
+  | { readonly action: "lexical" }
+  /** The current tier's embedder IS the one that built the index. */
+  | { readonly action: "use-current"; readonly model: string }
+  /** The tier drifted; query with the index's own embedder instead. */
+  | { readonly action: "pin"; readonly model: string; readonly currentModel: string }
+  /** Cannot query this index correctly — decline ONCE, up front. */
+  | { readonly action: "disable"; readonly reason: string };
+
+/** Human-readable `"model" (768-dim)`, dropping the width when unknown. */
+function describeEmbedder(model: string, dim: number | null): string {
+  const width = dim ?? embedDimFor(model);
+  return width === null ? `"${model}"` : `"${model}" (${width}-dim)`;
+}
+
+/**
+ * Decide which embedder to query an existing index with — by EMBEDDER IDENTITY,
+ * not embedder availability (R10.4).
+ *
+ * The old guard asked "can I run *an* embedder?", which is answered `true` by
+ * the wrong model just as readily as the right one: when a degraded hardware
+ * probe re-pointed the tier at a 768-dim embedder, the tier-1 model was indeed
+ * available, the guard passed, and every single query then threw
+ * `EmbedderMismatchError` against the 1024-dim index — failing open into a
+ * feature that was silently doing an embed call per request and discarding it.
+ *
+ * So the index's recorded embedder wins over the current tier's: a tier
+ * downgrade must NOT be allowed to change the embedder of an index that already
+ * exists. Either we query with what built it, or we decline once, naming both
+ * models — never an error per query.
+ *
+ * `isAvailable` is the Ollama probe (`ollamaHasModel`); it is consulted for the
+ * model we actually intend to use, not for whichever one the tier suggests.
+ */
+export async function planQueryEmbedder(
+  persisted: PersistedEmbedderRecord | null,
+  currentModel: string,
+  isAvailable: (model: string) => Promise<boolean>,
+): Promise<QueryEmbedderPlan> {
+  if (persisted === null || persisted.mode !== "semantic") return { action: "lexical" };
+
+  // The embedder the index says built it. A manifest too old to name one leaves
+  // only the current model as a candidate — still width-checked below, which is
+  // the check that actually protects the query.
+  const target = persisted.model ?? currentModel;
+  const targetDim = embedDimFor(target);
+
+  // The index's stored width is ground truth (the driver's meta.json). If the
+  // recorded embedder cannot produce it, the record is not trustworthy and no
+  // catalog model is known to fit — decline rather than guess.
+  if (persisted.dim !== null && targetDim !== null && targetDim !== persisted.dim) {
+    return {
+      action: "disable",
+      reason:
+        `the index stores ${persisted.dim}-dim vectors, but its recorded embedder ` +
+        `${describeEmbedder(target, targetDim)} produces ${targetDim}-dim ones — ` +
+        "rebuild it with `golem index`",
+    };
+  }
+
+  if (!(await isAvailable(target))) {
+    const alsoTried =
+      target === currentModel
+        ? ""
+        : ` — the current hardware tier would use ${describeEmbedder(currentModel, null)}, ` +
+          "which cannot query it";
+    return {
+      action: "disable",
+      reason:
+        `the index was built with the semantic embed model ${describeEmbedder(target, persisted.dim)}, ` +
+        `which isn't available now${alsoTried}. Start Ollama and pull ${target}, or run ` +
+        "`golem index` to rebuild the index with the embedder this machine has",
+    };
+  }
+
+  return target === currentModel
+    ? { action: "use-current", model: target }
+    : { action: "pin", model: target, currentModel };
 }
 
 /** Scan all roots into a `sourcePath → FileState` map (last-writer-wins across roots). */
@@ -111,9 +262,32 @@ export async function writeManifest(
   now: string,
   files: Readonly<Record<string, PersistedFileState>> = {},
 ): Promise<void> {
-  const dir = collectionDir(knowledgeDir(projectDir), projectId);
+  const base = knowledgeDir(projectDir);
+  const dir = collectionDir(base, projectId);
   await mkdir(dir, { recursive: true });
-  const manifest: IndexManifest = { signature, ts: now, paths, files };
+  // R10.4: record the embedder as a FACT ABOUT THE INDEX, not something a
+  // reader has to re-derive from the current machine's hardware tier. Width
+  // comes from what the driver just persisted (authoritative — it is what a
+  // query is dimension-checked against); the catalog table is only the fallback
+  // for the ingest-less paths that write a manifest before any vector exists.
+  const parsed = parseEmbedderSignature(signature);
+  const embedder: PersistedEmbedderRecord | undefined =
+    parsed === null
+      ? undefined
+      : {
+          mode: parsed.mode,
+          model: parsed.model,
+          dim:
+            (await readCollectionDim(base, projectId)) ??
+            (parsed.model === null ? null : embedDimFor(parsed.model)),
+        };
+  const manifest: IndexManifest = {
+    signature,
+    ts: now,
+    paths,
+    files,
+    ...(embedder !== undefined ? { embedder } : {}),
+  };
   await writeFile(path.join(dir, "manifest.json"), `${JSON.stringify(manifest)}\n`, "utf8");
 }
 
