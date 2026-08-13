@@ -148,7 +148,14 @@ function hostOf(baseUrl: string): string | undefined {
  * of your context than it asked for.
  */
 export function defaultTrustFor(provider: UpstreamProvider, baseUrl: string): TargetTrust {
-  if (provider === "ollama") {
+  // R10.8: `llamacpp` joins `ollama` here — both are model servers the user runs
+  // themselves, so the honest trust level is a property of WHERE it is, never of
+  // the provider name. The same `llama-server` binary is `local` on loopback and
+  // `lan` on `http://gpubox.lan:8080`; hardcoding "llamacpp = local" would hand
+  // an unredacted prompt to a box across the room on the strength of a config
+  // string. The URL decides, and the dispatcher re-checks loopback independently
+  // before it honours `trust: "local"` at all.
+  if (provider === "ollama" || provider === "llamacpp") {
     const host = hostOf(baseUrl);
     return host !== undefined && LOOPBACK_HOSTS.has(host) ? "local" : "lan";
   }

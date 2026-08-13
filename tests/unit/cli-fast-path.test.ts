@@ -35,6 +35,40 @@ describe("fastPathFor", () => {
 
   it("claims statusline, with or without --color", () => {
     expect(fastPathFor(argv("statusline"))).toBe("statusline");
+  });
+
+  // R10.10: the VS Code extension polls `status --json` on a timer, and routing
+  // it through commander cost ~1.6s of module graph per poll for a JSON dump
+  // that never touches the command registry.
+  it("routes the machine-readable `status --json` shapes the extension sends", () => {
+    expect(fastPathFor(argv("status", "--json"))).toBe("status");
+    expect(fastPathFor(argv("status", "--json", "--dir", "C:/p"))).toBe("status");
+    expect(fastPathFor(argv("status", "--dir", "C:/p", "--json"))).toBe("status");
+  });
+
+  it("leaves the HUMAN `golem status` to commander — its renderer is commander's business", () => {
+    expect(fastPathFor(argv("status"))).toBeNull();
+    expect(fastPathFor(argv("status", "--dir", "C:/p"))).toBeNull();
+  });
+
+  it("refuses a status shape it does not handle identically", () => {
+    // An unknown flag must reach commander so ITS error message is the one the
+    // user sees — a fast path that silently ignores a flag is worse than one
+    // that never runs.
+    expect(fastPathFor(argv("status", "--json", "--verbose"))).toBeNull();
+    expect(fastPathFor(argv("status", "--json", "--help"))).toBeNull();
+    // `--dir` takes a value; a dangling flag is commander's to complain about.
+    expect(fastPathFor(argv("status", "--json", "--dir"))).toBeNull();
+    expect(fastPathFor(argv("status", "--json", "--dir", "--json"))).toBeNull();
+  });
+
+  it("does NOT fast-path `stats --json`, even though it is the slower call", () => {
+    // Deliberate: stats' plain path branches on telemetry aggregation and a
+    // hasRequests fallback, and duplicating that is exactly the drift the
+    // "behaviourally identical" rule exists to prevent. A null `stats` blanks a
+    // savings figure; a null `status` is what renders the bar OFFLINE.
+    expect(fastPathFor(argv("stats", "--json"))).toBeNull();
+    expect(fastPathFor(argv("stats", "--json", "--window", "24h"))).toBeNull();
     expect(fastPathFor(argv("statusline", "--color"))).toBe("statusline");
   });
 

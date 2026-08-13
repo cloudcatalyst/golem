@@ -212,10 +212,27 @@ export const SETTINGS_LEAVES = {
      * model — that would send the work somewhere the user did not choose while
      * reporting success. A non-local target is redacted at its trust floor on
      * every dispatch (R9.3), so setting this never weakens redaction.
+     *
+     * R10.8: a worker with NO entry here no longer means "the local model". It
+     * falls through to `inference.default_target` and then to the harness's own
+     * upstream, so leaving this empty is a routing decision like any other.
      */
     worker_targets: z.record(z.string().min(1), z.string().min(1)).default({}),
     /**
      * R9.23: moved from `proxy.default_target` to `inference.default_target`.
+     *
+     * R10.8: this is now step 3 of the dispatch chain, and until R10.8 it was
+     * skipped entirely — an unrouted `coder` draft went to the local model, so
+     * the one setting whose job is to name the default did nothing. The order is
+     * an explicit target on the call, then `worker_targets[worker]`, then this,
+     * then the harness's own upstream (`proxy.upstream_*`). Unset means the
+     * last of those, which always exists.
+     *
+     * Fail-closed like every other target reference: an id in neither
+     * `proxy.targets` nor `proxy.gateways` raises, naming what IS configured —
+     * never a silent slide to the local model. A local backend is reached by
+     * pointing a target at it and naming that target here; it is a destination,
+     * not a default.
      */
     default_target: z.string().min(1).optional(),
     /**

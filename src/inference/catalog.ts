@@ -46,7 +46,21 @@ const P_MIN: TierCatalogEntry = {
     judge: "qwen2.5:7b",
   },
   textEmbed: "bge-m3",
-  codeEmbed: "nomic-embed-text",
+  // R10.7: was `nomic-embed-text`, the only tier that paired two DIFFERENT
+  // embedders — and therefore two vector widths (1024 vs 768) — for one
+  // collection. `KnowledgeBase.ingest` embeds text and code chunks separately by
+  // kind and stores both in the same collection, and `FileVectorDriver.upsert`
+  // resets the collection whenever the incoming width differs from the stored
+  // one, so a repo containing both prose and code thrashed here: each kind wiped
+  // the other's vectors and re-embedded. Queries compounded it — they always
+  // embed with the "text" model, so the 768-dim code vectors could never match
+  // even when they survived.
+  //
+  // Raised to match `textEmbed` rather than lowering `textEmbed` to 768: the
+  // text model decides the index signature AND every query, so changing it would
+  // invalidate every existing P_MIN index and cost query quality, while this
+  // only re-embeds code chunks that were already being reset away.
+  codeEmbed: "bge-m3",
 };
 
 const P_MID: TierCatalogEntry = {

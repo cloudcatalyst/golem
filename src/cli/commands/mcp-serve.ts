@@ -4,7 +4,12 @@
 
 import type { Command } from "commander";
 import { resolveEffectiveCompression } from "../../compression/effective-level.js";
-import { findProjectDir, loadConfig, settingsFilePaths } from "../../config/index.js";
+import {
+  findProjectDir,
+  type GolemSettings,
+  loadConfig,
+  settingsFilePaths,
+} from "../../config/index.js";
 import { DEFAULT_KEY_ENV } from "../../credentials/backends.js";
 import { createClaudeCliDrafter } from "../../inference/claude-cli.js";
 import {
@@ -13,13 +18,17 @@ import {
   OllamaClient,
   OllamaInferenceService,
 } from "../../inference/index.js";
-import { createTargetDispatcher } from "../../inference/target-dispatcher.js";
+import {
+  createTargetDispatcher,
+  type TargetDispatcher,
+  type TargetDispatcherOptions,
+} from "../../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase } from "../../interfaces/index.js";
 import {
-  listTargets,
   perGatewayEnvVar,
   resolveUpstreamDisplay,
   upstreamAssumesCaching,
+  withDefaultTarget,
 } from "../../providers/index.js";
 import { readServedModel } from "../../proxy/served-model.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
@@ -63,6 +72,60 @@ function resolveTargetCredential(
     const creds = await pending;
     return creds[accountId === null ? DEFAULT_KEY_ENV : perGatewayEnvVar(accountId)];
   };
+}
+
+/**
+ * R10.8 — the `coder` target dispatcher, built from loaded settings.
+ *
+ * **Extracted from the `serveStdio` call literal so the wiring is testable**, and
+ * that is not incidental: the bug this closes was invisible precisely because it
+ * lived in an inline object. `settings.proxy` satisfies `TargetRegistrySettings`
+ * structurally — it carries the DEPRECATED `proxy.default_target` leaf — so
+ * passing it where `withDefaultTarget(settings)` was meant type-checks perfectly
+ * and silently discards the live `inference.default_target`. Nothing throws;
+ * every unrouted dispatch simply goes somewhere else and reports success. R9.23
+ * moved the key and consolidated five call sites onto the helper; this one was
+ * missed because the dispatcher did not read `default_target` at all until now.
+ *
+ * `overrides` exists for tests (a fake `fetch`, a stub credential resolver). It
+ * is spread LAST but deliberately cannot reach `settings` or `workerTargets` —
+ * a test that could substitute those would no longer be testing this wiring.
+ */
+export function createCoderDispatcher(
+  settings: GolemSettings,
+  inference: InferenceService,
+  projectDir: string,
+  overrides: Partial<
+    Pick<
+      TargetDispatcherOptions,
+      "fetchImpl" | "resolveKey" | "spawnDrafter" | "sessionModel" | "audit" | "env"
+    >
+  > = {},
+): TargetDispatcher {
+  return createTargetDispatcher({
+    inference,
+    // NOT `settings.proxy` — see above.
+    settings: withDefaultTarget(settings),
+    workerTargets: settings.inference.worker_targets,
+    resolveKey: resolveTargetCredential(projectDir),
+    // R9.15: a `claude-cli` target drafts by spawning the user's own Claude
+    // Code. Wired here, guarded in the dispatcher.
+    spawnDrafter: createClaudeCliDrafter({
+      timeoutMs: settings.inference.request_timeout_ms,
+    }),
+    sessionModel: async () => (await readServedModel(projectDir))?.model,
+    audit: (e) => {
+      // ADR-0003 invariant 5 — non-secret attribution for every dispatch,
+      // including which trust floor applied and which step of the R10.8 chain
+      // chose the target.
+      process.stderr.write(
+        `golem coder: dispatched to ${e.targetId ?? "local"} ` +
+          `(${e.provider ?? "local"}, model ${e.model ?? "?"}) ` +
+          `[route=${e.route}] — ${e.reason}\n`,
+      );
+    },
+    ...overrides,
+  });
 }
 
 export default function register(program: Command): void {
@@ -180,33 +243,21 @@ export default function register(program: Command): void {
             : {}),
           ...(inference !== undefined ? { inference } : {}),
           ...(inference !== undefined ? { coder: inference } : {}),
-          // R9.3: `coder` may draft on any declared target. Only wired when
-          // there is more than the synthetic default to choose from — with one
-          // target the `target` parameter would be a schema cost with no choice
-          // behind it, and `coder`'s definition bills on every request (§110).
-          ...(inference !== undefined && listTargets(settings.proxy).length > 1
-            ? {
-                targetDispatcher: createTargetDispatcher({
-                  inference: inference,
-                  settings: settings.proxy,
-                  workerTargets: settings.inference.worker_targets,
-                  resolveKey: resolveTargetCredential(opts.dir),
-                  // R9.15: a `claude-cli` target drafts by spawning the user's
-                  // own Claude Code. Wired here, guarded in the dispatcher.
-                  spawnDrafter: createClaudeCliDrafter({
-                    timeoutMs: settings.inference.request_timeout_ms,
-                  }),
-                  sessionModel: async () => (await readServedModel(opts.dir))?.model,
-                  audit: (e) => {
-                    // ADR-0003 invariant 5 — non-secret attribution for every
-                    // dispatch, including which trust floor applied.
-                    process.stderr.write(
-                      `golem coder: dispatched to ${e.targetId ?? "local"} ` +
-                        `(${e.provider ?? "local"}, model ${e.model ?? "?"}) — ${e.reason}\n`,
-                    );
-                  },
-                }),
-              }
+          // R9.3: `coder` may draft on any declared target.
+          //
+          // R10.8: wired whenever there is a local service to fall back to at
+          // all, not only when several targets exist. The old
+          // `listTargets(...).length > 1` guard was sound while the dispatcher's
+          // only job was to offer a CHOICE — with one target there was nothing
+          // to choose. Now the dispatcher also decides *where an unrouted draft
+          // goes*, and skipping it in the single-target case would restore
+          // exactly the implicit-local behaviour this task removes, for the one
+          // configuration (a fresh project) where it is most surprising. The
+          // §110 schema cost is still avoided: `coder` only grows the `target`
+          // parameter when there is more than one selectable target, and that
+          // decision now lives in `registerCoderTool` where the schema is built.
+          ...(inference !== undefined
+            ? { targetDispatcher: createCoderDispatcher(settings, inference, opts.dir) }
             : {}),
           ...(settings.inference.local_editor_enabled ? { localEditor: true } : {}),
           ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),

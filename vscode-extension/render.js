@@ -89,15 +89,22 @@ function dialsSummary(model) {
 function buildModel(stats, status, update, accounts, surface) {
   const s = stats && typeof stats === "object" ? stats : {};
   const st = status && typeof status === "object" ? status : {};
-  // `golem account list --json` returns the AccountsReport OBJECT
-  // (`{active, active_unknown, accounts:[…]}`), not a bare array. Testing only for
+  // `golem gateway list --json` returns the GatewaysReport OBJECT
+  // (`{active, active_unknown, gateways:[…]}`), not a bare array. Testing only for
   // an array left this permanently `[]`, so the "Switch upstream…" quick-pick found
-  // no cache and re-ran the ~2.8s CLI call (it probes every account's credential
+  // no cache and re-ran the ~2.8s CLI call (it probes every gateway's credential
   // store) on every open. Accept either shape.
+  //
+  // R9.23 renamed the key `accounts` -> `gateways`, and R10.10 found the
+  // extension had never followed: it was still CALLING `golem account list`
+  // (removed, so every poll returned null) and still reading `.accounts`. Both
+  // keys are accepted so a newer extension paired with an older CLI still works.
   const accountList = Array.isArray(accounts)
     ? accounts
-    : accounts && Array.isArray(accounts.accounts)
-      ? accounts.accounts
+    : accounts && Array.isArray(accounts.gateways)
+      ? accounts.gateways
+      : accounts && Array.isArray(accounts.accounts)
+        ? accounts.accounts
       : [];
   // Normalize the two shapes: `golem update --json` → {updateAvailable,latest,current};
   // `golem status --json`.update → {available,latest,current}.
@@ -191,8 +198,10 @@ function buildModel(stats, status, update, accounts, surface) {
     // than the pipeline. Absent on an older CLI → false, i.e. the pre-56 display.
     proxyBypass: !!(st.proxy && st.proxy.bypass),
     localModelReachable: !!(st.local_model && st.local_model.reachable),
-    // `inference.coder_enabled`. Absent on an older CLI → assume enabled,
-    // matching the CLI statusline's fail-open reading of the same setting.
+    // Was `inference.coder_enabled`, which R9.23 REMOVED — the coder tool is now
+    // always offered, so `status --json` no longer emits the flag and this
+    // always takes the `true` branch. Kept rather than deleted so an older CLI
+    // that still sends it is still honoured; see R10.10.
     coderEnabled:
       st.local_model && typeof st.local_model.coder_enabled === "boolean"
         ? st.local_model.coder_enabled
@@ -206,10 +215,17 @@ function buildModel(stats, status, update, accounts, surface) {
       (st.local_model && typeof st.local_model.coder_enabled === "boolean"
         ? st.local_model.coder_enabled
         : true),
+    // R10.10: `status --json` emits `local_model.model`; this read
+    // `local_model.coder_model`, a name the CLI never had, so the status bar
+    // showed a bare "local" instead of the model id for as long as anyone can
+    // tell. `coder_model` is still accepted in case an older CLI ever emitted
+    // it, but `model` is the real field.
     coderModel:
-      st.local_model && typeof st.local_model.coder_model === "string"
-        ? st.local_model.coder_model
-        : null,
+      st.local_model && typeof st.local_model.model === "string"
+        ? st.local_model.model
+        : st.local_model && typeof st.local_model.coder_model === "string"
+          ? st.local_model.coder_model
+          : null,
     // R9.4 — the model behind `inference.coder_target`, when set and resolvable.
     // Wins over coderModel: a configured target is what `coder` will
     // actually draft on, local or not. Absent on an older CLI → null, i.e. the

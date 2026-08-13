@@ -239,15 +239,11 @@ export function renderStatus(report: StatusReport): string {
   const workers = report.workers ?? [];
   const localModel = report.local_model.model ?? "local";
   for (const worker of KNOWN_WORKERS) {
-    // Only `coder` has an enabled flag today; a future worker without one is
-    // simply always offered.
-    if (worker === "coder" && report.local_model.reachable === false && workers.length === 0) {
-      lines.push("  coder: unavailable — no local model or target configured");
-      continue;
-    }
     const configured = workers.find((w) => w.worker === worker);
     if (configured === undefined) {
-      // No configured target → the local model, which has to actually be up.
+      // A report from before R10.8 (or a caller that built one by hand) has no
+      // row for an unconfigured worker. Keep the old reading for those rather
+      // than claiming a route this report cannot vouch for.
       lines.push(
         report.local_model.reachable
           ? `  ${worker}: ${localModel} (local)`
@@ -265,9 +261,28 @@ export function renderStatus(report: StatusReport): string {
       );
       continue;
     }
+    // A worker resolved to a LOCAL target still depends on the local runtime
+    // being up; saying which model it would run while nothing answers on that
+    // port is the dishonest-signal class this project exists to close.
+    if (configured.local === true && report.local_model.reachable === false) {
+      lines.push(
+        `  ${worker}: unavailable — target "${configured.target}" is local and the local ` +
+          "model is not reachable",
+      );
+      continue;
+    }
     const model = configured.model ?? configured.target;
     const same = chatModel != null && model === chatModel ? " — same model as chat" : "";
-    lines.push(`  ${worker}: ${model} (target ${configured.target})${same}`);
+    // R10.8: name the step that chose the target. "went to your upstream" and
+    // "went to your upstream because nothing named anything else" are different
+    // facts, and only the second one is a prompt to go and configure something.
+    const via =
+      configured.route === "harness"
+        ? " — via the harness default upstream; nothing routes `coder`"
+        : configured.route === "default_target"
+          ? " — via inference.default_target"
+          : "";
+    lines.push(`  ${worker}: ${model} (target ${configured.target})${same}${via}`);
   }
   if (report.update !== undefined) {
     lines.push(
