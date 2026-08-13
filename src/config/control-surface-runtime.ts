@@ -143,7 +143,14 @@ export async function applyRuntime(
       // first level choice), which is exactly the ~530ms this module avoids paying
       // just to display a level.
       const { setSliderLevel } = await import("../cli/slider.js");
-      const result = await setSliderLevel(level, shared);
+      // Forward the init probe: on an uninitialized project this call ACTIVATES it,
+      // and `golemInit`'s default probe reads the developer's HOME (`~/.claude`).
+      // Without a way to inject one, this path could not be tested anywhere Claude
+      // Code is absent — which is every CI runner.
+      const result = await setSliderLevel(level, {
+        ...shared,
+        ...(options.initProbe !== undefined && { probe: options.initProbe }),
+      });
       return {
         id: "runtime:slider",
         value: String(result.effective.level),

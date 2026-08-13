@@ -1,6 +1,7 @@
 // `../hooks/guidance.js`, not the `../hooks/index.js` barrel: the barrel pulls
 // every hook handler (~446ms vs ~117ms) and all we need here is the feature table
 // plus the rule read/write helpers.
+import type { InitProbe } from "../cli/init.js";
 import type { GuidanceScope } from "../hooks/guidance.js";
 import type { SliderLevel } from "../interfaces/policy.js";
 import { ConfigError } from "./errors.js";
@@ -126,6 +127,22 @@ export interface ApplyControlOptions extends ControlSurfaceOptions {
   readonly cliPath?: string;
   /** Injected clock for the account audit log. */
   readonly nowIso?: string;
+  /**
+   * External-state probe forwarded to `golemInit`, for the apply paths that can
+   * ACTIVATE a project — choosing a slider level on an uninitialized project runs
+   * init as a side effect (Decision 43's "first level choice activates").
+   *
+   * Injectable because `golemInit`'s default probe reads the developer's HOME:
+   * it refuses when there is no `~/.claude` or `~/.claude.json`. That made
+   * `applyControl("runtime:slider", …)` untestable anywhere Claude Code is not
+   * installed — CI runners included, where it was the one red test in an otherwise
+   * green suite for four consecutive merges. `setSliderLevel` already accepted a
+   * probe; there was simply no way to hand it one from here.
+   *
+   * Type-only import, so this adds nothing to the module graph — `applyRuntime`
+   * still imports `cli/init.js` lazily, for the ~530ms it costs to load.
+   */
+  readonly initProbe?: InitProbe;
 }
 export function parseSettingScope(scope: string): SettingsScope {
   if (scope === "user" || scope === "project" || scope === "local") return scope;

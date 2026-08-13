@@ -3,6 +3,27 @@ name: CI
 on:
   push:
     branches: [main]
+  # Gate MERGES, not just record history. Until this trigger existed CI ran only
+  # after a merge, so a red run reported a problem that was already on `main` and
+  # nothing was ever blocked by it — which is how one environment-dependent test
+  # (`control-surface`, needing `~/.claude`) kept CI red for four consecutive
+  # merges while every other shard stayed green. A check nobody is gated by is a
+  # check nobody reads.
+  pull_request:
+    branches: [main]
+
+# One run per ref: a new push cancels the previous run for the same PR instead of
+# paying for both. This repo is deliberately minutes-conscious (see the Ubuntu-only
+# and shard-count notes below), and adding the pull_request trigger above roughly
+# doubles the runs per landed change — this is what keeps that affordable.
+#
+# `github.head_ref || github.run_id` rather than `github.ref`: on a pull_request
+# event `head_ref` is the source branch, so successive pushes to one PR collapse;
+# on a push to `main` it is empty, and falling back to the unique run id means a
+# merge is NEVER cancelled by the next merge.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # Ubuntu-only to conserve Actions minutes on this private repo (macOS bills at
@@ -83,3 +104,33 @@ jobs:
 
       - name: Tests (shard ${{ matrix.shard }}/10)
         run: npm test -- --shard ${{ matrix.shard }}/10
+
+  # The single check branch protection requires — one name that means "all of CI
+  # passed".
+  #
+  # Pinning protection to the individual jobs would mean listing 22 names
+  # (`quality / node 22`, `test / node 24 / shard 7`, …), and the shard count is
+  # explicitly a tuning dial in the comment above. Changing it would silently leave
+  # protection requiring checks that no longer exist — which blocks every merge —
+  # or, worse, stop requiring shards that were added. This job depends on the
+  # others, so the required-check list stays one entry however the matrix is tuned.
+  #
+  # `if: always()` is load-bearing: without it a failed dependency SKIPS this job,
+  # and a skipped required check reads as neutral rather than failing — the gate
+  # would let exactly the runs it exists to stop straight through. So it always
+  # runs, and inspects its dependencies' results explicitly.
+  ci-gate:
+    name: CI gate
+    if: always()
+    needs: [quality, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify every CI job succeeded
+        run: |
+          echo "quality: ${{ needs.quality.result }}"
+          echo "test:    ${{ needs.test.result }}"
+          if [ "${{ needs.quality.result }}" != "success" ] || [ "${{ needs.test.result }}" != "success" ]; then
+            echo "::error::CI gate failed — see the quality/test jobs above for the cause."
+            exit 1
+          fi
+          echo "All CI jobs succeeded."
