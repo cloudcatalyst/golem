@@ -16,6 +16,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { pipelineRedact, stripKnownSecrets } from "../hooks/redact.js";
+import { isRecord } from "../shared/json.js";
 
 export interface NoteEntry {
   readonly ts: string;
@@ -25,10 +26,6 @@ export interface NoteEntry {
 /** Notes log location for a project. */
 export function notesFilePath(projectDir: string): string {
   return path.join(projectDir, ".golem", "notes", "notes.jsonl");
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /** Parse one JSONL line into a NoteEntry, or null if malformed. */

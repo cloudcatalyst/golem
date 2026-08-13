@@ -73,8 +73,6 @@ const sessionTreeSchema = z.object({
   conversations: z.array(conversationSchema),
 });
 
-export type PersistedSessionTree = z.infer<typeof sessionTreeSchema>;
-
 /** ── Recorder ───────────────────────────────────────────────────────── */
 
 /**

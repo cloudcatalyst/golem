@@ -7,10 +7,9 @@
  * the tasks directory.
  */
 
-import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   PlanTaskStore,
   parsePlanTask,
@@ -18,7 +17,7 @@ import {
   planTasksDir,
   serializePlanTask,
 } from "../../../src/tasks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const DOC = `---
 task: R8.5
@@ -38,6 +37,8 @@ updated: 2026-07-30
 
 Build the map.
 `;
+
+const newTempDir = useTempDirs("golem-plan-tasks-");
 
 describe("parsePlanTask", () => {
   it("maps frontmatter onto a Task and the body onto the prompt", () => {
@@ -154,11 +155,7 @@ describe("PlanTaskStore", () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-plan-tasks-"));
-  });
-
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("returns an empty list when the directory does not exist", async () => {

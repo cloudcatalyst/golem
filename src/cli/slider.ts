@@ -68,7 +68,7 @@ export interface SetSliderResult {
    * success at "aggressive" while changing nothing about the pipeline's behaviour.
    *
    * This is deliberately a WARNING rather than a rejection. The same project is
-   * used against non-caching accounts (`golem account use …`) where levels 2–3 are
+   * used against non-caching accounts (`golem gateway use …`) where levels 2–3 are
    * exactly right, so the level is a valid thing to have set — it is only inert
    * *right now*. Refusing the write would make a correct future configuration
    * unreachable and would have to be undone on every account switch.

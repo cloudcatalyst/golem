@@ -17,10 +17,10 @@
  *   setting to lower layers / defaults).
  */
 
-import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { ConfigError } from "./errors.js";
+import { isPlainObject, replaceViaTemp } from "./file-io.js";
 import { liveKeyFor } from "./migrations.js";
 import { settingsFilePaths } from "./paths.js";
 import { allLeafPaths, leafSchema } from "./schema.js";
@@ -99,13 +99,12 @@ export async function writeSetting(
 
   const text = JSON.stringify(root, null, existing.indent) + (existing.trailingNewline ? "\n" : "");
 
+  // mkdir stays OUTSIDE the try: a directory that cannot be created is not a
+  // failed write, and wrapping it as one would mislabel the error.
   await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
   try {
-    await writeFile(tmp, text, "utf8");
-    await rename(tmp, file);
+    await replaceViaTemp(file, text);
   } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
     throw new ConfigError(
       `failed to write settings file ${file}: ` +
         `${err instanceof Error ? err.message : String(err)}`,
@@ -151,13 +150,8 @@ export async function deleteRetiredKey(
 
   const text =
     JSON.stringify(existing.root, null, existing.indent) + (existing.trailingNewline ? "\n" : "");
-  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    await writeFile(tmp, text, "utf8");
-    await rename(tmp, file);
-  } catch {
-    await rm(tmp, { force: true }).catch(() => {});
-  }
+  // No mkdir: this only ever rewrites a file it just read.
+  await replaceViaTemp(file, text).catch(() => {});
 }
 
 interface ExistingFile {
@@ -204,8 +198,4 @@ async function readExisting(file: string): Promise<ExistingFile> {
     indent: indentMatch?.[1] ?? "  ",
     trailingNewline: stripped.endsWith("\n"),
   };
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

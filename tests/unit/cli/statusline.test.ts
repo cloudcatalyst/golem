@@ -2,10 +2,9 @@
  * Decision 21c — golem statusline: defensive stdin parsing + pure rendering.
  */
 
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { proxyPidPath, writeProxyPid } from "../../../src/cli/proxy-daemon.js";
 import {
   BLOCKED_STALE_MS,
@@ -20,7 +19,9 @@ import { writeSetting } from "../../../src/config/index.js";
 import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
 import { writeServedModel } from "../../../src/proxy/index.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-statusline-");
 
 describe("parseSessionInput", () => {
   it("extracts the fields we use from the real stdin shape", () => {
@@ -392,10 +393,7 @@ describe("collectGolemState", () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-statusline-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("returns sane defaults for a bare project dir with no Golem state", async () => {

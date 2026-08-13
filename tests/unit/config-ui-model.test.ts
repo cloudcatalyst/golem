@@ -97,7 +97,7 @@ describe("deriveKind", () => {
   });
 
   it("treats a structured array as opaque, not an editable list", () => {
-    // proxy.gateways is an array of objects — `golem account` owns it (R9.23: renamed from proxy.accounts).
+    // proxy.gateways is an array of objects — `golem gateway` owns it (R9.23: renamed from proxy.accounts).
     expect(kindOf("proxy", "gateways")).toBe("opaque");
   });
 

@@ -16,6 +16,7 @@
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import type { CompressionStats, TokenDelta } from "../interfaces/compression.js";
+import { isRecord } from "../shared/json.js";
 import type {
   AvoidedUpstreamStats,
   TelemetryEvent,
@@ -54,10 +55,6 @@ export async function readTelemetryEvents(projectDir: string): Promise<readonly 
     if (ev !== null) events.push(ev);
   }
   return events;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function isTokenDelta(v: unknown): v is TokenDelta {

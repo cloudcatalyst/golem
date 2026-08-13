@@ -5,23 +5,20 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { contentHashIndex, WebCache } from "../../../src/knowledge/web-cache.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let dir: string;
 let cache: WebCache;
 
-beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-webcache-"));
-  cache = new WebCache(dir);
-});
+const newTempDir = useTempDirs("golem-webcache-");
 
-afterEach(async () => {
-  await rm(dir, rmTemp);
+beforeEach(async () => {
+  dir = await newTempDir();
+  cache = new WebCache(dir);
 });
 
 describe("WebCache.list", () => {

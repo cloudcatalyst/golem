@@ -3,7 +3,7 @@
  *
  * `list` / `show` report; `add` registers non-secret identity; `test` probes a
  * target's credential against its own endpoint. Credentials stay with
- * `golem account login` — a target names an account, it never holds a key.
+ * `golem gateway login` — a target names an account, it never holds a key.
  */
 
 import type { Command } from "commander";

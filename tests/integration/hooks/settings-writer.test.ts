@@ -3,26 +3,23 @@
  * preserves foreign hooks, is idempotent, and never clobbers foreign config.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { InitError } from "../../../src/cli/init.js";
 import {
   addPostToolUseHook,
   POST_TOOL_USE_COMMAND,
   removePostToolUseHook,
 } from "../../../src/hooks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-hooksettings-"));
-});
+const newTempDir = useTempDirs("golem-hooksettings-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 const SETTINGS_REL = ".claude/settings.json";

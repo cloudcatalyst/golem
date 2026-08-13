@@ -17,7 +17,7 @@
  * removed as a user-facing mechanism because it produced exactly the
  * "works in one terminal, not another" failure Decision 46 set out to end.
  * The name survives only as the internal CLI→daemon handoff channel — see
- * {@link envVarForAccount} — and is not documented to users as configuration.
+ * {@link envVarForGateway} — and is not documented to users as configuration.
  *
  * Two invariants hold throughout:
  *
@@ -58,7 +58,7 @@ export type CredentialProtection = "os-keychain" | "dpapi-user" | "file-permissi
 /** Where a credential lives, and an honest description of its protection. */
 export interface CredentialLocation {
   readonly backend: CredentialBackendId;
-  /** Human-readable, never overstated — shown by `golem account list`. */
+  /** Human-readable, never overstated — shown by `golem gateway list`. */
   readonly label: string;
   readonly protection: CredentialProtection;
 }
@@ -83,7 +83,7 @@ export interface CredentialBackend {
  * `proxy.upstream_*` describes when no named account is active. Its stored
  * credential and internal handoff var are the plain, un-suffixed ones.
  */
-export const DEFAULT_ACCOUNT_ID = "default";
+export const DEFAULT_GATEWAY_ID = "default";
 
 /** The internal handoff var for the top-level account's credential. */
 export const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
@@ -93,20 +93,20 @@ export const DEFAULT_KEY_ENV = "GOLEM_UPSTREAM_API_KEY";
  * spawns the proxy — an INTERNAL transport, not a user-facing setting
  * (Decision 47). There is no `env` credential backend any more, so exporting
  * this by hand configures nothing: a credential is set with
- * `golem account login <id>` and read back out of the OS store.
+ * `golem gateway login <id>` and read back out of the OS store.
  *
  * It still exists because the proxy daemon is detached and may have no desktop
  * session, which is where every OS keychain is least reliable (ADR-0003) — so
  * the CLI resolves the secret and hands it to the child process here rather
  * than making the daemon reach for the keychain itself.
  *
- * {@link DEFAULT_ACCOUNT_ID} maps to plain `GOLEM_UPSTREAM_API_KEY`; every
+ * {@link DEFAULT_GATEWAY_ID} maps to plain `GOLEM_UPSTREAM_API_KEY`; every
  * other id delegates to {@link perGatewayEnvVar} so there is exactly ONE
  * definition of the `GOLEM_UPSTREAM_API_KEY__<ID>` spelling in the codebase
  * (a divergence here would break the handoff silently).
  */
-export function envVarForAccount(id: string): string {
-  return id === DEFAULT_ACCOUNT_ID ? DEFAULT_KEY_ENV : perGatewayEnvVar(id);
+export function envVarForGateway(id: string): string {
+  return id === DEFAULT_GATEWAY_ID ? DEFAULT_KEY_ENV : perGatewayEnvVar(id);
 }
 
 /** Filesystem-safe form of an account id, for the on-disk backends. */
@@ -350,7 +350,7 @@ function windowsDpapi(userDir: string): CredentialBackend {
     "`powershell.exe` could not load its security module here and `pwsh` (PowerShell 7) " +
     "is not installed. Fixes, best first: (1) install PowerShell 7 " +
     "(`winget install Microsoft.PowerShell`); (2) opt into UNENCRYPTED file storage with " +
-    "`golem account login <id> --store file`.";
+    "`golem gateway login <id> --store file`.";
 
   return {
     id: "keychain",
@@ -374,7 +374,7 @@ function windowsDpapi(userDir: string): CredentialBackend {
       throw new Error(
         `DPAPI decrypt failed (exit ${r.code}) — the stored blob is bound to the user and machine ` +
           `that created it, so a copied or roamed ${path.basename(blobPath(account))} cannot be ` +
-          `read here. Re-run: golem account login ${account}`,
+          `read here. Re-run: golem gateway login ${account}`,
       );
     },
     set: async (account, secret) => {

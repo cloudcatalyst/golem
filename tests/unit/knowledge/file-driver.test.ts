@@ -6,10 +6,9 @@
  * index survives a fresh driver instance (process restart) reading the same dir.
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { Chunk } from "../../../src/interfaces/index.js";
 import type { StoredChunk } from "../../../src/knowledge/index.js";
 import {
@@ -18,14 +17,13 @@ import {
   EmbedderMismatchError,
   FileVectorDriver,
 } from "../../../src/knowledge/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let base: string;
+const newTempDir = useTempDirs("golem-fvd-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(tmpdir(), "golem-fvd-"));
-});
-afterEach(async () => {
-  await rm(base, rmTemp);
+  base = await newTempDir();
 });
 
 function chunk(id: string, text: string): Chunk {

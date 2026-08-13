@@ -11,14 +11,11 @@
  * unconditionally at module scope.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { mcpCompressionService, statsSourceForCli } from "../../../src/cli/mcp-compression.js";
 import { sliderPolicyForLevel } from "../../../src/interfaces/index.js";
 import { JsonlTelemetryStore, recordPipelineEvent } from "../../../src/telemetry/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const LEVEL_1 = sliderPolicyForLevel(1);
 
@@ -33,12 +30,10 @@ async function waitFor(predicate: () => Promise<boolean>): Promise<void> {
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-mcp-compression-"));
-});
+const newTempDir = useTempDirs("golem-mcp-compression-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 describe("mcpCompressionService", () => {

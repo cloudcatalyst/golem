@@ -54,6 +54,7 @@ import type {
 } from "../interfaces/compression.js";
 import type { SliderPolicy } from "../interfaces/policy.js";
 import type { BlobStore } from "../interfaces/storage.js";
+import { isRecord } from "../shared/json.js";
 import { CcrStore } from "./ccr-store.js";
 import { compactText } from "./compaction.js";
 import { LocalDirBlobStore } from "./local-blob-store.js";
@@ -138,10 +139,6 @@ function newAccount(): ProjectAccount {
     ccrRefsStored: 0,
     ccrRefsRetrieved: 0,
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

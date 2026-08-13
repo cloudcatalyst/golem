@@ -7,20 +7,18 @@
  * Ollama), so it exercises the actual delete-by-source + re-chunk path.
  */
 
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { rm, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ensureProjectIndexed } from "../../src/cli/auto-index.js";
 import { openKnowledgeBase } from "../../src/knowledge/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-inc-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-inc-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 const write = (rel: string, body: string) => writeFile(path.join(projectDir, rel), body, "utf8");

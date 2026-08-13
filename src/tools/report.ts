@@ -7,8 +7,9 @@
  * observability this project exists to avoid.
  */
 
+import { pct, signedPct } from "../bench/stats.js";
 import type { ToolCensus } from "./catalog.js";
-import type { CatalogComparison } from "./selection.js";
+import type { CatalogComparison } from "./compare-catalogs.js";
 import type { ShrinkMode } from "./shrink.js";
 
 export interface ToolBenchReport {
@@ -21,16 +22,6 @@ export interface ToolBenchReport {
     readonly role?: string;
     readonly result: CatalogComparison;
   };
-}
-
-function pct(value: number | null): string {
-  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
-}
-
-function signedPct(value: number | null): string {
-  if (value === null) return "n/a";
-  const s = (value * 100).toFixed(1);
-  return value > 0 ? `+${s}%` : `${s}%`;
 }
 
 export function renderToolBench(report: ToolBenchReport): string {

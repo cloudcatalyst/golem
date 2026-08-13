@@ -3,15 +3,35 @@
  * No real `claude` binary or home directory is touched.
  */
 
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
 import { loopbackCaPath } from "../../src/proxy/loopback-cert.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
+
+// R10.2: this file makes 36 golemInit() calls, each writing ~20 files. It was
+// paying a retry-prone recursive delete per test; now it pays one per file.
+
+// R10.2 — a LOCAL ceiling, with the measurement that justifies it.
+//
+// `golemInit` costs 298ms on an idle machine (measured 2026-08-13: 10 calls in
+// 2981ms). A test here does one or two of them. When one of these tests trips
+// the 20s budget under a full parallel run, that is a 66x slowdown of work that
+// is small and real — not a hung test and not a slow code path. The cause is
+// environmental: ~15 vitest workers doing filesystem work on Windows, where
+// every file creation is a virus-scanner event.
+//
+// The structural fixes are already applied (R10.2: one temp-tree delete per
+// file rather than per test; atomic settings writes). This raises the ceiling
+// only for the two init-heaviest files rather than globally, so the 20s default
+// still guards everything else — the same targeted approach, and the same
+// reasoning, as checkpoint-ledger.test.ts.
+vi.setConfig({ testTimeout: 90_000 });
+
+const newTempDir = useTempDirs("golem-init");
 
 const okProbe: InitProbe = {
   claudeCodeInstalled: () => Promise.resolve(true),
@@ -21,11 +41,7 @@ const okProbe: InitProbe = {
 let projectDir: string;
 
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-init-"));
-});
-
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 async function readJson(rel: string): Promise<Record<string, unknown>> {
@@ -507,8 +523,8 @@ describe("golem init — VS Code extension install", () => {
   let vscodeProbe: InitProbe;
 
   beforeEach(async () => {
-    extDir = await mkdtemp(path.join(tmpdir(), "golem-vsx-ext-"));
-    sourceDir = await mkdtemp(path.join(tmpdir(), "golem-vsx-src-"));
+    extDir = await newTempDir();
+    sourceDir = await newTempDir();
     vscodeProbe = { ...okProbe, vscodeExtensionsDir: () => Promise.resolve(extDir) };
     await writeFile(
       path.join(sourceDir, "package.json"),
@@ -517,10 +533,6 @@ describe("golem init — VS Code extension install", () => {
     );
     await writeFile(path.join(sourceDir, "extension.js"), "// ext", "utf8");
   });
-  afterEach(async () => {
-    await rm(extDir, rmTemp);
-    await rm(sourceDir, rmTemp);
-  });
 
   it("installs the extension by copying into the VS Code dir, idempotently", async () => {
     const id = "golem-run.golem-vscode-9.9.9";
@@ -528,14 +540,13 @@ describe("golem init — VS Code extension install", () => {
     expect(r1.actions.some((a) => a.kind === "create" && a.path.includes(id))).toBe(true);
     expect(await readFile(path.join(extDir, id, "extension.js"), "utf8")).toBe("// ext");
 
-    const projectDir2 = await mkdtemp(path.join(tmpdir(), "golem-init2-"));
+    const projectDir2 = await newTempDir();
     const r2 = await golemInit({
       projectDir: projectDir2,
       probe: vscodeProbe,
       vscodeSourceDir: sourceDir,
     });
     expect(r2.actions.some((a) => a.kind === "skip" && a.path.includes(id))).toBe(true);
-    await rm(projectDir2, rmTemp);
   });
 
   it("REFRESHES a stale deployment instead of skipping it (R9.16)", async () => {
@@ -547,7 +558,7 @@ describe("golem init — VS Code extension install", () => {
     // model, because init keyed on the directory existing.
     await writeFile(path.join(sourceDir, "render.js"), "// fixed renderer", "utf8");
 
-    const projectDir2 = await mkdtemp(path.join(tmpdir(), "golem-init3-"));
+    const projectDir2 = await newTempDir();
     const report = await golemInit({
       projectDir: projectDir2,
       probe: vscodeProbe,
@@ -558,7 +569,6 @@ describe("golem init — VS Code extension install", () => {
     expect(action?.kind).toBe("modify");
     expect(action?.detail).toContain("render.js");
     expect(await readFile(path.join(extDir, id, "render.js"), "utf8")).toBe("// fixed renderer");
-    await rm(projectDir2, rmTemp);
   });
 
   it("uninit removes the installed extension", async () => {

@@ -26,6 +26,7 @@
 
 import { estimateTokens } from "../compression/index.js";
 import type { TokenDelta } from "../interfaces/compression.js";
+import { isRecord } from "../shared/json.js";
 import {
   ENTROPY_CANDIDATE_RE,
   ENTROPY_RULE_ID,
@@ -210,10 +211,6 @@ export function redactReversibleText(text: string): ReversibleRedaction {
       return out;
     },
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

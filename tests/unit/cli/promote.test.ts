@@ -4,10 +4,9 @@
  * consent convention (non-TTY refuses without --yes).
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   draftTargetRelPath,
   listPendingPromotions,
@@ -18,18 +17,17 @@ import {
 import type { NoteDraft } from "../../../src/knowledge/distill.js";
 import { readDraftFile, writeNoteDraftFile } from "../../../src/knowledge/distill-store.js";
 import { FileWikiStore } from "../../../src/wiki/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
 let wikiDir: string;
 const NOW = "2026-07-16T12:00:00.000Z";
 
+const newTempDir = useTempDirs("golem-promote-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-promote-"));
+  projectDir = await newTempDir();
   wikiDir = path.join(projectDir, "docs", "wiki");
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
 });
 
 const questionDraft: NoteDraft = {

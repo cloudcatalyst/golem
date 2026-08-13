@@ -7,10 +7,9 @@
  * control is only read (switching it consults the OS credential store).
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { golemMcpEntry } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import {
@@ -20,7 +19,7 @@ import {
   collectControlSurface,
   collectHeader,
 } from "../../src/config/control-surface.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -54,8 +53,10 @@ function ids(surface: ControlSurface): string[] {
   return surface.groups.flatMap((g) => g.controls.map((c) => c.id));
 }
 
+const newTempDir = useTempDirs("golem-controls-test-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-controls-test-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
   // Write init markers so setSliderLevel sees an initialized project and
@@ -100,10 +101,6 @@ beforeEach(async () => {
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "SKILL.md"), `# golem ${s}\n`, "utf8");
   }
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 describe("collectControlSurface", () => {

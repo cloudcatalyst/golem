@@ -11,16 +11,15 @@
  * deployment. So these assert against a fake extensions directory instead.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   defaultVscodeExtensionsDir,
   inspectVscodeExtension,
   staleExtensionWarning,
 } from "../../src/cli/vscode-extension.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let sourceDir: string;
@@ -56,16 +55,14 @@ async function deploy(render?: string): Promise<void> {
   await writeFile(path.join(target, "media", "icon.svg"), "<svg/>", "utf8");
 }
 
+const newTempDir = useTempDirs("golem-vsx-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-vsx-"));
+  base = await newTempDir();
   sourceDir = path.join(base, "shipped");
   extensionsDir = path.join(base, "extensions");
   await mkdir(extensionsDir, { recursive: true });
   await writeShipped("// current renderer\n");
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 describe("inspectVscodeExtension", () => {

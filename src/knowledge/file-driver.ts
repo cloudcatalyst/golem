@@ -67,6 +67,36 @@ export function collectionDir(baseDir: string, projectId: string): string {
   return path.join(baseDir, hash);
 }
 
+/**
+ * The embedding width an EXISTING collection stores, read straight off the
+ * driver's persisted `meta.json` — without opening the collection or loading a
+ * single vector (R10.4).
+ *
+ * This is the ground truth a query is checked against by
+ * {@link assertEmbedderSpaceMatch}, so a caller that must decide "can I query
+ * this index with the embedder I have?" reads it here rather than discovering
+ * the answer as a thrown error on every request. Every index ever written by
+ * this driver has it, which is what makes the check work on indexes built
+ * before the embedder was recorded anywhere else.
+ *
+ * Returns `null` when there is no collection, the metadata is missing/corrupt,
+ * its schema version is stale (that data is never served — it is re-indexed),
+ * or the collection is empty (`dim` 0 — nothing to mismatch against).
+ */
+export async function readCollectionDim(
+  baseDir: string,
+  projectId: string,
+): Promise<number | null> {
+  try {
+    const raw = await readFile(path.join(collectionDir(baseDir, projectId), "meta.json"), "utf8");
+    const meta = JSON.parse(raw) as Partial<PersistedMeta>;
+    if (meta.schemaVersion !== KNOWLEDGE_SCHEMA_VERSION) return null;
+    return typeof meta.dim === "number" && meta.dim > 0 ? meta.dim : null;
+  } catch {
+    return null;
+  }
+}
+
 interface Collection {
   readonly dir: string;
   readonly records: Map<string, StoredChunk>;

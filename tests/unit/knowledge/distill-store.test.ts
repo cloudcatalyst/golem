@@ -3,10 +3,9 @@
  * shaped from the start (frontmatter type "source").
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { DistillDraft, NoteDraft, SynthesisDraft } from "../../../src/knowledge/distill.js";
 import {
   distillDir,
@@ -18,14 +17,13 @@ import {
   writeNoteDraftFile,
   writeSynthesisDraftFile,
 } from "../../../src/knowledge/distill-store.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-distill-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-distill-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 const url = "https://example.com/widgets";

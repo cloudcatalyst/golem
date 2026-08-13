@@ -3,15 +3,12 @@
  * and NEVER auto-allows on error (ADR-0002 default-deny proofs).
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { AutonomyLevel } from "../../../src/autonomy/index.js";
 import { readActionLog } from "../../../src/autonomy/index.js";
 import { runPreToolUseHook } from "../../../src/hooks/pre-tool-use.js";
 import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 /** Minimal HookIo capturing stdout/stderr, feeding a fixed stdin string. */
 function io(input: string) {
@@ -40,14 +37,13 @@ function payload(toolName: string, toolInput: unknown, cwd: string): string {
   return JSON.stringify({ tool_name: toolName, tool_input: toolInput, cwd, session_id: "s1" });
 }
 
+const newTempDir = useTempDirs("golem-pre-");
+
 describe("runPreToolUseHook", () => {
   let dir: string;
   const level = (l: AutonomyLevel) => ({ readLevel: () => Promise.resolve(l) });
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-pre-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("auto-allows a read at outcome level", async () => {

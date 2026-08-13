@@ -2,10 +2,8 @@
  * T4 (W3b, spec Decision 20f) — `golem note` capture engine.
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   appendNote,
   findNoteByTs,
@@ -14,14 +12,13 @@ import {
   notesFilePath,
   renderNotes,
 } from "../../../src/cli/notes.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-notes-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-notes-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 describe("appendNote", () => {

@@ -8,9 +8,18 @@
 import { z } from "zod";
 import { migrateSliderLevel, type SliderLevel } from "../interfaces/index.js";
 import { recordToolCall, type TelemetryStore } from "../telemetry/index.js";
+import { VERSION } from "../version.js";
 
 export const GOLEM_MCP_SERVER_NAME = "golem";
-export const GOLEM_MCP_SERVER_VERSION = "0.1.0";
+
+/**
+ * Advertised in the MCP initialize handshake. Tracks the package version
+ * (Decision 41a: package.json is the single source of truth, propagated to
+ * `version.ts` by `npm run sync-version`) rather than a separately hand-bumped
+ * literal — a hardcoded one sat at "0.1.0" through eighteen minor releases,
+ * telling every connecting client the wrong thing.
+ */
+export const GOLEM_MCP_SERVER_VERSION = VERSION;
 
 export const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
   0: "passthrough",

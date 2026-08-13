@@ -1,5 +1,5 @@
 /**
- * R6.2 v1 + Decisions 46/47 / R9.23 — `golem account` CLI: registry listing
+ * R6.2 v1 + Decisions 46/47 / R9.23 — `golem gateway` CLI: registry listing
  * (never leaking secrets), fail-closed switching, logout-on-remove, and the
  * ADR-0003 audit log.
  *
@@ -17,15 +17,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  addAccount,
-  collectAccounts,
+  addGateway,
+  collectGateways,
   credentialEnvForProxy,
-  defaultAccountId,
-  logoutAccount,
-  removeAccount,
-  renderAccounts,
-  useAccount,
-} from "../../../src/cli/accounts.js";
+  defaultGatewayId,
+  logoutGateway,
+  removeGateway,
+  renderGateways,
+  useGateway,
+} from "../../../src/cli/gateways.js";
 import { loadConfig, writeSetting } from "../../../src/config/index.js";
 import { createCredentialStore } from "../../../src/credentials/index.js";
 import { readServedModel, writeServedModel } from "../../../src/proxy/index.js";
@@ -70,25 +70,25 @@ afterEach(async () => {
   await rm(credDir, rmTemp);
 });
 
-describe("collectAccounts", () => {
-  it("lists accounts with key-set flags (never the key); the default is active by default", async () => {
+describe("collectGateways", () => {
+  it("lists gateways with key-set flags (never the key); the default is active by default", async () => {
     await seedKey("work", "sk-x");
-    const report = await collectAccounts(dir, {}, { store_backend: store });
+    const report = await collectGateways(dir, {}, { store_backend: store });
     // No named gateway selected → the synthetic default (top-level anthropic) is active.
     expect(report.active).toBe("anthropic");
     expect(report.active_unknown).toBe(false);
     // Default row is first, plus the two named gateways.
-    expect(report.accounts).toHaveLength(3);
-    const dflt = report.accounts[0];
+    expect(report.gateways).toHaveLength(3);
+    const dflt = report.gateways[0];
     expect(dflt).toMatchObject({
       id: "anthropic",
       provider: "anthropic",
       is_default: true,
       active: true,
     });
-    const work = report.accounts.find((a) => a.id === "work");
+    const work = report.gateways.find((a) => a.id === "work");
     expect(work).toMatchObject({ provider: "openai", key_set: true, active: false });
-    const local = report.accounts.find((a) => a.id === "local");
+    const local = report.gateways.find((a) => a.id === "local");
     expect(local?.key_set).toBe(false);
     // The report carries no secret values anywhere.
     expect(JSON.stringify(report)).not.toContain("sk-x");
@@ -96,22 +96,22 @@ describe("collectAccounts", () => {
 
   /** Decision 47: the report must not advertise an env var as the way to set a key. */
   it("does not name an env var anywhere in the report", async () => {
-    const report = await collectAccounts(dir, {}, { store_backend: store });
+    const report = await collectGateways(dir, {}, { store_backend: store });
     expect(JSON.stringify(report)).not.toContain("GOLEM_UPSTREAM_API_KEY");
   });
 
   it("exposes the default id as the top-level provider name", () => {
-    expect(defaultAccountId("anthropic")).toBe("anthropic");
-    expect(defaultAccountId("openrouter")).toBe("openrouter");
+    expect(defaultGatewayId("anthropic")).toBe("anthropic");
+    expect(defaultGatewayId("openrouter")).toBe("openrouter");
   });
 });
 
-describe("useAccount", () => {
+describe("useGateway", () => {
   it("switches the active account, marks it, and appends an audit line", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
-    const report = await collectAccounts(dir, {}, { store_backend: store });
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    const report = await collectGateways(dir, {}, { store_backend: store });
     expect(report.active).toBe("work");
-    expect(report.accounts.find((a) => a.id === "work")?.active).toBe(true);
+    expect(report.gateways.find((a) => a.id === "work")?.active).toBe(true);
 
     const log = await readFile(path.join(dir, ".golem", "state", "account-log.jsonl"), "utf8");
     expect(JSON.parse(log.trim())).toEqual({
@@ -123,17 +123,17 @@ describe("useAccount", () => {
 
   it("rejects an unknown account id (fail-closed, no silent creation)", async () => {
     await expect(
-      useAccount(dir, "ghost", "2026-07-23T00:00:00.000Z", { store_backend: store }),
+      useGateway(dir, "ghost", "2026-07-23T00:00:00.000Z", { store_backend: store }),
     ).rejects.toThrow(/unknown gateway/);
-    expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 
   it("refuses to switch onto an account with no stored credential (fail-closed preflight)", async () => {
     await expect(
-      useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
+      useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
     ).rejects.toThrow(/no credential is stored for "local"/);
     // No switch happened.
-    expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 
   /**
@@ -143,17 +143,17 @@ describe("useAccount", () => {
    */
   it("remediates a missing credential with account login, never an env var", async () => {
     await expect(
-      useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
-    ).rejects.toThrow(/golem account login local/);
+      useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
+    ).rejects.toThrow(/golem gateway login local/);
     await expect(
-      useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
+      useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
     ).rejects.not.toThrow(/GOLEM_UPSTREAM_API_KEY/);
   });
 
   it("switches when the credential resolves from the store", async () => {
     await seedKey("work", "sk-live");
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { store_backend: store });
-    expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("work");
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { store_backend: store });
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("work");
   });
 
   it("clears the last-served-model snapshot so no display shows the previous model", async () => {
@@ -162,18 +162,18 @@ describe("useAccount", () => {
       servedAtIso: "2026-07-23T00:00:00.000Z",
       accountId: null,
     });
-    await useAccount(dir, "work", "2026-07-23T00:01:00.000Z", { assumeYes: true });
+    await useGateway(dir, "work", "2026-07-23T00:01:00.000Z", { assumeYes: true });
     expect(await readServedModel(dir)).toBeNull();
   });
 
   it("clears it on the revert path too (account use none)", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
     await writeServedModel(dir, {
       model: "gpt-5.2",
       servedAtIso: "2026-07-23T00:01:00.000Z",
       accountId: "work",
     });
-    await useAccount(dir, null, "2026-07-23T00:02:00.000Z", { store_backend: store });
+    await useGateway(dir, null, "2026-07-23T00:02:00.000Z", { store_backend: store });
     expect(await readServedModel(dir)).toBeNull();
   });
 
@@ -182,7 +182,7 @@ describe("useAccount", () => {
     process.env.GOLEM_UPSTREAM_API_KEY__LOCAL = "sk-must-be-ignored";
     try {
       await expect(
-        useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
+        useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { store_backend: store }),
       ).rejects.toThrow(/no credential is stored/);
     } finally {
       delete process.env.GOLEM_UPSTREAM_API_KEY__LOCAL;
@@ -190,9 +190,9 @@ describe("useAccount", () => {
   });
 });
 
-describe("addAccount", () => {
+describe("addGateway", () => {
   it("registers a new account (preserving existing entries) and audit-logs it", async () => {
-    await addAccount(
+    await addGateway(
       dir,
       {
         id: "gemini",
@@ -215,7 +215,7 @@ describe("addAccount", () => {
 
   it("is fail-closed on a duplicate id (no silent overwrite)", async () => {
     await expect(
-      addAccount(
+      addGateway(
         dir,
         { id: "work", provider: "openai", base_url: "https://x.example/v1" },
         "2026-07-26T00:00:00.000Z",
@@ -230,7 +230,7 @@ describe("addAccount", () => {
 
   it("refuses to register the default account's id", async () => {
     await expect(
-      addAccount(
+      addGateway(
         dir,
         { id: "anthropic", provider: "anthropic", base_url: "https://x.example" },
         "2026-07-26T00:00:00.000Z",
@@ -240,7 +240,7 @@ describe("addAccount", () => {
 
   it("rejects an invalid entry via the schema (missing base_url shape)", async () => {
     await expect(
-      addAccount(
+      addGateway(
         dir,
         { id: "bad", provider: "openai", base_url: "not-a-url" },
         "2026-07-26T00:00:00.000Z",
@@ -256,13 +256,13 @@ describe("addAccount", () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      await addAccount(
+      await addGateway(
         dir,
         { id: "foundry", provider: "azure-foundry", base_url: "https://x.example/anthropic" },
         "2026-07-26T00:00:00.000Z",
       );
       expect(warnings.join("")).toBe(""); // no models → nothing to warn about
-      await addAccount(
+      await addGateway(
         dir,
         {
           id: "foundry-pinned",
@@ -289,7 +289,7 @@ describe("addAccount", () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      await addAccount(
+      await addGateway(
         dir,
         { id: "or-native", provider: "anthropic", base_url: "https://openrouter.ai/api/v1" },
         "2026-07-26T00:00:00.000Z",
@@ -308,7 +308,7 @@ describe("addAccount", () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      await addAccount(
+      await addGateway(
         dir,
         {
           id: "openrouter-laguna",
@@ -329,7 +329,7 @@ describe("addAccount", () => {
     // Regression: a `proxy.gateways` array in a higher-precedence layer
     // wholesale-replaces lower layers, so writing to project settings.json left
     // the new gateway invisible to the very merge the proxy reads.
-    await addAccount(
+    await addGateway(
       dir,
       { id: "gemini", provider: "gemini", base_url: "https://generativelanguage.googleapis.com" },
       "2026-07-26T00:00:00.000Z",
@@ -348,9 +348,9 @@ describe("addAccount", () => {
   });
 });
 
-describe("removeAccount", () => {
+describe("removeGateway", () => {
   it("removes the account from the registry", async () => {
-    const { account, was_active } = await removeAccount(dir, "local", "2026-07-26T00:00:00.000Z", {
+    const { account, was_active } = await removeGateway(dir, "local", "2026-07-26T00:00:00.000Z", {
       store_backend: store,
     });
     expect(account).toBe("local");
@@ -363,7 +363,7 @@ describe("removeAccount", () => {
     await seedKey("local", "sk-local");
     expect(await store.resolve("local")).not.toBeNull();
 
-    const result = await removeAccount(dir, "local", "2026-07-26T00:00:00.000Z", {
+    const result = await removeGateway(dir, "local", "2026-07-26T00:00:00.000Z", {
       store_backend: store,
     });
     expect(result.credential_removed.length).toBeGreaterThan(0);
@@ -372,7 +372,7 @@ describe("removeAccount", () => {
 
   it("audit-logs the logout as well as the remove", async () => {
     await seedKey("local", "sk-local");
-    await removeAccount(dir, "local", "2026-07-26T00:00:00.000Z", { store_backend: store });
+    await removeGateway(dir, "local", "2026-07-26T00:00:00.000Z", { store_backend: store });
     const log = await readFile(path.join(dir, ".golem", "state", "account-log.jsonl"), "utf8");
     expect(log).toContain('"action":"logout"');
     expect(log).toContain('"action":"remove"');
@@ -380,7 +380,7 @@ describe("removeAccount", () => {
   });
 
   it("reports no credential to remove when the account never had one", async () => {
-    const result = await removeAccount(dir, "local", "2026-07-26T00:00:00.000Z", {
+    const result = await removeGateway(dir, "local", "2026-07-26T00:00:00.000Z", {
       store_backend: store,
     });
     expect(result.credential_removed).toEqual([]);
@@ -388,7 +388,7 @@ describe("removeAccount", () => {
 
   it("keeps the credential when keepCredential is set (the escape hatch)", async () => {
     await seedKey("local", "sk-local");
-    const result = await removeAccount(dir, "local", "2026-07-26T00:00:00.000Z", {
+    const result = await removeGateway(dir, "local", "2026-07-26T00:00:00.000Z", {
       keepCredential: true,
       store_backend: store,
     });
@@ -399,27 +399,27 @@ describe("removeAccount", () => {
   it("does not delete a credential when the id is unknown (fail-closed, nothing touched)", async () => {
     await seedKey("local", "sk-local");
     await expect(
-      removeAccount(dir, "ghost", "2026-07-26T00:00:00.000Z", { store_backend: store }),
+      removeGateway(dir, "ghost", "2026-07-26T00:00:00.000Z", { store_backend: store }),
     ).rejects.toThrow(/unknown gateway/);
     expect(await store.resolve("local")).not.toBeNull();
   });
 
   it("reverts active_account to the default when the active account is removed", async () => {
-    await useAccount(dir, "work", "2026-07-26T00:00:00.000Z", { assumeYes: true });
-    const { was_active } = await removeAccount(dir, "work", "2026-07-26T00:01:00.000Z", {
+    await useGateway(dir, "work", "2026-07-26T00:00:00.000Z", { assumeYes: true });
+    const { was_active } = await removeGateway(dir, "work", "2026-07-26T00:01:00.000Z", {
       store_backend: store,
     });
     expect(was_active).toBe(true);
     const { settings } = await loadConfig({ projectDir: dir });
     expect(settings.inference.default_target).toBeUndefined();
-    expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 });
 
-describe("logoutAccount", () => {
+describe("logoutGateway", () => {
   it("removes the stored credential and reports where from", async () => {
     await seedKey("work", "sk-work");
-    const result = await logoutAccount(dir, "work", "2026-07-26T00:00:00.000Z", {
+    const result = await logoutGateway(dir, "work", "2026-07-26T00:00:00.000Z", {
       store_backend: store,
     });
     expect(result.removed.length).toBeGreaterThan(0);
@@ -427,7 +427,7 @@ describe("logoutAccount", () => {
   });
 
   it("is a no-op report when there was nothing stored", async () => {
-    const result = await logoutAccount(dir, "work", "2026-07-26T00:00:00.000Z", {
+    const result = await logoutGateway(dir, "work", "2026-07-26T00:00:00.000Z", {
       store_backend: store,
     });
     expect(result.removed).toEqual([]);
@@ -437,7 +437,7 @@ describe("logoutAccount", () => {
 describe("credentialEnvForProxy (Decisions 46/47 — the daemon handoff)", () => {
   it("hands the active named account's stored credential over on its per-account var", async () => {
     await seedKey("work", "sk-live-work");
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { store_backend: store });
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { store_backend: store });
     const env = await credentialEnvForProxy(dir, {}, { store_backend: store });
     expect(env).toEqual({ GOLEM_UPSTREAM_API_KEY__WORK: "sk-live-work" });
   });
@@ -463,27 +463,27 @@ describe("credentialEnvForProxy (Decisions 46/47 — the daemon handoff)", () =>
   });
 
   it("clears the active account with id=null (reverts to the default)", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
-    await useAccount(dir, null, "2026-07-23T00:01:00.000Z", { store_backend: store });
-    const report = await collectAccounts(dir, {}, { store_backend: store });
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    await useGateway(dir, null, "2026-07-23T00:01:00.000Z", { store_backend: store });
+    const report = await collectGateways(dir, {}, { store_backend: store });
     expect(report.active).toBe("anthropic");
-    expect(report.accounts[0]).toMatchObject({ id: "anthropic", active: true });
+    expect(report.gateways[0]).toMatchObject({ id: "anthropic", active: true });
   });
 
   it("treats selecting the default id as clearing (not an unknown-account error)", async () => {
-    await useAccount(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
-    const { active } = await useAccount(dir, "anthropic", "2026-07-23T00:02:00.000Z", {
+    await useGateway(dir, "work", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    const { active } = await useGateway(dir, "anthropic", "2026-07-23T00:02:00.000Z", {
       assumeYes: true,
     });
     expect(active).toBeNull(); // cleared, reverted to top-level
-    expect((await collectAccounts(dir, {}, { store_backend: store })).active).toBe("anthropic");
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 });
 
-describe("renderAccounts", () => {
+describe("renderGateways", () => {
   it("marks the active account and flags a missing credential", async () => {
-    await useAccount(dir, "local", "2026-07-23T00:00:00.000Z", { assumeYes: true });
-    const out = renderAccounts(await collectAccounts(dir, {}, { store_backend: store }));
+    await useGateway(dir, "local", "2026-07-23T00:00:00.000Z", { assumeYes: true });
+    const out = renderGateways(await collectGateways(dir, {}, { store_backend: store }));
     expect(out).toContain("* local");
     expect(out).toContain("key MISSING");
     expect(out).toContain("active: local");
@@ -494,14 +494,14 @@ describe("renderAccounts", () => {
 
   /** Decision 47: the fix offered for a missing key is `login`, not an export. */
   it("remediates a missing key with account login and names no env var", async () => {
-    const out = renderAccounts(await collectAccounts(dir, {}, { store_backend: store }));
-    expect(out).toContain("golem account login");
+    const out = renderGateways(await collectGateways(dir, {}, { store_backend: store }));
+    expect(out).toContain("golem gateway login");
     expect(out).not.toContain("GOLEM_UPSTREAM_API_KEY");
     expect(out).not.toContain("export ");
   });
 
   it("marks the default active when no named account is selected", async () => {
-    const out = renderAccounts(await collectAccounts(dir, {}, { store_backend: store }));
+    const out = renderGateways(await collectGateways(dir, {}, { store_backend: store }));
     expect(out).toContain("* anthropic");
     expect(out).toContain("active: anthropic");
   });

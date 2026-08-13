@@ -87,11 +87,16 @@ export default function register(program: Command): void {
             process.stderr.write(
               `golem: knowledge base ready (${stack.embedMode} embeddings${stack.embedMode === "lexical" ? "; pull bge-m3 + run Ollama for semantic" : ""})\n`,
             );
+            // R10.6: `mcp serve` builds an index incidentally, so an embedder
+            // decision it makes on the user's behalf has to be stated, not
+            // inferred from a rebuild that just happens to take a long time.
+            if (stack.notice !== undefined) process.stderr.write(`golem kb: ${stack.notice}\n`);
             void ensureProjectIndexed({
               projectDir: opts.dir,
               projectId: opts.dir,
               knowledge: stack.knowledge,
               embedMode: stack.embedMode,
+              embedModel: stack.embedModel,
               tier: stack.facts.tier,
               watchPaths: settings.knowledge.watch_paths,
               now: new Date().toISOString(),

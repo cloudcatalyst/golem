@@ -3,10 +3,7 @@
  * concurrency, graceful degradation, explicit escalation.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   CapabilityUnavailableError,
   type ChatMessage,
@@ -22,7 +19,7 @@ import {
   runQueueLocally,
   serviceTaskLocally,
 } from "../../../src/tasks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 function fakeInference(overrides: Partial<InferenceService> = {}): InferenceService {
   return {
@@ -45,6 +42,8 @@ const unavailable = (): InferenceService =>
   fakeInference({
     chat: () => Promise.reject(new CapabilityUnavailableError("drafter", 2)),
   });
+
+const newTempDir = useTempDirs("golem-mux-");
 
 describe("serviceTaskLocally", () => {
   it("attaches the local result and marks the task done", async () => {
@@ -125,10 +124,7 @@ describe("mapWithConcurrency", () => {
 describe("runQueueLocally", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-mux-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("services all queued tasks and persists results", async () => {

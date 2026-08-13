@@ -135,8 +135,7 @@ const LOCAL_CODER = [
   "is a compression dial only and never auto-engages a model (Decision 31). Use",
   "`coder` at every level.",
   "",
-  "This project ENFORCES the practice while this rule is active AND",
-  "`inference.coder_enabled` is true (the default): the PreToolUse gate",
+  "This project ENFORCES the practice while this rule is active: the PreToolUse gate",
   "denies the first non-trivial hand-written code Write/Edit of a session and",
   "redirects you here (a one-shot reminder — if you already drafted with `coder`,",
   "say so and proceed). Disable the guidance with `golem guidance disable coder-first`;",
@@ -285,8 +284,8 @@ export function guidanceRuleBody(feature: GuidanceFeature): string {
  *
  * Use this (not {@link guidanceEnabled}) when reporting state to a user: a
  * settings UI must show which scope a rule is enabled at, and must not report
- * `coder-first` as "off" merely because `inference.coder_enabled` is false
- * — that is a separate toggle with its own row.
+ * `coder-first` as "off" merely because the `coder` tool is not currently
+ * routable — that is a separate condition with its own row.
  */
 export async function guidanceRuleExists(
   projectDir: string,

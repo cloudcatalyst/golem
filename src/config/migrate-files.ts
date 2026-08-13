@@ -23,10 +23,10 @@
  *   strings; a settings sweep must not be able to stop a proxy from starting.
  */
 
-import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isPlainObject, splitDotted, writeAtomic } from "./file-io.js";
 import { SETTING_MIGRATIONS } from "./migrations.js";
 import { PROJECT_DIR_NAME, settingsFilePaths } from "./paths.js";
 import type { SettingsScope } from "./write-setting.js";
@@ -73,17 +73,6 @@ export interface SweepOptions {
   readonly write: boolean;
   /** Golem version, used to name the backup file. */
   readonly version: string;
-}
-
-/** Split a dotted `section.key`; the key is undefined when there is no dot. */
-function splitDotted(dotted: string): readonly [string, string | undefined] {
-  const i = dotted.indexOf(".");
-  if (i === -1) return [dotted, undefined];
-  return [dotted.slice(0, i), dotted.slice(i + 1)];
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -191,19 +180,6 @@ export function backupPath(projectDir: string, scope: SettingsScope, version: st
     "config-backups",
     `${scope}-${safeVersion}.json`,
   );
-}
-
-/** Write `text` to `file` via temp + rename, as `writeSetting` does. */
-async function writeAtomic(file: string, text: string): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${randomBytes(6).toString("hex")}.tmp`;
-  try {
-    await writeFile(tmp, text, "utf8");
-    await rename(tmp, file);
-  } catch (err) {
-    await rm(tmp, { force: true }).catch(() => {});
-    throw err;
-  }
 }
 
 /**

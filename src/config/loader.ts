@@ -28,6 +28,7 @@
 import { readFile } from "node:fs/promises";
 import { readEnvLayer } from "./env.js";
 import { ConfigError } from "./errors.js";
+import { isPlainObject, splitDotted } from "./file-io.js";
 import { migrationFrom, migrationShadowedWarning, migrationWarning } from "./migrations.js";
 import { type SettingsFilePaths, settingsFilePaths } from "./paths.js";
 import {
@@ -262,17 +263,6 @@ function applyObjectLayer(
       }
     }
   }
-}
-
-/** Split a dotted `section.key`; the key is undefined when there is no dot. */
-function splitDotted(dotted: string): readonly [string, string | undefined] {
-  const i = dotted.indexOf(".");
-  if (i === -1) return [dotted, undefined];
-  return [dotted.slice(0, i), dotted.slice(i + 1)];
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function describeType(value: unknown): string {

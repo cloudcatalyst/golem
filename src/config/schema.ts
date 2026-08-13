@@ -5,7 +5,9 @@
  * snake_case keys (CLAUDE.md convention). Every leaf is described once in
  * {@link SETTINGS_LEAVES}; the loader, env mapping, and `writeSetting` all
  * derive their behavior from that single table, so adding a key means adding
- * one leaf schema + one default + one interface field.
+ * one leaf schema + one default. The {@link GolemSettings} type is DERIVED from
+ * the table (see below) rather than hand-written, so there is no third place to
+ * keep in step and no way for the two to disagree.
  *
  * Key set (spec-derived where the spec speaks; noted otherwise):
  * - `slider.level` (0–3, Decision 30) — spec §4 / interfaces/policy.ts.
@@ -24,13 +26,7 @@
  */
 
 import { z } from "zod";
-import { migrateSliderLevel, type SliderLevel } from "../interfaces/policy.js";
-import type {
-  GatewayEntry,
-  TargetEntry,
-  UpstreamAuthScheme,
-  UpstreamProvider,
-} from "../providers/index.js";
+import { migrateSliderLevel } from "../interfaces/policy.js";
 import {
   PROXY_PROVIDERS,
   TARGET_TRUST_LEVELS,
@@ -116,6 +112,9 @@ export const SETTINGS_LEAVES = {
      * `golem gateway login <id>` (Decisions 46/47) — secrets are never a setting
      * and never an env var. Legitimate switching only; there is no automated
      * quota-evasion (ADR-0003 ToS scope).
+     *
+     * The inferred element type is the structural twin of `GatewayEntry`
+     * (`src/providers/gateways.ts`), which is what the consumers there take.
      */
     gateways: z
       .array(
@@ -151,6 +150,9 @@ export const SETTINGS_LEAVES = {
      * Inert in R9.1: nothing routes on this yet (R9.2/R9.3 consume it). Entries
      * in `proxy.gateways` already appear in `golem target list` without being
      * restated here.
+     *
+     * The inferred element type is the structural twin of `TargetEntry`
+     * (`src/providers/targets.ts`), which is what the registry there takes.
      */
     targets: z
       .array(
@@ -550,123 +552,88 @@ export function allLeafPaths(): readonly string[] {
 
 // ---------------------------------------------------------------------------
 // Typed settings object (snake_case, mirroring the on-disk shape).
+//
+// DERIVED from {@link SETTINGS_LEAVES}, never restated by hand: the table is
+// declared `as const satisfies …`, so each leaf keeps its narrow zod type
+// through the `satisfies` check and `z.infer` recovers the real value type. A
+// leaf added, removed, or retyped above therefore cannot drift away from the
+// type the rest of the codebase consumes — the two used to be two hand-kept
+// descriptions of one shape, which is exactly the kind of pair that rots.
+//
+// Per-key documentation lives on the leaf schemas above (the source of truth);
+// the section aliases below carry only the section-level note.
 // ---------------------------------------------------------------------------
 
-export interface SliderSettings {
-  readonly level: SliderLevel;
-}
+/** Keys of `T` whose value type admits `undefined` — i.e. `.optional()` leaves. */
+type UndefinedKeys<T> = { [K in keyof T]-?: undefined extends T[K] ? K : never }[keyof T];
 
-export interface ProxySettings {
-  readonly port: number;
-  readonly upstream_base_url: string;
-  readonly upstream_provider: UpstreamProvider;
-  readonly upstream_auth_scheme: UpstreamAuthScheme;
-  readonly upstream_model?: string;
-  readonly upstream_reasoning_effort?: "low" | "high" | "max";
-  readonly map_reasoning_to_thinking: boolean;
-  readonly gateways?: readonly GatewayEntry[];
-  readonly targets?: readonly TargetEntry[];
-  readonly request_timeout_ms: number;
-  readonly connect_timeout_ms: number;
-  /** R9.23: DEPRECATED — moved to `inference.default_target`. */
-  readonly default_target?: string;
-}
+/**
+ * Re-express `{ k: T | undefined }` (what `z.infer` gives an `.optional()`
+ * leaf) as `{ k?: T }`. Under `exactOptionalPropertyTypes` those are different
+ * types, and the hand-written interfaces this replaces used the optional form.
+ */
+type OptionalizeUndefined<T> = {
+  [K in Exclude<keyof T, UndefinedKeys<T>>]: T[K];
+} & {
+  [K in UndefinedKeys<T>]?: Exclude<T[K], undefined>;
+};
 
-export interface InferenceSettings {
-  readonly ollama_base_url: string;
-  readonly request_timeout_ms: number;
-  /** R9.4: worker name → target id (see `inference/workers.ts`). */
-  readonly worker_targets: Readonly<Record<string, string>>;
-  /** R9.23 */
-  readonly default_target?: string;
-  readonly local_editor_enabled: boolean;
-  /** R8.15: user-declared provider table for local-model role routing. */
-  readonly providers: readonly {
-    readonly id: string;
-    readonly api: string;
-    readonly base_url: string;
-    readonly models: readonly {
-      readonly id: string;
-      readonly roles?: readonly string[];
-      readonly context_window?: number;
-    }[];
-  }[];
-}
+/**
+ * Deep `readonly`, matching how settings are handed out (`DEFAULT_SETTINGS` and
+ * every loaded config are `deepFreeze`d). `z.infer` alone yields mutable objects
+ * and arrays. Optional properties keep their `?` (the mapping is homomorphic)
+ * and shed the `| undefined` that would otherwise not be assignable to an
+ * `exactOptionalPropertyTypes` optional.
+ */
+type DeepReadonly<T> = T extends readonly (infer U)[]
+  ? readonly DeepReadonly<U>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<Exclude<T[K], undefined>> }
+    : T;
 
-export interface CompressionSettings {
-  readonly headroom_sidecar: boolean;
-  readonly force_semantic_on_caching: boolean;
-  readonly level: "auto" | "1" | "2" | "3";
-  /** Decision 53 — opaque `CompressConfig` passthrough; see the schema comment. */
-  readonly headroom_config: Readonly<Record<string, unknown>>;
-}
+/**
+ * `z.infer` on a leaf read out of the table. The conditional is what lets the
+ * indexed access be inferred through the generic section/key parameters — the
+ * `satisfies` clause proves every leaf is a `ZodTypeAny`, but TypeScript will
+ * not use it on an unresolved index.
+ */
+type InferLeaf<L> = L extends z.ZodTypeAny ? z.infer<L> : never;
+
+export type GolemSettings = DeepReadonly<{
+  [S in SectionName]: OptionalizeUndefined<{
+    [K in keyof (typeof SETTINGS_LEAVES)[S]]: InferLeaf<(typeof SETTINGS_LEAVES)[S][K]>;
+  }>;
+}>;
+
+/** Decision 30 — the global quality/savings level (0–3 after migration). */
+export type SliderSettings = GolemSettings["slider"];
+
+/** Proxy listener, upstream selection (R6.1), and the gateway/target registries (R9.1). */
+export type ProxySettings = GolemSettings["proxy"];
+
+/** Local inference endpoint, per-worker target routing (R9.4), provider table (R8.15). */
+export type InferenceSettings = GolemSettings["inference"];
+
+/** The input-side dial (Decision 52) plus the Headroom sidecar opt-in (Decision 23/53). */
+export type CompressionSettings = GolemSettings["compression"];
 
 /** Decision 52 — the output-side brevity dial. */
-export interface BrevitySettings {
-  readonly level: "auto" | "off" | "lite" | "full" | "ultra";
-}
+export type BrevitySettings = GolemSettings["brevity"];
 
-export interface KnowledgeSettings {
-  readonly enabled: boolean;
-  readonly vector_db_url?: string;
-  readonly watch_paths: readonly string[];
-  readonly wiki_dir: string;
-  readonly local_answer_enabled: boolean;
-  readonly local_answer_min_confidence: number;
-  readonly syntax_aware_chunking: boolean;
-  readonly repo_map_enabled: boolean;
-  readonly read_skeleton_enabled: boolean;
-  readonly lsp_enabled: boolean;
-  readonly lsp_servers?: readonly {
-    readonly id: string;
-    readonly command: string;
-    readonly args: readonly string[];
-    readonly language_id: string;
-    readonly extensions: readonly string[];
-  }[];
-  readonly lsp_timeout_ms: number;
-  readonly user_wiki_enabled: boolean;
-  readonly rerank_enabled: boolean;
-  readonly memory_federation_enabled: boolean;
-  readonly webcache_revalidate: boolean;
-  readonly webcache_fetch_raw: boolean;
-}
+/** Vector KB, wiki, local-answer (Decision 33), repo map / LSP (R8.5/R8.6), web cache. */
+export type KnowledgeSettings = GolemSettings["knowledge"];
 
-export interface TelemetrySettings {
-  readonly enabled: boolean;
-  readonly dashboard_port: number;
-}
+/** Local telemetry collection and the savings dashboard (spec §5). */
+export type TelemetrySettings = GolemSettings["telemetry"];
 
-export interface UiSettings {
-  readonly pet: boolean;
-  readonly pet_color: string;
-  readonly color: "auto" | "always" | "never";
-  readonly advanced: boolean;
-}
+/** Control-panel presentation: pet, colour policy, advanced controls. */
+export type UiSettings = GolemSettings["ui"];
 
 /** R8.8 — the model catalog (price + context limits) settings. */
-export interface ModelsSettings {
-  readonly catalog_url: string;
-  readonly catalog_max_age_days: number;
-  readonly context_warn_fraction: number;
-}
+export type ModelsSettings = GolemSettings["models"];
 
-export interface SnoozeSettings {
-  readonly enforce: boolean;
-}
-
-export interface GolemSettings {
-  readonly slider: SliderSettings;
-  readonly proxy: ProxySettings;
-  readonly inference: InferenceSettings;
-  readonly compression: CompressionSettings;
-  readonly brevity: BrevitySettings;
-  readonly knowledge: KnowledgeSettings;
-  readonly telemetry: TelemetrySettings;
-  readonly ui: UiSettings;
-  readonly models: ModelsSettings;
-  readonly snooze: SnoozeSettings;
-}
+/** Decision 45 — the document-and-hold park at the usage limit. */
+export type SnoozeSettings = GolemSettings["snooze"];
 
 /**
  * Built-in defaults (the lowest layer). Where the spec is silent the choice is

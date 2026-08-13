@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -397,11 +398,47 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
+def _exit_when_parent_closes_stdin() -> None:
+    """Exit as soon as the parent's stdin pipe reaches EOF (task R10.3).
+
+    Golem's proxy daemon is stopped with an OS kill. On Windows that is
+    `TerminateProcess`: the daemon's shutdown handler does NOT run, so nothing in
+    the parent gets the chance to stop this worker, and before this existed these
+    processes accumulated for days — 24 of them at one point, still serving,
+    still burning CPU, with no parent left to answer to.
+
+    So the worker does not wait to be told. The parent gives it the read end of a
+    pipe it never writes to; when the parent dies — cleanly, killed, or crashed —
+    the OS closes the write end and this read returns EOF. `os._exit` rather than
+    `sys.exit`, because the HTTP server owns the main thread and a normal exit
+    from a daemon thread would not stop it.
+
+    Off unless the parent explicitly asks for it, so running this worker by hand
+    (stdin a terminal, or /dev/null, which is EOF immediately) still works.
+    """
+    if os.environ.get("GOLEM_HEADROOM_PARENT_PIPE") != "1" or sys.stdin is None:
+        return
+
+    def _watch() -> None:
+        try:
+            while sys.stdin.buffer.read(1):
+                pass
+        except Exception:  # pragma: no cover - a broken stdin means the parent is gone too
+            pass
+        os._exit(0)
+
+    threading.Thread(target=_watch, name="golem-parent-watchdog", daemon=True).start()
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0)
+    # Unused: it exists so the project this worker belongs to is visible in the
+    # process table, letting Golem's start-up sweep reap ITS strays and nobody
+    # else's (R10.3).
+    ap.add_argument("--golem-project", default=None)
     args = ap.parse_args()
+    _exit_when_parent_closes_stdin()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     # Announce the bound port on stdout so the parent (which may have passed 0)
     # can discover it, then serve.

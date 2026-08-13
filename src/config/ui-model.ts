@@ -197,7 +197,7 @@ export const SETTING_META = {
     summary: "How the credential is presented (inherit / x-api-key / api-key / bearer)",
     detail:
       "`inherit` forwards the client's own auth unchanged. The credential itself is " +
-      "never a setting — use `golem account login`.",
+      "never a setting — use `golem gateway login`.",
     advanced: true,
     restart: "proxy",
   },
@@ -228,10 +228,10 @@ export const SETTING_META = {
   },
   "proxy.gateways": {
     label: "Gateway registry",
-    summary: "Non-secret upstream connection config — managed by `golem account`",
+    summary: "Non-secret upstream connection config — managed by `golem gateway`",
     detail:
       "Credentials live in the OS credential store, never here. Add and remove entries " +
-      "with `golem account add` / `golem account remove`.",
+      "with `golem gateway add` / `golem gateway remove`.",
     kind: "opaque",
   },
   "proxy.targets": {

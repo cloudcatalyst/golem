@@ -5,10 +5,9 @@
  * needs an Ollama (or a GPU) to run.
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   collectLocalModel,
   isRemoteEndpoint,
@@ -19,7 +18,7 @@ import {
   setLocalCoderEnabled,
 } from "../../../src/cli/local-config.js";
 import { loadConfig, writeSetting } from "../../../src/config/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let dir: string;
 
@@ -34,11 +33,10 @@ const detect = async () => ({ tier: 2 as const, coderModel: "qwen2.5-coder:7b" }
 const pulled = (names: readonly string[]) => () => Promise.resolve(names.map((name) => ({ name })));
 const listModels = pulled(["qwen2.5-coder:7b"]);
 
+const newTempDir = useTempDirs("golem-local-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-local-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("isRemoteEndpoint", () => {

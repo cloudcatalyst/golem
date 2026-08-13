@@ -7,19 +7,16 @@
  * page, write conflict) must come back as actionable `isError` results.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createGolemMcpServer,
   createStandaloneDeps,
   type GolemMcpServerDeps,
 } from "../../src/mcp/index.js";
 import { FileWikiStore } from "../../src/wiki/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 const WIKI_TOOLS = ["wiki_read", "wiki_upsert"] as const;
 
@@ -41,12 +38,10 @@ function textOf(result: unknown): string {
 
 let dir: string;
 
-beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-wiki-mcp-"));
-});
+const newTempDir = useTempDirs("golem-wiki-mcp-");
 
-afterEach(async () => {
-  await rm(dir, rmTemp);
+beforeEach(async () => {
+  dir = await newTempDir();
 });
 
 function depsWithWiki(): GolemMcpServerDeps {

@@ -4,10 +4,9 @@
  * KnowledgeBase so the policy is tested without a real store/embedder.
  */
 
-import { mkdir, mkdtemp, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   embedderSignature,
   ensureProjectIndexed,
@@ -18,14 +17,13 @@ import { HardwareTier } from "../../../src/interfaces/inference.js";
 import type { Chunk, IngestReport, KnowledgeBase } from "../../../src/interfaces/knowledge.js";
 import { collectionDir, knowledgeDir } from "../../../src/knowledge/index.js";
 import type { IncrementalIngest } from "../../../src/knowledge/knowledge-base.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-autoidx-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-autoidx-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 class SpyKB implements KnowledgeBase {

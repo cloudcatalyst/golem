@@ -33,6 +33,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isRecord } from "../shared/json.js";
 import type { CcrStore } from "./ccr-store.js";
 import { estimateTokens } from "./tokens.js";
 
@@ -74,10 +75,6 @@ interface SubstitutionContext {
   tokensAfter: number;
   /** refId -> original content, persisted to the CCR store after the transform pass. */
   readonly pending: Map<string, string>;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function substituteText(text: string, ctx: SubstitutionContext): string {

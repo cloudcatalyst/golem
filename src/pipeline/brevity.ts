@@ -38,6 +38,7 @@
  */
 
 import type { BrevityLevel } from "../interfaces/policy.js";
+import { isRecord } from "../shared/json.js";
 
 /** Marker fence version. Bump only if the fence GRAMMAR changes. */
 const MARKER_VERSION = "1";
@@ -107,10 +108,6 @@ export function brevityDirective(level: Exclude<BrevityLevel, "off">): string {
  */
 export function hasExistingBrevityDirective(text: string): boolean {
   return text.includes(MARKER_OPEN_PREFIX) || /caveman/i.test(text);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A `system` content block that carries text we can append to. */

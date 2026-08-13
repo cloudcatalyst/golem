@@ -26,63 +26,35 @@
  * VS Code extensions dir?) sits behind {@link InitProbe} so tests inject fakes.
  */
 
-import { access, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { removeVersionStamp, writeSetting } from "../config/index.js";
-import {
-  addEventHook,
-  addMatcherHook,
-  addPostToolUseHook,
-  NOTIFICATION_COMMAND,
-  PERSONAL_RULES_GITIGNORE,
-  PROMPT_SUBMIT_COMMAND,
-  removeAllGuidanceRules,
-  removeDefaultMode,
-  removeEventHook,
-  removeMatcherHook,
-  removePostToolUseHook,
-  removeStatusLine,
-  SESSION_START_COMMAND,
-  SESSION_START_MATCHER,
-  seedDefaultGuidance,
-  WEB_FETCH_MATCHER,
-  WEB_FETCH_POST_COMMAND,
-  WEB_FETCH_PRE_COMMAND,
-  writeDefaultMode,
-  writeStatusLine,
-} from "../hooks/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
-import { ensureLoopbackCert, loopbackCaPath } from "../proxy/loopback-cert.js";
+// `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
+// permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
+// because the permission rules are built from it at module scope.
 import {
-  classifyManaged,
-  ownedDetail,
-  rememberManaged,
-  removeManagedState,
-} from "./managed-files.js";
+  configureClaudeSettings,
+  MCP_SERVER_KEY,
+  removeClaudeSettings,
+} from "./init-claude-settings.js";
+import { InitError } from "./init-error.js";
+import { unwireHooks, wireHooks } from "./init-hooks.js";
+import { installSkills, removeSkills } from "./init-skills.js";
+import {
+  ensureVscodeWatcherExclude,
+  installVscodeExtension,
+  removeVscodeExtensions,
+  removeVscodeWatcherExclude,
+} from "./init-vscode.js";
+import { type JsonObject, objectEntry, readJsonObject, rel, writeJsonObject } from "./json-file.js";
+import { removeManagedState } from "./managed-files.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
-import {
-  claudeLocalSettingsPath,
-  ENV_BASE_URL,
-  ENV_EXTRA_CA,
-  ENV_FOUNDRY_BASE_URL,
-  ENV_TOOL_SEARCH,
-  ENV_USE_FOUNDRY,
-  proxyBaseUrl,
-  removeGolemEnv,
-  removeLocalCaTrust,
-  writeLocalCaTrust,
-} from "./proxy-wiring.js";
+import { ENV_BASE_URL, proxyBaseUrl } from "./proxy-wiring.js";
 import { P0_SKILLS } from "./skills.js";
-// R9.16: one definition of what the extension IS and where it lives, shared with
-// the status surface — two copies of the file list is how the two would drift.
-import {
-  defaultVscodeSourceDir,
-  inspectVscodeExtension,
-  VSCODE_EXTENSION_FILES,
-} from "./vscode-extension.js";
 
 /** External-state checks, injectable for tests. */
 export interface InitProbe {
@@ -199,42 +171,12 @@ export interface InitReport {
 }
 
 /** A conflict or precondition failure with a user-actionable message. */
-export class InitError extends Error {}
+// Re-exported (not declared here) so `json-file.ts` can throw it without
+// importing init.ts — see init-error.ts. Every existing
+// `import { InitError } from "../init.js"` keeps working.
+export { InitError };
 
 const DEFAULT_PROXY_PORT = 4653;
-const MCP_SERVER_KEY = "golem";
-/**
- * Pre-approve Golem's own MCP tools so they don't prompt on first use. Uses the
- * anchored wildcard `mcp__<server>__*` — the documented "all tools from this
- * server" form (Claude Code permissions docs, "MCP" section). Switched to it
- * from the bare `mcp__<server>` rule (2026-07-18) after observing that the bare
- * form does NOT reliably auto-approve tools in practice: golem tools kept
- * prompting on first use and had to be added one-by-one via "always allow"
- * (`delegate`, then the new `snooze`). The `__*` is anchored to the server —
- * only fully-unanchored globs like `mcp__*` are skipped as allow rules — so it
- * is valid and covers every current and future golem tool at once — including
- * `wiki_upsert`.
- *
- * **`wiki_upsert` is no longer held on `ask` (USER decision 2026-07-30).** It used
- * to be, on the grounds that it writes committed wiki files. That was the pre-
- * Decision-44 posture and it outlived the decision: Decision 44 un-gated wiki
- * authoring precisely because every write lands in git — reviewable and revertible
- * — so a per-write prompt bought nothing and taught people to click through
- * prompts. Every living surface already says "author wiki pages freely"; this rule
- * was the last place still disagreeing, and a fresh `golem init` now matches. ADRs
- * are unaffected: they live at `docs/decisions/`, outside the wiki, and keep the
- * stricter human-driven rule.
- *
- * `uninit` still knows about the old `ask` entry so it cleans up projects
- * initialized before this change.
- *
- * Note: these rules are read at Claude Code session start (and activate only after
- * the one-time workspace-trust accept), so a running session must be restarted to
- * pick up a newly-added rule — mid-session edits/`always allow` don't apply live.
- */
-const MCP_ALLOW_RULE = `mcp__${MCP_SERVER_KEY}__*`;
-/** Legacy `ask` entry, removed by `uninit` but never written by `init`. */
-const LEGACY_MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
 /**
  * Per-server wall-clock cap (ms) for the golem MCP server in `.mcp.json`. Sized
  * above `snooze`'s own 6h cap (src/mcp/snooze.ts) so a full park completes
@@ -244,163 +186,9 @@ const LEGACY_MCP_ASK_RULE = `mcp__${MCP_SERVER_KEY}__wiki_upsert`;
  * embraces backgrounding + document-and-hold rather than foreground-blocking).
  */
 const GOLEM_MCP_TIMEOUT_MS = 23_400_000; // 6.5h
-/**
- * The PreToolUse hook command — the same one `golem autonomy wire` installs. It
- * runs THREE things (in order): the snooze document-and-hold nudge (P2b), the
- * coder-first enforcement (Decision 39), and the autonomy gate (Decision 40).
- * `golem init` wires it so snooze's near-limit redirect is active by default
- * (USER decision 2026-07-18). NOTE: the autonomy gate is ON by default and, even
- * at the default `manual` level, forces an `ask` for outward/destructive actions
- * (ADR-0002) — it is NOT fully silent at `manual`. It is a SEPARATE toggle from
- * this wiring: `golem autonomy disable` turns the gate off (keeping the snooze +
- * coder-first nudges). Matcher-less → fires on every tool call (each stage
- * self-filters).
- */
-const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
-/**
- * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`
- * (user decision 2026-07-16). Committed, team-wide, auto-loaded every session;
- * Golem never edits the user's CLAUDE.md. See src/hooks/guidance.ts.
- */
-/** The conventional personal, gitignored instructions file (Golem doesn't write it). */
-const PERSONAL_INSTRUCTIONS_FILENAME = "CLAUDE.local.md";
-
 /** Runtime files copied into the installed VS Code extension (no tests/tooling). */
 
-/**
- * Golem's own gitignored runtime dirs that churn constantly while a proxy is
- * running (telemetry event log, statusline/dashboard state, webcache, CCR
- * store, knowledge index, notes, distill drafts). VS Code's git extension
- * recomputes repo status on any watched filesystem event — including
- * gitignored ones, since `files.watcherExclude` only excludes `.git`/
- * `node_modules` by default — so these writes make the Source Control sync
- * icon flash continuously. Excluding them from the workspace file watcher is
- * cosmetic (nothing here is ever committed) but stops the noise.
- */
-const VSCODE_WATCHER_EXCLUDE_DIRS = [
-  "**/.golem/telemetry/**",
-  "**/.golem/state/**",
-  "**/.golem/webcache/**",
-  "**/.golem/ccr/**",
-  "**/.golem/knowledge/**",
-  "**/.golem/notes/**",
-  "**/.golem/distill/**",
-] as const;
-const VSCODE_WATCHER_EXCLUDE_KEY = "files.watcherExclude";
-
 /** Where this package's bundled VS Code extension lives (dist/cli/init.js -> ../../vscode-extension). */
-
-/**
- * Idempotently ensure `entry` is in the project's `.gitignore`. Golem uses it to
- * keep the conventional personal `CLAUDE.local.md` out of version control (even
- * though Golem's own guidance now lives in the committed CLAUDE.md). Creates
- * .gitignore if absent; a no-op if the exact line is already present.
- */
-async function ensureGitignored(
-  projectDir: string,
-  entry: string,
-  dryRun: boolean,
-): Promise<InitAction> {
-  const file = path.join(projectDir, ".gitignore");
-  let existing = "";
-  try {
-    existing = await readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-  }
-  const lines = existing.split(/\r?\n/).map((l) => l.trim());
-  if (lines.includes(entry)) {
-    return { kind: "skip", path: ".gitignore", detail: `${entry} already ignored` };
-  }
-  if (!dryRun) {
-    const sep = existing === "" || existing.endsWith("\n") ? "" : "\n";
-    await writeFile(file, `${existing}${sep}${entry}\n`, "utf8");
-  }
-  return {
-    kind: existing === "" ? "create" : "modify",
-    path: ".gitignore",
-    detail: `ignore ${entry}`,
-  };
-}
-
-/** Does a path exist? (module-level; the probe has its own scoped copy.) */
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function rel(projectDir: string, abs: string): string {
-  return path.relative(projectDir, abs).split(path.sep).join("/");
-}
-
-type JsonObject = Record<string, unknown>;
-
-/** Read a JSON object file; missing -> null; malformed -> InitError (never clobber). */
-async function readJsonObject(file: string): Promise<JsonObject | null> {
-  let raw: string;
-  try {
-    raw = await readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new InitError(`${file} is not valid JSON — fix or remove it, then re-run golem init`);
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new InitError(`${file} must contain a JSON object`);
-  }
-  return parsed as JsonObject;
-}
-
-async function writeJsonObject(file: string, value: JsonObject): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function objectEntry(obj: JsonObject, key: string): JsonObject {
-  const existing = obj[key];
-  if (typeof existing === "object" && existing !== null && !Array.isArray(existing)) {
-    return existing as JsonObject;
-  }
-  const fresh: JsonObject = {};
-  obj[key] = fresh;
-  return fresh;
-}
-
-/** Like {@link objectEntry} but for a string[] value (permission allow/ask lists). */
-function stringArrayEntry(obj: JsonObject, key: string): string[] {
-  const existing = obj[key];
-  if (Array.isArray(existing)) return existing as string[];
-  const fresh: string[] = [];
-  obj[key] = fresh;
-  return fresh;
-}
-
-/** Push a create/modify/skip action for the .claude/settings.json env block. */
-function pushEnvAction(
-  actions: InitAction[],
-  changed: boolean,
-  fileExisted: boolean,
-  relPath: string,
-  wrote: Readonly<Record<string, string>>,
-): void {
-  if (!changed) {
-    actions.push({ kind: "skip", path: relPath, detail: "already configured" });
-    return;
-  }
-  const detail = Object.entries(wrote)
-    .map(([k, v]) => `env.${k}=${v}`)
-    .join(", ");
-  actions.push({ kind: fileExisted ? "modify" : "create", path: relPath, detail });
-}
 
 /** The `.mcp.json` entry init installs (verification-notes §9 schema). */
 export function golemMcpEntry(): JsonObject {
@@ -522,175 +310,16 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     );
   }
 
-  // 1. .claude/settings.json — env block (mode-aware).
-  const settingsPath = path.join(projectDir, ".claude", "settings.json");
-  const settingsExisting = await readJsonObject(settingsPath);
-  const settings = settingsExisting ?? {};
-  const settingsExisted = settingsExisting !== null;
-  const env = objectEntry(settings, "env");
-
-  // Upstream mode: Foundry (Claude Code Foundry env), a generic Anthropic-compatible
-  // gateway, or direct Anthropic. Explicit flags win; otherwise, if the project is
-  // ALREADY wired for Foundry (env has CLAUDE_CODE_USE_FOUNDRY), preserve that mode
-  // rather than adding a conflicting ANTHROPIC_BASE_URL. `proxyUpstream` (if set) is
-  // written to the proxy config; Claude Code always points at the LOCAL proxy.
-  const existingFoundry =
-    env[ENV_USE_FOUNDRY] === "true" && typeof env[ENV_FOUNDRY_BASE_URL] === "string";
-  const useFoundry =
-    options.foundry !== undefined || (options.upstream === undefined && existingFoundry);
-  const proxyUpstream = options.foundry ?? options.upstream;
-
-  if (useFoundry) {
-    // Foundry appends the request path to the Foundry base URL; the proxy exposes
-    // Anthropic's `/v1/messages` under `/anthropic` (the fix in §36).
-    const foundryBaseUrl = `${baseUrl}/anthropic`;
-    const currentFoundry = env[ENV_FOUNDRY_BASE_URL];
-    if (typeof currentFoundry === "string" && currentFoundry !== foundryBaseUrl) {
-      throw new InitError(
-        `${rel(projectDir, settingsPath)} already sets ${ENV_FOUNDRY_BASE_URL}=${currentFoundry}. ` +
-          "Remove it before pointing Foundry at the Golem proxy.",
-      );
-    }
-    const changed =
-      env[ENV_USE_FOUNDRY] !== "true" ||
-      currentFoundry !== foundryBaseUrl ||
-      env[ENV_TOOL_SEARCH] !== "true" ||
-      env[ENV_BASE_URL] === baseUrl;
-    env[ENV_USE_FOUNDRY] = "true";
-    env[ENV_FOUNDRY_BASE_URL] = foundryBaseUrl;
-    env[ENV_TOOL_SEARCH] = "true";
-    // Switching from a prior direct-mode init: drop the now-conflicting base URL.
-    if (env[ENV_BASE_URL] === baseUrl) delete env[ENV_BASE_URL];
-    pushEnvAction(actions, changed, settingsExisted, rel(projectDir, settingsPath), {
-      [ENV_USE_FOUNDRY]: "true",
-      [ENV_FOUNDRY_BASE_URL]: foundryBaseUrl,
-    });
-    if (changed && !dryRun) await writeJsonObject(settingsPath, settings);
-  } else {
-    const currentBaseUrl = env[ENV_BASE_URL];
-    if (typeof currentBaseUrl === "string" && currentBaseUrl !== baseUrl) {
-      throw new InitError(
-        `${rel(projectDir, settingsPath)} already sets ${ENV_BASE_URL}=${currentBaseUrl}. ` +
-          "Another proxy or gateway owns this project's Claude Code traffic — remove that " +
-          "setting (or `headroom unwrap`) before running golem init.",
-      );
-    }
-    const envChanged = currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
-    env[ENV_BASE_URL] = baseUrl;
-    env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
-    pushEnvAction(actions, envChanged, settingsExisted, rel(projectDir, settingsPath), {
-      [ENV_BASE_URL]: baseUrl,
-    });
-    if (envChanged && !dryRun) await writeJsonObject(settingsPath, settings);
-  }
-
-  // 1b-bis. R9.12 — trust the loopback CA so a cache-served WebFetch renders
-  // GREEN rather than as a denied tool call. Four rules, all from measurements:
-  //   * set it ONLY when nothing else owns the variable (§121-C): a user behind a
-  //     TLS-inspection proxy already has it, and concatenating bundles creates a
-  //     copy that goes stale when theirs rotates.
-  //   * the anchor is a CA, because BoringSSL refuses a bare leaf (§123), but it
-  //     carries a dNSName name constraint so it CANNOT issue a certificate for
-  //     api.anthropic.com (§124, measured: `permitted subtree violation`).
-  //   * it goes in `.claude/settings.local.json`, NOT the committed settings.json
-  //     (R9.22): the path is machine-absolute, so a committed one resolves on no
-  //     other clone and Claude Code warns about it twice at every start. A Golem
-  //     path left in the committed file by an older init is healed away here, so
-  //     a clone self-heals on its first `golem init`.
-  //   * it takes effect only after a restart (§112), so say so.
-  // Declining with `--no-loopback-cert` costs nothing: the hook falls back to the
-  // deny-and-serve path R9.7 shipped, which is what every un-wired session uses.
-  if (options.noLoopbackCert !== true) {
-    const localPath = claudeLocalSettingsPath(projectDir);
-    const localExisted = (await readJsonObject(localPath).catch(() => null)) !== null;
-    const caPath = dryRun
-      ? loopbackCaPath(projectDir)
-      : (await ensureLoopbackCert(projectDir)).caPath;
-    const trust = await writeLocalCaTrust(projectDir, caPath, { dryRun });
-
-    if (trust.healedCommitted) {
-      // The heal was performed against writeLocalCaTrust's own read of the file.
-      // `settings` is still live in this function and is written again below
-      // (step 1c), so the key has to go from the in-memory copy too — otherwise
-      // that write puts the machine-absolute path straight back.
-      delete env[ENV_EXTRA_CA];
-      actions.push({
-        kind: "modify",
-        path: rel(projectDir, settingsPath),
-        detail: `${ENV_EXTRA_CA} moved to ${rel(projectDir, localPath)} — a machine-absolute path does not belong in a committed file`,
-      });
-    }
-
-    if (trust.foreign !== undefined) {
-      actions.push({
-        kind: "skip",
-        path: rel(projectDir, localPath),
-        detail: `${ENV_EXTRA_CA} is already set to ${trust.foreign} — left alone; served WebFetches stay on the deny path`,
-      });
-    } else if (trust.wrote) {
-      pushEnvAction(actions, true, localExisted, rel(projectDir, localPath), {
-        [ENV_EXTRA_CA]: caPath,
-      });
-    } else {
-      actions.push({
-        kind: "skip",
-        path: rel(projectDir, localPath),
-        detail: `${ENV_EXTRA_CA} already trusts Golem's loopback CA`,
-      });
-    }
-  }
-
-  // 1c. .claude/settings.json — pre-approve Golem's own MCP tools so they don't
-  // prompt on first use. All of them, wiki_upsert included (Decision 44 / USER
-  // 2026-07-30): wiki writes are un-gated because git makes them reviewable.
-  {
-    const permissions = objectEntry(settings, "permissions");
-    const allow = stringArrayEntry(permissions, "allow");
-    let permsChanged = false;
-    let allowAdded = false;
-    if (!allow.includes(MCP_ALLOW_RULE)) {
-      allow.push(MCP_ALLOW_RULE);
-      allowAdded = true;
-      permsChanged = true;
-    }
-    // Drop the legacy wiki_upsert `ask` rule if an earlier init left one: an `ask`
-    // entry prompts even when an `allow` rule also matches (deny → ask → allow
-    // precedence), so leaving it would silently keep the gate this change removes.
-    // Read in place rather than through `stringArrayEntry` — that would *create* an
-    // empty `ask: []`, which is footprint init no longer has any reason to add.
-    const existingAsk = permissions.ask;
-    let legacyRemoved = false;
-    if (Array.isArray(existingAsk)) {
-      const index = existingAsk.indexOf(LEGACY_MCP_ASK_RULE);
-      if (index >= 0) {
-        existingAsk.splice(index, 1);
-        if (existingAsk.length === 0) delete permissions.ask;
-        legacyRemoved = true;
-        permsChanged = true;
-      }
-    }
-    actions.push(
-      permsChanged
-        ? {
-            kind: settingsExisted ? "modify" : "create",
-            path: rel(projectDir, settingsPath),
-            // Report only what actually moved: on an already-configured project the
-            // only change is dropping the legacy `ask` entry.
-            detail: [
-              ...(allowAdded ? [`permissions.allow += ${MCP_ALLOW_RULE}`] : []),
-              ...(legacyRemoved ? [`permissions.ask -= ${LEGACY_MCP_ASK_RULE}`] : []),
-            ].join(", "),
-          }
-        : {
-            kind: "skip",
-            path: rel(projectDir, settingsPath),
-            detail: "MCP tool permissions set",
-          },
-    );
-    if (permsChanged && !dryRun) await writeJsonObject(settingsPath, settings);
-  }
+  // 1 / 1b-bis / 1c. `.claude/settings.json`: the mode-aware env block (direct
+  // Anthropic / Foundry / generic gateway), the loopback-CA trust in the
+  // gitignored local scope, and the MCP tool pre-approval. See
+  // init-claude-settings.ts — `golem uninit` mirrors all three from there too.
+  actions.push(...(await configureClaudeSettings(options, baseUrl, dryRun)));
 
   // 1b. Proxy upstream (front Foundry / a generic gateway) — .golem/settings.local.json.
+  // Which of the two flags is set decides the Claude Code env mode (step 1, in
+  // init-claude-settings.ts); either one points the PROXY upstream at the URL.
+  const proxyUpstream = options.foundry ?? options.upstream;
   if (proxyUpstream !== undefined) {
     const localPath = path.join(projectDir, ".golem", "settings.local.json");
     const localExisting = await readJsonObject(localPath).catch(() => null);
@@ -728,44 +357,7 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   }
 
   // 3. Skills: .claude/skills/golem/<cmd>/SKILL.md -> /golem/<cmd>.
-  for (const [name, content] of Object.entries(P0_SKILLS)) {
-    const skillPath = path.join(projectDir, ".claude", "skills", "golem", name, "SKILL.md");
-    let existing: string | null = null;
-    try {
-      existing = await readFile(skillPath, "utf8");
-    } catch {
-      existing = null;
-    }
-    // R9.5: "differs from what Golem ships" cannot tell a stale file from an
-    // edited one. Ask the provenance record which it is — an edited skill is
-    // reported and kept, not silently replaced.
-    const disposition = await classifyManaged(projectDir, skillPath, content, existing);
-    if (disposition === "current") {
-      actions.push({ kind: "skip", path: rel(projectDir, skillPath), detail: "up to date" });
-      continue;
-    }
-    if (disposition === "owned") {
-      actions.push({
-        kind: "conflict",
-        path: rel(projectDir, skillPath),
-        detail: ownedDetail(`/golem/${name} skill`),
-      });
-      continue;
-    }
-    actions.push({
-      kind: disposition === "absent" ? "create" : "modify",
-      path: rel(projectDir, skillPath),
-      detail:
-        disposition === "absent"
-          ? `/golem/${name} skill`
-          : `/golem/${name} skill — refreshed (unmodified since Golem wrote it)`,
-    });
-    if (!dryRun) {
-      await mkdir(path.dirname(skillPath), { recursive: true });
-      await writeFile(skillPath, content, "utf8");
-      await rememberManaged(projectDir, skillPath, content);
-    }
-  }
+  actions.push(...(await installSkills(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
   // (gitignored). The slider level and per-project proxy port are personal /
@@ -818,68 +410,11 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
   }
 
-  // 5. PostToolUse hook + Golem guidance. Guidance is seeded (once) as Claude
-  // Code project rules — `.claude/rules/golem-<feature>.md` (committed, team-wide,
-  // auto-loaded every session). Golem never edits the user's CLAUDE.md. Defaults
-  // are user-owned after seeding: `golem guidance disable <feature>` sticks.
-  actions.push(await addPostToolUseHook({ projectDir, dryRun }));
-  actions.push(...(await seedDefaultGuidance(projectDir, dryRun)));
-  // Keep personal (`--user`) golem rules AND the conventional personal
-  // instructions file out of version control.
-  actions.push(await ensureGitignored(projectDir, PERSONAL_INSTRUCTIONS_FILENAME, dryRun));
-  actions.push(await ensureGitignored(projectDir, PERSONAL_RULES_GITIGNORE, dryRun));
-
-  // 6. Status line (21c) + blocked-state event hooks (21b).
-  actions.push(await writeStatusLine({ projectDir, dryRun }));
-  actions.push(await writeDefaultMode({ projectDir, dryRun }));
-  actions.push(await addEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
-  actions.push(
-    await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
-  );
-  // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
-  // default `manual` level). See PRE_TOOL_USE_HOOK_COMMAND.
-  actions.push(await addEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
-
-  // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
-  // capture every fetch into the KB (non-blocking post-capture) — §44.
-  actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "PreToolUse",
-        matcher: WEB_FETCH_MATCHER,
-        command: WEB_FETCH_PRE_COMMAND,
-        async: false,
-        timeoutSeconds: 15,
-      },
-    ),
-  );
-  actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "PostToolUse",
-        matcher: WEB_FETCH_MATCHER,
-        command: WEB_FETCH_POST_COMMAND,
-        async: true,
-        timeoutSeconds: 60,
-      },
-    ),
-  );
-
-  // 6c. SessionStart: auto-start the proxy on project open if it was running (§47).
-  actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "SessionStart",
-        matcher: SESSION_START_MATCHER,
-        command: SESSION_START_COMMAND,
-        async: false,
-        timeoutSeconds: 15,
-      },
-    ),
-  );
+  // 5 / 6 / 6b / 6c. Hooks: the PostToolUse CCR hook + seeded guidance rules
+  // (and the `.gitignore` lines for personal instruction files), the status line
+  // and blocked-state event hooks, the WebFetch KB-cache pre/post hooks, and the
+  // SessionStart proxy auto-start. See init-hooks.ts.
+  actions.push(...(await wireHooks(projectDir, dryRun)));
 
   // 7. .vscode/settings.json — exclude Golem's churny runtime dirs (telemetry,
   // state, webcache, CCR, knowledge, notes, distill) from VS Code's file
@@ -892,149 +427,6 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   if (vscodeAction !== null) actions.push(vscodeAction);
 
   return { dryRun, actions };
-}
-
-/**
- * Idempotently add Golem's churny runtime dirs to `.vscode/settings.json`'s
- * `files.watcherExclude` (workspace-scoped, so it applies whether or not the
- * Golem VS Code extension itself is installed). Never removes or overwrites
- * unrelated keys or other watcherExclude entries the user already has.
- */
-async function ensureVscodeWatcherExclude(
-  projectDir: string,
-  dryRun: boolean,
-): Promise<InitAction> {
-  const file = path.join(projectDir, ".vscode", "settings.json");
-  const existing = await readJsonObject(file);
-  const settings = existing ?? {};
-  const watcherExclude = objectEntry(settings, VSCODE_WATCHER_EXCLUDE_KEY);
-
-  let changed = false;
-  for (const pattern of VSCODE_WATCHER_EXCLUDE_DIRS) {
-    if (watcherExclude[pattern] !== true) {
-      watcherExclude[pattern] = true;
-      changed = true;
-    }
-  }
-
-  const relPath = rel(projectDir, file);
-  if (!changed) {
-    return { kind: "skip", path: relPath, detail: "watcher excludes already set" };
-  }
-  if (!dryRun) await writeJsonObject(file, settings);
-  return {
-    kind: existing === null ? "create" : "modify",
-    path: relPath,
-    detail: "exclude Golem's runtime dirs from the file watcher",
-  };
-}
-
-/** The removal half of {@link ensureVscodeWatcherExclude} — only ever deletes entries init added. */
-async function removeVscodeWatcherExclude(
-  projectDir: string,
-  dryRun: boolean,
-): Promise<InitAction> {
-  const file = path.join(projectDir, ".vscode", "settings.json");
-  const relPath = rel(projectDir, file);
-  const settings = await readJsonObject(file);
-  const watcherExclude = settings?.[VSCODE_WATCHER_EXCLUDE_KEY];
-  if (
-    settings === null ||
-    typeof watcherExclude !== "object" ||
-    watcherExclude === null ||
-    Array.isArray(watcherExclude)
-  ) {
-    return { kind: "skip", path: relPath, detail: "not present" };
-  }
-  const watcherExcludeObj = watcherExclude as JsonObject;
-  let changed = false;
-  for (const pattern of VSCODE_WATCHER_EXCLUDE_DIRS) {
-    if (watcherExcludeObj[pattern] === true) {
-      delete watcherExcludeObj[pattern];
-      changed = true;
-    }
-  }
-  if (!changed) return { kind: "skip", path: relPath, detail: "not present" };
-  if (Object.keys(watcherExcludeObj).length === 0) delete settings[VSCODE_WATCHER_EXCLUDE_KEY];
-  if (!dryRun) await writeJsonObject(file, settings);
-  return { kind: "modify", path: relPath, detail: "removed Golem watcher excludes" };
-}
-
-/**
- * Install the bundled VS Code extension by copying it into VS Code's global
- * extensions dir (dependency-free, the same mechanism as `deploy:local`). Returns
- * null when VS Code isn't detected (the probe returns no dir) so init stays a
- * no-op on machines without it. Idempotent: an already-installed same-version
- * copy is a skip.
- */
-async function installVscodeExtension(
-  options: InitOptions,
-  dryRun: boolean,
-): Promise<InitAction | null> {
-  const probe = options.probe ?? defaultProbe();
-  const extensionsDir = (await probe.vscodeExtensionsDir?.()) ?? null;
-  if (extensionsDir === null) return null;
-
-  const sourceDir = options.vscodeSourceDir ?? defaultVscodeSourceDir();
-  const manifest = await readJsonObject(path.join(sourceDir, "package.json")).catch(() => null);
-  if (manifest === null) return null; // source not shipped/available — skip quietly
-  const id = `${String(manifest.publisher)}.${String(manifest.name)}-${String(manifest.version)}`;
-  const target = path.join(extensionsDir, id);
-
-  // R9.16: "the directory exists" is NOT "the right bytes are in it". The dir is
-  // named for the extension version, so shipping a fix without a version bump
-  // made every later init a silent no-op — and a stale `render.js` then named a
-  // model the coder was not using. Compare content, refresh when it differs.
-  const inspected = await inspectVscodeExtension({ sourceDir, extensionsDir });
-  if (inspected.state === "current") {
-    return { kind: "skip", path: `~/.vscode/extensions/${id}`, detail: "already up to date" };
-  }
-  if (!dryRun) {
-    await mkdir(target, { recursive: true });
-    for (const name of VSCODE_EXTENSION_FILES) {
-      const src = path.join(sourceDir, name);
-      // `force: true` so a refresh overwrites rather than failing on an existing
-      // file. Safe here and nowhere else: this is Golem's own build artifact in
-      // VS Code's directory, not a document the user may have edited (R9.5).
-      if (await pathExists(src)) {
-        await cp(src, path.join(target, name), { recursive: true, force: true });
-      }
-    }
-  }
-  return inspected.state === "stale"
-    ? {
-        kind: "modify",
-        path: `~/.vscode/extensions/${id}`,
-        detail: `refreshed ${inspected.staleFiles.join(", ")} — reload the VS Code window`,
-      }
-    : {
-        kind: "create",
-        path: `~/.vscode/extensions/${id}`,
-        detail: "VS Code panel + status bar (reload the window to activate)",
-      };
-}
-
-/** Remove any installed Golem VS Code extension(s) — matches `golem-run.golem-vscode-*`. */
-async function removeVscodeExtensions(
-  options: UninitOptions,
-  dryRun: boolean,
-): Promise<InitAction[]> {
-  const probe = options.probe ?? defaultProbe();
-  const extensionsDir = (await probe.vscodeExtensionsDir?.()) ?? null;
-  if (extensionsDir === null) return [];
-  let entries: string[];
-  try {
-    entries = await readdir(extensionsDir);
-  } catch {
-    return [];
-  }
-  const mine = entries.filter((e) => e.startsWith("golem-run.golem-vscode-"));
-  const out: InitAction[] = [];
-  for (const id of mine) {
-    out.push({ kind: "remove", path: `~/.vscode/extensions/${id}`, detail: "VS Code extension" });
-    if (!dryRun) await rm(path.join(extensionsDir, id), { recursive: true, force: true });
-  }
-  return out;
 }
 
 export interface UninitOptions {
@@ -1060,68 +452,10 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   const baseUrl = proxyBaseUrl(port);
   const actions: InitAction[] = [];
 
-  // 1. Remove only the env keys init set, and only if they hold init's values.
-  const settingsPath = path.join(projectDir, ".claude", "settings.json");
-  const settings = await readJsonObject(settingsPath);
-  const env = settings?.env;
-  if (settings && typeof env === "object" && env !== null && !Array.isArray(env)) {
-    const envObj = env as JsonObject;
-    // Ownership-guarded: removes ANTHROPIC_BASE_URL / the Foundry pair /
-    // ENABLE_TOOL_SEARCH only where they hold OUR values (proxy-wiring.ts).
-    const changed = removeGolemEnv(envObj, baseUrl, loopbackCaPath(projectDir));
-    if (Object.keys(envObj).length === 0) delete settings.env;
-    if (changed) {
-      actions.push({
-        kind: "modify",
-        path: rel(projectDir, settingsPath),
-        detail: "removed Golem env entries",
-      });
-      if (!dryRun) await writeJsonObject(settingsPath, settings);
-    }
-  }
-
-  // 1a-bis. R9.22 — the loopback CA trust lives in the gitignored local scope, so
-  // uninit has to visit that file too. Same ownership rule: a NODE_EXTRA_CA_CERTS
-  // that is not ours (and not a stale Golem path) is the user's and stays.
-  if (await removeLocalCaTrust(projectDir, { dryRun })) {
-    actions.push({
-      kind: "modify",
-      path: rel(projectDir, claudeLocalSettingsPath(projectDir)),
-      detail: `removed ${ENV_EXTRA_CA}`,
-    });
-  }
-
-  // 1b. Remove only the MCP permission rules init added (exact rules only). The
-  // `ask` rule is legacy — init no longer writes it — but a project initialized
-  // before 2026-07-30 still has one, so uninit must still clean it up.
-  const perms = settings?.permissions;
-  if (settings && typeof perms === "object" && perms !== null && !Array.isArray(perms)) {
-    const permsObj = perms as JsonObject;
-    let changed = false;
-    for (const [key, rule] of [
-      ["allow", MCP_ALLOW_RULE],
-      ["ask", LEGACY_MCP_ASK_RULE],
-    ] as const) {
-      const arr = permsObj[key];
-      if (Array.isArray(arr)) {
-        const idx = arr.indexOf(rule);
-        if (idx !== -1) {
-          arr.splice(idx, 1);
-          changed = true;
-        }
-        if (arr.length === 0) delete permsObj[key];
-      }
-    }
-    if (Object.keys(permsObj).length === 0) delete settings.permissions;
-    if (changed) {
-      actions.push({
-        kind: "modify",
-        path: rel(projectDir, settingsPath),
-        detail: "removed Golem MCP permission rules",
-      });
-      if (!dryRun) await writeJsonObject(settingsPath, settings);
-    }
-  }
+  // 1 / 1a-bis / 1b. `.claude/settings.json` (+ the gitignored local scope): the
+  // env keys, the loopback-CA trust and the MCP permission rules — each removed
+  // only where it still holds init's own value. See init-claude-settings.ts.
+  actions.push(...(await removeClaudeSettings(projectDir, baseUrl, dryRun)));
 
   // 2. Remove the MCP registration.
   const mcpPath = path.join(projectDir, ".mcp.json");
@@ -1142,19 +476,12 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   }
 
   // 3. Remove the whole golem skills namespace (all files in it are ours).
-  const skillsDir = path.join(projectDir, ".claude", "skills", "golem");
-  try {
-    await access(skillsDir);
-    actions.push({ kind: "remove", path: rel(projectDir, skillsDir), detail: "Golem skills" });
-    if (!dryRun) await rm(skillsDir, { recursive: true, force: true });
-  } catch {
-    // not installed
-  }
+  actions.push(...(await removeSkills(projectDir, dryRun)));
 
-  // 4. Remove the PostToolUse hook entry + the seeded Golem guidance rules
-  // (`.claude/rules/golem-*.md`, both scopes) and the seed sentinel.
-  actions.push(await removePostToolUseHook({ projectDir, dryRun }));
-  actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
+  // 4 / 5 / 5b. Every hook init installed: the PostToolUse CCR hook + the seeded
+  // guidance rules, the status line and blocked-state event hooks, the WebFetch
+  // KB-cache hooks and the SessionStart auto-start. See init-hooks.ts.
+  actions.push(...(await unwireHooks(projectDir, dryRun)));
   // R9.5: the managed-file provenance record is something init added, so uninit
   // takes it away. Silent — it is internal bookkeeping under .golem/state/, and
   // the files it described have their own removal actions above.
@@ -1162,28 +489,6 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   // R9.13: same reasoning for the version stamp. The config backups beside it
   // stay — those are copies of the user's own settings, not our bookkeeping.
   if (!dryRun) await removeVersionStamp(projectDir);
-
-  // 5. Remove the status line + blocked-state event hooks.
-  actions.push(await removeStatusLine({ projectDir, dryRun }));
-  actions.push(await removeDefaultMode({ projectDir, dryRun }));
-  actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
-  actions.push(
-    await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
-  );
-  actions.push(
-    await removeEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
-  );
-
-  // 5b. Remove the WebFetch KB-cache hooks + the SessionStart auto-start hook.
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "PreToolUse", WEB_FETCH_PRE_COMMAND),
-  );
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "PostToolUse", WEB_FETCH_POST_COMMAND),
-  );
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "SessionStart", SESSION_START_COMMAND),
-  );
 
   // 6. Remove the `.vscode/settings.json` watcher excludes init added.
   actions.push(await removeVscodeWatcherExclude(projectDir, dryRun));

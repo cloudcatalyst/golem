@@ -15,6 +15,19 @@ const portArgIdx = process.argv.indexOf("--port");
 const wantPort = portArgIdx >= 0 ? Number(process.argv[portArgIdx + 1]) : 0;
 const mode = process.env.FAKE_MODE ?? "ok";
 
+/**
+ * Mirrors headroom-memory-worker.py's parent watchdog (R10.3): exit as soon as
+ * the parent's stdin pipe reaches EOF, so the worker cannot outlive the process
+ * that spawned it even when that process dies without running any handler.
+ */
+const stdinWatch = process.env.GOLEM_HEADROOM_PARENT_PIPE === "1";
+if (stdinWatch) {
+  process.stdin.resume();
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.on("error", () => process.exit(0));
+}
+
 if (mode === "slowstart") {
   // Simulate a worker that binds but never announces — exercises startup timeout.
   setTimeout(() => {}, 60_000);
@@ -27,7 +40,9 @@ if (mode === "slowstart") {
         return;
       }
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ ok: true, headroom: "fake", pid: process.pid }));
+      res.end(
+        JSON.stringify({ ok: true, headroom: "fake", pid: process.pid, stdin_watch: stdinWatch }),
+      );
       return;
     }
     if (req.method === "POST" && req.url === "/memory/search") {

@@ -8,12 +8,13 @@
  * auto-index.ts) so this module has no config dependency of its own.
  */
 
-import { access, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { defaultUserDir } from "../config/paths.js";
 import type { WikiPageType } from "../interfaces/index.js";
 import { extractWikilinks, parseFrontmatter } from "../wiki/index.js";
 import type { InitAction } from "./init.js";
+import { pathExists, rel } from "./json-file.js";
 
 /**
  * Zone-2 subdirectories every scaffolded wiki gets, empty but git-tracked.
@@ -142,19 +143,6 @@ export interface WikiInitOptions {
 export interface WikiInitReport {
   readonly dryRun: boolean;
   readonly actions: readonly InitAction[];
-}
-
-async function pathExists(p: string): Promise<boolean> {
-  try {
-    await access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function rel(projectDir: string, abs: string): string {
-  return path.relative(projectDir, abs).split(path.sep).join("/");
 }
 
 /** Scaffold `wikiDir`: WIKI.md schema + empty, git-tracked zone directories. */

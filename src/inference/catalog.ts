@@ -96,6 +96,35 @@ export function embedModelFor(tier: HardwareTier, kind: "text" | "code"): string
   return kind === "code" ? entry.codeEmbed : entry.textEmbed;
 }
 
+/**
+ * Output vector width per embedding model in the catalog (R10.4).
+ *
+ * The width is a property of the MODEL, not of the tier that happened to select
+ * it — and it is what makes two embedders incompatible: a query embedded at 768
+ * dims cannot be scored against a 1024-dim index (`assertEmbedderSpaceMatch`
+ * rejects it). Recorded here so an index/query embedder mismatch can be named
+ * with both widths WITHOUT a network probe, and so a model added to the catalog
+ * without a width entry degrades to "unknown" rather than to a wrong number.
+ */
+const EMBED_DIMS: Readonly<Record<string, number>> = Object.freeze({
+  "nomic-embed-text": 768,
+  "bge-m3": 1024,
+});
+
+/**
+ * Vector width of a catalog embedding model, or `null` when it is not a model
+ * this catalog knows. Matches by name prefix so a tagged pull (`bge-m3:latest`)
+ * resolves the same as the bare name, exactly like `ollamaHasModel`.
+ */
+export function embedDimFor(model: string): number | null {
+  const known = EMBED_DIMS[model];
+  if (known !== undefined) return known;
+  for (const [name, dim] of Object.entries(EMBED_DIMS)) {
+    if (model.startsWith(`${name}:`)) return dim;
+  }
+  return null;
+}
+
 /** Every distinct model a tier needs (for pull-on-demand pre-checks). */
 export function modelsForTier(tier: HardwareTier): readonly string[] {
   const entry = CATALOG[tier];

@@ -73,7 +73,11 @@ describe("golem status", () => {
     expect(report.workers?.[0]?.local).toBe(false);
   });
 
-  it.skip("names the target's model for a routed worker, not the local one", () => {
+  // R10.1: these two were `it.skip` with no recorded reason. Both pass — the
+  // render layer has been honouring the R9.10 gate all along, with only the
+  // report-object assertion above actually guarding it. Unskipped so the gate
+  // is checked where a user would see it break.
+  it("names the target's model for a routed worker, not the local one", () => {
     const out = renderStatus({
       ...BASE,
       workers: [{ worker: "coder", target: "sonnet-5", model: "claude-sonnet-5", local: false }],
@@ -81,7 +85,7 @@ describe("golem status", () => {
     expect(out).toContain("claude-sonnet-5");
   });
 
-  it.skip("still reports the local model for a worker with no target", () => {
+  it("still reports the local model for a worker with no target", () => {
     const out = renderStatus(BASE);
     expect(out).toContain("qwen2.5-coder:7b");
     expect(out).toContain("(local)");
@@ -114,9 +118,14 @@ describe("golem local status", () => {
     expect(out).not.toContain("NOT on this backend");
   });
 
-  it.skip("points at the tool-shaped command to enable it, not the backend-shaped one", () => {
-    const out = renderLocalModel({ ...base, active: false });
-    expect(out).toContain("golem coder enable");
-    expect(out).not.toContain("golem local enable");
-  });
+  // R10.1: the third skipped test here asserted that an inactive backend points
+  // at `golem coder enable` rather than `golem local enable`. It was written
+  // when `active` meant "enabled AND reachable", so there was a
+  // disabled-but-reachable state for that message to describe. R9.23 retired
+  // `inference.coder_enabled` and `active` became synonymous with `reachable`
+  // (local-config.ts: `active: reachable`), so the only way to be inactive is
+  // for the endpoint not to answer — and the right advice then is the Ollama
+  // one the renderer already gives. Naming a toggle would be misdirection.
+  // Deleted rather than unskipped: it pins a state that can no longer occur.
+  // (`golem coder` itself is alive and registered — see commands/local-ollama.ts.)
 });

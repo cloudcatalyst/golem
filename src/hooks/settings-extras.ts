@@ -7,9 +7,16 @@
  * malformed files or FOREIGN settings, report InitAction, honor dryRun.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type InitAction, InitError } from "../cli/init.js";
+import type { InitAction } from "../cli/init.js";
+// R10.1: this module used to carry its OWN readJsonObject/writeJsonObject/rel —
+// a fourth copy, differing from the others only in an error message. It now
+// shares the one in cli/json-file.ts, which (unlike this copy) writes
+// atomically. `.claude/settings.json` is read back several times during a single
+// `golem init`, so a non-atomic write left a window where a reader saw a
+// truncated file and init failed against JSON it had just written itself.
+import { InitError } from "../cli/init-error.js";
+import { readJsonObject, rel, writeJsonObject } from "../cli/json-file.js";
 import type { HookSettingsOptions } from "./settings-writer.js";
 
 export const NOTIFICATION_COMMAND = "golem hook notification";
@@ -39,31 +46,6 @@ type JsonObject = Record<string, unknown>;
 const isRecord = (v: unknown): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-async function readJsonObject(file: string): Promise<JsonObject | null> {
-  let raw: string;
-  try {
-    raw = await readFile(file, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new InitError(`${file} is not valid JSON — fix or remove it, then retry`);
-  }
-  if (!isRecord(parsed)) throw new InitError(`${file} must contain a JSON object`);
-  return parsed;
-}
-
-async function writeJsonObject(file: string, value: JsonObject): Promise<void> {
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-const rel = (projectDir: string, abs: string): string =>
-  path.relative(projectDir, abs).split(path.sep).join("/");
 const settingsPath = (projectDir: string): string =>
   path.join(projectDir, ".claude", "settings.json");
 

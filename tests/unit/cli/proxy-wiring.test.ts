@@ -9,10 +9,9 @@
  * gets clobbered.
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   ENV_BASE_URL,
   ENV_EXTRA_CA,
@@ -26,19 +25,17 @@ import {
   wiringGap,
   writeLocalCaTrust,
 } from "../../../src/cli/proxy-wiring.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const OURS = proxyBaseUrl(4653);
 const FOREIGN = "http://localhost:9999";
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-proxy-wiring-"));
-});
+const newTempDir = useTempDirs("golem-proxy-wiring-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 async function writeClaudeSettings(value: unknown): Promise<void> {
@@ -184,6 +181,21 @@ describe("wireProxyEnv", () => {
     expect((await readWiringState(projectDir, OURS)).owner).toBe("golem");
     await unwireProxyEnv(projectDir, OURS);
     expect((await readWiringState(projectDir, OURS)).owner).toBe("none");
+  });
+
+  // R10.1. This used to destroy the file: the read swallowed the parse failure,
+  // fell back to `{}`, and wrote that — so a stray trailing comma cost a user
+  // every other key in their `.claude/settings.json`. `golem init` had always
+  // refused to clobber a file it could not parse; `wire` did the opposite.
+  it("refuses to overwrite a MALFORMED settings file, leaving its bytes untouched", async () => {
+    const dir = path.join(projectDir, ".claude");
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, "settings.json");
+    const original = '{ "env": { "MY_VAR": "keep me" },, }';
+    await writeFile(file, original, "utf8");
+
+    await expect(wireProxyEnv(projectDir, OURS)).rejects.toThrow(/not valid JSON/);
+    expect(await readFile(file, "utf8")).toBe(original);
   });
 });
 

@@ -31,7 +31,9 @@
 
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { bestCaseRate, caseResolution, pct, signedPct, worstCaseRate } from "../bench/stats.js";
 import { estimateTokens } from "../compression/tokens.js";
+import { readReplyField, recoverKnownValue, stripFence } from "../inference/reply-parsing.js";
 import type { InferenceService, Role } from "../interfaces/index.js";
 import {
   buildGraph,
@@ -120,24 +122,10 @@ export function parsePathChoice(
   text: string,
   known: ReadonlySet<string>,
 ): string | null | undefined {
-  const trimmed = text
-    .trim()
-    .replace(/^```[a-zA-Z]*\s*/u, "")
-    .replace(/```$/u, "")
-    .trim();
+  const trimmed = stripFence(text);
   if (trimmed.length === 0) return null;
 
-  let raw: string | undefined;
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (typeof parsed === "string") raw = parsed;
-    else if (typeof parsed === "object" && parsed !== null && "path" in parsed) {
-      const value = (parsed as { path: unknown }).path;
-      if (typeof value === "string") raw = value;
-    }
-  } catch {
-    raw = trimmed;
-  }
+  const raw = readReplyField(trimmed, "path");
   if (raw === undefined) return undefined;
 
   const cleaned = raw
@@ -149,10 +137,7 @@ export function parsePathChoice(
   if (known.has(cleaned)) return cleaned;
   // A small model often answers in a sentence. Accept the first known path that
   // appears anywhere in the reply — a formatting slip is not a wrong choice.
-  for (const candidate of known) {
-    if (trimmed.includes(candidate)) return candidate;
-  }
-  return undefined;
+  return recoverKnownValue(trimmed, known);
 }
 
 /** The cheap baseline context: just the paths, capped to the map's own budget. */
@@ -277,16 +262,6 @@ export interface BenchOptions {
   readonly budgetTokens?: number;
 }
 
-function pct(value: number | null): string {
-  return value === null ? "n/a" : `${(value * 100).toFixed(1)}%`;
-}
-
-function signedPct(value: number | null): string {
-  if (value === null) return "n/a";
-  const s = (value * 100).toFixed(1);
-  return value > 0 ? `+${s}%` : `${s}%`;
-}
-
 /**
  * Run the gate: cost figures always, and the A/B when an `InferenceService` is
  * supplied. Never throws on a chooser failure — that is an `errors` count.
@@ -355,7 +330,7 @@ export async function benchRepoMap(options: BenchOptions): Promise<RepoMapBenchR
     ...(options.role === undefined ? {} : { role: options.role }),
   });
 
-  const resolution = options.cases.length === 0 ? 1 : 1 / options.cases.length;
+  const resolution = caseResolution(options.cases.length);
   const accuracyDelta =
     baseline.accuracy === null || candidate.accuracy === null
       ? null
@@ -369,13 +344,17 @@ export async function benchRepoMap(options: BenchOptions): Promise<RepoMapBenchR
    * and see whether the sign survives. A single unusable reply out of 22 cases
    * must not be able to erase a delta five times the case set's resolution, and a
    * delta that a single reply COULD erase was never a result.
+   *
+   * The two bracketing rates are `src/bench/stats.ts`'s; the rule applied to
+   * them below is this gate's own — see the note there on why the edit gate's
+   * version of this guard is not the same question.
    */
   const adverse = (): number | null => {
     if (accuracyDelta === null) return null;
-    const baseTotal = baseline.scored + baseline.errors;
-    const candTotal = candidate.scored + candidate.errors;
-    if (baseTotal === 0 || candTotal === 0) return null;
-    return (candidate.correct / candTotal) * 1 - (baseline.correct + baseline.errors) / baseTotal;
+    const candidateWorst = worstCaseRate(candidate.correct, candidate.scored, candidate.errors);
+    const baselineBest = bestCaseRate(baseline.correct, baseline.scored, baseline.errors);
+    if (candidateWorst === null || baselineBest === null) return null;
+    return candidateWorst - baselineBest;
   };
   const adverseDelta = adverse();
   const errorsCouldFlip =

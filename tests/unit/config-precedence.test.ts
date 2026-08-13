@@ -1,16 +1,15 @@
 /** E1: layer precedence, defaults, provenance, freezing. */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_SETTINGS,
   findProjectDir,
   loadConfig,
   policyFromSettings,
 } from "../../src/config/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -25,15 +24,13 @@ const userFile = (): string => path.join(userDir, "settings.json");
 const projectFile = (): string => path.join(projectDir, ".golem", "settings.json");
 const localFile = (): string => path.join(projectDir, ".golem", "settings.local.json");
 
+const newTempDir = useTempDirs("golem-config-test-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-config-test-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
   await mkdir(projectDir, { recursive: true });
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 describe("loadConfig precedence", () => {

@@ -7,28 +7,25 @@
  * loader all see one value (verification-notes §20).
  */
 
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_SLIDER_LEVEL,
   JsonFileSliderStore,
   LEGACY_SLIDER_LEVEL_KEY,
 } from "../../src/mcp/slider-store.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-slider-");
 
 describe("JsonFileSliderStore", () => {
   let dir: string;
   let settingsPath: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "golem-slider-"));
+    dir = await newTempDir();
     settingsPath = join(dir, "settings.json");
-  });
-
-  afterEach(async () => {
-    await rm(dir, rmTemp);
   });
 
   it("returns the default level when no settings file exists", async () => {

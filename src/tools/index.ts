@@ -5,12 +5,20 @@
  * measurement scaffolding that should be free to change as the case set grows.
  */
 
+export type { ArgumentRun, ArgumentRunOptions } from "./argument-harness.js";
+export { parseArguments, runArgumentHarness } from "./argument-harness.js";
 export type { ArgumentCase, ArgumentOutcome, SchemaViolation } from "./arguments.js";
 export { scoreArguments, validateAgainstSchema } from "./arguments.js";
 export type { SelectionCase } from "./cases.js";
 export { ARGUMENT_CASES, SELECTION_CASES } from "./cases.js";
 export type { CatalogTool, ToolCensus } from "./catalog.js";
 export { golemToolCensus } from "./catalog.js";
+export type {
+  ArgumentComparison,
+  CatalogComparison,
+  CompareVerdict,
+} from "./compare-catalogs.js";
+export { applyArgumentVeto, compareCatalogs } from "./compare-catalogs.js";
 export type {
   EditStatus,
   MatchStrategy,
@@ -40,24 +48,8 @@ export type { ExternalShrinker } from "./ext-shrink.js";
 export { resolveCavemanShrink } from "./ext-shrink.js";
 export type { ToolBenchReport } from "./report.js";
 export { renderToolBench } from "./report.js";
-export type {
-  ArgumentComparison,
-  ArgumentRun,
-  ArgumentRunOptions,
-  CaseOutcome,
-  CatalogComparison,
-  CatalogRender,
-  CompareVerdict,
-  RunOptions,
-  SelectionRun,
-} from "./selection.js";
-export {
-  compareCatalogs,
-  parseArguments,
-  parseChoice,
-  runArgumentHarness,
-  runSelectionHarness,
-} from "./selection.js";
+export type { CaseOutcome, CatalogRender, RunOptions, SelectionRun } from "./selection.js";
+export { parseChoice, runSelectionHarness } from "./selection.js";
 export type { ShrinkMode } from "./shrink.js";
 export {
   EXTERNAL_MODES,

@@ -3,10 +3,9 @@
  * logic + one-shot-per-session state I/O behind the PreToolUse coder-first gate.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   coderFirstNudgeReason,
   coderFirstNudgeStatePath,
@@ -17,17 +16,16 @@ import {
   readCoderFirstNudgeState,
   writeCoderFirstNudgeState,
 } from "../../../src/hooks/coder-first-nudge.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const big = (n: number) => "x".repeat(n);
 const OVER = MIN_CODE_DRAFT_CHARS + 60;
 
 let dir: string;
+const newTempDir = useTempDirs("golem-coderfirst-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-coderfirst-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("isCodeDraftTarget", () => {

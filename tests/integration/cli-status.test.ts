@@ -6,10 +6,9 @@
  * (against a real ephemeral HTTP server and an unused port).
  */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { golemInit } from "../../src/cli/init.js";
@@ -23,7 +22,10 @@ import {
 } from "../../src/cli/status.js";
 import { writeSetting } from "../../src/config/index.js";
 import type { LimitPrediction } from "../../src/proxy/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
+
+// R10.2: one recursive delete for the whole file, not one per test.
+const newTempDir = useTempDirs("golem-status");
 
 const VERSION = "0.1.0-test";
 
@@ -38,15 +40,11 @@ describe("collectStatus", () => {
   let userDir: string;
 
   beforeEach(async () => {
-    const root = await mkdtemp(join(tmpdir(), "golem-status-"));
+    const root = await newTempDir();
     projectDir = join(root, "project");
     userDir = join(root, "user");
     await mkdir(projectDir, { recursive: true });
     await mkdir(userDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("reports an uninitialized project with default-layer config", async () => {
@@ -545,7 +543,7 @@ describe("renderStatus", () => {
   });
 
   it("renders collectStatus's real output for an uninitialized project (no source suffixes, no warnings)", async () => {
-    const root = await mkdtemp(join(tmpdir(), "golem-status-render-"));
+    const root = await newTempDir();
     try {
       const projectDir = join(root, "project");
       const userDir = join(root, "user");
@@ -574,7 +572,6 @@ describe("renderStatus", () => {
       expect(output).toContain("slider.level = 1 — default");
       expect(output).not.toContain("Warnings:");
     } finally {
-      await rm(root, rmTemp);
     }
   });
 });
@@ -597,14 +594,11 @@ describe("status — usage-limit prediction freshness", () => {
   let projectDir: string;
   let userDir: string;
   beforeEach(async () => {
-    const root = await mkdtemp(join(tmpdir(), "golem-status-lim-"));
+    const root = await newTempDir();
     projectDir = join(root, "project");
     userDir = join(root, "user");
     await mkdir(projectDir, { recursive: true });
     await mkdir(userDir, { recursive: true });
-  });
-  afterEach(async () => {
-    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("omits limits entirely when the proxy has never seen the headers", async () => {
