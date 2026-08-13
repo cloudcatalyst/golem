@@ -37,10 +37,27 @@ export const FAST_HOOK_EVENTS: readonly string[] = [
  * `--help` and anything unrecognised must reach commander so its output and error
  * messages stay authoritative.
  */
-export function fastPathFor(argv: readonly string[]): "hook" | "statusline" | null {
+export function fastPathFor(argv: readonly string[]): "hook" | "statusline" | "status" | null {
   const args = argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) return null;
   const [first, second] = args;
+  // R10.10: the VS Code extension polls `status --json` and `stats --json` on a
+  // timer, four CLI spawns at a time against an 8s timeout that renders a miss
+  // as "offline". Measured: `program.js` is ~2146ms to load where `status.js` is
+  // ~526ms, so routing these through commander cost ~1.6s per poll for nothing —
+  // the JSON path never touches the command registry. Only the exact
+  // machine-readable shapes qualify; a human-facing `golem status` still goes the
+  // long way, because its renderer is commander's business.
+  //
+  // `stats --json` deliberately stays on commander despite being the SLOWER of
+  // the two: its plain path branches on telemetry aggregation and a
+  // `hasRequests` fallback, and duplicating that here would be exactly the drift
+  // this file's "behaviourally identical" rule exists to prevent. It is also not
+  // the call that matters — a null `stats` blanks the savings figure, while a
+  // null `status` is what renders the bar as OFFLINE.
+  if (first === "status" && args.includes("--json") && statusFlagsOk(args.slice(1))) {
+    return "status";
+  }
   if (first === "statusline") {
     // Only the documented flag; anything else goes the long way.
     const rest = args.slice(1);
@@ -60,11 +77,53 @@ export function fastPathFor(argv: readonly string[]): "hook" | "statusline" | nu
 
 /** Run the fast path chosen by {@link fastPathFor}. */
 export async function runFastPath(
-  kind: "hook" | "statusline",
+  kind: "hook" | "statusline" | "status",
   argv: readonly string[],
 ): Promise<void> {
   if (kind === "statusline") return runStatusline(argv);
+  if (kind === "status") return runStatusJson(argv);
   return runHook(argv);
+}
+
+/**
+ * Only flags whose handling is identical on the fast path. Anything else — an
+ * unknown flag, a typo, a future option — falls through to commander so its
+ * parsing and error message stay authoritative. Deliberately strict: a fast path
+ * that silently ignores a flag is worse than one that never runs.
+ */
+function statusFlagsOk(rest: readonly string[]): boolean {
+  const allowed = ["--json", "--dir"];
+  for (let i = 0; i < rest.length; i += 1) {
+    const arg = rest[i];
+    if (arg === undefined || !allowed.includes(arg)) return false;
+    // `--dir` and `--window` take a value; `--json` does not.
+    if (arg !== "--json") {
+      const value = rest[i + 1];
+      if (value === undefined || value.startsWith("-")) return false;
+      i += 1;
+    }
+  }
+  return true;
+}
+
+/** The value of a `--flag <value>` pair, or undefined. */
+function flagValue(args: readonly string[], flag: string): string | undefined {
+  const at = args.indexOf(flag);
+  return at === -1 ? undefined : args[at + 1];
+}
+
+/** Mirrors the `status --json` action in commands/status-update.ts. */
+async function runStatusJson(argv: readonly string[]): Promise<void> {
+  const args = argv.slice(2);
+  const [{ collectStatus }, { VERSION }, { findProjectDir }] = await Promise.all([
+    import("./status.js"),
+    import("../version.js"),
+    import("../config/paths.js"),
+  ]);
+  const dir = flagValue(args, "--dir") ?? findProjectDir(process.cwd()) ?? process.cwd();
+  const report = await collectStatus({ projectDir: dir, version: VERSION });
+  process.stdout.write(`${JSON.stringify(report, null, 2)}
+`);
 }
 
 /** Mirrors the `statusline` action in program.ts. Must never throw or hang. */

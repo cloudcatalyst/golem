@@ -95,7 +95,7 @@ async function fetchModel() {
     golemJson(["status", "--json"]),
     // Cache the account list so the "Switch upstream" quick-pick can render
     // instantly instead of waiting for a CLI round-trip each time it opens.
-    golemJson(["account", "list", "--json", "--dir", cwd()]),
+    golemJson(["gateway", "list", "--json", "--dir", cwd()]),
     // The control surface: labels, widget kinds, values, provenance, and writable
     // scopes for settings + guidance rules + runtime state. The CLI is the single
     // source of truth, so a new settings key needs no extension change.
@@ -144,7 +144,7 @@ async function applyControlChange(id, value, scope) {
     await applySlider(Number(value));
     return;
   } else if (family === "runtime" && name === "account") {
-    out = await golemText(["account", "use", String(value), ...dir]);
+    out = await golemText(["gateway", "use", String(value), ...dir]);
   } else if (family === "runtime" && name === "proxy") {
     await setProxy(value === true || value === "true");
     return;
@@ -305,7 +305,7 @@ async function wireProxy() {
 
 /**
  * Show a quick-pick of configured upstream accounts and switch to the chosen
- * one. `golem account use` auto-restarts a running proxy, so the switch applies
+ * one. `golem gateway use` auto-restarts a running proxy, so the switch applies
  * immediately; we just refresh afterwards. The synthetic default (e.g.
  * `anthropic`) is a first-class entry — selecting it reverts to the top-level
  * config.
@@ -315,7 +315,7 @@ async function pickAccount() {
   // instantly; only block on a CLI round-trip the first time it is opened.
   let accounts = lastModel && Array.isArray(lastModel.accounts) ? lastModel.accounts : [];
   if (accounts.length === 0) {
-    const report = await golemJson(["account", "list", "--json", "--dir", cwd()]);
+    const report = await golemJson(["gateway", "list", "--json", "--dir", cwd()]);
     accounts = report && Array.isArray(report.accounts) ? report.accounts : [];
   }
   if (accounts.length === 0) {
@@ -338,7 +338,7 @@ async function pickAccount() {
     placeHolder: "Golem — switch upstream account",
   });
   if (!pick || pick.active) return; // cancelled, or already active
-  await golemText(["account", "use", pick.id, "--dir", cwd()]);
+  await golemText(["gateway", "use", pick.id, "--dir", cwd()]);
   await refresh();
 }
 
