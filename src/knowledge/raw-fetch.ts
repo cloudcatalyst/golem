@@ -31,8 +31,23 @@ export interface RawPage {
   readonly headers: RawPageHeaders;
 }
 
-/** Default request timeout — this fetch blocks the WebFetch tool (Decision 42, Option A). */
-export const DEFAULT_RAW_FETCH_TIMEOUT_MS = 15_000;
+/**
+ * Default request timeout — this fetch blocks the WebFetch tool (Decision 42,
+ * Option A).
+ *
+ * R9.21: this was **15_000, exactly equal to the PreToolUse hook's
+ * `timeoutSeconds: 15`**, so the fetch was entitled to the hook's whole budget and
+ * anything that had to happen afterwards — extraction, redaction, the cache write,
+ * the serve — ran past the platform's kill deadline. The hook then died with the
+ * page downloaded and cached but never served, and WebFetch fetched it again.
+ *
+ * Two guards now. The PreToolUse hook passes an explicit remaining-budget
+ * argument, so it no longer relies on this default at all; and this default is
+ * lower than any hook timeout, so a caller that forgets to pass one still leaves
+ * room to use what it fetched. Do not raise it to match a hook timeout again —
+ * that equality was the bug.
+ */
+export const DEFAULT_RAW_FETCH_TIMEOUT_MS = 11_000;
 
 /** Does the URL's path (ignoring query/hash) end in `.pdf`? */
 function isPdfPath(url: string): boolean {

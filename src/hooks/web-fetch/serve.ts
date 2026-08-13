@@ -26,6 +26,12 @@ import { join, resolve } from "node:path";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../../compression/index.js";
 import { findDraftByUrl, type WebCacheEntry } from "../../knowledge/index.js";
 import {
+  decideReach,
+  readLoopbackHits,
+  readLoopbackReach,
+  writeLoopbackReach,
+} from "../../proxy/loopback-reach.js";
+import {
   type LoopbackServeState,
   loopbackServeUrl,
   probeLoopbackServe,
@@ -94,9 +100,16 @@ async function storeServedPageRef(projectDir: string, content: string): Promise<
   }
 }
 
+/** R9.19 — injection points for the reachability latch (tests supply a clock). */
+export interface GreenServeOptions {
+  readonly nowMs?: number;
+  /** Where the latch's stderr note goes; omitted → silent. */
+  readonly stderr?: { write(s: string): void };
+}
+
 /**
  * Whether the GREEN path is available *for the session actually running* — the
- * positive evidence §121-B demanded instead of assuming. Three conditions, all
+ * positive evidence §121-B demanded instead of assuming. Four conditions, all
  * cheap, all failing closed to the deny path:
  *
  * 1. A loopback endpoint has published its coordinates (the proxy daemon is up).
@@ -105,10 +118,21 @@ async function storeServedPageRef(projectDir: string, content: string): Promise<
  *    unset (no restart yet) or owned by someone else (a TLS-inspection proxy,
  *    §121-C), we must not rewrite.
  * 3. The endpoint answers a TLS probe validated against that same certificate.
+ * 4. **R9.19** — no evidence that a previous rewrite in this window went
+ *    unfollowed. Signals 1–3 all read this process's own environment, and §125
+ *    measured that a hook's environment reflects the settings FILE rather than what
+ *    Claude Code's TLS stack honours; §121-A records that the two disagree in cloud
+ *    and Desktop-app-managed sessions. So the first three can all pass in a session
+ *    where the rewrite fails with an opaque TLS error. See
+ *    {@link ../../proxy/loopback-reach.js decideReach} for the optimistic-once
+ *    latch that closes that gap.
  *
  * Returns the endpoint state on success, else null (caller serves the floor).
  */
-export async function greenServeState(projectDir: string): Promise<LoopbackServeState | null> {
+export async function greenServeState(
+  projectDir: string,
+  options: GreenServeOptions = {},
+): Promise<LoopbackServeState | null> {
   const state = await readLoopbackServeState(projectDir);
   if (state === null) return null;
 
@@ -126,7 +150,18 @@ export async function greenServeState(projectDir: string): Promise<LoopbackServe
   } catch {
     return null;
   }
-  return (await probeLoopbackServe(state, certPem)) ? state : null;
+  if (!(await probeLoopbackServe(state, certPem))) return null;
+
+  // R9.19 — the probe above proves the endpoint is reachable from HERE. Only a
+  // recorded hit proves it is reachable from Claude Code.
+  const [reach, hits] = await Promise.all([
+    readLoopbackReach(projectDir),
+    readLoopbackHits(projectDir),
+  ]);
+  const decision = decideReach(state.startedAt, reach, hits, options.nowMs ?? Date.now());
+  if (decision.write !== null) await writeLoopbackReach(projectDir, decision.write);
+  options.stderr?.write(`golem hook web-fetch-pre: green path — ${decision.reason}\n`);
+  return decision.allowGreen ? state : null;
 }
 
 /** What a serve needs beyond the content: the original input, and the green verdict. */

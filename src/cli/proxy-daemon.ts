@@ -222,6 +222,27 @@ export function buildSpawnEnv(
 }
 
 /**
+ * R9.20 — set by the parent when it has already resolved and injected the
+ * daemon's credentials, so the child does not resolve them a second time.
+ *
+ * The proxy paid the credential cost TWICE per restart: the parent resolved to
+ * build the child's env, and the child then resolved again on startup — even
+ * though its own injection is `process.env[name] ??= secret`, so the second
+ * result was discarded every time. At the measured 6668ms that was ~13.3s of an
+ * ~18s restart spent finding the same secrets twice.
+ *
+ * A marker rather than inference: "some `GOLEM_UPSTREAM_API_KEY*` var is set"
+ * cannot distinguish "the parent injected everything" from "the parent injected
+ * one of three", and guessing wrong would silently start the proxy without a
+ * credential it needs. The parent knows, so the parent says. An empty resolution
+ * still sets it — "there was nothing to resolve" is an answer, and re-deriving it
+ * costs the same as deriving it.
+ *
+ * Absent for a hand-run `golem proxy run`, which therefore resolves normally.
+ */
+export const CREDENTIALS_INJECTED_ENV = "GOLEM_CREDENTIALS_INJECTED";
+
+/**
  * Is a Golem proxy running for this project, and is it THIS build? Prefers the
  * PID file (exact), falls back to a port probe (catches a proxy started without
  * a pid file).
@@ -348,7 +369,9 @@ export async function startDetached(
     detached: true,
     stdio: log === null ? "ignore" : ["ignore", log.fd, log.fd],
     windowsHide: true,
-    env: buildSpawnEnv(process.env, env),
+    // R9.20: the marker rides with the credentials it describes, so the two can
+    // never disagree — a caller cannot inject one without the other.
+    env: buildSpawnEnv(process.env, { ...env, [CREDENTIALS_INJECTED_ENV]: "1" }),
   });
   // The child holds its own duplicate of the descriptor; ours is done.
   if (log !== null) await log.close().catch(() => {});

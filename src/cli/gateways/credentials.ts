@@ -240,26 +240,41 @@ export async function credentialEnvForProxy(
   const activeStoreId = onDefault ? DEFAULT_STORE_ID : selected;
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
-  // Resolution stays SEQUENTIAL, deliberately. R9.18 measured this as the bulk
-  // of proxy start-up — ~2.6s one-time for the DPAPI host self-test, then ~0.94s
-  // per *stored* account (unstored ones cost ~1ms) — and tried resolving them
-  // concurrently. That bought nothing on Windows, because concurrent PowerShell
-  // startups contend rather than overlap, and the burst of processes was enough
-  // to destabilise the test suite. The fix that actually removes the cost is one
-  // batched decrypt in a single invocation: filed as R9.20, with the numbers.
+  // R9.20 — ONE batched resolution, not one per account.
   //
-  // The active account first, so its credential wins the shared var; then every
-  // account a target references. A missing credential is skipped silently rather
-  // than thrown — an unkeyed target must not stop the proxy starting for the
-  // targets that ARE keyed. `golem target list` reports it.
+  // R9.18 first made these lookups concurrent, which bought nothing on Windows:
+  // concurrent PowerShell startups contend rather than overlap, and the burst was
+  // enough to destabilise the test suite. So it was reverted to sequential and the
+  // real fix filed with the numbers — this is it. Measured before:
+  //
+  //     6668ms  credentialEnvForProxy      <- 98% of all pre-listen() time
+  //       7ms   migrateOnVersionChange
+  //      11ms   loadConfig
+  //     118ms   detectCapability
+  //
+  // broken down as a one-time ~2.6s DPAPI host self-test plus ~0.94s per *stored*
+  // account (unstored ones cost ~1ms, since the blob file is simply absent). Both
+  // terms are gone: `resolveMany` decrypts every blob in a single PowerShell
+  // invocation, and the self-test no longer gates a read at all — the batch proves
+  // the host by doing the real work, and the self-test is kept only to tell "no
+  // working PowerShell" apart from "this blob belongs to another machine" once
+  // something has actually failed.
+  //
+  // The active account is resolved in the SAME batch but applied first, so its
+  // credential still wins the shared var. A missing credential is skipped silently
+  // rather than thrown — an unkeyed target must not stop the proxy starting for
+  // the targets that ARE keyed. `golem gateway list` reports it.
+  const referenced = accountsReferencedByTargets(settings.proxy);
+  const resolved = await store.resolveMany([activeStoreId, ...referenced]);
+
   const out: Record<string, string> = {};
-  const active = await store.resolve(activeStoreId);
+  const active = resolved.get(activeStoreId) ?? null;
   if (active !== null) out[envVarForGateway(activeStoreId)] = active.secret;
 
-  for (const accountId of accountsReferencedByTargets(settings.proxy)) {
+  for (const accountId of referenced) {
     const varName = envVarForGateway(accountId);
     if (out[varName] !== undefined) continue;
-    const hit = await store.resolve(accountId);
+    const hit = resolved.get(accountId) ?? null;
     if (hit !== null) out[varName] = hit.secret;
   }
   return out;

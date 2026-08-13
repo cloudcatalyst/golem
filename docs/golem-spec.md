@@ -128,6 +128,21 @@ Rationale: the proxy is the only mechanism that sees *every* request (Claude Cod
 
 The proxy handles *implicit* savings (compression, dedup, caching). MCP handles *explicit* delegation (Claude chooses to retrieve 5 relevant chunks instead of ingesting 50 files). Both share the same engine, caches, and indexes.
 
+**The layering rule between tools and skills (R9.11, 2026-08-13): skills orchestrate, tools execute — a skill never reimplements a capability an MCP tool already provides.**
+
+Several names appear on both surfaces (`expand` the tool and `/golem/expand`; `stats` and `/golem/stats`; the `level` tool and `/golem/slider`), which invites the question of whether the tools would be better served as skills with packaged scripts. They would not, for four reasons a skill-plus-script structurally cannot answer:
+
+1. **Portability.** §R6.1 extends the pipeline past Claude Code. MCP tools work in any MCP client; `SKILL.md` is one client's file format. Shelling out to `golem search` from a skill binds a core surface to Claude Code.
+2. **Hook enforcement keys on tool names.** The usage-limit park (Decision 45) denies every tool call outside `PARK_EXEMPT_TOOLS`; the local-coder PreToolUse gate distinguishes `coder` from a hand-written `Write`/`Edit`; the CCR PostToolUse hook emits refs `expand` consumes. A Bash-invoked script is a `Bash` call — every one of those gates would have to parse command lines instead.
+3. **Round-trip, typing and permissioning.** Skill path = read `SKILL.md` → Bash spawn → node cold start → re-load the vector index → parse stdout prose. Tool path = one stdio call into a warm server already holding the index, Zod-validated in and structured out; `search`/`fetch`/`expand` are called reflexively many times a session. Separately, `wiki_upsert` as a tool carries its own allow/deny, where as a script it collapses into blanket `Bash` permission.
+4. **The context-cost argument is largely dead.** The usual case for skills is that MCP schemas sit in context permanently. Claude Code defers them (names listed, schemas fetched on demand — notes §102), so converting would pay skill-shaped costs for tool-shaped work.
+
+The converse is the other half of the rule: a capability that is **rare, procedural, and needs prose about *when*** belongs in a skill — one that *calls* the tool. That is why `/golem/research` climbs `wiki_read` → `search` → `fetch` rather than reimplementing any of them.
+
+Enforced by `tests/contract/skills-tools-layering.contract.test.ts`, which flags a `golem <verb>` invocation in any installed `SKILL.md` whose verb names a tool capability. A deliberate exception is declared in the skill as `<!-- golem:layering-exception <verb> — <reason> -->` and must carry a reason; the `slider`/`bypass` skills use it, because level 0 turns redaction off and therefore must not be reachable from any tool call.
+
+**No tool is demoted without a call count to justify it.** Asked of live telemetry on this project (2026-08-13, all-time window): `coder` 45, `search` 44, `wiki_read` 1, `ingest` 1, everything else zero — but the zeros were an **instrument gap, not evidence**. `expand`, `stats`, `level` and `devices` never called `instrumented()`, so three of the four demotion candidates could not be measured at all. R9.11 therefore cut nothing and fixed the instrument instead; the question is answerable next time, on numbers.
+
 ### 2.2 Device registry & job scheduler
 - Workers run a lightweight agent that reports: GPU model, VRAM, current load, installed models, disk space.
 - Hub maintains a capability table and routes jobs by **task → minimum capability tier** (tiers map to the hardware profiles above):

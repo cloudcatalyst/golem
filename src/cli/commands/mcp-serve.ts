@@ -104,6 +104,11 @@ export function createCoderDispatcher(
 ): TargetDispatcher {
   return createTargetDispatcher({
     inference,
+    // R10.9 — where `inference` actually listens. Without this the dispatcher can
+    // only guess by provider name, and two Ollama servers on different loopback
+    // ports become indistinguishable. Wired from the same setting the service
+    // itself is built from, so the two cannot disagree.
+    localServiceBaseUrl: settings.inference.ollama_base_url,
     // NOT `settings.proxy` — see above.
     settings: withDefaultTarget(settings),
     workerTargets: settings.inference.worker_targets,

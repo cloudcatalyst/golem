@@ -79,6 +79,37 @@ export const DEFAULT_MIN_DEDUP_CHARS = 256;
 export const CCR_MARKER_RE = /hash=([0-9a-f]{64})/;
 
 /**
+ * R9.23 — tools whose results are NEVER dedup candidates, however large or
+ * repeated.
+ *
+ * CCR's bargain is "replace bulk with a reference the agent can expand on
+ * demand". That assumes expansion is always available. For a **tool schema** it
+ * is not, and the failure is a deadlock rather than an inconvenience:
+ *
+ * `ToolSearch` is how a deferred tool's schema is loaded. Under snooze
+ * enforcement (Decision 45) the only permitted call is `mcp__golem__snooze` —
+ * itself deferred — so the agent must `ToolSearch` for its schema first. Every
+ * such call came back elided (observed live twice: 2026-08-10 and 2026-08-13),
+ * and `expand`, which would retrieve the reference, is *also* deferred and also
+ * denied by enforcement. The agent cannot park, so the note that was supposed to
+ * survive the session is never written.
+ *
+ * The elision was not even wrong-in-detail: the dedup keys on the response BODY,
+ * so two differently-spelled queries resolving to the same schema collide and no
+ * rephrasing escapes it (confirmed 2026-08-13 — same hash across four spellings
+ * within a session, different hash across sessions).
+ *
+ * Beyond the deadlock, a schema is not prose. It is the executable contract for a
+ * call the model is about to make, and unlike a file excerpt it cannot be
+ * re-derived, narrowed, or grepped for. So the exemption is unconditional rather
+ * than "only while enforcement is active" — a conditional one would leave a
+ * confusing elision in every other session for no gain.
+ *
+ * Cheap, too: §102 measured `ToolSearch` results at a few hundred tokens.
+ */
+export const DEDUP_EXEMPT_TOOLS: readonly string[] = ["ToolSearch"];
+
+/**
  * Inline retrieval marker, following Headroom's marker convention
  * ("... Retrieve more: hash=<h>", verification-notes.md §2) so a future P2
  * sidecar and expand share one `hash=` grammar. Pure function of
@@ -114,6 +145,17 @@ interface CompressContext {
   readonly refs: Map<string, CCRRef>;
   /** refId -> original content awaiting persistence. */
   readonly pendingOriginals: Map<string, string>;
+  /**
+   * R9.23 — `tool_use` ids belonging to {@link DEDUP_EXEMPT_TOOLS}, collected
+   * from assistant messages as the array is walked in order.
+   *
+   * Filled from the PREFIX, which is what keeps the determinism obligation in the
+   * module doc intact: the API requires every `tool_result` to name a
+   * `tool_use_id` from an EARLIER assistant message, so by the time a result is
+   * transformed its id is already known — and the transform of `messages[i]`
+   * still depends only on the original bytes of `messages[0..i]`.
+   */
+  readonly exemptToolUseIds: Set<string>;
   readonly dedup: MutableDelta;
   readonly compaction: MutableDelta;
 }
@@ -195,11 +237,45 @@ function transformToolResultContent(content: unknown, ctx: CompressContext): unk
   return content;
 }
 
+/**
+ * R9.23 — note the ids of `tool_use` blocks calling an exempt tool, so their
+ * results can be recognized when they arrive in the next user message.
+ *
+ * Matching on the id rather than sniffing the result text is deliberate: the
+ * conversation already carries the authoritative tool NAME, and a content
+ * heuristic in a byte-stability-critical stage would be a guess where a fact is
+ * available.
+ */
+function collectExemptToolUses(message: Message, ctx: CompressContext): void {
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const block of content) {
+    if (
+      isRecord(block) &&
+      block.type === "tool_use" &&
+      typeof block.name === "string" &&
+      typeof block.id === "string" &&
+      DEDUP_EXEMPT_TOOLS.includes(block.name)
+    ) {
+      ctx.exemptToolUseIds.add(block.id);
+    }
+  }
+}
+
 function transformUserBlock(block: unknown, ctx: CompressContext): unknown {
   if (!isRecord(block)) {
     return block;
   }
   if (block.type === "tool_result") {
+    // R9.23: an exempt tool's result passes through byte-faithful — not elided,
+    // not compacted, and deliberately NOT seeded into `seen` either. Seeding it
+    // would let a schema silently become the "first occurrence" that elides some
+    // later, non-exempt duplicate, which is the same trap one level along.
+    if (typeof block.tool_use_id === "string" && ctx.exemptToolUseIds.has(block.tool_use_id)) {
+      return block;
+    }
     const content = transformToolResultContent(block.content, ctx);
     return content === block.content ? block : { ...block, content };
   }
@@ -217,7 +293,9 @@ function transformUserBlock(block: unknown, ctx: CompressContext): unknown {
  */
 function transformMessage(message: Message, ctx: CompressContext): Message {
   if (message.role !== "user") {
-    // Assistant (and any unknown role) passes through byte-faithful.
+    // Assistant (and any unknown role) passes through byte-faithful — but is
+    // still READ, for the exempt `tool_use` ids R9.23 needs (see the ctx field).
+    collectExemptToolUses(message, ctx);
     return message;
   }
   const content = message.content;
@@ -285,6 +363,7 @@ export class NativeLosslessCompression implements CompressionService {
       seen: new Set(),
       refs: new Map(),
       pendingOriginals: new Map(),
+      exemptToolUseIds: new Set(),
       dedup: newDelta(),
       compaction: newDelta(),
     };

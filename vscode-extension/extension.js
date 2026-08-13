@@ -14,6 +14,7 @@ const {
   renderHtml,
   levelLabel,
   fmtTokens,
+  gatewayRows,
   SLIDER_LEVELS,
 } = require("./render.js");
 
@@ -315,8 +316,12 @@ async function pickAccount() {
   // instantly; only block on a CLI round-trip the first time it is opened.
   let accounts = lastModel && Array.isArray(lastModel.accounts) ? lastModel.accounts : [];
   if (accounts.length === 0) {
-    const report = await golemJson(["gateway", "list", "--json", "--dir", cwd()]);
-    accounts = report && Array.isArray(report.accounts) ? report.accounts : [];
+    // R10.11: this read was `report.accounts`, a key R9.23 renamed to `gateways`.
+    // buildModel had been taught both spellings; this cold path never was, so the
+    // FIRST open of the picker on a fresh window found nothing and reported "no
+    // upstream accounts configured" on a project that had several. One helper
+    // knows the shape now (render.gatewayRows) and both call sites use it.
+    accounts = gatewayRows(await golemJson(["gateway", "list", "--json", "--dir", cwd()]));
   }
   if (accounts.length === 0) {
     vscode.window.showInformationMessage("Golem: no upstream accounts configured.");

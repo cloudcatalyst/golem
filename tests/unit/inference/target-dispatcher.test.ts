@@ -750,14 +750,30 @@ describe("R10.8 — llamacpp targets", () => {
     };
   }
 
-  it("takes the unredacted direct path for a LOOPBACK llama.cpp server", async () => {
+  /**
+   * R10.9 — REWRITTEN. This test previously asserted the defect as the contract:
+   * that a loopback `llamacpp` target produced `sent.length === 0` and arrived at
+   * `inference.calls[0]`, i.e. that declaring a llama.cpp server on `:8080` drafted
+   * on the Ollama-backed tiered service at `:11434` instead. That is what R10.9
+   * fixes, so the assertions had to invert — the previous ones could only pass
+   * while the bug was present.
+   *
+   * Unredacted is still correct here and is unchanged: the endpoint is loopback, so
+   * nothing leaves the machine. What changed is WHERE the bytes go.
+   */
+  it("dispatches a LOOPBACK llama.cpp target to that server, unredacted (R10.9)", async () => {
     const inference = stubInference();
-    const { fetchImpl, sent } = captureFetch({});
+    const { fetchImpl, sent } = captureFetch({
+      model: "qwen3-coder-30b",
+      choices: [{ message: { content: "draft" } }],
+    });
+    const audits: { targetId: string | null; reason: string; redactedCount: number }[] = [];
     const dispatcher = createTargetDispatcher({
       inference,
       settings: llamacpp("http://127.0.0.1:8080/v1"),
       fetchImpl,
       env: {},
+      audit: (e) => audits.push(e),
     });
 
     const result = await dispatcher.dispatch({
@@ -768,9 +784,125 @@ describe("R10.8 — llamacpp targets", () => {
 
     // Trust was DERIVED as local from the loopback URL — the target declares none.
     expect(result.trust).toBe("local");
+    // It reached THAT server, not Ollama. This is the whole defect.
+    expect(inference.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.url).toContain("127.0.0.1:8080");
+    // Unredacted, because loopback: the prompt arrives whole.
+    expect(result.redactedCount).toBe(0);
+    expect(sent[0]?.body).toContain(FAKE_KEY);
+    expect(result.text).toBe("draft");
+    // The gate is proven from the audit record, so it must name the endpoint.
+    expect(audits[0]?.reason).toContain("127.0.0.1:8080");
+    expect(audits[0]?.reason).toContain("not the tiered service");
+  });
+
+  it("still routes a loopback OLLAMA target to the tiered service (role catalog)", async () => {
+    // The special case that survives: only `InferenceService` maps a ROLE through
+    // the hardware-tier catalog, so it stays the destination when the target really
+    // is its endpoint. Narrowing the branch must not break this.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: {
+        ...REMOTE,
+        gateways: [
+          { id: "olla", provider: "ollama", base_url: "http://127.0.0.1:11434", models: ["q"] },
+        ],
+        targets: [{ id: "olla-local", gateway: "olla", model: "q" }],
+      },
+      localServiceBaseUrl: "http://127.0.0.1:11434",
+      fetchImpl,
+      env: {},
+    });
+
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      targetId: "olla-local",
+    });
+
+    expect(result.trust).toBe("local");
     expect(result.redactedCount).toBe(0);
     expect(sent).toHaveLength(0);
     expect(inference.calls[0]?.prompt).toBe(SECRET_PROMPT);
+  });
+
+  it("distinguishes a second loopback Ollama from the tiered service by ORIGIN", async () => {
+    // Two Ollama servers, different ports. The provider name cannot tell them
+    // apart; the wired endpoint can. Without `localServiceBaseUrl` this target
+    // would be swallowed by the tiered service — the residual imprecision the
+    // fallback documents.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({
+      model: "q",
+      choices: [{ message: { content: "draft" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: {
+        ...REMOTE,
+        gateways: [
+          { id: "olla2", provider: "ollama", base_url: "http://127.0.0.1:11435", models: ["q"] },
+        ],
+        targets: [{ id: "olla2-local", gateway: "olla2", model: "q" }],
+      },
+      localServiceBaseUrl: "http://127.0.0.1:11434",
+      fetchImpl,
+      env: {},
+    });
+
+    await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT, targetId: "olla2-local" });
+
+    expect(inference.calls).toHaveLength(0);
+    expect(sent[0]?.url).toContain("127.0.0.1:11435");
+  });
+
+  /**
+   * R10.9 asked this explicitly: a loopback target whose provider is neither
+   * `ollama` nor `llamacpp` must not reach the unredacted branch. `defaultTrustFor`
+   * gives it `third-party`, so loopback alone buys nothing — confirming that stays
+   * true is the difference between "narrow widening" and "any localhost URL turns
+   * redaction off".
+   */
+  it("does NOT trust a loopback target whose provider is not self-hosted", async () => {
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({
+      model: "gpt-x",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: {
+        ...REMOTE,
+        gateways: [
+          {
+            id: "shim",
+            provider: "openai",
+            base_url: "http://127.0.0.1:9099/v1",
+            models: ["gpt-x"],
+          },
+        ],
+        targets: [{ id: "shim-local", gateway: "shim", model: "gpt-x" }],
+      },
+      fetchImpl,
+      env: {},
+      // A credential is required for this provider; supply one so the test fails on
+      // the redaction question it is asking about, not on auth.
+      resolveKey: () => "k",
+    });
+
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      targetId: "shim-local",
+    });
+
+    expect(result.trust).toBe("third-party");
+    expect(result.redactedCount).toBeGreaterThan(0);
+    expect(sent[0]?.body).not.toContain(FAKE_KEY);
+    expect(inference.calls).toHaveLength(0);
   });
 
   it("REDACTS a llama.cpp server on the LAN, at its trust floor", async () => {

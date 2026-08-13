@@ -115,4 +115,6 @@ export {
   defaultRevalidate,
   runWebFetchPost,
   runWebFetchPre,
+  WEB_FETCH_PRE_TIMEOUT_SECONDS,
+  WEB_FETCH_SERVE_RESERVE_MS,
 } from "./web-fetch.js";

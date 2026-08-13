@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   CCR_MARKER_RE,
   ccrMarker,
+  DEDUP_EXEMPT_TOOLS,
   NativeLosslessCompression,
   STAGE_COMPACTION,
   STAGE_DEDUP,
@@ -234,5 +235,152 @@ describe("NativeLosslessCompression stats accounting", () => {
     expect(aggregate.projectId).toBeNull();
     expect(aggregate.requests).toBe(2);
     expect(aggregate.tokensBefore).toBeGreaterThanOrEqual(aggregate.tokensAfter);
+  });
+});
+
+/**
+ * R9.23 — a tool SCHEMA must never be replaced by a reference.
+ *
+ * Hit live twice (2026-08-10, 2026-08-13). Under snooze enforcement the only
+ * permitted call is `mcp__golem__snooze`, which is deferred — so its schema has to
+ * be loaded with `ToolSearch` first. Every such response came back elided, and
+ * `expand` (the way back) is itself deferred and denied by enforcement. The agent
+ * could not park, so the note meant to survive the session was never written.
+ *
+ * The dedup keys on the response BODY, which is why no rephrasing escaped it: four
+ * different query spellings produced one hash within a session.
+ */
+describe("NativeLosslessCompression tool-schema exemption (R9.23)", () => {
+  /** A ToolSearch response: two spellings, one body — the live collision. */
+  const SCHEMA = JSON.stringify({
+    functions: [
+      {
+        name: "mcp__golem__snooze",
+        description: "Park the session at the usage limit.".repeat(8),
+        parameters: {
+          type: "object",
+          properties: {
+            until: { type: "string", description: "ISO reset time from the rate-limit headers." },
+            note: { type: "string", description: "Where you are up to plus next steps." },
+          },
+          required: ["until"],
+        },
+      },
+    ],
+  });
+
+  function toolSearchCall(id: string, query: string): Message {
+    return {
+      role: "assistant",
+      content: [{ type: "tool_use", id, name: "ToolSearch", input: { query, max_results: 5 } }],
+    };
+  }
+
+  it("never elides a repeated ToolSearch response, however identical", async () => {
+    // Long enough to be a dedup candidate, so the exemption is what spares it.
+    expect(SCHEMA.length).toBeGreaterThan(256);
+
+    const svc = await makeService();
+    const messages: readonly Message[] = [
+      userText("park the session"),
+      toolSearchCall("toolu_ts1", "select:mcp__golem__snooze"),
+      toolResult("toolu_ts1", SCHEMA),
+      // A different spelling that resolves to the same tool — the exact live case.
+      toolSearchCall("toolu_ts2", "snooze park usage limit until note"),
+      toolResult("toolu_ts2", SCHEMA),
+    ];
+    const result = await svc.compress(messages, LEVEL_1, PROJECT);
+
+    // BOTH schemas arrive intact. The second one carrying a marker instead is the
+    // deadlock: the agent cannot read the contract for the only call it may make.
+    expect(contentOfToolResult(result.messagesOut[2] as Message)).toBe(SCHEMA);
+    expect(contentOfToolResult(result.messagesOut[4] as Message)).toBe(SCHEMA);
+    expect(JSON.stringify(result.messagesOut)).not.toMatch(CCR_MARKER_RE);
+    expect(result.refs).toHaveLength(0);
+  });
+
+  /**
+   * The control. Without it the test above could pass because dedup stopped
+   * working at all, which is how a green suite hides a broken stage.
+   */
+  it("still elides the same repeat when the tool is not exempt", async () => {
+    const svc = await makeService();
+    const messages: readonly Message[] = [
+      userText("read it twice"),
+      assistantToolUse("toolu_a"),
+      toolResult("toolu_a", SCHEMA),
+      assistantToolUse("toolu_b"),
+      toolResult("toolu_b", SCHEMA),
+    ];
+    const result = await svc.compress(messages, LEVEL_1, PROJECT);
+
+    expect(contentOfToolResult(result.messagesOut[2] as Message)).toBe(SCHEMA);
+    expect(String(contentOfToolResult(result.messagesOut[4] as Message))).toMatch(CCR_MARKER_RE);
+    expect(result.refs).toHaveLength(1);
+  });
+
+  it("does not let an exempt result become the first occurrence that elides others", async () => {
+    // The trap one level along: if a schema seeded the seen-set, a later
+    // non-exempt duplicate would be elided against content that was never
+    // itself replaceable. Both must survive.
+    const svc = await makeService();
+    const messages: readonly Message[] = [
+      userText("schema first, then a read of the same bytes"),
+      toolSearchCall("toolu_ts", "select:mcp__golem__snooze"),
+      toolResult("toolu_ts", SCHEMA),
+      assistantToolUse("toolu_r"),
+      toolResult("toolu_r", SCHEMA),
+    ];
+    const result = await svc.compress(messages, LEVEL_1, PROJECT);
+
+    expect(contentOfToolResult(result.messagesOut[2] as Message)).toBe(SCHEMA);
+    expect(contentOfToolResult(result.messagesOut[4] as Message)).toBe(SCHEMA);
+    expect(result.refs).toHaveLength(0);
+  });
+
+  it("exempts a block-array tool_result too, not just a string one", async () => {
+    // ToolSearch results arrive as `content: [{type:"text",…}]` as often as a bare
+    // string, and an exemption that only covered one shape would be a coin flip.
+    const svc = await makeService();
+    const blockResult = (id: string): Message => ({
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: id, content: [{ type: "text", text: SCHEMA }] },
+      ],
+    });
+    const messages: readonly Message[] = [
+      userText("park"),
+      toolSearchCall("toolu_b1", "+snooze"),
+      blockResult("toolu_b1"),
+      toolSearchCall("toolu_b2", "select:mcp__golem__snooze"),
+      blockResult("toolu_b2"),
+    ];
+    const result = await svc.compress(messages, LEVEL_1, PROJECT);
+    expect(JSON.stringify(result.messagesOut)).not.toMatch(CCR_MARKER_RE);
+  });
+
+  it("keeps prefix bytes stable when the conversation is extended", async () => {
+    // The determinism obligation in the module doc: the exemption reads the
+    // PREFIX (a tool_result's tool_use always precedes it), so appending turns
+    // must not change earlier bytes — a prompt-cache miss on every park otherwise.
+    const svc = await makeService();
+    const prefix: readonly Message[] = [
+      userText("park the session"),
+      toolSearchCall("toolu_ts1", "select:mcp__golem__snooze"),
+      toolResult("toolu_ts1", SCHEMA),
+    ];
+    const first = await svc.compress(prefix, LEVEL_1, PROJECT);
+    const extended = await svc.compress(
+      [...prefix, toolSearchCall("toolu_ts2", "+snooze"), toolResult("toolu_ts2", SCHEMA)],
+      LEVEL_1,
+      PROJECT,
+    );
+    expect(JSON.stringify(extended.messagesOut.slice(0, 3))).toBe(
+      JSON.stringify(first.messagesOut),
+    );
+  });
+
+  it("names the exempt tools so the list is reviewable", () => {
+    expect(DEDUP_EXEMPT_TOOLS).toContain("ToolSearch");
   });
 });

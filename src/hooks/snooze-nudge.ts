@@ -148,12 +148,17 @@ export function snoozeEnforceReason(resetAtIso: string, utilization: number): st
   return (
     `**Golem** Usage-limit ENFORCEMENT is on and the session window is ~${pct}% used. ` +
     `The ONLY permitted action now is the \`mcp__golem__snooze\` tool ` +
-    `(\`until="${resetAtIso}"\`) — every other tool is denied until you park or the ` +
-    `window resets, so do NOT try to run \`golem task add\` first: pass ` +
-    `\`note="<where you're up to + next steps>"\` to snooze instead and it files that ` +
-    `durable task for you, before the wait. Call snooze now: your context is retained ` +
-    `in-place and the session resumes automatically at reset. To lift enforcement, the ` +
-    `user can set \`snooze.enforce\` false (env \`GOLEM_SNOOZE_ENFORCE=false\`).`
+    `(\`until="${resetAtIso}"\`, plus \`note="<where you're up to + next steps>"\`) — ` +
+    `every other tool is denied until you park or the window resets, so do NOT try to ` +
+    `run \`golem task add\` first: the \`note\` files that durable task for you, before ` +
+    `the wait. Call snooze now: your context is retained in-place and the session ` +
+    // R9.23: the parameters are named above precisely so this is never REQUIRED —
+    // but say it, because the alternative was an agent that could not discover them
+    // and therefore could not park at all.
+    `resumes automatically at reset. (\`ToolSearch\` and \`mcp__golem__expand\` are also ` +
+    `permitted, if you need to load a schema or resolve a reference to make that call.) ` +
+    `To lift enforcement, the user can set \`snooze.enforce\` false ` +
+    `(env \`GOLEM_SNOOZE_ENFORCE=false\`).`
   );
 }
 

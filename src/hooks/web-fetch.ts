@@ -62,6 +62,37 @@ export { MAX_SERVED_CHARS } from "./web-fetch/serve.js";
 /** Default freshness window for a cached URL. */
 export const DEFAULT_WEB_CACHE_TTL_HOURS = 168; // 7 days
 
+/**
+ * R9.21 — the PreToolUse(WebFetch) hook's wall-clock budget, in seconds.
+ *
+ * **One definition, two consumers.** `golem init` writes this as the hook's
+ * `timeoutSeconds` (`src/cli/init-hooks.ts`) and the hook below derives its own
+ * deadline from it. The hook cannot read the value out of its payload, so the only
+ * alternative to a shared constant is two numbers that must agree by hand — and
+ * they did not: `DEFAULT_RAW_FETCH_TIMEOUT_MS` was **also 15s**, exactly equal to
+ * the platform's kill deadline, so the self-fetch was permitted to consume the
+ * entire budget and leave nothing for the work that has to follow it.
+ */
+export const WEB_FETCH_PRE_TIMEOUT_SECONDS = 15;
+
+/**
+ * How much of the budget is held back for everything after the bytes arrive:
+ * text extraction, redaction, the cache write, and the serve itself.
+ *
+ * This is the R9.21 defect in one number. Observed on
+ * `https://www.rfc-editor.org/rfc/rfc5280` (327,623 chars extracted): the fetch
+ * finished *inside* its 15s timeout, the cache write landed (`raw: true`), and
+ * then the hook was killed before its stdout could be read — so Claude Code ran
+ * WebFetch anyway and paid a second full download plus a summarizer call. The user
+ * saw a normal answer, so nothing looked wrong; the cost was silent.
+ *
+ * A reserve makes the failure mode honest: either Golem serves within budget, or
+ * it gives up early enough to fail open cleanly with only a PARTIAL download
+ * spent. What it may never do is pay for a whole page and get killed on the way
+ * to using it.
+ */
+export const WEB_FETCH_SERVE_RESERVE_MS = 4_000;
+
 const payloadSchema = z
   .object({
     cwd: z.string().optional(),
@@ -125,8 +156,26 @@ export interface WebFetchHookOptions {
    * Code's prompt-specific WebFetch answer. A raw fetch that throws caches
    * nothing (an honest miss) — the answer is never stored. Absent → legacy
    * answer-capture behavior.
+   *
+   * R9.21 — receives the milliseconds it has left. The fetcher must treat this as
+   * a hard bound, because overrunning it does not merely make the hook slow: the
+   * platform kills the hook and WebFetch runs anyway, so the download is paid for
+   * twice.
    */
-  readonly fetchRaw?: (url: string) => Promise<RawPage>;
+  readonly fetchRaw?: (url: string, budgetMs?: number) => Promise<RawPage>;
+  /**
+   * R9.21 — the hook's total wall-clock budget in ms, matching the
+   * `timeoutSeconds` `golem init` wrote. Injected only by tests; production
+   * derives it from {@link WEB_FETCH_PRE_TIMEOUT_SECONDS}, which is the same
+   * constant init writes.
+   */
+  readonly budgetMs?: number;
+  /**
+   * R9.21 — override {@link WEB_FETCH_SERVE_RESERVE_MS}. Tests only: a 4s reserve
+   * would otherwise force any test of the out-of-budget branch to sleep for longer
+   * than that, in a suite already sensitive to timing under load (R10.2).
+   */
+  readonly serveReserveMs?: number;
   /** Per-project gate for {@link fetchRaw}; CLI reads `knowledge.webcache_fetch_raw`. */
   readonly fetchRawEnabled?: (projectDir: string) => Promise<boolean>;
 }
@@ -167,13 +216,29 @@ async function fetchCacheAndServe(
   nowMs: number,
   nowIso: string,
   ctx: ServeContext,
+  /** R9.21 — `Date.now()`-scale instant after which the platform will kill us. */
+  deadlineMs: number,
 ): Promise<boolean> {
   const fetchRaw = options.fetchRaw;
   if (fetchRaw === undefined) return false; // caller guarantees this; narrows the type
 
+  // R9.21 — hand the fetcher only what is left after reserving time to USE the
+  // bytes. Declining before starting an expensive fetch we cannot finish is the
+  // gate's "either it serves, or it declines early": the alternative is paying for
+  // a full download and then being killed on the way to serving it.
+  const reserveMs = options.serveReserveMs ?? WEB_FETCH_SERVE_RESERVE_MS;
+  const fetchBudgetMs = deadlineMs - Date.now() - reserveMs;
+  if (fetchBudgetMs <= 0) {
+    io.stderr.write(
+      `golem hook web-fetch-pre: no budget left to fetch ${url} within the hook's ` +
+        `${WEB_FETCH_PRE_TIMEOUT_SECONDS}s window; allowing WebFetch (one fetch, not two)\n`,
+    );
+    return false;
+  }
+
   let raw: RawPage;
   try {
-    raw = await fetchRaw(url);
+    raw = await fetchRaw(url, fetchBudgetMs);
   } catch (err) {
     io.stderr.write(
       `golem hook web-fetch-pre: raw fetch of ${url} failed (${
@@ -190,14 +255,36 @@ async function fetchCacheAndServe(
   const meta: WebCacheMeta = { ...metaFrom({ status: 200, ...raw.headers }, nowMs), raw: true };
   await cache.put(url, content, nowIso, meta);
 
-  // Ingest is best-effort — a KB failure must never block serving the page.
-  try {
-    await ingestWebPage(options, projectDir, url, content, nowIso);
-  } catch {
-    // best-effort only
-  }
-
+  // R9.21 — SERVE FIRST, ingest after.
+  //
+  // This ordering is the other half of the double-fetch bug and it was the more
+  // expensive half. Ingest embeds the whole page into the vector KB, which on a
+  // 327KB document is seconds of work — and it used to run BEFORE the serve, on
+  // the critical path, inside a hook the platform kills at
+  // `WEB_FETCH_PRE_TIMEOUT_SECONDS`. So the fetch could finish comfortably, the
+  // cache write could land, and the hook could still be killed before its stdout
+  // was read, at which point WebFetch ran and downloaded the same page again.
+  //
+  // Serving is the part that PREVENTS the second fetch; indexing is a bonus. Doing
+  // the bonus first was strictly backwards.
   await serveFetched(io, projectDir, url, content, ctx);
+
+  // Best-effort, and now genuinely optional: the page is already served and
+  // cached, so skipping this costs a KB entry, not a download. A KB failure must
+  // never block serving — and nor may a slow one, which is what the budget check
+  // is for. The next fetch is a cache hit either way.
+  if (Date.now() < deadlineMs) {
+    try {
+      await ingestWebPage(options, projectDir, url, content, nowIso);
+    } catch {
+      // best-effort only
+    }
+  } else {
+    io.stderr.write(
+      `golem hook web-fetch-pre: served ${url} but skipped the KB ingest — out of budget. ` +
+        "The page is cached, so the next fetch is a hit.\n",
+    );
+  }
   return true;
 }
 
@@ -213,6 +300,11 @@ export async function runWebFetchPre(
   io: HookIo,
   options: WebFetchHookOptions = {},
 ): Promise<number> {
+  // R9.21 — the clock starts at the top of the hook, not at the fetch: reading
+  // stdin, loading config and probing the loopback endpoint all spend the same
+  // budget the platform is counting down.
+  const startedMs = Date.now();
+  const deadlineMs = startedMs + (options.budgetMs ?? WEB_FETCH_PRE_TIMEOUT_SECONDS * 1_000);
   try {
     const parsed = payloadSchema.safeParse(JSON.parse(await readAll(io.stdin)));
     if (!parsed.success) return 0;
@@ -237,14 +329,17 @@ export async function runWebFetchPre(
     // closed here is what keeps a cert-less session byte-identical to R9.7.
     const ctx: ServeContext = {
       toolInput: parsed.data.tool_input,
-      green: await greenServeState(projectDir),
+      // R9.19: the verdict is latched per endpoint instance, so this also decides
+      // whether a previous optimistic rewrite went unfollowed. Its note goes to
+      // stderr — an invisible trust decision is one nobody can debug.
+      green: await greenServeState(projectDir, { stderr: io.stderr }),
     };
 
     // "Should we self-fetch and serve the raw page for this miss?" In raw mode we
     // do; otherwise we fall open and let the post hook capture WebFetch's answer.
     const serveMiss = (): Promise<boolean> =>
       rawMode
-        ? fetchCacheAndServe(io, projectDir, cache, url, options, nowMs, nowIso, ctx)
+        ? fetchCacheAndServe(io, projectDir, cache, url, options, nowMs, nowIso, ctx, deadlineMs)
         : Promise.resolve(false);
 
     const entry = await cache.get(url);

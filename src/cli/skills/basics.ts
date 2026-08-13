@@ -10,6 +10,10 @@ description: Show or set the Golem token-savings slider (0 passthrough … 3 agg
 invocationMode: user
 ---
 
+<!-- golem:layering-exception slider — level 0 turns redaction OFF, so by design no
+     tool call can reach it (the \`level\` tool refuses 0). Naming the CLI command for
+     the user to run in their OWN terminal is the point, not a shortcut around the tool. -->
+
 The user wants to view or change Golem's savings slider.
 
 Arguments: $ARGUMENTS
@@ -47,13 +51,17 @@ Arguments: $ARGUMENTS
 Extract the CCR reference id from the arguments (or from the marker in recent
 context, e.g. \`hash=<sha256>\` / \`[golem:ccr ref=...]\`) and call the
 \`expand\` MCP tool with it. Show the retrieved original content. If the
-reference is unknown, report that and suggest \`golem stats\` to check the store.
+reference is unknown, report that and call the \`stats\` MCP tool to check the
+store — it reports \`ccr_refs_stored\`, which answers whether anything is there.
 `;
 
 const bypass = `---
 description: Send the next request(s) untouched — bypass Golem compression
 invocationMode: user
 ---
+
+<!-- golem:layering-exception slider — same reason as the \`slider\` skill: a true full
+     bypass is level 0, which no tool call may set. The CLI command is named FOR the user. -->
 
 The user wants to bypass Golem's compression pipeline.
 
