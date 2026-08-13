@@ -88,6 +88,27 @@ describe("HeadroomMemorySidecar (fake worker)", () => {
     expect(sc.isRunning()).toBe(false);
   });
 
+  it("says the worker script was not shipped, instead of failing open in silence (R10.5)", async () => {
+    // The exact state every BUILT install was in: the script `copy-assets.mjs`
+    // forgot to copy. Still fail-open — false, then null — but no longer mute.
+    const logs: string[] = [];
+    const sc = track(
+      new HeadroomMemorySidecar({
+        command: process.execPath,
+        launchArgs: [],
+        workerPath: path.join(path.dirname(FAKE_WORKER), "never-shipped-worker.py"),
+        startupTimeoutMs: 3000,
+        log: (m) => logs.push(m),
+      }),
+    );
+    expect(await sc.start()).toBe(false);
+    expect(await sc.search("x", "proj-1", 5)).toBeNull();
+    expect(sc.isRunning()).toBe(false);
+    expect(logs.join("\n")).toContain("worker script not found");
+    // Once — an absent file does not appear mid-run, so this must not log per search.
+    expect(logs.filter((l) => l.includes("worker script not found"))).toHaveLength(1);
+  });
+
   it("fails open (null) when the worker returns a non-200 on /memory/search", async () => {
     const sc = track(fakeSidecar({ FAKE_MODE: "badstatus" }));
     expect(await sc.start()).toBe(true);

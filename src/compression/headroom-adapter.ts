@@ -33,6 +33,7 @@
  */
 
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { request } from "undici";
@@ -225,6 +226,29 @@ class HeadroomWorkerProcess {
   }
 
   async #startInner(): Promise<boolean> {
+    // Say so when the script itself is missing, rather than spawning `uv` on a
+    // path that is not there and reporting the generic startup failure that
+    // comes back (R10.5).
+    //
+    // This is not a hypothetical: `scripts/copy-assets.mjs` shipped only one of
+    // the two workers, so on every BUILT install the memory sidecar's script was
+    // absent. It failed open, as designed — and said nothing recognisable, so a
+    // feature that was on in config did nothing for as long as nobody looked.
+    // Fail-open is unchanged (`false` here, `null` from every public method);
+    // the only difference is that the user is told which of the two it is: a
+    // broken install, not a missing `uv`.
+    //
+    // Deliberately not retried: a file that is absent at start does not appear
+    // mid-run, so the memoized `false` keeps this to one message instead of one
+    // per search. `stop()` clears it, so a restart re-checks.
+    if (!existsSync(this.#workerPath)) {
+      this.#log(
+        `worker script not found at ${this.#workerPath} — this install did not ship it, so ` +
+          "the sidecar is unavailable and contributes nothing. Reinstall golem-run, or run " +
+          "`npm run build` if this is a source checkout.",
+      );
+      return false;
+    }
     const args = [
       ...this.#launchArgs,
       this.#workerPath,

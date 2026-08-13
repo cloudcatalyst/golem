@@ -3,13 +3,16 @@
  * store + WS-D local inference, so `golem mcp serve`, `golem index`, and
  * `golem devices` share one construction path.
  *
- * Embedder selection (zero-setup by default): if Ollama is reachable AND the
- * tier's embedding model is pulled, use the SEMANTIC bge-m3 embedder (WS-D C3);
- * otherwise fall back to the pure-TS hashing embedder (LEXICAL) so `search`
- * works out of the box with no model download. The choice is made ONCE here so an
- * index is never built with mixed embedders. The durable FileVectorDriver
- * persists under `<project>/.golem/knowledge`, so an index survives across
- * sessions (§26 refinement).
+ * Embedder selection (zero-setup by default): if Ollama is reachable AND an
+ * embedding model is pulled, use the SEMANTIC embedder (WS-D C3); otherwise fall
+ * back to the pure-TS hashing embedder (LEXICAL) so `search` works out of the box
+ * with no model download. WHICH semantic model is decided by `planBuildEmbedder`
+ * (R10.6): an existing index's own embedder outranks the detected hardware tier's,
+ * because the tier is a probe that degrades on failure and the index's embedder is
+ * a recorded fact. The choice is made ONCE here so an index is never built with
+ * mixed embedders. The durable FileVectorDriver persists under
+ * `<project>/.golem/knowledge`, so an index survives across sessions (§26
+ * refinement).
  */
 
 import { HeadroomMemorySidecar } from "../compression/headroom-adapter.js";
@@ -24,21 +27,41 @@ import {
 } from "../inference/index.js";
 import type { InferenceService, KnowledgeBase } from "../interfaces/index.js";
 import { hashingEmbedFn, openKnowledgeBase } from "../knowledge/index.js";
+import { planBuildEmbedder, resolvePersistedEmbedder } from "./auto-index.js";
 
 export type EmbedMode = "semantic" | "lexical";
 
 export interface KnowledgeStack {
   readonly knowledge: KnowledgeBase;
+  /**
+   * Local inference for CHAT, on the detected tier. Never the pinned embedder
+   * service: pinning is a fact about this project's index, not about what this
+   * machine can run (R10.6, mirroring the proxy's R10.4 split).
+   */
   readonly inference: InferenceService;
   readonly facts: CapabilityFacts;
   /** Which embedder backs the KB this run: bge-m3 semantic, or hashing lexical. */
   readonly embedMode: EmbedMode;
+  /**
+   * R10.6 — the embed model actually backing `knowledge`; null for the lexical
+   * hashing embedder. Pass to `ensureProjectIndexed`/`writeManifest` so the
+   * manifest records the embedder that really wrote the vectors.
+   */
+  readonly embedModel: string | null;
+  /**
+   * R10.6 — one user-facing line, present ONLY when this build departs from the
+   * tier's embedder or changes an existing index's vector space. Callers MUST
+   * surface it: making that case visible is the entire point.
+   */
+  readonly notice?: string;
 }
 
 export interface BuildKnowledgeOptions {
   readonly projectDir: string;
   /** Override the Ollama base URL (default: resolved config `inference.ollama_base_url`). */
   readonly ollamaBaseUrl?: string;
+  /** Collection to check for an existing embedder (default: `projectDir`, as every caller indexes). */
+  readonly projectId?: string;
 }
 
 /**
@@ -75,10 +98,30 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   const facts = await detectCapability(createProbeRunner());
   const inference = new OllamaInferenceService(client, facts);
 
-  // Semantic only if the query embed model is actually available; else lexical.
-  const textEmbedModel = embedModelFor(facts.tier, "text");
-  const semantic = await ollamaHasModel(baseUrl, textEmbedModel);
+  // R10.6: choose the embedder by INDEX IDENTITY first, detected tier second —
+  // the build-side counterpart of R10.4's query rule. The old code asked only
+  // "is the tier's embed model available?", so a capability probe that hiccupped
+  // (it degrades to the CPU tier, it never throws) re-pointed the tier at a
+  // 768-dim model, changed the signature, and silently re-embedded every chunk
+  // of a 1024-dim index at the narrower width. See `planBuildEmbedder` for why
+  // narrowing is refused while widening is not.
+  const plan = await planBuildEmbedder(
+    await resolvePersistedEmbedder(options.projectDir, options.projectId ?? options.projectDir),
+    embedModelFor(facts.tier, "text"),
+    (model) => ollamaHasModel(baseUrl, model),
+  );
+  const semantic = plan.action !== "lexical";
   const embedMode: EmbedMode = semantic ? "semantic" : "lexical";
+  const embedModel = plan.action === "lexical" ? null : plan.model;
+  // Only a PIN needs to override the catalog: the other plans already resolve to
+  // the tier's own model. Both kinds are pinned together — one index is one
+  // vector space, so its text and code chunks must come from one model.
+  const embedInference =
+    plan.action === "pin"
+      ? new OllamaInferenceService(client, facts, {
+          embedModels: { text: plan.model, code: plan.model },
+        })
+      : inference;
 
   // R3.6 (Decisions 13/18): opt-in MEMORY-scope federation via the Headroom
   // `[memory]` sidecar — a separate, heavier install than `headroom_sidecar`
@@ -94,10 +137,17 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   const knowledge = openKnowledgeBase({
     projectDir: options.projectDir,
     // Choose ONE embedder for the whole index (mixing spaces would corrupt it).
-    ...(semantic ? { inference } : { embed: hashingEmbedFn() }),
+    ...(semantic ? { inference: embedInference } : { embed: hashingEmbedFn() }),
     syntaxAwareChunking: settings.knowledge.syntax_aware_chunking,
     ...(memorySearch !== undefined ? { memorySearch } : {}),
   });
 
-  return { knowledge, inference, facts, embedMode };
+  return {
+    knowledge,
+    inference,
+    facts,
+    embedMode,
+    embedModel,
+    ...(plan.action !== "use-current" && plan.notice !== undefined ? { notice: plan.notice } : {}),
+  };
 }

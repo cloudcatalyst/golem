@@ -10,6 +10,11 @@
  *
  * These tests hold the property the guard actually needs: an index recorded with
  * one embedder is never queried with a different-width one.
+ *
+ * R10.6 extends the same property to the BUILD side (`planBuildEmbedder`): the
+ * degraded probe there did not error, it silently re-embedded the entire index at
+ * the narrower width. The build must keep the index's embedder while it is still
+ * available, and when it genuinely cannot, it must SAY so.
  */
 
 import { readFile, writeFile } from "node:fs/promises";
@@ -17,7 +22,9 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   embedderSignature,
+  ensureProjectIndexed,
   parseEmbedderSignature,
+  planBuildEmbedder,
   planQueryEmbedder,
   resolvePersistedEmbedder,
   writeManifest,
@@ -245,6 +252,180 @@ describe("planQueryEmbedder — identity, not availability", () => {
     };
     await planQueryEmbedder(await resolvePersistedEmbedder(projectDir, projectDir), NARROW, probe);
     expect(probed).toStrictEqual([WIDE]);
+  });
+});
+
+describe("planBuildEmbedder — a degraded tier cannot silently narrow an index (R10.6)", () => {
+  it("uses the current embedder when it IS the one that built the index", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    expect(
+      await planBuildEmbedder(
+        await resolvePersistedEmbedder(projectDir, projectDir),
+        WIDE,
+        available(WIDE),
+      ),
+    ).toStrictEqual({ action: "use-current", model: WIDE });
+  });
+
+  /**
+   * THE REGRESSION. The capability probe hiccuped, so the tier fell back to CPU
+   * and its 768-dim embedder — which IS pulled, so the old "is a model
+   * available?" test passed and the whole 1024-dim index was re-embedded narrow.
+   * The index's own embedder is still there, so it wins.
+   */
+  it("pins to the index's embedder rather than re-embedding it narrower", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const plan = await planBuildEmbedder(
+      await resolvePersistedEmbedder(projectDir, projectDir),
+      NARROW,
+      available(NARROW, WIDE),
+    );
+    expect(plan.action).toBe("pin");
+    if (plan.action !== "pin") throw new Error("unreachable");
+    expect(plan.model).toBe(WIDE);
+    expect(plan.currentModel).toBe(NARROW);
+    for (const part of [WIDE, NARROW, "1024-dim", "768-dim"]) expect(plan.notice).toContain(part);
+  });
+
+  it("survives ONE flaky probe answer — a 1.5 s timeout must not cost a re-embed", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    let asked = 0;
+    const flaky = (model: string): Promise<boolean> => {
+      asked += 1;
+      // First answer about the index's own embedder is a false negative.
+      return Promise.resolve(model === WIDE ? asked > 2 : true);
+    };
+    const plan = await planBuildEmbedder(
+      await resolvePersistedEmbedder(projectDir, projectDir),
+      NARROW,
+      flaky,
+    );
+    expect(plan.action).toBe("pin");
+  });
+
+  it("narrows only when the index's embedder is really gone — and says so", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const plan = await planBuildEmbedder(
+      await resolvePersistedEmbedder(projectDir, projectDir),
+      NARROW,
+      available(NARROW), // the wide model is no longer pulled
+    );
+    expect(plan.action).toBe("reembed");
+    if (plan.action !== "reembed") throw new Error("unreachable");
+    expect(plan.model).toBe(NARROW);
+    expect(plan.previous).toBe(WIDE);
+    for (const part of [WIDE, NARROW, "1024-dim", "768-dim", "ENTIRE"])
+      expect(plan.notice).toContain(part);
+  });
+
+  it("still WIDENS an index when the machine gained the wider embedder", async () => {
+    await buildIndexAt(768, HardwareTier.PCpu);
+    const plan = await planBuildEmbedder(
+      await resolvePersistedEmbedder(projectDir, projectDir),
+      WIDE,
+      available(NARROW, WIDE),
+    );
+    expect(plan.action).toBe("reembed");
+    if (plan.action !== "reembed") throw new Error("unreachable");
+    expect(plan.model).toBe(WIDE);
+    expect(plan.notice).toContain("ENTIRE");
+  });
+
+  it("leaves the no-index and lexical-index paths exactly as they were", async () => {
+    expect(await planBuildEmbedder(null, WIDE, available(WIDE))).toStrictEqual({
+      action: "use-current",
+      model: WIDE,
+    });
+    expect(await planBuildEmbedder(null, WIDE, available())).toStrictEqual({ action: "lexical" });
+    // A lexical index gaining a semantic embedder is the advertised upgrade.
+    expect(
+      await planBuildEmbedder({ mode: "lexical", model: null, dim: 512 }, WIDE, available(WIDE)),
+    ).toStrictEqual({ action: "use-current", model: WIDE });
+  });
+
+  it("never drops a semantic index to lexical without a notice", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const persisted = await resolvePersistedEmbedder(projectDir, projectDir);
+    for (const current of [WIDE, NARROW]) {
+      const plan = await planBuildEmbedder(persisted, current, available()); // Ollama gone
+      expect(plan.action).toBe("lexical");
+      if (plan.action !== "lexical") throw new Error("unreachable");
+      expect(plan.notice).toContain(WIDE);
+      expect(plan.notice).toContain("lexical");
+    }
+  });
+});
+
+describe("ensureProjectIndexed honours the build plan (R10.6)", () => {
+  /** The KB reopened over the SAME on-disk index, at the pinned width. */
+  const kbAt = (dim: number): ReturnType<typeof openKnowledgeBase> =>
+    openKnowledgeBase({ projectDir, embed: fakeEmbedOfWidth(dim) });
+
+  const readSignature = async (): Promise<string> =>
+    JSON.parse(
+      await readFile(
+        path.join(collectionDir(knowledgeDir(projectDir), projectDir), "manifest.json"),
+        "utf8",
+      ),
+    ).signature;
+
+  it("a pinned build does NOT re-embed, and leaves the recorded embedder alone", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const logs: string[] = [];
+    const result = await ensureProjectIndexed({
+      projectDir,
+      projectId: projectDir,
+      knowledge: kbAt(1024),
+      embedMode: "semantic",
+      embedModel: WIDE, // what planBuildEmbedder pinned
+      tier: HardwareTier.PCpu, // ...while the probe says CPU
+      watchPaths: [],
+      now: NOW,
+      log: (m) => logs.push(m),
+    });
+    expect(result.action).not.toBe("reindexed");
+    expect(await readSignature()).toBe(embedderSignature("semantic", HardwareTier.PMid));
+    expect(logs.join("\n")).not.toContain("embedder changed");
+  });
+
+  /**
+   * The counterfactual: the pre-R10.6 behaviour, where the signature came from
+   * the degraded TIER. The whole index is thrown away and re-embedded — which is
+   * sometimes unavoidable, so the requirement is that the user is TOLD.
+   */
+  it("a tier-driven rebuild announces the re-embed, naming both embedders", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const logs: string[] = [];
+    const result = await ensureProjectIndexed({
+      projectDir,
+      projectId: projectDir,
+      knowledge: kbAt(768),
+      embedMode: "semantic",
+      embedModel: NARROW,
+      tier: HardwareTier.PCpu,
+      watchPaths: [],
+      now: NOW,
+      log: (m) => logs.push(m),
+    });
+    expect(result.action).toBe("reindexed");
+    const said = logs.join("\n");
+    for (const part of [WIDE, NARROW, "1024-dim", "768-dim", "ENTIRE"])
+      expect(said).toContain(part);
+  });
+
+  it("without an embedModel it still behaves exactly as it did before", async () => {
+    await buildIndexAt(1024, HardwareTier.PMid);
+    const result = await ensureProjectIndexed({
+      projectDir,
+      projectId: projectDir,
+      knowledge: kbAt(1024),
+      embedMode: "semantic",
+      tier: HardwareTier.PMid,
+      watchPaths: [],
+      now: NOW,
+    });
+    expect(result.action).not.toBe("reindexed");
+    expect(await readSignature()).toBe(embedderSignature("semantic", HardwareTier.PMid));
   });
 });
 

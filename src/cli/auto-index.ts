@@ -65,7 +65,20 @@ interface IndexManifest {
  * so a signature mismatch means the index must be rebuilt.
  */
 export function embedderSignature(mode: EmbedMode, tier: HardwareTier): string {
-  return mode === "semantic" ? `semantic:${embedModelFor(tier, "text")}` : "lexical:hash-v1-512";
+  return embedderSignatureForModel(mode, embedModelFor(tier, "text"));
+}
+
+/**
+ * The same identity, from the CONCRETE model rather than the tier that would
+ * select it (R10.6).
+ *
+ * A build may deliberately embed with a model the current tier would NOT choose
+ * — see {@link planBuildEmbedder} — and the signature has to name the model
+ * actually used. A signature computed from the tier would describe an index that
+ * was never written, and every later run would see a mismatch and rebuild.
+ */
+export function embedderSignatureForModel(mode: EmbedMode, model: string | null): string {
+  return mode === "semantic" && model !== null ? `semantic:${model}` : "lexical:hash-v1-512";
 }
 
 /**
@@ -173,6 +186,13 @@ function describeEmbedder(model: string, dim: number | null): string {
   return width === null ? `"${model}"` : `"${model}" (${width}-dim)`;
 }
 
+/** An {@link embedderSignature} rendered for a human; the raw string if unparsable. */
+function describeSignature(signature: string): string {
+  const parsed = parseEmbedderSignature(signature);
+  if (parsed === null) return signature;
+  return parsed.model === null ? "lexical (built-in)" : describeEmbedder(parsed.model, null);
+}
+
 /**
  * Decide which embedder to query an existing index with — by EMBEDDER IDENTITY,
  * not embedder availability (R10.4).
@@ -238,6 +258,149 @@ export async function planQueryEmbedder(
     : { action: "pin", model: target, currentModel };
 }
 
+/**
+ * What the BUILD side should embed with (R10.6) — the counterpart of
+ * {@link QueryEmbedderPlan}, and deliberately the same vocabulary.
+ */
+export type BuildEmbedderPlan =
+  /** No semantic embedder to use — build with the pure-TS lexical embedder. */
+  | { readonly action: "lexical"; readonly notice?: string }
+  /** The current tier's embedder is the right one (no index yet, or it matches). */
+  | { readonly action: "use-current"; readonly model: string }
+  /** Keep the EXISTING index's embedder; the tier's would narrow it. */
+  | {
+      readonly action: "pin";
+      readonly model: string;
+      readonly currentModel: string;
+      readonly notice: string;
+    }
+  /** The index WILL be re-embedded into a different vector space — say so. */
+  | {
+      readonly action: "reembed";
+      readonly model: string;
+      readonly previous: string;
+      readonly notice: string;
+    };
+
+/**
+ * Decide which embedder to BUILD an index with (R10.6), given what built the
+ * one already on disk. The build-side counterpart of {@link planQueryEmbedder}.
+ *
+ * The build side used to pick purely by detected hardware tier, and
+ * `detectCapability` degrades to the CPU tier on ANY probe failure. Nothing
+ * errored — a changed embedder changes the signature, which rebuilds the index,
+ * so the result stayed self-consistent — but a transient hiccup silently
+ * re-embedded the WHOLE index at the degraded width (768 in place of 1024),
+ * which is expensive, invisible, and quietly worse at retrieval until something
+ * rebuilt it again.
+ *
+ * The rule: **a build never narrows an existing index's vectors while the
+ * embedder that built it is still available.** Narrowing is the harmful
+ * direction — it is pure loss (a full re-embed AND weaker retrieval), and it is
+ * exactly what a degraded probe asks for. Widening is not blocked: an index
+ * built on the CPU tier that finds itself on a machine with the wider embedder
+ * is the advertised semantic upgrade, and it is announced like any other
+ * re-embed. Widths come from {@link embedDimFor}; when either is unknown the
+ * change counts as narrowing, because an unrecognized model is not evidence
+ * that re-embedding is safe.
+ *
+ * Refusing outright was the other candidate and is deliberately NOT what this
+ * does: the caller would be left holding a knowledge base whose embedder does
+ * not match the index on disk, which turns into an `EmbedderMismatchError` on
+ * every search — a probe failure must degrade, never become an error path.
+ *
+ * `isAvailable` is the Ollama probe (`ollamaHasModel`), consulted for the model
+ * we actually intend to use rather than whichever one the tier suggests.
+ */
+export async function planBuildEmbedder(
+  persisted: PersistedEmbedderRecord | null,
+  currentModel: string,
+  isAvailable: (model: string) => Promise<boolean>,
+): Promise<BuildEmbedderPlan> {
+  const previous = persisted !== null && persisted.mode === "semantic" ? persisted.model : null;
+
+  // Each model is probed at most once. While a semantic index is at stake, a
+  // `false` is retried once before we believe it: `ollamaHasModel` is a 1.5 s
+  // HTTP timeout against a local server, and a false negative here costs a full
+  // re-embed of every chunk — the precise expense this plan exists to avoid.
+  const answers = new Map<string, boolean>();
+  const available = async (model: string): Promise<boolean> => {
+    const cached = answers.get(model);
+    if (cached !== undefined) return cached;
+    const ok = (await isAvailable(model)) || (previous !== null && (await isAvailable(model)));
+    answers.set(model, ok);
+    return ok;
+  };
+  const currentOk = await available(currentModel);
+
+  // No semantic index to protect: the tier's choice is exactly right, and
+  // lexical → semantic stays the advertised zero-setup upgrade.
+  if (previous === null) {
+    return currentOk ? { action: "use-current", model: currentModel } : { action: "lexical" };
+  }
+
+  const previousDim = persisted?.dim ?? embedDimFor(previous);
+  const from = describeEmbedder(previous, previousDim);
+  const restore =
+    `Start Ollama and pull ${previous}, then run \`golem index\`, ` +
+    "to rebuild it with the embedder it was built with";
+
+  if (previous === currentModel) {
+    if (currentOk) return { action: "use-current", model: currentModel };
+    return {
+      action: "lexical",
+      notice:
+        `${from} built this index and is not available here, so the index is being rebuilt ` +
+        `with the built-in lexical embedder — weaker retrieval. ${restore}`,
+    };
+  }
+
+  const currentDim = embedDimFor(currentModel);
+  const to = describeEmbedder(currentModel, currentDim);
+  const narrows = previousDim === null || currentDim === null || currentDim < previousDim;
+
+  if (narrows && (await available(previous))) {
+    return {
+      action: "pin",
+      model: previous,
+      currentModel,
+      notice:
+        `building with ${from} — the embedder this index was built with. The detected ` +
+        `hardware tier would use ${to}, which would re-embed the whole index into a ` +
+        "narrower space; delete .golem/knowledge if that is what you want",
+    };
+  }
+  if (currentOk) {
+    return {
+      action: "reembed",
+      model: currentModel,
+      previous,
+      notice: narrows
+        ? `re-embedding the ENTIRE index, ${from} → ${to}: ${from} built it but is not ` +
+          `available here, so it cannot be kept in the space it was built in. ${restore}`
+        : `re-embedding the ENTIRE index, ${from} → ${to}: this machine now supports the ` +
+          "wider embedder",
+    };
+  }
+  if (await available(previous)) {
+    return {
+      action: "pin",
+      model: previous,
+      currentModel,
+      notice:
+        `building with ${from} — the embedder this index was built with. The detected ` +
+        `hardware tier would use ${to}, which is not available here`,
+    };
+  }
+  return {
+    action: "lexical",
+    notice:
+      `neither ${from}, which built this index, nor ${to}, which the detected hardware ` +
+      "tier would use, is available here — the index is being rebuilt with the built-in " +
+      `lexical embedder, which is weaker at retrieval. ${restore}`,
+  };
+}
+
 /** Scan all roots into a `sourcePath → FileState` map (last-writer-wins across roots). */
 async function scanAll(roots: readonly string[]): Promise<Map<string, FileState>> {
   const map = new Map<string, FileState>();
@@ -297,6 +460,15 @@ export interface EnsureIndexedOptions {
   readonly knowledge: KnowledgeBase;
   readonly embedMode: EmbedMode;
   readonly tier: HardwareTier;
+  /**
+   * R10.6 — the embed model actually backing `knowledge`, for callers that chose
+   * it by INDEX IDENTITY rather than by tier ({@link planBuildEmbedder}). The
+   * manifest signature is taken from this when supplied: a pinned build embeds
+   * with a model the tier would not pick, and a tier-derived signature would
+   * then describe an index that was never written. Omit to keep the historical
+   * tier-derived behaviour (`null` means the lexical hashing embedder).
+   */
+  readonly embedModel?: string | null;
   readonly watchPaths: readonly string[];
   /** Current time (ISO); injected so callers/tests control it. */
   readonly now: string;
@@ -347,7 +519,10 @@ export async function ensureProjectIndexed(
   opts: EnsureIndexedOptions,
 ): Promise<EnsureIndexedResult> {
   const dir = collectionDir(knowledgeDir(opts.projectDir), opts.projectId);
-  const signature = embedderSignature(opts.embedMode, opts.tier);
+  const signature =
+    opts.embedModel === undefined
+      ? embedderSignature(opts.embedMode, opts.tier)
+      : embedderSignatureForModel(opts.embedMode, opts.embedModel);
   const manifest = await readManifest(dir);
   const roots = resolveIndexPaths(opts.projectDir, opts.watchPaths);
   const log = opts.log ?? (() => {});
@@ -355,7 +530,12 @@ export async function ensureProjectIndexed(
   // First run or embedder change → full (re)build.
   if (manifest?.signature !== signature) {
     if (manifest !== null) {
-      log(`embedder changed (${manifest.signature} → ${signature}) — re-indexing`);
+      // R10.6: name what changed and what it costs. This is the one branch that
+      // throws away every vector in the index, so it must never read as routine.
+      log(
+        `embedder changed: ${describeSignature(manifest.signature)} → ${describeSignature(signature)}` +
+          " — re-embedding the ENTIRE index, not just changed files",
+      );
       await rm(dir, { recursive: true, force: true });
     } else {
       log(`indexing project for search (${signature})`);
