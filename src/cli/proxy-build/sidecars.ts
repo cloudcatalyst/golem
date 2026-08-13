@@ -38,8 +38,11 @@ export function buildProxySidecars(
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   // Decision 53: the opaque `headroom_config` bag rides through to the worker, so
   // Headroom options Golem has never heard of are reachable from settings alone.
+  // `projectDir` is lifecycle bookkeeping, not behaviour: it stamps the worker's
+  // command line with the project it belongs to, so a later start-up sweep can
+  // reap THIS project's stray workers and no other project's (R10.3).
   const semantic = settings.compression.headroom_sidecar
-    ? new HeadroomSidecar({ config: settings.compression.headroom_config })
+    ? new HeadroomSidecar({ config: settings.compression.headroom_config, projectDir: dir })
     : undefined;
   // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
   // writes to, shared by both the R2.4 Headroom backfill and R2.2 context

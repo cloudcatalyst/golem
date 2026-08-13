@@ -85,8 +85,10 @@ export async function buildKnowledgeStack(options: BuildKnowledgeOptions): Promi
   // (verification-notes §4), so it gets its own settings leaf and its own
   // sidecar process. Fails open (HeadroomMemorySidecar.search resolves null)
   // if the sidecar can't start, same as HeadroomSidecar's compress().
+  // `projectDir` stamps the worker's command line with its owning project, so a
+  // stray one can later be reaped without touching another project's (R10.3).
   const memorySearch = settings.knowledge.memory_federation_enabled
-    ? new HeadroomMemorySidecar()
+    ? new HeadroomMemorySidecar({ projectDir: options.projectDir })
     : undefined;
 
   const knowledge = openKnowledgeBase({

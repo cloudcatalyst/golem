@@ -33,7 +33,7 @@
  */
 
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { request } from "undici";
 import { HEADROOM_SIDECAR_PYPI_PIN } from "./index.js";
@@ -42,6 +42,42 @@ import type { SemanticCompressor, SemanticMode, SemanticResult } from "./semanti
 
 /** Line every worker prints on stdout once listening (carries the bound port). */
 const LISTENING_RE = /GOLEM_HEADROOM_LISTENING (\d+)/;
+
+/**
+ * Set on every worker we spawn, telling it to exit the moment its stdin pipe
+ * reaches EOF (R10.3).
+ *
+ * This is the ONE mechanism that makes orphaning structurally impossible rather
+ * than merely handled. Golem's proxy daemon is stopped with `process.kill(pid)`,
+ * which on Windows is `TerminateProcess` — Node's *emulated* SIGTERM handler in
+ * the target is never invoked by an external kill, so the daemon's `shutdown`
+ * function does not run, and anything that relied on it did not happen. Nothing
+ * inside the dying parent can be trusted to run; what CAN be trusted is the
+ * kernel closing its handles. The worker holds the read end of a pipe whose only
+ * write end lives in the daemon, so the daemon's death — clean exit, SIGKILL,
+ * TerminateProcess, or a power-off-grade crash — closes that pipe and the worker
+ * sees EOF.
+ *
+ * Gated behind this env var so a worker run by hand (stdin a terminal, or
+ * `/dev/null`, which reads EOF immediately) does not exit on startup.
+ */
+const PARENT_PIPE_ENV = "GOLEM_HEADROOM_PARENT_PIPE";
+
+/**
+ * Worker script basenames, used to recognise a stray worker process by its
+ * command line during the start-up sweep. Both sidecars' scripts, because ONE
+ * sweep reaps every kind of worker Golem can leave behind.
+ */
+const WORKER_SCRIPT_NAMES = ["headroom-worker.py", "headroom-memory-worker.py"] as const;
+
+/**
+ * CLI flag every worker is launched with, carrying the project it belongs to.
+ * The worker ignores it — its only job is to be *visible in the command line*,
+ * so the sweep can tell this project's workers from another project's. Without
+ * it, a globally-installed Golem launches byte-identical command lines for every
+ * project on the machine and a sweep could not safely kill any of them.
+ */
+const PROJECT_ARG = "--golem-project";
 
 /** Default Anthropic model id used by the compression worker only for token counting. */
 const DEFAULT_MODEL = "claude-sonnet-4-5-20250929";
@@ -58,6 +94,55 @@ interface WorkerProcessOptions {
   readonly log: (message: string) => void;
   /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000. */
   readonly backoffBaseMs?: number;
+  /**
+   * Project this worker serves. Appended to the worker's command line as
+   * {@link PROJECT_ARG} so {@link reapOrphanedHeadroomWorkers} can scope a sweep
+   * to one project. Omitted when unknown — the worker then simply cannot be
+   * matched by project, which is the safe direction to fail.
+   */
+  readonly projectDir?: string;
+}
+
+/**
+ * Every worker process this module has running, so ONE call
+ * ({@link stopAllHeadroomWorkers}) tears down every sidecar rather than the
+ * caller having to know how many classes of sidecar exist. The proxy's shutdown
+ * path used to stop only the semantic one, which meant the memory sidecar leaked
+ * even on a clean POSIX shutdown (R10.3).
+ */
+const LIVE_WORKERS = new Set<HeadroomWorkerProcess>();
+
+/**
+ * Stop every Headroom worker this process has spawned, of every kind.
+ * Best-effort and synchronous, so it is safe to call from a signal handler or an
+ * `exit` listener. Idempotent.
+ */
+export function stopAllHeadroomWorkers(): void {
+  for (const worker of [...LIVE_WORKERS]) worker.stop();
+}
+
+/**
+ * Kill a process tree on Windows, where killing a pid kills only that pid.
+ *
+ * `uv run` is not one process: it launches a Python that (via uv's Windows
+ * trampoline) launches the Python that actually serves, so the pid Node holds is
+ * the ancestor of the worker, not the worker. `taskkill /T` walks the tree.
+ * Argument-array spawn, never a shell string (CLAUDE.md); best-effort and silent
+ * — a failure here is a process we could not kill, not an error for the caller.
+ */
+function killProcessTreeWindows(pid: number): void {
+  try {
+    const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    killer.on("error", () => {
+      /* taskkill missing or the pid already gone */
+    });
+    killer.unref();
+  } catch {
+    // spawn itself failed — nothing more we can do
+  }
 }
 
 /**
@@ -75,8 +160,9 @@ class HeadroomWorkerProcess {
   readonly #startupTimeoutMs: number;
   readonly #requestTimeoutMs: number;
   readonly #log: (message: string) => void;
+  readonly #projectDir: string | undefined;
 
-  #child: ChildProcessByStdio<null, Readable, Readable> | null = null;
+  #child: ChildProcessByStdio<Writable, Readable, Readable> | null = null;
   #port: number | null = null;
   #startPromise: Promise<boolean> | null = null;
   /** Next-spawn timestamp — backs off after an unexpected worker death (R8.30). */
@@ -98,6 +184,7 @@ class HeadroomWorkerProcess {
     this.#requestTimeoutMs = options.requestTimeoutMs;
     this.#log = options.log;
     this.#backoffBaseMs = options.backoffBaseMs ?? 1000;
+    this.#projectDir = options.projectDir;
   }
 
   /** True once the worker is listening and health-checked. */
@@ -138,12 +225,32 @@ class HeadroomWorkerProcess {
   }
 
   async #startInner(): Promise<boolean> {
-    const args = [...this.#launchArgs, this.#workerPath, "--port", "0", ...this.#workerArgs];
+    const args = [
+      ...this.#launchArgs,
+      this.#workerPath,
+      "--port",
+      "0",
+      ...this.#workerArgs,
+      ...(this.#projectDir === undefined ? [] : [PROJECT_ARG, this.#projectDir]),
+    ];
+    // stdin is a PIPE, deliberately: it is never written to, it exists so that
+    // its closure — which the OS guarantees when this process dies, however it
+    // dies — is the worker's signal to exit. See PARENT_PIPE_ENV.
     const child = spawn(this.#command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env: { ...process.env, [PARENT_PIPE_ENV]: "1" },
     });
     this.#child = child;
+    LIVE_WORKERS.add(this);
+    // A worker that dies on its own closes the read end; writing is never done
+    // here, but an EPIPE must not become an unhandled 'error' event.
+    child.stdin.on("error", () => {
+      /* worker gone — the exit handler below is the one that matters */
+    });
+    // Do not let the idle keep-alive pipe hold a short-lived CLI's event loop
+    // open. (A pipe stdio stream is a net.Socket; `unref` is not on Writable.)
+    (child.stdin as unknown as { unref?: () => void }).unref?.();
 
     let stderrTail = "";
     child.stderr.on("data", (d: Buffer) => {
@@ -178,11 +285,7 @@ class HeadroomWorkerProcess {
           ? `startup timeout — stderr tail: ${stderrTail.trim()}`
           : "startup timeout (no stderr captured)",
       );
-      try {
-        child.kill();
-      } catch {
-        // already gone
-      }
+      HeadroomWorkerProcess.killChild(child);
       this.#cleanup();
       return false;
     }
@@ -192,11 +295,7 @@ class HeadroomWorkerProcess {
     if (!healthy) {
       // Same orphan risk: the worker is listening but unhealthy — kill it.
       this.#log("worker did not pass health check");
-      try {
-        child.kill();
-      } catch {
-        // already gone
-      }
+      HeadroomWorkerProcess.killChild(child);
       this.#cleanup();
       return false;
     }
@@ -209,7 +308,7 @@ class HeadroomWorkerProcess {
 
   /** Resolve the port from the worker's stdout announcement, or null on timeout/exit. */
   #awaitListeningPort(
-    child: ChildProcessByStdio<null, Readable, Readable>,
+    child: ChildProcessByStdio<Writable, Readable, Readable>,
   ): Promise<number | null> {
     return new Promise<number | null>((resolve) => {
       let buf = "";
@@ -299,20 +398,62 @@ class HeadroomWorkerProcess {
     }
   }
 
-  /** Stop the worker (best-effort). */
+  /**
+   * Stop the worker (best-effort).
+   *
+   * Three steps, because the pid Node holds is not necessarily the process doing
+   * the work (`uv run` puts one or two Python processes between them):
+   *
+   * 1. Close stdin. That is the EOF the worker itself watches for, so it reaches
+   *    the REAL worker however deep it sits — no pid, no tree walk needed.
+   * 2. Kill the direct child, which ends the launcher.
+   * 3. On Windows, `taskkill /T` the child's tree, since a kill there does not
+   *    propagate to descendants. Only while Node still knows the child is
+   *    unreaped, so the pid is certainly still ours and cannot have been reused.
+   */
   stop(): void {
     this.#stopping = true;
-    if (this.#child !== null) {
-      try {
-        this.#child.kill();
-      } catch {
-        // already gone
-      }
-    }
+    if (this.#child !== null) HeadroomWorkerProcess.killChild(this.#child);
     this.#cleanup();
   }
 
+  /**
+   * Take down a spawned child and everything under it.
+   *
+   * Static, and used by every abandonment path — an explicit {@link stop}, a
+   * startup timeout, a failed health check — because they abandon the same kind
+   * of process tree and every one of them could otherwise strand the real
+   * worker. The timeout path is not hypothetical: a first start that has to
+   * download the package can exceed the budget while the worker is alive.
+   *
+   * Deliberately NOT `stop()`, so callers mid-start do not set the `#stopping`
+   * flag and suppress R8.30's respawn backoff.
+   */
+  static killChild(child: ChildProcessByStdio<Writable, Readable, Readable>): void {
+    try {
+      // First, because it is the step that reaches the REAL worker however many
+      // launcher processes sit in between (see PARENT_PIPE_ENV).
+      child.stdin.end();
+      child.stdin.destroy();
+    } catch {
+      // already closed
+    }
+    // Node has not reaped it, so the pid is certainly still this child's and
+    // cannot have been recycled onto some unrelated process by the time taskkill
+    // runs.
+    const stillOurs = child.exitCode === null && child.signalCode === null;
+    try {
+      child.kill();
+    } catch {
+      // already gone
+    }
+    if (process.platform === "win32" && stillOurs && child.pid !== undefined) {
+      killProcessTreeWindows(child.pid);
+    }
+  }
+
   #cleanup(): void {
+    LIVE_WORKERS.delete(this);
     this.#child = null;
     this.#port = null;
     this.#startPromise = null;
@@ -350,6 +491,12 @@ export interface HeadroomSidecarOptions {
   readonly log?: (message: string) => void;
   /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000 (1s). */
   readonly backoffBaseMs?: number;
+  /**
+   * The project this sidecar serves. Stamped onto the worker's command line so a
+   * later {@link reapOrphanedHeadroomWorkers} can recognise this project's
+   * workers and leave every other project's alone (R10.3).
+   */
+  readonly projectDir?: string;
 }
 
 function defaultWorkerPath(): string {
@@ -386,6 +533,7 @@ export class HeadroomSidecar implements SemanticCompressor {
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       log,
       ...(options.backoffBaseMs !== undefined && { backoffBaseMs: options.backoffBaseMs }),
+      ...(options.projectDir !== undefined && { projectDir: options.projectDir }),
     });
     this.#model = options.model ?? DEFAULT_MODEL;
     this.#config =
@@ -495,6 +643,12 @@ export interface HeadroomMemorySidecarOptions {
   readonly dbPath?: string;
   /** Sink for diagnostics (default: stderr). Never stdout (would corrupt MCP stdio callers). */
   readonly log?: (message: string) => void;
+  /**
+   * The project this sidecar serves. Stamped onto the worker's command line so a
+   * later {@link reapOrphanedHeadroomWorkers} can recognise this project's
+   * workers and leave every other project's alone (R10.3).
+   */
+  readonly projectDir?: string;
 }
 
 function defaultMemoryWorkerPath(): string {
@@ -546,6 +700,7 @@ export class HeadroomMemorySidecar implements MemorySearchProvider {
       startupTimeoutMs: options.startupTimeoutMs ?? 90_000,
       requestTimeoutMs: options.requestTimeoutMs ?? 60_000,
       log,
+      ...(options.projectDir !== undefined && { projectDir: options.projectDir }),
     });
   }
 
@@ -582,5 +737,219 @@ export class HeadroomMemorySidecar implements MemorySearchProvider {
   /** Stop the worker (best-effort). */
   stop(): void {
     this.#proc.stop();
+  }
+}
+
+/** One row of the machine's process table, as the sweep needs to see it. */
+export interface SystemProcessRow {
+  readonly pid: number;
+  readonly commandLine: string;
+}
+
+/**
+ * Compare paths the way a *command line* has to be compared: slashes normalised
+ * (Windows quotes and mixes them) and case folded (Windows is case-insensitive,
+ * and two POSIX paths differing only in case that BOTH contain a Headroom worker
+ * script is not a situation that occurs).
+ */
+function normalizePathish(value: string): string {
+  return value.replace(/\\/g, "/").toLowerCase();
+}
+
+/**
+ * Which of these processes are stray Headroom workers belonging to `projectDir`?
+ *
+ * Pure and exported so the matching rule — the part that must never be wrong —
+ * is directly testable without killing anything. Two conditions, both required:
+ *
+ * 1. The command line names one of Golem's worker scripts. That excludes every
+ *    other Python on the machine (other tools' `uv` sidecars, language servers).
+ * 2. The command line places it in THIS project — either by the
+ *    {@link PROJECT_ARG} stamp, or by the worker script itself living under the
+ *    project directory (which is how a repo-local install looks, and how the
+ *    orphans that predate the stamp are still recognisable).
+ *
+ * Condition 2 is what makes the sweep safe on a machine running several Golem
+ * proxies at once, one per project: a globally-installed Golem gives every
+ * project the same worker path, and killing on script name alone would take down
+ * a different project's healthy sidecar. The directory test is anchored with a
+ * trailing separator so `…/golem` never matches `…/golem2`.
+ */
+export function selectHeadroomOrphans(
+  processes: readonly SystemProcessRow[],
+  options: { readonly projectDir: string; readonly excludePids?: readonly number[] },
+): number[] {
+  const dir = normalizePathish(options.projectDir).replace(/\/+$/, "");
+  if (dir === "") return [];
+  const excluded = new Set<number>([process.pid, ...(options.excludePids ?? [])]);
+  const out: number[] = [];
+  for (const row of processes) {
+    if (!Number.isInteger(row.pid) || row.pid <= 0 || excluded.has(row.pid)) continue;
+    const cmd = normalizePathish(row.commandLine);
+    if (!WORKER_SCRIPT_NAMES.some((name) => cmd.includes(name))) continue;
+    const stamped =
+      cmd.includes(`${PROJECT_ARG} ${dir}`) || cmd.includes(`${PROJECT_ARG} "${dir}"`);
+    if (!stamped && !cmd.includes(`${dir}/`)) continue;
+    out.push(row.pid);
+  }
+  return out;
+}
+
+/** Parse `ps -A -o pid=,args=` output (POSIX). */
+function parsePsOutput(text: string): SystemProcessRow[] {
+  const rows: SystemProcessRow[] = [];
+  for (const line of text.split("\n")) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m?.[1] === undefined || m[2] === undefined) continue;
+    rows.push({ pid: Number.parseInt(m[1], 10), commandLine: m[2] });
+  }
+  return rows;
+}
+
+/** Parse the `ConvertTo-Json` output of the Windows process query. */
+function parseWindowsProcessJson(text: string): SystemProcessRow[] {
+  const trimmed = text.trim();
+  if (trimmed === "") return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return [];
+  }
+  const list = Array.isArray(parsed) ? parsed : [parsed];
+  const rows: SystemProcessRow[] = [];
+  for (const item of list) {
+    if (typeof item !== "object" || item === null) continue;
+    const { ProcessId, CommandLine } = item as Record<string, unknown>;
+    if (typeof ProcessId !== "number" || typeof CommandLine !== "string") continue;
+    rows.push({ pid: ProcessId, commandLine: CommandLine });
+  }
+  return rows;
+}
+
+/** Run a process-listing command and collect its stdout, or "" on any failure. */
+function runCapture(command: string, args: readonly string[], timeoutMs: number): Promise<string> {
+  return new Promise<string>((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, [...args], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+    } catch {
+      resolve("");
+      return;
+    }
+    let out = "";
+    let settled = false;
+    const done = (value: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill();
+      } catch {
+        // already gone
+      }
+      done("");
+    }, timeoutMs);
+    child.stdout?.on("data", (d: Buffer) => {
+      out += d.toString("utf8");
+    });
+    child.on("error", () => done(""));
+    child.on("close", () => done(out));
+  });
+}
+
+/**
+ * The machine's Headroom-worker-shaped processes. Never throws; an empty list
+ * means "could not tell", which the sweep treats the same as "none" — declining
+ * to reap is always safe, guessing is not.
+ *
+ * No native dependency and no shell string: Windows has no `ps`, and `wmic` is
+ * gone from current builds, so the command line has to come from PowerShell's
+ * CIM query — invoked as an argument array with a fixed, non-interpolated
+ * script. POSIX gets plain `ps`.
+ */
+async function listWorkerLikeProcesses(timeoutMs: number): Promise<SystemProcessRow[]> {
+  if (process.platform === "win32") {
+    const script =
+      "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*headroom*worker.py*' } | " +
+      "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+    const out = await runCapture(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      timeoutMs,
+    );
+    return parseWindowsProcessJson(out);
+  }
+  return parsePsOutput(await runCapture("ps", ["-A", "-o", "pid=,args="], timeoutMs));
+}
+
+export interface ReapOrphansOptions {
+  /** Only workers belonging to this project are ever killed. */
+  readonly projectDir: string;
+  /** Diagnostics sink; nothing is written anywhere else. */
+  readonly log?: (message: string) => void;
+  /** Pids to spare (e.g. workers this process is deliberately running). */
+  readonly excludePids?: readonly number[];
+  /** Budget for the process listing. Default 10s. */
+  readonly timeoutMs?: number;
+  /** Seams for tests — real enumeration/kill by default. */
+  readonly listProcesses?: () => Promise<readonly SystemProcessRow[]>;
+  readonly kill?: (pid: number) => void;
+}
+
+/**
+ * Kill Headroom workers left behind by an EARLIER Golem daemon for this project,
+ * and report the pids killed.
+ *
+ * The recovery half of R10.3. The stdin-EOF contract (see {@link PARENT_PIPE_ENV})
+ * stops new orphans being created, but it cannot help processes that are already
+ * running the old code — on the machine where this was found, 24 of them, the
+ * oldest five days old and burning two minutes of CPU. Those only ever go away
+ * if something sweeps them up, so the daemon does it at start.
+ *
+ * Fail-open in every direction: cannot enumerate, cannot parse, cannot kill — it
+ * resolves an empty list and the proxy starts normally. It must be called BEFORE
+ * this process starts a worker of its own, since a live worker of ours is
+ * indistinguishable from a stray one by command line (or its pid passed in
+ * `excludePids`).
+ */
+export async function reapOrphanedHeadroomWorkers(
+  options: ReapOrphansOptions,
+): Promise<readonly number[]> {
+  const log = options.log;
+  try {
+    const list =
+      options.listProcesses ?? (() => listWorkerLikeProcesses(options.timeoutMs ?? 10_000));
+    const rows = await list();
+    const selectOptions = {
+      projectDir: options.projectDir,
+      ...(options.excludePids !== undefined && { excludePids: options.excludePids }),
+    };
+    const pids = selectHeadroomOrphans(rows, selectOptions);
+    if (pids.length === 0) return [];
+    const kill =
+      options.kill ??
+      ((pid: number) => {
+        if (process.platform === "win32") {
+          killProcessTreeWindows(pid);
+          return;
+        }
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone / not ours
+        }
+      });
+    for (const pid of pids) kill(pid);
+    log?.(
+      `reaped ${pids.length} orphaned worker process(es) from an earlier run: ${pids.join(", ")}`,
+    );
+    return pids;
+  } catch (err) {
+    log?.(`orphan sweep skipped: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
   }
 }

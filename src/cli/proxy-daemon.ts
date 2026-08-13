@@ -257,15 +257,39 @@ export async function proxyStatus(
   return { running: false, source: "none" };
 }
 
-/** Stop the proxy recorded in the pid file (best-effort). Returns the pid stopped, if any. */
+/**
+ * Stop the proxy recorded in the pid file (best-effort). Returns the pid stopped,
+ * if any.
+ *
+ * On POSIX the daemon is spawned `detached`, which makes it a process-GROUP
+ * leader, so a negative pid signals the daemon and everything it launched in one
+ * call. That matters because the daemon may own child processes (R10.3's
+ * Headroom sidecars among them) that a signal to the daemon alone would strand
+ * if it died before passing the signal on. Falls back to signalling just the
+ * daemon when there is no group to signal (a foreground-started proxy) — and on
+ * Windows, which has no process groups: there, the children's own parent-death
+ * watchdogs are what reap them, precisely because nothing in a
+ * `TerminateProcess`-ed parent gets to run.
+ */
 export async function stopProxy(projectDir: string): Promise<number | null> {
   const info = await readProxyPid(projectDir);
   await removeProxyPid(projectDir);
   if (info && isProcessAlive(info.pid)) {
-    try {
-      process.kill(info.pid);
-    } catch {
-      // already gone / no permission
+    let signalled = false;
+    if (process.platform !== "win32") {
+      try {
+        process.kill(-info.pid);
+        signalled = true;
+      } catch {
+        // not a group leader (foreground start) — fall through to the plain kill
+      }
+    }
+    if (!signalled) {
+      try {
+        process.kill(info.pid);
+      } catch {
+        // already gone / no permission
+      }
     }
     return info.pid;
   }

@@ -27,6 +27,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -104,12 +105,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": f"{type(exc).__name__}: {exc}"})
 
 
+def _exit_when_parent_closes_stdin() -> None:
+    """Exit as soon as the parent's stdin pipe reaches EOF (task R10.3).
+
+    Identical contract to headroom-worker.py's watchdog — see that file for why
+    a worker cannot rely on being told to stop: an OS kill of the parent (on
+    Windows, `TerminateProcess`) runs no shutdown handler there, and this sidecar
+    was never stopped on ANY platform, so it outlived every proxy that spawned
+    it. The pipe's EOF is the one signal that survives every way a parent can
+    die. Off unless the parent sets the env var, so a hand-run worker (stdin a
+    terminal, or /dev/null) does not exit immediately.
+    """
+    if os.environ.get("GOLEM_HEADROOM_PARENT_PIPE") != "1" or sys.stdin is None:
+        return
+
+    def _watch() -> None:
+        try:
+            while sys.stdin.buffer.read(1):
+                pass
+        except Exception:  # pragma: no cover - a broken stdin means the parent is gone too
+            pass
+        os._exit(0)
+
+    threading.Thread(target=_watch, name="golem-parent-watchdog", daemon=True).start()
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--db-path", default=None)
+    # Unused: makes the owning project visible in the process table for the
+    # start-up orphan sweep (R10.3).
+    ap.add_argument("--golem-project", default=None)
     args = ap.parse_args()
+    _exit_when_parent_closes_stdin()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.db_path = args.db_path  # type: ignore[attr-defined]
     # Announce the bound port on stdout so the parent (which may have passed 0)

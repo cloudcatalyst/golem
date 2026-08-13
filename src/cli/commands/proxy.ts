@@ -10,6 +10,10 @@
 import { request } from "node:http";
 import type { Command } from "commander";
 import {
+  reapOrphanedHeadroomWorkers,
+  stopAllHeadroomWorkers,
+} from "../../compression/headroom-adapter.js";
+import {
   findProjectDir,
   loadConfig,
   migrateOnVersionChange,
@@ -28,7 +32,7 @@ import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
-import { resolvePersistedEmbedMode } from "../auto-index.js";
+import { planQueryEmbedder, resolvePersistedEmbedder } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
@@ -155,16 +159,31 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     return;
   }
 
+  // R10.3: reap Headroom sidecars stranded by an EARLIER daemon for this project
+  // before starting our own. New daemons cannot strand them (the workers exit on
+  // stdin EOF), but processes already running the old code never will on their
+  // own — 24 of them had piled up here, the oldest five days old. Started now and
+  // awaited just before `listen`, so it overlaps the credential/capability work
+  // instead of adding to start-up latency, and still completes before this
+  // process can spawn a sidecar of its own (which the sweep could not tell from a
+  // stray one). Never throws: a failed sweep must not stop the proxy starting.
+  const sweep = reapOrphanedHeadroomWorkers({
+    projectDir: dir,
+    log: (m) => process.stderr.write(`golem proxy: ${m}\n`),
+  });
+
   const telemetry = openTelemetryStore(dir);
   const { JsonFileSliderStore } = await import("../../mcp/index.js");
   const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).local);
   let inference: InferenceService | undefined;
   let facts: Awaited<ReturnType<typeof detectCapability>> | undefined;
+  let ollamaClient: OllamaClient | undefined;
   try {
     const client = new OllamaClient({
       baseUrl: settings.inference.ollama_base_url,
       requestTimeoutMs: settings.inference.request_timeout_ms,
     });
+    ollamaClient = client;
     facts = await detectCapability(createProbeRunner());
     inference = new OllamaInferenceService(client, facts);
   } catch (err) {
@@ -177,17 +196,31 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   let localAnswerInference: InferenceService | undefined;
   let suppressLocalAnswer = false;
   if (settings.knowledge.local_answer_enabled && inference !== undefined && facts !== undefined) {
-    const persisted = await resolvePersistedEmbedMode(dir, dir);
-    if (persisted === "semantic") {
-      const model = embedModelFor(facts.tier, "text");
-      if (await ollamaHasModel(settings.inference.ollama_base_url, model)) {
-        localAnswerInference = inference;
-      } else {
-        suppressLocalAnswer = true;
-        process.stderr.write(
-          `golem proxy: local-answer disabled — the index was built with the semantic embed model "${model}", which isn't available now; run \`golem index\` to rebuild it lexically, or start Ollama and pull the model\n`,
-        );
-      }
+    // R10.4: pick the embedder by INDEX IDENTITY, not availability. The tier is
+    // a runtime probe that degrades to CPU on any hiccup, which used to swap a
+    // 1024-dim embedder for a 768-dim one under an index that could not accept
+    // it — passing the old "is a model available?" guard and then throwing
+    // EmbedderMismatchError on every single query. Decided ONCE, here.
+    const plan = await planQueryEmbedder(
+      await resolvePersistedEmbedder(dir, dir),
+      embedModelFor(facts.tier, "text"),
+      (model) => ollamaHasModel(settings.inference.ollama_base_url, model),
+    );
+    if (plan.action === "use-current") {
+      localAnswerInference = inference;
+    } else if (plan.action === "pin" && ollamaClient !== undefined) {
+      // The index's embedder wins over the current tier's; chat stays on tier.
+      localAnswerInference = new OllamaInferenceService(ollamaClient, facts, {
+        embedModels: { text: plan.model, code: plan.model },
+      });
+      process.stdout.write(
+        `golem proxy: local-answer querying with "${plan.model}" — the embedder this index was built with (the detected hardware tier would have used "${plan.currentModel}")\n`,
+      );
+    } else if (plan.action !== "lexical") {
+      suppressLocalAnswer = true;
+      const reason =
+        plan.action === "disable" ? plan.reason : "the index's embedder could not be resolved";
+      process.stderr.write(`golem proxy: local-answer disabled — ${reason}\n`);
     }
   }
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
@@ -200,6 +233,7 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
       "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
     );
   }
+  await sweep;
   const addr = await proxy.listen(port);
   await writeProxyPid(dir, {
     pid: process.pid,
@@ -235,7 +269,11 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
 
   const shutdown = (): void => {
-    semantic?.stop();
+    // Every sidecar, not just the semantic one: this handler used to stop
+    // `semantic` alone, so the MEMORY sidecar leaked even on a clean POSIX
+    // shutdown (R10.3). One teardown that the adapter keeps complete is the only
+    // version of this that stays correct when a third sidecar appears.
+    stopAllHeadroomWorkers();
     void Promise.allSettled([
       proxy.close(),
       telemetry.close(),
