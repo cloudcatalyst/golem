@@ -14,18 +14,14 @@
 
 import { getConfig, listConfig, setConfig, unsetConfig } from "../cli/config.js";
 import {
-  type ApplyControlOptions,
   type ApplyResult,
   type Control,
   type ControlGroup,
-  coerceLevel,
   ENV_LOCKED,
-  GUIDANCE_SCOPES,
   OPAQUE_LOCKED,
   parseSettingScope,
   restartHintFor,
   SETTING_SCOPES,
-  SLIDER_LEVELS,
 } from "./control-surface-types.js";
 import { ConfigError } from "./errors.js";
 import { leafSchema } from "./schema.js";

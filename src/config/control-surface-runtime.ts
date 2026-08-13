@@ -12,11 +12,6 @@ import {
   type ControlGroup,
   coerceLevel,
   ENV_LOCKED,
-  GUIDANCE_SCOPES,
-  OPAQUE_LOCKED,
-  parseSettingScope,
-  restartHintFor,
-  SETTING_SCOPES,
   SLIDER_LEVELS,
 } from "./control-surface-types.js";
 import { ConfigError } from "./errors.js";
