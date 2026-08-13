@@ -155,6 +155,18 @@ describe("target registry -- trust defaults", () => {
     expect(defaultTrustFor("ollama", "http://192.168.1.40:11434/v1")).toBe("lan");
   });
 
+  it("decides llamacpp trust by WHERE it is, never by the provider name (R10.8)", () => {
+    // The same `llama-server` binary is genuinely local on loopback and
+    // genuinely not on a LAN address. Hardcoding "llamacpp = local" would hand
+    // an unredacted prompt to a box across the room on the strength of a config
+    // string, which is the exact failure `permitsUnredactedDispatch` re-checks
+    // for. So the URL decides, exactly as it does for ollama.
+    expect(defaultTrustFor("llamacpp", "http://localhost:8080/v1")).toBe("local");
+    expect(defaultTrustFor("llamacpp", "http://127.0.0.1:8080/v1")).toBe("local");
+    expect(defaultTrustFor("llamacpp", "http://gpubox.lan:8080/v1")).toBe("lan");
+    expect(defaultTrustFor("llamacpp", "http://192.168.1.40:8080/v1")).toBe("lan");
+  });
+
   it("defaults an unknown provider to the MOST redacted level, not the least", () => {
     // The direction is the point: an omitted field must never buy a target more
     // of your context than it asked for.

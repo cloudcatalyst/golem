@@ -185,28 +185,18 @@ describe("the gate — no secret leaves, and the draft comes back usable", () =>
   });
 });
 
+/**
+ * R10.8 changed WHEN the local service is reached, and nothing about WHAT
+ * happens once it is. The block below is that unchanged half: a `local`-trust
+ * loopback target still delegates to the frozen contract with the prompt
+ * verbatim, and a `local` claim on a non-loopback URL is still refused.
+ *
+ * What is gone is the third case that used to head this block — "no target named
+ * → local tiered inference". That was never a property of the local path; it was
+ * the absence of routing, and it is the defect R10.8 removes. Its replacement
+ * lives in "R10.8 — the resolution chain" below.
+ */
 describe("the local path is unchanged", () => {
-  it("delegates to the frozen InferenceService when no target is named", async () => {
-    const inference = stubInference();
-    const { fetchImpl, sent } = captureFetch({});
-    const dispatcher = createTargetDispatcher({ inference, settings: REMOTE, fetchImpl, env: {} });
-
-    const result = await dispatcher.dispatch({
-      role: "drafter",
-      prompt: SECRET_PROMPT,
-      worker: "coder",
-    });
-
-    expect(result.targetId).toBeNull();
-    expect(result.model).toBe("qwen2.5-coder:7b");
-    expect(result.redactedCount).toBe(0);
-    // Nothing left the machine, and the local model saw the prompt VERBATIM —
-    // redacting it would degrade the draft for no privacy gain.
-    expect(sent).toHaveLength(0);
-    expect(inference.calls[0]?.prompt).toBe(SECRET_PROMPT);
-    expect(inference.calls[0]?.role).toBe("drafter");
-  });
-
   it("uses the local service for a loopback target declared local", async () => {
     const inference = stubInference();
     const { fetchImpl, sent } = captureFetch({});
@@ -383,12 +373,457 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
     expect(inference.calls).toHaveLength(0);
   });
 
-  it("keeps the local path when no default is configured", async () => {
+  it("falls through to the harness default when the worker has no entry (R10.8)", async () => {
+    // Pre-R10.8 this drafted locally. It now continues down the chain — there is
+    // no `inference.default_target` here either, so it lands on the synthetic
+    // default over `proxy.upstream_*`, and the LOCAL SERVICE IS NEVER ASKED.
     const inference = stubInference();
-    const dispatcher = createTargetDispatcher({ inference, settings: REMOTE, env: {} });
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-x",
+      content: [{ type: "text", text: "ok" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: { ...REMOTE, upstream_model: "claude-sonnet-5" },
+      fetchImpl,
+      env: {},
+      workerTargets: { coder: "" }, // an empty entry is "no entry", not a target id
+    });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
-    expect(result.targetId).toBeNull();
-    expect(inference.calls).toHaveLength(1);
+    expect(result.targetId).toBe("anthropic");
+    expect(result.route).toBe("harness");
+    expect(inference.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+  });
+});
+
+/**
+ * R10.8 — `coder` fell through to the LOCAL model whenever nothing named a
+ * target, so `inference.default_target` (the setting whose only job is to name
+ * the default) was dead config. The chain is now:
+ *
+ *   explicit targetId → worker_targets[worker] → default_target → harness default
+ *
+ * Every step below resolves through the SAME fail-closed lookup and the SAME
+ * redaction floor; the tests here are about which step wins, and about the two
+ * properties that make the change safe — that an unknown `default_target` raises
+ * instead of sliding to local, and that the redaction floor still applies to the
+ * traffic this change newly routes off-machine.
+ */
+describe("R10.8 — the resolution chain", () => {
+  /** REMOTE plus a second, distinguishable target, so precedence is observable. */
+  const CHAIN: TargetRegistrySettings = {
+    ...REMOTE,
+    upstream_model: "claude-sonnet-5",
+    gateways: [
+      {
+        id: "openrouter",
+        provider: "openrouter",
+        base_url: "https://openrouter.ai/api/v1",
+        models: ["openai/gpt-oss-20b:free"],
+      },
+      { id: "vendorgw", provider: "anthropic", base_url: "https://api.anthropic.com" },
+    ],
+    targets: [
+      {
+        id: "cheap",
+        gateway: "openrouter",
+        model: "openai/gpt-oss-20b:free",
+        trust: "third-party",
+      },
+      { id: "fallback", gateway: "openrouter", model: "openai/gpt-oss-120b", trust: "third-party" },
+      { id: "vendor", gateway: "vendorgw", model: "claude-opus-5", trust: "vendor" },
+    ],
+  };
+
+  const KEY = { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" };
+
+  it("step 1 — an explicit targetId beats both worker_targets and default_target", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      choices: [{ message: { content: "k" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: { ...CHAIN, default_target: "fallback" },
+      fetchImpl,
+      env: KEY,
+      workerTargets: { coder: "vendor" },
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: "hi",
+      worker: "coder",
+      targetId: "cheap",
+    });
+    expect(result.targetId).toBe("cheap");
+    expect(result.route).toBe("explicit");
+    expect(sent[0]?.url).toContain("openrouter.ai");
+  });
+
+  it("step 2 — worker_targets beats default_target", async () => {
+    const { fetchImpl } = captureFetch({ model: "m", content: [{ type: "text", text: "k" }] });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: { ...CHAIN, default_target: "fallback" },
+      fetchImpl,
+      env: KEY,
+      workerTargets: { coder: "vendor" },
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    expect(result.targetId).toBe("vendor");
+    expect(result.route).toBe("worker");
+  });
+
+  it("step 3 — default_target is used when the worker has no entry", async () => {
+    // THE DEFECT THIS TASK EXISTS TO CLOSE: this dispatch used to go to the
+    // local model, ignoring `default_target` entirely.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({
+      model: "m",
+      choices: [{ message: { content: "k" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: { ...CHAIN, default_target: "fallback" },
+      fetchImpl,
+      env: KEY,
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    expect(result.targetId).toBe("fallback");
+    expect(result.route).toBe("default_target");
+    expect(inference.calls).toHaveLength(0);
+    expect(JSON.parse(sent[0]?.body ?? "{}").model).toBe("openai/gpt-oss-120b");
+  });
+
+  it("step 4 — the harness default upstream when nothing names a target at all", async () => {
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-x",
+      content: [{ type: "text", text: "k" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: CHAIN,
+      fetchImpl,
+      env: {},
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    // The synthetic default over `proxy.upstream_*`, which always exists.
+    expect(result.targetId).toBe("anthropic");
+    expect(result.route).toBe("harness");
+    expect(sent[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(inference.calls).toHaveLength(0);
+  });
+
+  it("reaches the harness default with NO local model and NO default_target", async () => {
+    // The task's gate, stated directly: a project with neither must still get a
+    // draft, and must get it from the harness's own upstream. The stub throws on
+    // any local call, so this cannot pass by accidentally drafting locally.
+    const exploding: InferenceService = {
+      chat: async () => {
+        throw new Error("no local model is installed on this machine");
+      },
+      embed: async () => [],
+      capabilities: () => 2 as never,
+    };
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-x",
+      content: [{ type: "text", text: "drafted upstream" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: exploding,
+      settings: CHAIN,
+      fetchImpl,
+      env: {},
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    expect(result.text).toBe("drafted upstream");
+    expect(result.route).toBe("harness");
+    expect(sent).toHaveLength(1);
+  });
+
+  it("FAILS CLOSED on an unknown default_target, naming what IS configured", async () => {
+    // The rule `worker_targets` has always had, now applied to step 3: never a
+    // silent slide to the local model, which would send the work somewhere the
+    // user did not choose while reporting success.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: { ...CHAIN, default_target: "ghost" },
+      fetchImpl,
+      env: {},
+    });
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(/unknown target "ghost"/);
+    // The error names the alternatives and the step that chose the id.
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(/cheap.*fallback.*vendor.*inference\.default_target/s);
+    expect(sent).toHaveLength(0);
+    expect(inference.calls).toHaveLength(0);
+  });
+
+  it("resolves a default_target that names a GATEWAY to that gateway's first target", async () => {
+    // R9.23 behaviour, reached through the new step rather than reimplemented.
+    const { fetchImpl } = captureFetch({ model: "m", choices: [{ message: { content: "k" } }] });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: { ...CHAIN, default_target: "openrouter" },
+      fetchImpl,
+      env: KEY,
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    expect(result.targetId).toBe("openrouter:openai/gpt-oss-20b:free");
+    expect(result.route).toBe("default_target");
+  });
+
+  it("uses THIS SESSION's model when the harness default declares none", async () => {
+    // `proxy.upstream_model` is unset on the commonest configuration there is —
+    // a byte-faithful Anthropic upstream forwards the client's own id, so there
+    // is nothing to configure. Step 4 has no client request to forward, so it
+    // asks for the model the session is actually being served. Refusing here
+    // would make the last resort unreachable for a fresh project.
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-opus-5",
+      content: [{ type: "text", text: "ok" }],
+    });
+    const noUpstreamModel: TargetRegistrySettings = { ...CHAIN };
+    delete (noUpstreamModel as { upstream_model?: string }).upstream_model;
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: noUpstreamModel,
+      fetchImpl,
+      env: {},
+      sessionModel: () => "claude-opus-5",
+    });
+    const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
+    expect(result.route).toBe("harness");
+    expect(JSON.parse(sent[0]?.body ?? "{}").model).toBe("claude-opus-5");
+  });
+
+  it("says which step it was on when the harness default has no model to ask", async () => {
+    // The last resort can still fail — and when it does the message must name
+    // the step it was on and the settings that would fix it, not report a bare
+    // "declares no model" about a target the user never chose.
+    const noUpstreamModel: TargetRegistrySettings = { ...CHAIN };
+    delete (noUpstreamModel as { upstream_model?: string }).upstream_model;
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: noUpstreamModel,
+      fetchImpl,
+      env: {},
+    });
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(
+      /harness default upstream.*inference\.default_target.*proxy\.upstream_model/s,
+    );
+    expect(sent).toHaveLength(0);
+  });
+
+  it("does NOT borrow the session model for a target the user actually named", async () => {
+    // The session-model stand-in is scoped to step 4. A named target that
+    // declares no model is a configuration error, and quietly substituting a
+    // model for it would hide the mistake.
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: {
+        ...CHAIN,
+        gateways: [
+          ...(CHAIN.gateways ?? []),
+          { id: "baregw", provider: "openai", base_url: "https://api.openai.com/v1" },
+        ],
+        targets: [...(CHAIN.targets ?? []), { id: "bare", gateway: "baregw" }],
+        default_target: "bare",
+      },
+      fetchImpl,
+      env: {},
+      sessionModel: () => "claude-opus-5",
+    });
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(/target "bare" declares no model/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("still REDACTS the traffic this change newly routes off-machine", async () => {
+    // R10.8 sends more work to non-local targets, so the R9.3 trust floor is
+    // what makes it safe. An unrouted draft must be redacted exactly like a
+    // named one — the gate at the top of this file, on the default path.
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-x",
+      content: [{ type: "text", text: "ok" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: CHAIN,
+      fetchImpl,
+      env: {},
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      worker: "coder",
+    });
+    expect(sent[0]?.body).not.toContain(FAKE_KEY);
+    expect(sent[0]?.body).not.toContain(FAKE_EMAIL);
+    expect(sent[0]?.body).toContain("[REDACTED:");
+    expect(result.redactedCount).toBeGreaterThan(0);
+  });
+
+  it("keeps the local model reachable — by NAMING a target that points at it", async () => {
+    // Local stays a full capability. What it stops being is implicit.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: {
+        ...CHAIN,
+        gateways: [
+          ...(CHAIN.gateways ?? []),
+          {
+            id: "localgw",
+            provider: "ollama",
+            base_url: "http://localhost:11434/v1",
+            models: ["qwen2.5-coder:7b"],
+          },
+        ],
+        default_target: "localgw:qwen2.5-coder:7b",
+      },
+      fetchImpl,
+      env: {},
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      worker: "coder",
+    });
+    expect(result.route).toBe("default_target");
+    expect(result.trust).toBe("local");
+    expect(result.redactedCount).toBe(0);
+    expect(sent).toHaveLength(0);
+    // Verbatim, as before: redacting a prompt that never leaves the machine
+    // would degrade the draft for no privacy gain.
+    expect(inference.calls[0]?.prompt).toBe(SECRET_PROMPT);
+  });
+
+  it("audits WHICH step chose the target, not just which target", async () => {
+    const events: { route?: string; reason?: string }[] = [];
+    const { fetchImpl } = captureFetch({ model: "m", content: [{ type: "text", text: "k" }] });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: CHAIN,
+      fetchImpl,
+      env: {},
+      audit: (e) => events.push(e),
+    });
+    await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT, worker: "coder" });
+    expect(events[0]?.route).toBe("harness");
+    expect(events[0]?.reason).toContain("harness default upstream");
+    expect(events[0]?.reason).toContain("redacted before dispatch");
+    expect(JSON.stringify(events)).not.toContain(FAKE_KEY);
+  });
+});
+
+/**
+ * R10.8 — `llamacpp` as a first-class provider.
+ *
+ * It is OpenAI-shaped, so it must ride the existing translating transport rather
+ * than a parallel one. What the distinct member buys is the trust default: a
+ * loopback llama.cpp is genuinely local, and the same binary on the LAN is
+ * genuinely not — and the second case must be redacted at its floor like any
+ * other remote.
+ */
+describe("R10.8 — llamacpp targets", () => {
+  function llamacpp(baseUrl: string): TargetRegistrySettings {
+    return {
+      ...REMOTE,
+      gateways: [
+        { id: "llama", provider: "llamacpp", base_url: baseUrl, models: ["qwen3-coder-30b"] },
+      ],
+      targets: [{ id: "llama-local", gateway: "llama", model: "qwen3-coder-30b" }],
+    };
+  }
+
+  it("takes the unredacted direct path for a LOOPBACK llama.cpp server", async () => {
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: llamacpp("http://127.0.0.1:8080/v1"),
+      fetchImpl,
+      env: {},
+    });
+
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      targetId: "llama-local",
+    });
+
+    // Trust was DERIVED as local from the loopback URL — the target declares none.
+    expect(result.trust).toBe("local");
+    expect(result.redactedCount).toBe(0);
+    expect(sent).toHaveLength(0);
+    expect(inference.calls[0]?.prompt).toBe(SECRET_PROMPT);
+  });
+
+  it("REDACTS a llama.cpp server on the LAN, at its trust floor", async () => {
+    // Same provider, same config shape, different host. Nothing about the name
+    // `llamacpp` may buy a target the unredacted path.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({
+      model: "qwen3-coder-30b",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: llamacpp("http://gpubox.lan:8080/v1"),
+      fetchImpl,
+      env: {},
+    });
+
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      targetId: "llama-local",
+    });
+
+    expect(result.trust).toBe("lan");
+    expect(inference.calls).toHaveLength(0);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.body).not.toContain(FAKE_KEY);
+    expect(sent[0]?.body).not.toContain(FAKE_EMAIL);
+    expect(result.redactedCount).toBeGreaterThan(0);
+    // OpenAI-shaped transport, reused rather than reimplemented.
+    expect(sent[0]?.url).toBe("http://gpubox.lan:8080/v1/chat/completions");
+  });
+
+  it("dispatches keyless — a missing credential is not an error for llama.cpp", async () => {
+    // The most likely thing to get wrong: a keyless gateway tripping the
+    // "needs a credential" guard and refusing before it ever sends.
+    const { fetchImpl, sent } = captureFetch({
+      model: "qwen3-coder-30b",
+      choices: [{ message: { content: "ok" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: llamacpp("http://gpubox.lan:8080/v1"),
+      fetchImpl,
+      env: {},
+      resolveKey: () => undefined,
+    });
+
+    await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "llama-local" });
+
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.headers.authorization).toBeUndefined();
+    expect(sent[0]?.headers["x-api-key"]).toBeUndefined();
   });
 });
 

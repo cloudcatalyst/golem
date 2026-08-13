@@ -206,6 +206,11 @@ export function providerUpstreamLabel(
       return "openai";
     case "ollama":
       return "ollama";
+    case "llamacpp":
+      // The project spells itself "llama.cpp"; the config token cannot carry the
+      // dot, but the status line has no such constraint and should read the way
+      // the user's own notes do.
+      return "llama.cpp";
     case "gemini":
       return "gemini";
     default:

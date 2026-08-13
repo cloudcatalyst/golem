@@ -9,10 +9,13 @@ import {
   defaultAuthScheme,
   doubledVersionSegment,
   isGeminiProvider,
+  isKeylessProvider,
   isTranslatingProvider,
   makeAuthMapper,
+  PROXY_PROVIDERS,
   preservesVendorPrefix,
   resolveAuthScheme,
+  UPSTREAM_PROVIDERS,
   upstreamAssumesCaching,
   upstreamBasePath,
   upstreamChatCompletionsPath,
@@ -35,6 +38,52 @@ describe("translating providers (case b)", () => {
   it("auth defaults: openai bearer, ollama none (inherit)", () => {
     expect(defaultAuthScheme("openai")).toBe("bearer");
     expect(defaultAuthScheme("ollama")).toBe("inherit");
+  });
+
+  it("R10.8 — llamacpp reuses the OpenAI path rather than growing a parallel one", () => {
+    // The whole argument for a distinct enum member was better ergonomics and
+    // better messages, NOT a second transport. It must translate, compose, and
+    // route byte-for-byte like the OpenAI-shaped provider it is.
+    expect(isTranslatingProvider("llamacpp")).toBe(true);
+    expect(isGeminiProvider("llamacpp")).toBe(false);
+    // Single-vendor server: one loaded GGUF, named bare — no `vendor/` segment
+    // to preserve (that is OpenRouter's multi-vendor property).
+    expect(preservesVendorPrefix("llamacpp")).toBe(false);
+    // Genuinely non-caching, like the other self-hosted backends.
+    expect(upstreamAssumesCaching("llamacpp")).toBe(false);
+    expect(upstreamRequestUrl("llamacpp", "http://localhost:8080/v1")).toBe(
+      "http://localhost:8080/v1/chat/completions",
+    );
+  });
+
+  it("R10.8 — a keyless llamacpp gateway is a first-class state, not a defect", () => {
+    // `llama-server` serves unauthenticated unless started with --api-key, so
+    // "no credential stored" is the CORRECT state and must not be reported as a
+    // missing one. Nothing is injected by default.
+    expect(defaultAuthScheme("llamacpp")).toBe("inherit");
+    expect(resolveAuthScheme("llamacpp", "inherit")).toBe("inherit");
+    expect(makeAuthMapper(resolveAuthScheme("llamacpp", "inherit"), undefined)).toBeUndefined();
+    expect(isKeylessProvider("llamacpp")).toBe(true);
+    expect(isKeylessProvider("ollama")).toBe(true);
+    // A user who DID pass --api-key opts in explicitly.
+    expect(resolveAuthScheme("llamacpp", "bearer")).toBe("bearer");
+  });
+
+  it("R10.8 — gemini is NOT keyless, though its default scheme is also inherit", () => {
+    // Keying "keyless" off `inherit` would have silenced the one warning that
+    // matters most: gemini genuinely needs a key, carried in `?key=`.
+    expect(defaultAuthScheme("gemini")).toBe("inherit");
+    expect(isKeylessProvider("gemini")).toBe(false);
+    expect(isKeylessProvider("anthropic")).toBe(false);
+    expect(isKeylessProvider("openrouter")).toBe(false);
+  });
+
+  it("R10.8 — llamacpp is a PROXY provider: there is an endpoint to forward to", () => {
+    // The membership rule is "is there something to forward to". `claude-cli`
+    // fails it (a spawned process, no endpoint); `llama-server` passes it.
+    expect(PROXY_PROVIDERS).toContain("llamacpp");
+    expect(PROXY_PROVIDERS).not.toContain("claude-cli");
+    expect(UPSTREAM_PROVIDERS).toContain("llamacpp");
   });
 
   it("treats openai/ollama/gemini as NON-caching (semantic stage may engage)", () => {

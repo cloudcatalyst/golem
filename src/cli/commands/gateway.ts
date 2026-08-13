@@ -5,6 +5,7 @@
 import type { Command } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
 import {
+  isKeylessProvider,
   resolveUpstreamDisplay,
   UPSTREAM_AUTH_SCHEMES,
   UPSTREAM_PROVIDERS,
@@ -230,8 +231,16 @@ export default function register(program: Command): void {
             },
             new Date().toISOString(),
           );
+          // R10.8: a self-hosted model server has no key to set, so telling the
+          // user to run `gateway login` next is a step that cannot succeed and
+          // teaches them the tool does not know what it just registered.
           process.stdout.write(
-            `registered gateway "${id}" (${provider} ${opts.baseUrl}). Next: golem gateway login ${id}  (set its key), then  golem gateway use ${id}.\n`,
+            isKeylessProvider(provider)
+              ? `registered gateway "${id}" (${provider} ${opts.baseUrl}). ` +
+                  `${provider} serves unauthenticated by default, so there is no key to set — ` +
+                  `next: golem gateway use ${id}. ` +
+                  `(If you started it with an API key, add --auth-scheme bearer and run golem gateway login ${id}.)\n`
+              : `registered gateway "${id}" (${provider} ${opts.baseUrl}). Next: golem gateway login ${id}  (set its key), then  golem gateway use ${id}.\n`,
           );
           if (opts.login) {
             const result = await loginGateway(opts.dir, id, new Date().toISOString(), {});
