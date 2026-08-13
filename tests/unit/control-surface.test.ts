@@ -12,6 +12,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { golemMcpEntry } from "../../src/cli/init.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
+import { P0_SKILLS } from "../../src/cli/skills.js";
 import {
   applyControl,
   type Control,
@@ -27,6 +28,21 @@ let projectDir: string;
 
 /** Keeps the header cheap and deterministic: no Ollama probe, no real network. */
 const localProbe = async () => ({ reachable: false });
+/**
+ * `golemInit`'s external-state probe, injected.
+ *
+ * The default one reads the developer's HOME and refuses when there is no
+ * `~/.claude` / `~/.claude.json`. The slider apply path ACTIVATES an
+ * uninitialized project (Decision 43), so without this the test depended on
+ * Claude Code being installed on the machine running it — which is why it was the
+ * single red test in an otherwise green CI suite for four consecutive merges,
+ * failing identically on Node 22 and 24. Same shape every other init-touching
+ * test in this repo already uses.
+ */
+const initProbe = {
+  claudeCodeInstalled: () => Promise.resolve(true),
+  headroomWrapActive: () => Promise.resolve(false),
+};
 const OPTS = () => ({
   projectDir,
   userDir,
@@ -34,6 +50,7 @@ const OPTS = () => ({
   env: {},
   probeTimeoutMs: 50,
   localProbe,
+  initProbe,
 });
 
 const projectFile = () => path.join(projectDir, ".golem", "settings.json");
@@ -75,28 +92,15 @@ beforeEach(async () => {
     JSON.stringify({ mcpServers: { golem: golemMcpEntry() } }),
     "utf8",
   );
-  const SKILL_NAMES = [
-    "slider",
-    "stats",
-    "expand",
-    "bypass",
-    "research",
-    "wiki-ingest",
-    "develop",
-    "plan",
-    "verify",
-    "ship",
-    "promote",
-    "upstream",
-    "debrief",
-    "park",
-    "triage",
-    "cache-health",
-    "context-hygiene",
-    "fresh-eyes",
-    "checkpoint",
-  ];
-  for (const s of SKILL_NAMES) {
+  // DERIVED from P0_SKILLS, never hand-listed. `golemInitStatus` requires every
+  // installed skill to be present before it calls a project initialized, so a
+  // hardcoded list silently stops satisfying it the moment a skill is added — and
+  // that is exactly what happened: `first-pancake` landed, the list stayed at 19,
+  // the project read as UNINITIALIZED, and `setSliderLevel` fell through to
+  // `golemInit`. Invisible locally (init just succeeds when `~/.claude` exists)
+  // and fatal on CI, where it refuses. Same failure class as R10.11's rotted
+  // extension test: a hand-kept list that has to agree with a live source.
+  for (const s of Object.keys(P0_SKILLS)) {
     const dir = path.join(projectDir, ".claude", "skills", "golem", s);
     await mkdir(dir, { recursive: true });
     await writeFile(path.join(dir, "SKILL.md"), `# golem ${s}\n`, "utf8");
