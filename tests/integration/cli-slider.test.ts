@@ -5,15 +5,14 @@
  * read the same value from the same file.
  */
 
-import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { golemInitStatus, type InitProbe } from "../../src/cli/init.js";
 import { getSliderInfo, setSliderLevel } from "../../src/cli/slider.js";
 import { loadConfig, settingsFilePaths } from "../../src/config/index.js";
 import { JsonFileSliderStore } from "../../src/mcp/slider-store.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 // Fake probe (as in cli-init.test.ts): no real ~/.claude / ~/.vscode touched.
 const okProbe: InitProbe = {
@@ -21,20 +20,20 @@ const okProbe: InitProbe = {
   headroomWrapActive: () => Promise.resolve(false),
 };
 
+// R10.2: one recursive delete for the whole file instead of one per test.
+// Each test still gets its own fresh root, so isolation is unchanged.
+const newTempRoot = useTempDirs("golem-slider-cli");
+
 describe("golem slider", () => {
   let projectDir: string;
   let userDir: string;
 
   beforeEach(async () => {
-    const root = await mkdtemp(join(tmpdir(), "golem-slider-cli-"));
+    const root = await newTempRoot();
     projectDir = join(root, "project");
     userDir = join(root, "user");
     await mkdir(projectDir, { recursive: true });
     await mkdir(userDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await rm(join(projectDir, ".."), rmTemp);
   });
 
   it("defaults to level 1 (lossless) from the default layer", async () => {

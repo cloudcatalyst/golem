@@ -3,11 +3,10 @@
  * hooks. Temp dirs; hook I/O injected.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   markBlocked,
   markUnblocked,
@@ -16,14 +15,13 @@ import {
   runUserPromptSubmitHook,
   sessionStatePath,
 } from "../../../src/hooks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let dir: string;
+const newTempDir = useTempDirs("golem-state-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-state-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 function io(input: string) {

@@ -237,6 +237,34 @@ describe("compactDocument", () => {
     expect(res.warnings.join("\n")).toContain("local model unavailable");
   });
 
+  /**
+   * A prose segment owns the blank lines that separate it from the heading or
+   * fence on either side, and the model never reproduces them. Without the
+   * hold-back-and-re-attach the rewrite welds the paragraph to the next heading
+   * and the file's shape drifts a little every time the command is run — a
+   * silent structural regression no other assertion here would catch.
+   */
+  describe("blank-line reassembly", () => {
+    /** Deliberately free of code, paths and identifiers, so nothing is masked. */
+    const paragraph =
+      "This paragraph is long enough to be worth a rewrite, and it deliberately contains " +
+      "nothing that would be masked, so the rewrite is accepted exactly as the model returns it.";
+
+    it("re-attaches the blank lines a rewritten paragraph was surrounded by", async () => {
+      const spaced = ["# Rules", "", paragraph, "", "## Checks"].join("\n");
+      const res = await compactDocument(spaced, { inference: fakeInference(() => "SHORT.") });
+      expect(res.segments.some((s) => s.rewritten)).toBe(true);
+      expect(res.compacted).toBe(["# Rules", "", "SHORT.", "", "## Checks", ""].join("\n"));
+    });
+
+    it("adds no blank line the original did not have", async () => {
+      const tight = [paragraph, "## Checks"].join("\n");
+      const res = await compactDocument(tight, { inference: fakeInference(() => "SHORT.") });
+      expect(res.segments.some((s) => s.rewritten)).toBe(true);
+      expect(res.compacted).toBe(["SHORT.", "## Checks", ""].join("\n"));
+    });
+  });
+
   it("always reports the cost side, even on a no-op", async () => {
     const res = await compactDocument(doc, { inference: unavailable });
     expect(res.directives.length).toBeGreaterThan(0);

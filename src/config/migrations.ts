@@ -73,9 +73,17 @@ function splitLeaf(dotted: string): readonly [string, string | undefined] {
  */
 export function assertLeafRename(m: SettingMigration): string | undefined {
   if (sectionOf(m.from) !== sectionOf(m.to)) {
-    // R9.23: proxy.active_account was moved to inference.default_target. Cross-section
-    // renames break env-var mapping (GOLEM_PROXY_* → GOLEM_INFERENCE_*), but this was
-    // a deliberate migration — the old env var is also retired.
+    // A pre-authorised exemption for ONE cross-section rename. Cross-section
+    // renames break env-var mapping (GOLEM_PROXY_* → GOLEM_INFERENCE_*), which
+    // is why they are refused in general; this pair was reviewed and accepted
+    // because the old env var is retired too.
+    //
+    // Note it does not currently fire: SETTING_MIGRATIONS routes
+    // `proxy.active_account` to `proxy.default_target` (same section), and
+    // `proxy.default_target` is the deprecated leaf that resolves onward to
+    // `inference.default_target`. The exemption is kept so that collapsing
+    // those two hops into one direct migration stays a one-line table change
+    // rather than a guard change — but it is dead against today's table.
     if (m.from === "proxy.active_account" && m.to === "inference.default_target") {
       return undefined;
     }

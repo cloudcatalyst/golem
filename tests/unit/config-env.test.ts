@@ -1,24 +1,20 @@
 /** E1: GOLEM_<SECTION>_<KEY> env mapping — names, case, coercion, warnings. */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, readEnvLayer } from "../../src/config/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
 let projectDir: string;
 
+const newTempDir = useTempDirs("golem-env-test-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-env-test-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 const load = (env: Record<string, string | undefined>) => loadConfig({ projectDir, userDir, env });

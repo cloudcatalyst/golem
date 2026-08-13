@@ -1,5 +1,5 @@
 /**
- * Decision 53 — `golem ext` rendering.
+ * Decision 53 — `golem pkg` rendering.
  *
  * The assertions that matter are the honest ones: the gate note must survive to
  * the output for an enabled-but-gated tool, and the footer must refuse to claim

@@ -36,6 +36,7 @@
 import { Transform, type TransformCallback } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
 import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
+import { isRecord } from "../shared/json.js";
 import type { ResponseUsage } from "./types.js";
 
 /** Cap on buffered bytes while sniffing a non-streaming JSON body. */
@@ -51,10 +52,6 @@ function sniffDecompressorFor(contentEncoding: string | undefined): Transform | 
   if (enc === "br") return createBrotliDecompress();
   if (enc === "deflate") return createInflate();
   return null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 interface PartialUsage {

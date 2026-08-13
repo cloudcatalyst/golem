@@ -151,7 +151,7 @@ export default function register(program: Command): void {
         const ec = result.effectiveCompression;
         if (ec.degraded)
           process.stdout.write(
-            `⚠ on this upstream that behaves as level ${ec.effective} (${SLIDER_LEVEL_NAMES[ec.effective]}), not ${ec.nominal} (${SLIDER_LEVEL_NAMES[ec.nominal]}): ${ec.reason ?? ""}\n  The setting is kept — it applies as chosen on a non-caching account (golem account use <id>).\n`,
+            `⚠ on this upstream that behaves as level ${ec.effective} (${SLIDER_LEVEL_NAMES[ec.effective]}), not ${ec.nominal} (${SLIDER_LEVEL_NAMES[ec.nominal]}): ${ec.reason ?? ""}\n  The setting is kept — it applies as chosen on a non-caching account (golem gateway use <id>).\n`,
           );
       } catch (err) {
         _fail(err);

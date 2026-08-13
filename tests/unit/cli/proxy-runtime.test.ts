@@ -101,7 +101,7 @@ describe("buildProxyFromSettings — resolved-upstream reporting", () => {
   it("reports the ACTIVE ACCOUNT, not the top-level upstream config", async () => {
     // Regression: the startup banner printed settings.proxy.upstream_base_url, so a
     // proxy genuinely serving an active account still announced
-    // `-> https://api.anthropic.com` — making a working `golem account use` look
+    // `-> https://api.anthropic.com` — making a working `golem gateway use` look
     // like it had not taken effect.
     const { settings } = await loadConfig({
       projectDir,
@@ -176,6 +176,43 @@ describe("buildProxyFromSettings — compression.headroom_sidecar wiring", () =>
     const build = buildProxyFromSettings(projectDir, settings, telemetry);
     expect(build.semantic).toBeUndefined();
     expect("semantic" in build).toBe(false);
+  });
+});
+
+describe("buildProxyFromSettings — byte-fidelity of the plain-Anthropic single-upstream path", () => {
+  it("passes NO mapUpstreamHeaders / translateUpstream / resolveRoute — absent, never a no-op function", async () => {
+    const { settings } = await loadConfig({
+      projectDir,
+      userDir: fakeUserDir,
+      overrides: {
+        proxy: { upstream_base_url: "https://api.anthropic.com", upstream_provider: "anthropic" },
+      },
+    });
+
+    const { config } = buildProxyFromSettings(projectDir, settings, telemetry).proxy;
+
+    // CLAUDE.md hard rule: the proxy is byte-faithful at slider ≤ 1, and it is
+    // so only because these options are ABSENT — `inherit` auth yields no
+    // mapper, an Anthropic-protocol upstream no translator. A refactor that
+    // "helpfully" returns an identity function instead of `undefined` still
+    // compiles and still passes every other test in this file, while silently
+    // putting a header rewrite and a body translator into a pipe that is
+    // supposed to be raw bytes. `resolveProxyConfig` copies each optional key
+    // only when it is defined, so an absent key here is proof it was never
+    // passed to the proxy at all.
+    expect(config.mapUpstreamHeaders).toBeUndefined();
+    expect(typeof config.mapUpstreamHeaders).not.toBe("function");
+    expect("mapUpstreamHeaders" in config).toBe(false);
+
+    expect(config.translateUpstream).toBeUndefined();
+    expect("translateUpstream" in config).toBe(false);
+
+    // R9.2: with exactly one target the route resolver is omitted ENTIRELY
+    // rather than constructed and ignored — "one target, so the resolver would
+    // decide the same thing every time" is a different code path through the
+    // proxy, not a cosmetic difference.
+    expect(config.resolveRoute).toBeUndefined();
+    expect("resolveRoute" in config).toBe(false);
   });
 });
 

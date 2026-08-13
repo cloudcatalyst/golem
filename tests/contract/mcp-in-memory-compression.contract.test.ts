@@ -4,7 +4,7 @@
  * guaranteed to behave like the real WS-A implementation will.
  */
 
-import { InMemoryCompressionService } from "../../src/mcp/stub-compression.js";
+import { InMemoryCompressionService } from "../../src/mcp/in-memory-compression.js";
 import { describeCompressionServiceContract } from "./compression-contract.js";
 
 describeCompressionServiceContract(

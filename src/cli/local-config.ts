@@ -5,8 +5,9 @@
  * existed as settings leaves; what was missing was one place to see and set
  * them. This is that place:
  *
- * - `inference.coder_enabled` — whether the `coder` MCP tool (the only
- *   thing that routinely engages the local model, Decision 31) is offered.
+ * - `inference.worker_targets` — where each worker is routed. Since R9.23 the
+ *   `coder` MCP tool (the only thing that routinely engages the local model,
+ *   Decision 31) is always offered; disabling it means routing it away.
  * - `inference.ollama_base_url` — *which* Ollama the local roles talk to.
  *   Pointing this at another machine is the whole LAN-offload story (spec §6,
  *   Decision 12): a laptop can borrow the GPU box without any other change.
@@ -94,9 +95,10 @@ export interface LocalModelReport {
    */
   readonly non_local_workers?: readonly { readonly worker: string; readonly target: string }[];
   /**
-   * The effective state the status surfaces show: the local model counts as
-   * ACTIVE only when it is both enabled and reachable. Neither alone is enough —
-   * which is the distinction the VS Code status bar previously lost.
+   * The effective state the status surfaces show. This was "enabled AND
+   * reachable" until R9.23 retired `inference.coder_enabled`; with the enabled
+   * half gone it is now exactly {@link reachable}, and is kept as its own field
+   * because it is what the surfaces (including the VS Code status bar) read.
    */
   readonly active: boolean;
 }
@@ -262,9 +264,14 @@ export function renderLocalModel(report: LocalModelReport): string {
   const lines: string[] = [];
   const where = report.remote ? "LAN" : "this machine";
   lines.push(`Local model: ${report.active ? "ACTIVE" : "not active"} (${where})`);
+  // R9.23 removed `inference.coder_enabled`: the coder tool is always offered,
+  // and what varies is whether THIS backend can serve it. The line here used to
+  // name that retired leaf and attribute it to `base_url_layer` — which is the
+  // endpoint's provenance, not the tool's — so it sent anyone who followed the
+  // advice to `golem config get inference.coder_enabled`, which reports nothing.
   lines.push(
-    `  coder tool: ${report.reachable ? "enabled" : "DISABLED"} ` +
-      `(inference.coder_enabled, from ${report.base_url_layer})`,
+    `  coder tool: always available — this backend ` +
+      `${report.reachable ? "can serve it" : "CANNOT serve it"}`,
   );
   // R9.10: a worker with a target does not run here, and this command must not
   // imply it does. Everything below describes the LOCAL backend, which such a

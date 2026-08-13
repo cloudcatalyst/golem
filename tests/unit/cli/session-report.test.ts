@@ -3,17 +3,14 @@
  * defensive degradation, and the redaction-off surfacing rule.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   collectSessionStateReport,
   sessionStateReportSchema,
 } from "../../../src/cli/session-report.js";
 import type { GolemState } from "../../../src/cli/statusline.js";
 import { markBlocked } from "../../../src/hooks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const fakeState: GolemState = {
   sliderLevel: 1,
@@ -22,13 +19,12 @@ const fakeState: GolemState = {
   localModelReachable: false,
 };
 
+const newTempDir = useTempDirs("golem-report-");
+
 describe("collectSessionStateReport", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-report-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("assembles a report that satisfies the zod contract", async () => {

@@ -3,23 +3,21 @@
  * date stamping across a changing clock, and the on-disk file shape.
  */
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FileWikiStore } from "../../../src/wiki/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let dir: string;
 let today: string;
 
-beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-wiki-store-"));
-  today = "2026-07-10";
-});
+const newTempDir = useTempDirs("golem-wiki-store-");
 
-afterEach(async () => {
-  await rm(dir, rmTemp);
+beforeEach(async () => {
+  dir = await newTempDir();
+  today = "2026-07-10";
 });
 
 describe("FileWikiStore", () => {

@@ -3,10 +3,8 @@
  * corruption tolerance, per-project scoping, concurrent-append safety.
  */
 
-import { appendFile, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { appendFile } from "node:fs/promises";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
   JsonlTelemetryStore,
@@ -18,15 +16,14 @@ import {
   telemetryFilePath,
   telemetryStatsSource,
 } from "../../../src/telemetry/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let dir: string;
 
+const newTempDir = useTempDirs("golem-tel-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-tel-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 function ev(over: Partial<TelemetryEvent> = {}): TelemetryEvent {

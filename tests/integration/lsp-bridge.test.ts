@@ -15,13 +15,12 @@
  * criterion 4), and the risk here is protocol and lifecycle, not TypeScript.
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { LspBridge, type LspServerSpec } from "../../src/pkg/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 const FAKE_SERVER = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -42,13 +41,11 @@ const SAMPLE = [
 
 let root: string;
 
-beforeEach(async () => {
-  root = await mkdtemp(path.join(tmpdir(), "golem-lsp-"));
-  await writeFile(path.join(root, "sample.ts"), SAMPLE, "utf8");
-});
+const newTempDir = useTempDirs("golem-lsp-");
 
-afterEach(async () => {
-  await rm(root, rmTemp);
+beforeEach(async () => {
+  root = await newTempDir();
+  await writeFile(path.join(root, "sample.ts"), SAMPLE, "utf8");
 });
 
 /**

@@ -7,7 +7,7 @@
  * keeps ADR-0003's invariants at that boundary:
  *
  * - **A target holds no secret.** `add` writes non-secret identity only; the
- *   credential still comes from `golem account login <account>` and lives in the
+ *   credential still comes from `golem gateway login <account>` and lives in the
  *   OS store. `list` reports only WHERE a credential resolves from and whether
  *   it resolves at all — never its value.
  * - **Fail-closed.** An unknown target id is an error naming the ids that do
@@ -28,7 +28,7 @@ import {
   type CredentialFault,
   type CredentialStore,
   createCredentialStore,
-  DEFAULT_ACCOUNT_ID,
+  DEFAULT_GATEWAY_ID,
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import {
@@ -41,6 +41,7 @@ import {
   type TargetOrigin,
   type TargetTrust,
   targetWarnings,
+  withDefaultTarget,
 } from "../providers/index.js";
 import { InitError } from "./init.js";
 
@@ -89,7 +90,7 @@ async function appendAudit(
  * points at).
  */
 function storeIdFor(target: ResolvedTarget): string {
-  return target.accountId ?? DEFAULT_ACCOUNT_ID;
+  return target.accountId ?? DEFAULT_GATEWAY_ID;
 }
 
 /**
@@ -106,12 +107,7 @@ export async function collectTargets(
   const targets = listTargets(proxy);
   // R9.23: default_target moved to inference, but proxy may still carry it
   // via the migration table (proxy.active_account → proxy.default_target).
-  const defaultId = resolveDefaultTargetId({
-    ...proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
-  });
+  const defaultId = resolveDefaultTargetId(withDefaultTarget(settings));
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
   // Config-level warnings are computed once for the whole registry, then
@@ -128,7 +124,7 @@ export async function collectTargets(
       if (t.accountId !== null && !status.present) {
         warnings.push(
           `no credential is stored for account "${t.accountId}" — set one with: ` +
-            `golem account login ${t.accountId}`,
+            `golem gateway login ${t.accountId}`,
         );
       }
       return {
@@ -218,7 +214,7 @@ export async function addTarget(
     throw new InitError(
       `target "${input.id}" references gateway "${input.gateway}", which is not in ` +
         `proxy.gateways; configured gateways: ${ids}. Register it first with ` +
-        `\`golem account add ${input.gateway} …\`, then \`golem account login ${input.gateway}\`.`,
+        `\`golem gateway add ${input.gateway} …\`, then \`golem gateway login ${input.gateway}\`.`,
     );
   }
 
@@ -278,7 +274,7 @@ export async function testTarget(
         target.accountId === null
           ? "this target inherits the client's own auth, so there is nothing stored to probe."
           : `no credential is stored for account "${target.accountId}" — ` +
-            `set one with: golem account login ${target.accountId}`,
+            `set one with: golem gateway login ${target.accountId}`,
     };
   }
 

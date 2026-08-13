@@ -2,20 +2,18 @@
  * R5.1 — file-backed TaskStore: round-trip, corrupt-file tolerance, delete.
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createTask, FileTaskStore, tasksDir } from "../../../src/tasks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-tasks-");
 
 describe("FileTaskStore", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-tasks-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("returns [] when no tasks dir exists yet", async () => {

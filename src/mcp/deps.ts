@@ -17,9 +17,9 @@ import type {
 } from "../interfaces/index.js";
 import type { LspBridge } from "../pkg/index.js";
 import type { TelemetryStore } from "../telemetry/index.js";
+import { InMemoryCompressionService } from "./in-memory-compression.js";
 import type { SliderStore } from "./slider-store.js";
 import { InMemorySliderStore } from "./slider-store.js";
-import { InMemoryCompressionService } from "./stub-compression.js";
 
 export interface GolemMcpServerDeps {
   readonly compression: CompressionService;
@@ -42,8 +42,8 @@ export interface GolemMcpServerDeps {
   /**
    * WS-D tiered inference (task B3). When present, the `coder` tool
    * is registered, letting Claude offload a task to a local model (the
-   * "drafter" role). Omitted when local inference is unavailable or when
-   * `inference.coder_enabled` is false.
+   * "drafter" role). Omitted when local inference is unavailable — R9.23
+   * removed `inference.coder_enabled`, so there is no toggle to omit it for.
    */
   readonly coder?: InferenceService;
   /**
@@ -146,7 +146,13 @@ export interface GolemMcpServerDeps {
   readonly telemetry?: TelemetryStore;
 }
 
-/** In-memory deps for tests and for running standalone before WS-A lands. */
+/**
+ * In-memory deps for tests and for `golem mcp serve` running standalone.
+ *
+ * "before WS-A lands" until R10.1 — WS-A landed long ago; this is simply the
+ * dependency set for the standalone path, which does not serve proxy traffic
+ * and so does not need the real lossless stage.
+ */
 export function createStandaloneDeps(): GolemMcpServerDeps & {
   readonly compression: InMemoryCompressionService;
 } {

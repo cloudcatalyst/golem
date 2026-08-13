@@ -29,6 +29,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { isRecord } from "../shared/json.js";
 import type { CcrStore } from "./ccr-store.js";
 import { estimateTokens } from "./tokens.js";
 
@@ -37,10 +38,6 @@ import { estimateTokens } from "./tokens.js";
  * hex chars observed across its transforms) rather than Golem's own
  * fixed 64-char convention. */
 const HASH_MARKER_RE = /hash=([0-9a-f]{8,64})/gi;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Is `hash` a prefix of a standard digest of `content`? Headroom's store
  * defaults to SHA-256[:24] but some transforms supply MD5 or a shorter

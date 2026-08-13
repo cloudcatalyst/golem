@@ -33,6 +33,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { estimateTokens } from "../compression/tokens.js";
+import { isRecord } from "../shared/json.js";
 
 /** Buckets a request's tokens are attributed to. Exhaustive by construction. */
 export const CONTEXT_BUCKETS = [
@@ -168,10 +169,6 @@ export type ContextToolsBlock = z.infer<typeof toolsBlockSchema>;
 
 /** How many "biggest block" rows to keep. Enough to act on, small enough to read. */
 const LARGEST_KEEP = 8;
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
 
 function tokensOf(value: unknown): number {
   if (value === undefined) return 0;

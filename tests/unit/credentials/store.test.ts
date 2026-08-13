@@ -13,7 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type CredentialBackend,
   DEFAULT_KEY_ENV,
-  envVarForAccount,
+  envVarForGateway,
   fileBackend,
 } from "../../../src/credentials/backends.js";
 import { createCredentialStore } from "../../../src/credentials/store.js";
@@ -30,21 +30,21 @@ afterAll(async () => {
 });
 
 /**
- * `envVarForAccount` still exists, but only to name the internal CLI→daemon
+ * `envVarForGateway` still exists, but only to name the internal CLI→daemon
  * handoff channel (Decision 47) — the spelling is pinned because the two sides
  * of that handoff must agree.
  */
-describe("envVarForAccount (internal daemon handoff only)", () => {
+describe("envVarForGateway (internal daemon handoff only)", () => {
   it("maps the reserved default id to the plain var", () => {
-    expect(envVarForAccount("default")).toBe(DEFAULT_KEY_ENV);
+    expect(envVarForGateway("default")).toBe(DEFAULT_KEY_ENV);
   });
 
   it("keeps the per-account spelling both sides of the handoff agree on", () => {
-    expect(envVarForAccount("kimi")).toBe("GOLEM_UPSTREAM_API_KEY__KIMI");
+    expect(envVarForGateway("kimi")).toBe("GOLEM_UPSTREAM_API_KEY__KIMI");
   });
 
   it("sanitizes non-alphanumerics to underscores", () => {
-    expect(envVarForAccount("work-acct.2")).toBe("GOLEM_UPSTREAM_API_KEY__WORK_ACCT_2");
+    expect(envVarForGateway("work-acct.2")).toBe("GOLEM_UPSTREAM_API_KEY__WORK_ACCT_2");
   });
 });
 

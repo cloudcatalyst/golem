@@ -81,13 +81,41 @@ describe("the CLI keeps the panel off the hot path", () => {
     // barrel, proxy, update, the local-model probe) is ~400ms, and the panel paints
     // before asking for any of it. Same reasoning for the slider's write path and
     // the hooks barrel.
-    const specifiers = staticSpecifiers(await source("src/config/control-surface.ts"));
+    //
+    // R10.1 split control-surface.ts by store, and the cost being guarded here is
+    // the whole FAMILY's: control-surface.ts statically imports the three store
+    // modules, so anything they import is paid the moment the surface loads.
+    // Checking the entry file alone would let an expensive import move one file
+    // sideways and silently pass — so the specifiers are unioned across all four.
+    const family = [
+      "src/config/control-surface.ts",
+      "src/config/control-surface-types.ts",
+      "src/config/control-surface-settings.ts",
+      "src/config/control-surface-guidance.ts",
+      "src/config/control-surface-runtime.ts",
+    ];
+    const specifiers = (await Promise.all(family.map(source))).flatMap(staticSpecifiers);
+
     expect(specifiers).not.toContain("../cli/status.js");
     expect(specifiers).not.toContain("../cli/slider.js");
     expect(specifiers).not.toContain("../hooks/index.js");
     // ...and the cheap read-only substitutes ARE used.
     expect(specifiers).toContain("../cli/slider-read.js");
     expect(specifiers).toContain("../hooks/guidance.js");
+  });
+
+  it("keeps the control surface's entry file importing only its own family", async () => {
+    // The split is only free if the entry file's own imports stay cheap: it must
+    // reach the stores, not re-import what they already pull. Anything here that
+    // is neither a control-surface sibling nor a known-cheap leaf is a new cost on
+    // every panel paint.
+    const specifiers = staticSpecifiers(await source("src/config/control-surface.ts"));
+    const unexpected = specifiers.filter(
+      (s) =>
+        !s.startsWith("./control-surface-") &&
+        !["node:path", "./errors.js", "./loader.js", "./ui-model.js"].includes(s),
+    );
+    expect(unexpected).toEqual([]);
   });
 
   it("keeps the control surface out of the config barrel", async () => {

@@ -6,10 +6,7 @@
  * pluggable seam accepts an alternate stats provider (the A4 telemetry path).
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   collectStats,
   collectWindowedStats,
@@ -21,7 +18,7 @@ import { NativeLosslessCompression, STAGE_DEDUP } from "../../src/compression/in
 import type { Message } from "../../src/interfaces/compression.js";
 import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
 import type { TelemetryEvent } from "../../src/telemetry/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 const LEVEL_1 = sliderPolicyForLevel(1);
 const PROJECT = "stats-test-project";
@@ -33,15 +30,13 @@ function userText(text: string): Message {
   return { role: "user", content: text };
 }
 
+const newTempDir = useTempDirs("golem-stats-");
+
 describe("golem stats", () => {
   let projectDir: string;
 
   beforeEach(async () => {
-    projectDir = await mkdtemp(join(tmpdir(), "golem-stats-"));
-  });
-
-  afterEach(async () => {
-    await rm(projectDir, rmTemp);
+    projectDir = await newTempDir();
   });
 
   it("reports genuine savings and CCR activity from a seeded store", async () => {

@@ -19,6 +19,7 @@ export type { TierCatalogEntry } from "./catalog.js";
 export {
   catalogForTier,
   chatModelFor,
+  embedDimFor,
   embedModelFor,
   modelsForTier,
 } from "./catalog.js";

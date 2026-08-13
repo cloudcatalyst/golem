@@ -4,26 +4,24 @@
  * (those with a `.golem/` dir) should be written to (reported 2026-07-22).
  */
 
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   golemDirExists,
   localModelCachePath,
   readLocalModelCache,
   writeLocalModelCache,
 } from "../../../src/cli/local-model.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
+
+const newTempDir = useTempDirs("golem-lm-");
 
 describe("local-model cache", () => {
   let dir: string;
 
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-lm-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   describe("golemDirExists", () => {

@@ -176,7 +176,7 @@ export function snoozeStaleReason(
     `API-key account after an account switch. While blind, Golem cannot warn you as ` +
     `you approach the limit, so watch Claude Code's own limit indicator and park ` +
     `manually if needed. Check \`golem status\` (Limits line) and the active account ` +
-    `(\`golem account\`). This is a one-time notice for this reading.`
+    `(\`golem gateway\`). This is a one-time notice for this reading.`
   );
 }
 

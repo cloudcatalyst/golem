@@ -8,24 +8,21 @@
  * its rejection behavior is covered here rather than in the shared contract.
  */
 
-import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { LocalDirBlobStore } from "../../../src/compression/index.js";
 import { BlobNotFoundError } from "../../../src/interfaces/storage.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let root: string;
 let store: LocalDirBlobStore;
 
-beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "golem-a2-blob-key-"));
-  store = new LocalDirBlobStore(root);
-});
+const newTempDir = useTempDirs("golem-a2-blob-key-");
 
-afterEach(async () => {
-  await rm(root, rmTemp);
+beforeEach(async () => {
+  root = await newTempDir();
+  store = new LocalDirBlobStore(root);
 });
 
 const INVALID_KEYS: ReadonlyArray<[label: string, key: string]> = [

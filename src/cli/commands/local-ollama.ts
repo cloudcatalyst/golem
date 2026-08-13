@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
 import type { SettingsScope } from "../../config/write-setting.js";
-import { embedderSignature, ensureProjectIndexed, writeManifest } from "../auto-index.js";
+import { embedderSignatureForModel, ensureProjectIndexed, writeManifest } from "../auto-index.js";
 import { buildKnowledgeStack } from "../build-knowledge.js";
 import { collectDevices, devicesJson, renderDevices } from "../devices.js";
 import { InitError } from "../init.js";
@@ -161,13 +161,17 @@ export default function register(program: Command): void {
     .action(
       async (pathArg: string | undefined, opts: { dir: string; watch: boolean; json: boolean }) => {
         try {
-          const { knowledge, embedMode, facts } = await buildKnowledgeStack({
+          const { knowledge, embedMode, embedModel, facts, notice } = await buildKnowledgeStack({
             projectDir: opts.dir,
           });
           const embedNote =
             embedMode === "semantic"
-              ? "semantic (Ollama bge-m3)"
+              ? `semantic (Ollama ${embedModel})`
               : "lexical (built-in, no Ollama — pull bge-m3 for semantic)";
+          // R10.6: `golem index` asks for the index to be CURRENT, not for its
+          // embedder to change. When this run does change it, say so before the
+          // work starts — it is the expensive, quality-affecting part.
+          if (notice !== undefined && !opts.json) process.stdout.write(`golem index: ${notice}\n`);
           if (pathArg === undefined && !opts.watch) {
             const { settings } = await loadConfig({ projectDir: opts.dir });
             const result = await ensureProjectIndexed({
@@ -175,12 +179,16 @@ export default function register(program: Command): void {
               projectId: opts.dir,
               knowledge,
               embedMode,
+              embedModel,
               tier: facts.tier,
               watchPaths: settings.knowledge.watch_paths,
               now: new Date().toISOString(),
+              ...(opts.json ? {} : { log: (m) => process.stdout.write(`golem index: ${m}\n`) }),
             });
             if (opts.json) {
-              process.stdout.write(`${JSON.stringify({ ...result, embedMode }, null, 2)}\n`);
+              process.stdout.write(
+                `${JSON.stringify({ ...result, embedMode, embedModel, ...(notice !== undefined ? { notice } : {}) }, null, 2)}\n`,
+              );
               return;
             }
             const line =
@@ -200,12 +208,16 @@ export default function register(program: Command): void {
           await writeManifest(
             opts.dir,
             opts.dir,
-            embedderSignature(embedMode, facts.tier),
+            // R10.6: the model that actually embedded these chunks, which is not
+            // always the one the detected tier would have chosen.
+            embedderSignatureForModel(embedMode, embedModel),
             [target],
             new Date().toISOString(),
           );
           if (opts.json) {
-            process.stdout.write(`${JSON.stringify({ ...report, embedMode }, null, 2)}\n`);
+            process.stdout.write(
+              `${JSON.stringify({ ...report, embedMode, embedModel, ...(notice !== undefined ? { notice } : {}) }, null, 2)}\n`,
+            );
             return;
           }
           process.stdout.write(

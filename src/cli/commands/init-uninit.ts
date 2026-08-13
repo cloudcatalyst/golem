@@ -10,7 +10,7 @@ import { loopbackCaPath } from "../../proxy/loopback-cert.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
 import { golemInit, golemUninit, InitError, type InitReport } from "../init.js";
-import { startDetached } from "../proxy-daemon.js";
+import { proxyStatus, startDetached, stopProxy, waitForPortFree } from "../proxy-daemon.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -147,9 +147,39 @@ export default function register(program: Command): void {
           if (pid === null) {
             process.stdout.write("golem proxy: failed to start — port in use or daemon crashed\n");
           } else {
-            process.stdout.write(
-              `golem proxy: started (pid ${pid}) on port ${settings.proxy.port}\n`,
-            );
+            // `startDetached` cannot tell "I started it" from "something was
+            // already listening": its child exits on a port clash, the port probe
+            // then succeeds against the OLD daemon, and the pid it reads back is
+            // that daemon's. Reporting that as "started" is how a reinit silently
+            // left an hours-old build serving the freshly-written wiring. So ask
+            // which build is actually answering, and replace it if it is not this
+            // one — a reinit that leaves a stale daemon has not finished the job.
+            const before = await proxyStatus(opts.dir, settings.proxy.port);
+            if (before.running && before.stale === true) {
+              const was =
+                before.version !== undefined ? `build ${before.version}` : "an unknown build";
+              process.stdout.write(
+                `golem proxy: found ${was} already running (pid ${before.pid ?? "?"}) — ` +
+                  `restarting it on ${VERSION}\n`,
+              );
+              await stopProxy(opts.dir);
+              await waitForPortFree(settings.proxy.port);
+              const fresh = await startDetached(
+                opts.dir,
+                settings.proxy.port,
+                process.argv[1] ?? "",
+                await credentialEnvForProxy(opts.dir),
+              );
+              process.stdout.write(
+                fresh === null
+                  ? "golem proxy: restart FAILED — run `golem proxy restart`, then check .golem/proxy.log\n"
+                  : `golem proxy: restarted (pid ${fresh}) on port ${settings.proxy.port}\n`,
+              );
+            } else {
+              process.stdout.write(
+                `golem proxy: running (pid ${pid}) on port ${settings.proxy.port}\n`,
+              );
+            }
           }
           process.stdout.write(await initSummary(opts.dir));
         } catch (err) {

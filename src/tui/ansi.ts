@@ -27,7 +27,6 @@ export const SHOW_CURSOR = `${CSI}?25h`;
 /** Home the cursor without clearing — the panel repaints in place. */
 export const CURSOR_HOME = `${CSI}H`;
 
-export const cursorUp = (n: number): string => (n > 0 ? `${CSI}${n}A` : "");
 export const cursorTo = (row: number, col = 1): string => `${CSI}${row};${col}H`;
 
 // --- colour -----------------------------------------------------------------

@@ -1,11 +1,10 @@
 /** E1: writeSetting — round-trips, unknown-key preservation, formatting, safety. */
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, loadConfig, writeSetting } from "../../src/config/index.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
 
 let base: string;
 let userDir: string;
@@ -15,14 +14,12 @@ const userFile = (): string => path.join(userDir, "settings.json");
 const projectFile = (): string => path.join(projectDir, ".golem", "settings.json");
 const localFile = (): string => path.join(projectDir, ".golem", "settings.local.json");
 
+const newTempDir = useTempDirs("golem-write-test-");
+
 beforeEach(async () => {
-  base = await mkdtemp(path.join(os.tmpdir(), "golem-write-test-"));
+  base = await newTempDir();
   userDir = path.join(base, "user-golem");
   projectDir = path.join(base, "project");
-});
-
-afterEach(async () => {
-  await rm(base, rmTemp);
 });
 
 const dirs = () => ({ projectDir, userDir });

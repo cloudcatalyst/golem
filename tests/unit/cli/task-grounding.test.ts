@@ -9,14 +9,13 @@
  * by tests/unit/tasks/multiplex.test.ts ("injects grounding when provided").
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { buildTaskGrounding } from "../../../src/cli/task-grounding.js";
 import type { InferenceService } from "../../../src/interfaces/inference.js";
 import type { KnowledgeBase } from "../../../src/interfaces/knowledge.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 const fakeInference = {
   chat: () => Promise.reject(new Error("unused in these tests")),
@@ -33,13 +32,12 @@ async function writeSettings(dir: string, knowledge: Record<string, unknown>): P
   await writeFile(path.join(dir, ".golem", "settings.json"), JSON.stringify({ knowledge }), "utf8");
 }
 
+const newTempDir = useTempDirs("golem-ground-");
+
 describe("buildTaskGrounding (LE3)", () => {
   let dir: string;
   beforeEach(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), "golem-ground-"));
-  });
-  afterEach(async () => {
-    await rm(dir, rmTemp);
+    dir = await newTempDir();
   });
 
   it("returns undefined when knowledge is disabled (opt-out → service ungrounded)", async () => {

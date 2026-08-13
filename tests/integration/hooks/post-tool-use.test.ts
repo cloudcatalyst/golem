@@ -7,10 +7,8 @@
  * a PEM / sk-ant secret in the output is stripped from the stored original.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   CCR_MARKER_RE,
   CcrStore,
@@ -30,16 +28,14 @@ import {
   servedFetchLabel,
   stripReadLineNumbers,
 } from "../../../src/hooks/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
 
-beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-hook-"));
-});
+const newTempDir = useTempDirs("golem-hook-");
 
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+beforeEach(async () => {
+  projectDir = await newTempDir();
 });
 
 /** A HookIo backed by a fixed input string and capture buffers. */

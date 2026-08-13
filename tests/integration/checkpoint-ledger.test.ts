@@ -10,10 +10,9 @@
  * asserted separately, without git, in the no-repo test).
  */
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createCheckpoint,
   dropCheckpoint,
@@ -26,10 +25,12 @@ import {
   runGit,
 } from "../../src/checkpoint/index.js";
 import { commandOnPath } from "../../src/pkg/detect.js";
-import { rmTemp } from "../helpers/tmp.js";
+import { useTempDirs } from "../helpers/tmp.js";
+
+// R10.2: one recursive delete for the file, not one per repo created.
+const newTempDir = useTempDirs("golem-ledger");
 
 const hasGit = commandOnPath("git") !== null;
-const dirs: string[] = [];
 
 // Every test here drives a real `git` through several subprocess round-trips, and
 // process spawn on Windows is slow enough that the 20s default times out under a
@@ -37,10 +38,6 @@ const dirs: string[] = [];
 // latency, not the code under test, so raise the ceiling rather than lose the file
 // to flakes.
 vi.setConfig({ testTimeout: 90_000 });
-
-afterEach(async () => {
-  await Promise.all(dirs.splice(0).map((dir) => rm(dir, rmTemp)));
-});
 
 /**
  * `git init` with line endings pinned.
@@ -58,8 +55,7 @@ async function initRepo(dir: string): Promise<void> {
 
 /** A repo with one commit, deterministic identity, and a `.gitignore`. */
 async function makeRepo(): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "golem-ledger-"));
-  dirs.push(dir);
+  const dir = await newTempDir();
   await runGit(dir, ["init", "--initial-branch=main"]);
   await runGit(dir, ["config", "user.name", "Test"]);
   await runGit(dir, ["config", "user.email", "test@example.invalid"]);
@@ -302,8 +298,7 @@ describe.skipIf(!hasGit)("change ledger (R8.9)", () => {
   // rewound Golem rather than the user's attempt. The pathspec now excludes it
   // whether or not it is ignored.
   it("never snapshots or deletes Golem's own .golem/ state, even untracked", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "golem-ledger-state-"));
-    dirs.push(dir);
+    const dir = await newTempDir();
     await initRepo(dir);
     await writeFile(path.join(dir, "a.txt"), "v1\n", "utf8");
 
@@ -329,8 +324,7 @@ describe.skipIf(!hasGit)("change ledger (R8.9)", () => {
   });
 
   it("degrades to a no-op with a reason outside a git repo", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "golem-ledger-plain-"));
-    dirs.push(dir);
+    const dir = await newTempDir();
     const created = await createCheckpoint(dir, { note: "nope" });
     expect(created.ok).toBe(false);
     if (!created.ok) expect(created.reason).toMatch(/not inside a git worktree|not on PATH/);
@@ -341,8 +335,7 @@ describe.skipIf(!hasGit)("change ledger (R8.9)", () => {
   });
 
   it("checkpoints a repo with no commits yet (unborn HEAD)", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "golem-ledger-unborn-"));
-    dirs.push(dir);
+    const dir = await newTempDir();
     await initRepo(dir);
     await writeFile(path.join(dir, "first.txt"), "hello\n", "utf8");
 

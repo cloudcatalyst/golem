@@ -4,10 +4,9 @@
  * URLs through. Uses the real WebCache + hashing KB (no network, no Ollama).
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { CcrStore, LocalDirBlobStore } from "../../../src/compression/index.js";
 import { type HookIo, runWebFetchPost, runWebFetchPre } from "../../../src/hooks/index.js";
 import { MAX_SERVED_CHARS } from "../../../src/hooks/web-fetch.js";
@@ -18,14 +17,15 @@ import {
   webCacheKey,
   writeDraftFile,
 } from "../../../src/knowledge/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { generateLoopbackPair } from "../../../src/proxy/loopback-cert.js";
+import { startLoopbackServe } from "../../../src/proxy/loopback-serve.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-webfetch-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-webfetch-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 function fakeIo(input: string): HookIo & { out: string[]; err: string[] } {
@@ -367,6 +367,81 @@ describe("WebFetch gate (PreToolUse)", () => {
     const io = fakeIo(preInput(url));
     await runWebFetchPre(io, { projectDir, nowMs: Date.parse("2026-07-05T00:05:00Z") });
     expect(io.out[0]).toContain("Roundtrip content here.");
+  });
+});
+
+describe("WebFetch GREEN serve (R9.12) — exact stdout JSON shape", () => {
+  /**
+   * The green path's stdout is a strict contract: Claude Code parses
+   * `hookSpecificOutput` and acts on `permissionDecision` / `updatedInput` /
+   * `additionalContext` verbatim, and §122 measured that the content only reaches
+   * the model because it rides on `additionalContext` of an `allow`. Every other
+   * test in this file exercises the red `deny` floor (no loopback endpoint, so
+   * `greenServeState` fails closed), which left the shape that actually renders
+   * green unpinned. This asserts the WHOLE emitted object, not fragments of it —
+   * a restructure, a renamed field, or a reworded frame must fail here.
+   *
+   * Green needs all three of `greenServeState`'s conditions to hold for real, so
+   * this stands up the actual endpoint: the shipped CA/leaf pair, an HTTPS server
+   * on loopback, and `NODE_EXTRA_CA_CERTS` naming that exact CA file.
+   */
+  it("emits allow + loopback updatedInput + the page in additionalContext", async () => {
+    const pair = await generateLoopbackPair();
+    const caPath = path.join(projectDir, "ca.pem");
+    await writeFile(caPath, pair.caPem, "utf8");
+    // Fixed nonce so the rewritten URL is fully determined (the port is not, so
+    // it is read back from the handle).
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const handle = await startLoopbackServe({
+      projectDir,
+      certPem: pair.chainPem,
+      keyPem: pair.leafKeyPem,
+      certPath: caPath,
+      nonce,
+    });
+    const previousCa = process.env.NODE_EXTRA_CA_CERTS;
+    process.env.NODE_EXTRA_CA_CERTS = caPath;
+
+    try {
+      const url = "https://example.com/green";
+      await new WebCache(webCacheDir(projectDir)).put(
+        url,
+        "CACHED BODY TEXT",
+        "2026-07-05T00:00:00Z",
+      );
+
+      const io = fakeIo(preInput(url));
+      const code = await runWebFetchPre(io, {
+        projectDir,
+        nowMs: Date.parse("2026-07-05T01:00:00Z"),
+        ttlHours: 168,
+      });
+
+      expect(code).toBe(0);
+      expect(io.out).toHaveLength(1);
+      expect(JSON.parse(io.out[0] ?? "{}")).toStrictEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "allow",
+          permissionDecisionReason: "Golem served this URL from its knowledge base (cached).",
+          updatedInput: {
+            // `updatedInput` replaces the ENTIRE input object (§115), so `prompt`
+            // has to survive the rewrite or the tool call is malformed.
+            url: `https://127.0.0.1:${handle.port}/w?n=${nonce}&s=hit&a=1h%20ago&u=${encodeURIComponent(url)}`,
+            prompt: "?",
+          },
+          additionalContext:
+            "Golem served this URL from its knowledge base (fetched 1h ago), skipping the " +
+            "network fetch. The WebFetch call SUCCEEDED — its tool result is a short Golem " +
+            "placeholder rather than the page, and the real page content follows here. Do not " +
+            "describe the fetch as failed and do not retry it. Content:\n\nCACHED BODY TEXT",
+        },
+      });
+    } finally {
+      if (previousCa === undefined) delete process.env.NODE_EXTRA_CA_CERTS;
+      else process.env.NODE_EXTRA_CA_CERTS = previousCa;
+      await handle.close();
+    }
   });
 });
 

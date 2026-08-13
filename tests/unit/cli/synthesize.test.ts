@@ -3,10 +3,7 @@
  * inference is injected (fake), so no real Ollama is required.
  */
 
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { InitError } from "../../../src/cli/init.js";
 import { appendNote } from "../../../src/cli/notes.js";
 import { synthesizeWeeklyReport } from "../../../src/cli/synthesize.js";
@@ -22,7 +19,7 @@ import type {
 } from "../../../src/interfaces/inference.js";
 import { HardwareTier as Tier } from "../../../src/interfaces/inference.js";
 import { FileWikiStore } from "../../../src/wiki/index.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 class FakeInferenceService implements InferenceService {
   lastMessages: readonly ChatMessage[] | undefined;
@@ -63,11 +60,10 @@ const fakeDraft = {
 };
 
 let projectDir: string;
+const newTempDir = useTempDirs("golem-synthesize-cli-");
+
 beforeEach(async () => {
-  projectDir = await mkdtemp(path.join(tmpdir(), "golem-synthesize-cli-"));
-});
-afterEach(async () => {
-  await rm(projectDir, rmTemp);
+  projectDir = await newTempDir();
 });
 
 async function writeDebrief(created: string, title: string, body: string): Promise<void> {

@@ -21,6 +21,21 @@ const portArgIdx = process.argv.indexOf("--port");
 const wantPort = portArgIdx >= 0 ? Number(process.argv[portArgIdx + 1]) : 0;
 const mode = process.env.FAKE_MODE ?? "ok";
 
+/**
+ * Mirrors headroom-worker.py's parent watchdog (R10.3): exit the moment the
+ * parent's stdin pipe reaches EOF, which is what happens when the parent dies by
+ * any means — including a Windows TerminateProcess that runs no handler in it.
+ * Reported on /health as `stdin_watch` so a test can assert the adapter really
+ * asked for it.
+ */
+const stdinWatch = process.env.GOLEM_HEADROOM_PARENT_PIPE === "1";
+if (stdinWatch) {
+  process.stdin.resume();
+  process.stdin.on("end", () => process.exit(0));
+  process.stdin.on("close", () => process.exit(0));
+  process.stdin.on("error", () => process.exit(0));
+}
+
 if (mode === "slowstart") {
   // Simulate a worker that binds but never announces — exercises startup timeout.
   setTimeout(() => {}, 60_000);
@@ -75,6 +90,7 @@ if (mode === "slowstart") {
           ok: true,
           headroom: "fake",
           pid: process.pid,
+          stdin_watch: stdinWatch,
           supported_config: [...SUPPORTED_CONFIG].sort(),
         }),
       );

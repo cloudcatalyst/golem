@@ -6,12 +6,11 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultProjectPort,
   isProcessAlive,
@@ -28,7 +27,7 @@ import {
   waitForPortFree,
   writeProxyPid,
 } from "../../../src/cli/proxy-daemon.js";
-import { rmTemp } from "../../helpers/tmp.js";
+import { useTempDirs } from "../../helpers/tmp.js";
 
 /** Grab a currently-free loopback port by letting the OS assign one, then releasing it. */
 async function getFreePort(): Promise<number> {
@@ -49,11 +48,10 @@ async function getFreePort(): Promise<number> {
 }
 
 let dir: string;
+const newTempDir = useTempDirs("golem-daemon-");
+
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), "golem-daemon-"));
-});
-afterEach(async () => {
-  await rm(dir, rmTemp);
+  dir = await newTempDir();
 });
 
 describe("pid file", () => {
@@ -103,6 +101,43 @@ describe("proxyStatus", () => {
     expect(st.running).toBe(true);
     expect(st.pid).toBe(4242);
     expect(st.source).toBe("pidfile");
+  });
+
+  // The incident this exists to prevent: a daemon that started 18 hours and
+  // several rebuilds ago answers every probe, reports `running`, and looks
+  // healthy on every other field — while serving the code AND the config it
+  // started with. "Running" and "current" are different questions.
+  describe("which BUILD is answering", () => {
+    it("is not stale when the running daemon's stamp matches this build", async () => {
+      await writeProxyPid(dir, { pid: 4242, port: 4653, ts: "t", version: "9.9.9" });
+      const st = await proxyStatus(dir, 4653, (pid) => pid === 4242, "9.9.9");
+      expect(st.running).toBe(true);
+      expect(st.version).toBe("9.9.9");
+      expect(st.stale).toBe(false);
+    });
+
+    it("is stale when the running daemon was built from a different version", async () => {
+      await writeProxyPid(dir, { pid: 4242, port: 4653, ts: "t", version: "0.17.0" });
+      const st = await proxyStatus(dir, 4653, (pid) => pid === 4242, "0.18.0");
+      expect(st.running).toBe(true);
+      expect(st.version).toBe("0.17.0");
+      expect(st.stale).toBe(true);
+    });
+
+    it("is stale when the pid file carries no stamp at all", async () => {
+      // Written before the stamp existed, so it is older than this build by
+      // definition. Unknown must not read as fine.
+      await writeProxyPid(dir, { pid: 4242, port: 4653, ts: "t" });
+      const st = await proxyStatus(dir, 4653, (pid) => pid === 4242, "0.18.0");
+      expect(st.running).toBe(true);
+      expect(st.version).toBeUndefined();
+      expect(st.stale).toBe(true);
+    });
+
+    it("round-trips the stamp through the pid file", async () => {
+      await writeProxyPid(dir, { pid: 1, port: 2, ts: "t", version: "1.2.3" });
+      expect((await readProxyPid(dir))?.version).toBe("1.2.3");
+    });
   });
 
   it("ignores a stale pid file whose process is dead", async () => {
