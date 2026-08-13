@@ -56,3 +56,4 @@ Run `/golem/ship` after the last task in a batch. Checklist:
 - [ ] `golem task done <id> --note "shipped"`
 - [ ] `golem task index --write` → regenerate ROADMAP.md
 - [ ] Retire batch brief, commit + PR
+- [ ] **Before merging: `gh pr checks <n>` must show `CI gate` green.** CI runs on every PR, but *enforcement* needs GitHub Pro on a private repo, so nothing server-side blocks a red merge — this step is the gate. Skipping it is how CI stayed red for four consecutive merges.
