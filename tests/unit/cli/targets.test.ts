@@ -102,6 +102,52 @@ describe("collectTargets", () => {
     expect(dflt?.warnings).toEqual([]);
   });
 
+  it("does NOT warn about a keyless llamacpp gateway — that is the correct state (R10.8)", async () => {
+    // `llama-server` serves unauthenticated unless started with --api-key, so a
+    // gateway with no stored credential is configured correctly, not broken.
+    // Telling this user to run `gateway login` is advice their server ignores.
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "llama",
+          provider: "llamacpp",
+          base_url: "http://127.0.0.1:8080/v1",
+          models: ["qwen3-coder-30b"],
+        },
+        {
+          id: "lanllama",
+          provider: "llamacpp",
+          base_url: "http://gpubox.lan:8080/v1",
+          models: ["qwen3-coder-30b"],
+        },
+      ],
+      { projectDir: dir },
+    );
+    const report = await collectTargets(dir, {}, { store_backend: store });
+
+    const local = report.targets.find((t) => t.id === "llama:qwen3-coder-30b");
+    expect(local?.key_set).toBe(false);
+    expect(local?.warnings).toEqual([]);
+    // Trust is decided by the URL, not the provider name — the same binary on
+    // the LAN is not local and will be redacted at its floor.
+    expect(local?.trust).toBe("local");
+    expect(report.targets.find((t) => t.id === "lanllama:qwen3-coder-30b")?.trust).toBe("lan");
+    expect(report.targets.find((t) => t.id === "lanllama:qwen3-coder-30b")?.warnings).toEqual([]);
+    // The rendered table must not nag either.
+    expect(renderTargets(report)).not.toContain("golem gateway login llama");
+  });
+
+  it("still warns about a keyed provider with no credential (the check is not disabled)", async () => {
+    // Guard against the exemption being too broad: `openai` needs a key, and a
+    // missing one is still a defect worth naming.
+    const report = await collectTargets(dir, {}, { store_backend: store });
+    expect(report.targets.find((t) => t.id === "work:gpt-5.2")?.warnings.join(" ")).toContain(
+      "golem gateway login work",
+    );
+  });
+
   it("flags a default_target that names an id in neither registry", async () => {
     await writeSetting("project", "inference.default_target", "ghost", { projectDir: dir });
     const report = await collectTargets(dir, {}, { store_backend: store });

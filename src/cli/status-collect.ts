@@ -17,7 +17,8 @@ import path from "node:path";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
-import { isKnownWorker, unknownWorkerWarnings } from "../inference/workers.js";
+import { selectTarget } from "../inference/target-dispatcher.js";
+import { KNOWN_WORKERS, unknownWorkerWarnings } from "../inference/workers.js";
 import {
   listTargets,
   resolveDefaultTargetId,
@@ -206,20 +207,33 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // resolves to nothing is a misconfiguration worth naming, not something to
   // paper over — the worker fails closed on it rather than quietly using the
   // local model. Built generically so a new worker needs no change here.
-  const workerRows = Object.entries(settings.inference.worker_targets)
-    .filter(([worker]) => isKnownWorker(worker))
-    .map(([worker, target]) => {
-      const row = targetRows.find((t) => t.id === target);
-      return {
-        worker,
-        target,
-        ...(row?.model != null ? { model: row.model } : {}),
-        ...(row === undefined ? { target_unknown: true } : {}),
-        // R9.10: say plainly whether this worker is actually running locally,
-        // rather than leaving every surface to infer it from the trust level.
-        ...(row !== undefined ? { local: row.trust === "local" } : {}),
-      };
-    });
+  //
+  // R10.8: a row for EVERY known worker, not only the ones with a
+  // `worker_targets` entry, and each carries the `route` that produced it. The
+  // old shape could only answer "which workers did you configure"; the question
+  // a user actually has is "where does the next `coder` draft go", and the
+  // unconfigured worker — which now lands on `inference.default_target` or the
+  // harness upstream rather than silently on the local model — is precisely the
+  // one that used to have no row at all. Asked through the dispatcher's own
+  // `selectTarget`, so status cannot predict one destination while dispatch
+  // picks another.
+  const workerRows = KNOWN_WORKERS.map((worker) => {
+    const { id, route } = selectTarget(
+      { settings: proxyWithDefault, workerTargets: settings.inference.worker_targets },
+      { worker },
+    );
+    const row = targetRows.find((t) => t.id === id);
+    return {
+      worker,
+      target: id,
+      route,
+      ...(row?.model != null ? { model: row.model } : {}),
+      ...(row === undefined ? { target_unknown: true } : {}),
+      // R9.10: say plainly whether this worker is actually running locally,
+      // rather than leaving every surface to infer it from the trust level.
+      ...(row !== undefined ? { local: row.trust === "local" } : {}),
+    };
+  });
 
   // R8.32: `init.claudeSettingsWired` is a bare boolean, so it cannot tell "no
   // wiring at all" from "another gateway owns it" — and those have different

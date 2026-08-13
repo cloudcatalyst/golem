@@ -248,7 +248,10 @@ export const SETTING_META = {
     summary: "Which target serves a request that names none",
     detail:
       "Supersedes the retired `proxy.active_account`, which an existing settings file may " +
-      "still name — R9.6's migration table reads it and says so. An unknown id fails closed.",
+      "still name — R9.6's migration table reads it and says so. An unknown id fails closed. " +
+      "R10.8: also step 3 of the `coder` dispatch chain (explicit target → worker_targets → " +
+      "this → the harness's own upstream). Unset means the harness upstream; a local model " +
+      "is reached by naming a target that points at it, never by leaving this blank.",
     advanced: true,
     restart: "proxy",
   },
@@ -284,9 +287,10 @@ export const SETTING_META = {
     label: "Worker targets",
     summary: "Which target each tool worker (coder, …) drafts on by default",
     detail:
-      "Keyed by worker name. A worker with no entry uses the local model, exactly as before. " +
-      "A non-local target is redacted at its trust floor on every dispatch, and an unknown " +
-      "target id fails closed — it never falls back to the local model. See `golem target list`.",
+      "Keyed by worker name. R10.8: a worker with no entry falls through to " +
+      "`inference.default_target` and then to the harness's own upstream — no longer to the " +
+      "local model. A non-local target is redacted at its trust floor on every dispatch, and " +
+      "an unknown target id fails closed. See `golem target list`.",
     kind: "opaque",
     restart: "mcp",
   },

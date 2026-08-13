@@ -75,8 +75,8 @@ export {
  * - Case (a) — Anthropic wire protocol, byte-faithful: `anthropic` (default),
  *   `azure-foundry`, `custom`.
  * - Case (b) — needs request/response translation (not byte-faithful):
- *   `openai`, `openrouter`, `ollama` (OpenAI Chat Completions schema), `gemini`
- *   (Google `generateContent` schema).
+ *   `openai`, `openrouter`, `ollama`, `llamacpp` (OpenAI Chat Completions
+ *   schema), `gemini` (Google `generateContent` schema).
  *
  * `openrouter` was case (a) until Decision 48 (2026-07-29). OpenRouter's
  * Anthropic-Messages endpoint can only serve *Claude* models, so a byte-faithful
@@ -97,6 +97,16 @@ export const UPSTREAM_PROVIDERS = [
   "custom",
   "openai",
   "ollama",
+  // R10.8: llama.cpp's `llama-server`. It speaks the OpenAI Chat Completions
+  // schema, so it reached Golem before this as `openai` + a base URL — and that
+  // still works. A distinct member buys three things a shared `openai` could
+  // not: `defaultTrustFor` can treat a loopback llama.cpp as genuinely `local`
+  // (an `openai` target on localhost is not, and must not be, believed local),
+  // `isKeylessProvider` can say that a bare `llama-server` needs no credential
+  // instead of nagging for one, and the probe can explain a 404 in llama.cpp's
+  // terms (no GGUF loaded) rather than OpenAI's. The cost is one enum member
+  // and no new branch: every switch below folds it into the OpenAI path.
+  "llamacpp",
   "gemini",
   // R9.15: not an endpoint at all — a target that SPAWNS the user's own Claude
   // Code CLI, so a draft runs on their subscription without Golem ever touching
@@ -112,6 +122,13 @@ export type UpstreamProvider = (typeof UPSTREAM_PROVIDERS)[number];
  * to — naming it as `proxy.upstream_provider` would be a setting that parses and
  * then cannot work, which is the silent-no-op class this repo keeps closing.
  * Enforced at config-load time by the schema, not at first request.
+ *
+ * R10.8 — `llamacpp` IS included, on exactly that test: `llama-server` serves a
+ * real HTTP endpoint, so `upstream_provider = "llamacpp"` both parses and works.
+ * The membership rule here is "is there something to forward to", not "is this a
+ * big vendor"; excluding a working local server would be the mirror-image
+ * silent-no-op (a provider you may declare on a target but not serve from, for
+ * no reason a user could infer).
  */
 export const PROXY_PROVIDERS = UPSTREAM_PROVIDERS.filter(
   (p) => p !== "claude-cli",
@@ -131,8 +148,32 @@ export function isTranslatingProvider(provider: UpstreamProvider): boolean {
     provider === "openai" ||
     provider === "openrouter" ||
     provider === "ollama" ||
+    provider === "llamacpp" ||
     provider === "gemini"
   );
+}
+
+/**
+ * Whether this provider is normally reached with **no credential at all** — a
+ * model server you run yourself, which accepts requests because you can reach
+ * the port, not because you presented a key.
+ *
+ * This exists so "no credential stored" can be reported as the *expected* state
+ * for such a gateway instead of a defect. Without it, every surface that checks
+ * for a stored key (`golem target list`, `golem status`) tells a user who ran
+ * `llama-server` exactly as documented to go and set a credential that their
+ * server would ignore — advice that is not merely noisy but wrong.
+ *
+ * `gemini` is deliberately NOT here even though its default scheme is `inherit`:
+ * it genuinely needs a key, carried in the `?key=` query parameter rather than a
+ * header. Keying this off `inherit` instead of naming the providers would
+ * therefore silence the one warning that matters most.
+ *
+ * A keyless provider may still be *given* a key (`llama-server --api-key`); this
+ * only governs whether the ABSENCE of one is worth reporting.
+ */
+export function isKeylessProvider(provider: UpstreamProvider): boolean {
+  return provider === "ollama" || provider === "llamacpp" || provider === "claude-cli";
 }
 
 /**
@@ -186,6 +227,11 @@ export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthSchem
       return "bearer";
     case "ollama":
       // Ollama ignores auth by default (local / trusted LAN); inject none.
+      return "inherit";
+    case "llamacpp":
+      // R10.8: `llama-server` serves unauthenticated unless started with
+      // `--api-key`. Inject nothing by default; a user who did pass `--api-key`
+      // sets `auth_scheme = "bearer"` on the gateway and stores the key.
       return "inherit";
     case "gemini":
       // Gemini authenticates with a `?key=` query param carried in the path, not

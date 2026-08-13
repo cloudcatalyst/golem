@@ -32,6 +32,7 @@ import {
 } from "../credentials/index.js";
 import { probeCredential } from "../credentials/probe.js";
 import {
+  isKeylessProvider,
   listTargets,
   type ResolvedTarget,
   resolveDefaultTargetId,
@@ -121,7 +122,14 @@ export async function collectTargets(
       // A target that names an account with no stored credential cannot
       // authenticate. The synthetic default is exempt: it may legitimately run
       // keyless, because `inherit` forwards the client's own auth.
-      if (t.accountId !== null && !status.present) {
+      //
+      // R10.8: so is a model server the user runs themselves (`ollama`,
+      // `llamacpp`). It is not that a missing key is tolerable there — it is
+      // that a key is not part of how you reach it, so reporting its absence as
+      // a defect and telling the user to run `gateway login` is advice their
+      // server would ignore. Keyless is the CORRECT state for these, not a
+      // degraded one.
+      if (t.accountId !== null && !status.present && !isKeylessProvider(t.provider)) {
         warnings.push(
           `no credential is stored for account "${t.accountId}" — set one with: ` +
             `golem gateway login ${t.accountId}`,
@@ -266,7 +274,11 @@ export async function testTarget(
 
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
   const hit = await store.resolve(storeIdFor(target));
-  if (hit === null) {
+  // R10.8: for a server the user runs themselves there is no credential to
+  // report missing — but there IS something worth testing, namely whether the
+  // endpoint answers at all. Probe it keyless rather than returning a verdict
+  // about a key that was never part of reaching it.
+  if (hit === null && !isKeylessProvider(target.provider)) {
     return {
       target: id,
       verdict: "no-credential",
@@ -282,7 +294,7 @@ export async function testTarget(
     provider: target.provider,
     baseUrl: target.baseUrl,
     authScheme: target.authScheme,
-    secret: hit.secret,
+    secret: hit?.secret ?? "",
   });
   return {
     target: id,

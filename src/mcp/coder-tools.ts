@@ -100,8 +100,15 @@ export function registerCoderTool(
   const selectable = dispatcher?.selectableTargets() ?? [];
   // A single declared property type keeps the tool's shape inferable — a
   // conditionally-shaped object would erase every other parameter's type too.
+  //
+  // R10.8: `> 1`, not `> 0`. The dispatcher is now wired even for a project with
+  // only the synthetic default target (it decides where an unrouted draft goes,
+  // not just which of several targets to offer), so the schema gate has to be
+  // the one that was always meant: offer the parameter when there is a CHOICE.
+  // With a single target the enum would bill tokens on every request for a
+  // parameter whose only legal value is the one already in use (§110).
   const targetSchema: { target?: z.ZodOptional<z.ZodType<string>> } =
-    selectable.length > 0
+    selectable.length > 1
       ? {
           target: z
             .enum(selectable.map((t) => t.id) as [string, ...string[]])
@@ -295,13 +302,26 @@ export function registerCoderTool(
         const refinedNote = refined === null ? "" : refineNote(refined);
         // Say where it ran and whether anything was redacted — a remote draft
         // must never read like a local one.
+        //
+        // R10.8: also say WHY that target. A draft that went to the harness's
+        // own upstream because nothing named a target reads identically to one
+        // the user routed there deliberately, and only the first case means
+        // their `worker_targets`/`default_target` is not doing what they think.
         const whereNote =
-          dispatched !== null && dispatched.targetId !== null && dispatched.redactedCount > 0
-            ? `on target "${dispatched.targetId}" (trust=${dispatched.trust}; ` +
-              `${dispatched.redactedCount} secret(s) redacted before dispatch, restored here)`
-            : dispatched !== null && dispatched.targetId !== null
-              ? `on target "${dispatched.targetId}" (trust=${dispatched.trust})`
-              : "locally";
+          dispatched === null
+            ? "locally"
+            : `on target "${dispatched.targetId}" (trust=${dispatched.trust}` +
+              (dispatched.route === "harness"
+                ? "; the harness default upstream — no target is configured for `coder`"
+                : dispatched.route === "default_target"
+                  ? "; via inference.default_target"
+                  : dispatched.route === "worker"
+                    ? "; via inference.worker_targets.coder"
+                    : "") +
+              (dispatched.redactedCount > 0
+                ? `; ${dispatched.redactedCount} secret(s) redacted before dispatch, restored here`
+                : "") +
+              ")";
         return instrumented(tel, "coder", startMs, {
           content: [
             {
@@ -313,10 +333,13 @@ export function registerCoderTool(
             text: finalText,
             model: result.model,
             role: result.role,
-            ...(dispatched !== null && dispatched.targetId !== null
+            ...(dispatched !== null
               ? {
                   target: dispatched.targetId,
                   trust: dispatched.trust,
+                  // R10.8: which step of the chain picked it, so a caller reading
+                  // the structured result can tell a routed draft from a default.
+                  route: dispatched.route,
                   redacted_count: dispatched.redactedCount,
                 }
               : {}),

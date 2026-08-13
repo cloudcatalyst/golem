@@ -37,6 +37,7 @@ import { request } from "undici";
 import {
   defaultAuthScheme,
   doubledVersionSegment,
+  isKeylessProvider,
   type UpstreamAuthScheme,
   type UpstreamProvider,
   upstreamBasePath,
@@ -115,6 +116,26 @@ function probeHeaders(
 }
 
 /**
+ * R10.8 — a closing hint for a model server the user runs themselves, where a
+ * 404 or a refused connection is almost never about the credential and almost
+ * always about the process. Empty for hosted providers, whose failures a
+ * local-process guess would only mislead about.
+ */
+function selfHostedHint(provider: UpstreamProvider): string {
+  switch (provider) {
+    case "llamacpp":
+      return (
+        " — for llama.cpp, check `llama-server` is running on that port with a model loaded " +
+        "(`llama-server -m <model>.gguf --port <port>`)"
+      );
+    case "ollama":
+      return " — for Ollama, check `ollama serve` is running on that port";
+    default:
+      return "";
+  }
+}
+
+/**
  * Probe `secret` against the upstream. Never throws — a transport failure is an
  * `inconclusive` verdict, because "could not reach the provider" is not evidence
  * about the key.
@@ -163,7 +184,14 @@ export async function probeCredential(input: ProbeInput): Promise<ProbeResult> {
       return verdict({
         verdict: "accepted",
         status,
-        detail: `upstream accepted the credential (${status})`,
+        // A keyless server answers 200 whatever you present, so reporting
+        // "accepted the credential" there would be precisely the dishonest
+        // signal this module exists to avoid (see the header). Say what the 200
+        // actually proves.
+        detail: isKeylessProvider(input.provider)
+          ? `upstream answered (${status}) — ${input.provider} serves unauthenticated by ` +
+            "default, so this proves the endpoint is reachable, not that the key was checked"
+          : `upstream accepted the credential (${status})`,
       });
     }
     if (status === 401 || status === 403) {
@@ -177,7 +205,9 @@ export async function probeCredential(input: ProbeInput): Promise<ProbeResult> {
       return verdict({
         verdict: "inconclusive",
         status,
-        detail: `no model-list endpoint at ${shownUrl} (HTTP 404) — cannot verify the key this way`,
+        detail:
+          `no model-list endpoint at ${shownUrl} (HTTP 404) — cannot verify the key this way` +
+          selfHostedHint(input.provider),
       });
     }
     if (status === 429) {
@@ -196,7 +226,7 @@ export async function probeCredential(input: ProbeInput): Promise<ProbeResult> {
     const message = err instanceof Error ? err.message : String(err);
     return verdict({
       verdict: "inconclusive",
-      detail: `could not reach ${new URL(shownUrl).host}: ${message}`,
+      detail: `could not reach ${new URL(shownUrl).host}: ${message}${selfHostedHint(input.provider)}`,
     });
   }
 }

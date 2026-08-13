@@ -9,10 +9,30 @@
  * contract is **not amended**. `InferenceService` keeps its exact present
  * meaning (local, tiered, role-based) and this dispatcher wraps it:
  *
- * - no target, or a `local`-trust target → delegate to `InferenceService`,
- *   mapping the requested role through the existing catalog. **Today's path,
- *   unchanged.**
- * - any non-local target → redact, then dispatch directly, then restore.
+ * - a `local`-trust target on a loopback URL → delegate to `InferenceService`,
+ *   mapping the requested role through the existing catalog.
+ * - any other target → redact, then dispatch directly, then restore.
+ *
+ * ## R10.8 — local inference is a destination, not a default
+ *
+ * Until R10.8 a dispatch that named no target went to the local tiered service,
+ * and `inference.default_target` — the setting whose entire job is to name the
+ * default — was never consulted. So the local model was not *chosen*; it was
+ * what happened when nothing else was. The chain is now, in order:
+ *
+ * 1. an explicit `targetId` on the call,
+ * 2. `inference.worker_targets[worker]`,
+ * 3. `inference.default_target`,
+ * 4. the harness's own default upstream (the synthetic target over
+ *    `proxy.upstream_*`), which always exists.
+ *
+ * Every one of those four resolves to a target id and goes through the same
+ * fail-closed lookup and the same redaction floor below — there is no longer a
+ * branch that reaches a model without naming one. A local backend stays fully
+ * reachable, by pointing a target at it and naming that target at step 1, 2 or
+ * 3; what it stops being is the silent destination for work the user thought
+ * they had routed elsewhere. {@link DispatchResult.route} reports which of the
+ * four applied, so a surface can say where a draft went and why.
  *
  * ## The redaction blocker this task exists to close
  *
@@ -58,14 +78,46 @@ export interface DispatchRequest {
   /** The role to use when this resolves to the local tiered service. */
   readonly role: Role;
   readonly prompt: string;
-  /** A target id from the registry. Omitted → this worker's configured default. */
+  /** A target id from the registry. Omitted → step 2 of the R10.8 chain onward. */
   readonly targetId?: string | undefined;
   /**
    * R9.4 — which tool worker is dispatching (`coder`, and more to come). Selects
    * the `inference.worker_targets` entry that applies when no `targetId` is
-   * given. Omitted → no worker default, i.e. the local tiered service.
+   * given. Omitted, or no entry for it → `inference.default_target`, then the
+   * harness's own default upstream.
    */
   readonly worker?: string | undefined;
+}
+
+/**
+ * R10.8 — which step of the resolution chain chose the target. Reported rather
+ * than inferred: "it went to your Anthropic account" and "it went to your
+ * Anthropic account *because nothing named anything else*" are different facts,
+ * and only the second one tells a user their config is not doing what they
+ * think.
+ */
+export type DispatchRoute =
+  /** An explicit `targetId` on the call. */
+  | "explicit"
+  /** This worker's `inference.worker_targets` entry. */
+  | "worker"
+  /** `inference.default_target`. */
+  | "default_target"
+  /** Nothing named a target — the synthetic default over `proxy.upstream_*`. */
+  | "harness";
+
+/** How to describe {@link DispatchRoute} in an audit line or a user-facing note. */
+export function describeRoute(route: DispatchRoute, worker?: string | undefined): string {
+  switch (route) {
+    case "explicit":
+      return "target named by the caller";
+    case "worker":
+      return `inference.worker_targets.${worker ?? "?"}`;
+    case "default_target":
+      return "inference.default_target";
+    case "harness":
+      return "the harness default upstream (proxy.upstream_*) — nothing named a target";
+  }
 }
 
 export interface DispatchResult {
@@ -73,9 +125,14 @@ export interface DispatchResult {
   readonly text: string;
   /** The concrete model that produced it. */
   readonly model: string;
-  /** The target id, or null when the local tiered service served it. */
-  readonly targetId: string | null;
-  readonly trust: TargetTrust | null;
+  /**
+   * The target that served it. Never null since R10.8: every dispatch resolves a
+   * target, even when the caller and the config both named none.
+   */
+  readonly targetId: string;
+  readonly trust: TargetTrust;
+  /** Which step of the chain picked {@link targetId}. */
+  readonly route: DispatchRoute;
   /** How many secret occurrences were redacted before dispatch (0 on the local path). */
   readonly redactedCount: number;
 }
@@ -139,13 +196,17 @@ export interface TargetDispatcherOptions {
     readonly provider: string | null;
     readonly model: string | null;
     readonly trust: string | null;
+    /** R10.8 — which step of the chain chose the target. */
+    readonly route: DispatchRoute;
     readonly redactedCount: number;
     readonly reason: string;
   }) => void;
   /**
    * R9.4 — `inference.worker_targets`: worker name → target id. The dispatch's
-   * {@link DispatchRequest.worker} picks the entry. A worker with no entry uses
-   * the local tiered service, exactly as before.
+   * {@link DispatchRequest.worker} picks the entry. A worker with no entry falls
+   * through to `inference.default_target` and then to the harness default
+   * (R10.8) — never a silent fall back to the local model, which would send the
+   * work somewhere the user did not choose while reporting success.
    *
    * Applied as a *default*, never as an override: an explicit `targetId` on the
    * request always wins.
@@ -347,6 +408,38 @@ function sessionUpstreamProvider(settings: TargetRegistrySettings): string {
   return lookup.ok ? lookup.target.provider : settings.upstream_provider;
 }
 
+/**
+ * R10.8 — the four-step chain, as one pure function so every surface that wants
+ * to *predict* a dispatch (`golem status`) asks the same code the dispatch asks.
+ *
+ * Step 3 and step 4 both come out of {@link resolveDefaultTargetId}, which
+ * already encodes both (`settings.default_target ?? defaultTargetId(provider)`,
+ * plus the bare-gateway-id resolution R9.23 added). Re-deriving the id here
+ * would be a second copy of a rule that must not drift; the ROUTE is a separate
+ * observation about which half of that expression applied.
+ *
+ * Note this returns an id, not a target — resolution stays fail-closed at
+ * {@link resolveTarget}, so a `default_target` naming nothing raises there with
+ * the list of what does exist.
+ */
+export function selectTarget(
+  options: Pick<TargetDispatcherOptions, "settings" | "workerTargets">,
+  request: Pick<DispatchRequest, "targetId" | "worker">,
+): { readonly id: string; readonly route: DispatchRoute } {
+  if (request.targetId !== undefined && request.targetId !== "") {
+    return { id: request.targetId, route: "explicit" };
+  }
+  const fromWorker =
+    request.worker !== undefined ? workerTarget(options.workerTargets, request.worker) : undefined;
+  if (fromWorker !== undefined) return { id: fromWorker, route: "worker" };
+
+  const configured = options.settings.default_target;
+  return {
+    id: resolveDefaultTargetId(options.settings),
+    route: configured !== undefined && configured !== "" ? "default_target" : "harness",
+  };
+}
+
 export function createTargetDispatcher(options: TargetDispatcherOptions): TargetDispatcher {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetchImpl ?? fetch;
@@ -373,73 +466,77 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
     async dispatch(request: DispatchRequest): Promise<DispatchResult> {
       const messages: readonly ChatMessage[] = [{ role: "user", content: request.prompt }];
 
-      // R9.4: an explicit target always wins; this worker's
-      // `inference.worker_targets` entry fills in when the call names none.
-      const named =
-        request.targetId !== undefined && request.targetId !== ""
-          ? request.targetId
-          : request.worker !== undefined
-            ? workerTarget(options.workerTargets, request.worker)
-            : undefined;
-
-      // No target at all → exactly today's behaviour, through the frozen contract.
-      if (named === undefined || named === "") {
-        const result = await options.inference.chat(request.role, messages);
-        options.audit?.({
-          targetId: null,
-          provider: null,
-          model: result.model,
-          trust: null,
-          redactedCount: 0,
-          reason: "no target named — local tiered inference",
-        });
-        return {
-          text: result.text,
-          model: result.model,
-          targetId: null,
-          trust: null,
-          redactedCount: 0,
-        };
-      }
+      // R10.8: the four-step chain. Every branch yields a target ID, so there is
+      // no path from here to a model that was not named by somebody.
+      const { id: named, route } = selectTarget(options, request);
+      const via = describeRoute(route, request.worker);
 
       // Fail closed: an unknown id is an error naming what exists, never a
-      // fallback to another target or to the local model.
+      // fallback to another target or to the local model. This now guards
+      // `inference.default_target` too — a typo there raises, exactly as a typo
+      // in `worker_targets` always has, rather than quietly drafting locally and
+      // reporting success.
       const lookup = resolveTarget(options.settings, named);
-      if (!lookup.ok) throw new TargetDispatchError(lookup.reason);
-      const target = lookup.target;
+      if (!lookup.ok) throw new TargetDispatchError(`${lookup.reason} (via ${via})`);
+      const base = lookup.target;
 
-      if (!declaredSelectable(options.settings, target.id)) {
+      if (!declaredSelectable(options.settings, base.id)) {
         throw new TargetDispatchError(
-          `target "${target.id}" is marked agent_selectable = false, so it cannot be chosen ` +
+          `target "${base.id}" is marked agent_selectable = false, so it cannot be chosen ` +
             "for a draft. Route to it explicitly instead.",
         );
       }
 
       // A local-trust loopback target keeps the direct, unredacted path — that
       // is the ONE case where nothing leaves the machine.
-      if (permitsUnredactedDispatch(target)) {
+      if (permitsUnredactedDispatch(base)) {
         const result = await options.inference.chat(request.role, messages);
         options.audit?.({
-          targetId: target.id,
-          provider: target.provider,
+          targetId: base.id,
+          provider: base.provider,
           model: result.model,
-          trust: target.trust,
+          trust: base.trust,
+          route,
           redactedCount: 0,
-          reason: "local target — dispatched to the local tiered service",
+          reason: `${via} → local target — dispatched to the local tiered service`,
         });
         return {
           text: result.text,
           model: result.model,
-          targetId: target.id,
-          trust: target.trust,
+          targetId: base.id,
+          trust: base.trust,
+          route,
           redactedCount: 0,
         };
       }
 
+      // R10.8 — the harness default routinely declares NO model, and that is
+      // correct rather than broken: a byte-faithful Anthropic upstream forwards
+      // the client's own `claude-*` id, so `proxy.upstream_model` is left unset
+      // on the most common configuration there is. A dispatch that originates
+      // here has no client request whose id it could forward, so the honest
+      // stand-in is the model this session is actually being served — the same
+      // snapshot the "don't draft on the model you are already using" guard
+      // reads. Refusing instead would make step 4 unreachable for a fresh
+      // project, which is exactly the project it exists for.
+      //
+      // Only on the harness step. Every other step named a target deliberately,
+      // and a *named* target that declares no model is a configuration error
+      // worth reporting rather than papering over.
+      const target =
+        base.model === undefined && route === "harness"
+          ? { ...base, model: await options.sessionModel?.() }
+          : base;
+
       if (target.model === undefined) {
         throw new TargetDispatchError(
-          `target "${target.id}" declares no model, so there is nothing to ask. ` +
-            "Give it one with `golem target add --model <id>`.",
+          route === "harness"
+            ? `no target is configured for this draft, so it fell through to the harness ` +
+                `default upstream ("${target.id}") — which declares no model, and this session's ` +
+                "own model is not known yet. Name a destination with `inference.default_target` " +
+                "or `inference.worker_targets`, or set `proxy.upstream_model`."
+            : `target "${target.id}" declares no model, so there is nothing to ask. ` +
+                "Give it one with `golem target add --model <id>`.",
         );
       }
       if (isGeminiProvider(target.provider)) {
@@ -461,14 +558,16 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
           provider: target.provider,
           model: reply.model,
           trust: target.trust,
+          route,
           redactedCount: redacted.count,
-          reason: "spawned the user's own Claude Code CLI — redacted before spawn",
+          reason: `${via} → spawned the user's own Claude Code CLI — redacted before spawn`,
         });
         return {
           text: redacted.restore(reply.text),
           model: reply.model,
           targetId: target.id,
           trust: target.trust,
+          route,
           redactedCount: redacted.count,
         };
       }
@@ -516,8 +615,9 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
         provider: target.provider,
         model: reply.model,
         trust: target.trust,
+        route,
         redactedCount: redacted.count,
-        reason: `non-local target (trust=${target.trust}) — redacted before dispatch`,
+        reason: `${via} → non-local target (trust=${target.trust}) — redacted before dispatch`,
       });
 
       return {
@@ -527,6 +627,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
         model: reply.model,
         targetId: target.id,
         trust: target.trust,
+        route,
         redactedCount: redacted.count,
       };
     },

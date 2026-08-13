@@ -204,18 +204,27 @@ export interface StatusReport {
     readonly base_url: string;
   };
   /**
-   * R9.4/R9.10 — one row per tool worker that has a configured target.
+   * R9.4/R9.10 — one row per tool worker, naming where its next dispatch goes.
    *
    * **Top-level, not under `local_model`.** A worker routes to any target since
    * R9.3, so reporting `claude-sonnet-5` inside a block called `local_model` was
-   * a contradiction in one object. Absent when no worker has a target, in which
-   * case every worker uses local tiered inference and `local_model` is the whole
-   * story. Optional so a renderer that predates the move degrades rather than
-   * breaks.
+   * a contradiction in one object. Optional so a renderer that predates the move
+   * degrades rather than breaks.
+   *
+   * R10.8: every known worker gets a row, whether or not it has a
+   * `worker_targets` entry, and `route` says which step of the resolution chain
+   * produced `target`. Before R10.8 an absent row meant "uses local tiered
+   * inference"; it no longer can, because an unrouted worker now resolves
+   * through `inference.default_target` to the harness's own upstream.
    */
   readonly workers?: readonly {
     readonly worker: string;
     readonly target: string;
+    /**
+     * Which step chose `target`: an explicit `worker_targets` entry (`worker`),
+     * `inference.default_target`, or the harness default upstream (`harness`).
+     */
+    readonly route?: string;
     /** The target's model. Absent when the target does not resolve. */
     readonly model?: string;
     /** True when `target` names an id in no registry — the worker fails closed. */
