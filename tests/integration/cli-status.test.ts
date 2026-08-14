@@ -76,11 +76,9 @@ describe("collectStatus", () => {
   it("reads the CA trust from settings.local.json (R9.22)", async () => {
     await golemInit({ projectDir, probe: passingProbe });
 
-    // Pin the premise: the committed file must NOT carry the machine-absolute path.
-    const committed = JSON.parse(
-      await readFile(join(projectDir, ".claude", "settings.json"), "utf8"),
-    ) as { env?: Record<string, unknown> };
-    expect(committed.env?.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    // Pin the premise: the committed file must NOT carry the machine-absolute
+    // path. Under the default `claude.settings_scope` it is not written at all.
+    await expect(readFile(join(projectDir, ".claude", "settings.json"), "utf8")).rejects.toThrow();
 
     const report = await collectStatus({
       projectDir,
@@ -96,15 +94,15 @@ describe("collectStatus", () => {
   });
 
   /**
-   * R8.32 — status now READS `.claude/settings.json` to answer "is Golem in the
+   * R8.32 — status now READS the `.claude` settings to answer "is Golem in the
    * request path?". The obvious next step is to have it repair what it finds,
    * and that is exactly the mistake R8.31 avoided by keeping `start`/`stop` out
    * of this file. Pinned, because a fix that edits on read would still pass
    * every other assertion here.
    */
-  it("never writes .claude/settings.json — reporting the gap must not repair it", async () => {
+  it("never writes the .claude settings — reporting the gap must not repair it", async () => {
     await golemInit({ projectDir, probe: passingProbe });
-    const settingsPath = join(projectDir, ".claude", "settings.json");
+    const settingsPath = join(projectDir, ".claude", "settings.local.json");
     const before = await readFile(settingsPath, "utf8");
 
     // The defect state: wiring removed while the daemon would report healthy.
@@ -127,7 +125,7 @@ describe("collectStatus", () => {
 
   it("distinguishes a foreign ANTHROPIC_BASE_URL from no wiring at all", async () => {
     await golemInit({ projectDir, probe: passingProbe });
-    const settingsPath = join(projectDir, ".claude", "settings.json");
+    const settingsPath = join(projectDir, ".claude", "settings.local.json");
     const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as {
       env?: Record<string, unknown>;
     };
@@ -393,7 +391,7 @@ describe("renderStatus", () => {
 
     expect(output).toContain("Golem 1.2.3 — /tmp/healthy-project");
     expect(output).toContain("Project wiring (initialized)");
-    expect(output).toContain("[ok] .claude/settings.json -> proxy base URL");
+    expect(output).toContain("[ok] .claude settings -> proxy base URL");
     expect(output).toContain("[ok] .mcp.json -> golem MCP server");
     expect(output).toContain("[ok] /golem/* skills installed");
     expect(output).toContain("[ok] .golem/settings.json present");
@@ -416,7 +414,7 @@ describe("renderStatus", () => {
 
     expect(output).toContain("Golem 1.2.3 — /tmp/unhealthy-project");
     expect(output).toContain("Project wiring (run `golem init`)");
-    expect(output).toContain("[--] .claude/settings.json -> proxy base URL");
+    expect(output).toContain("[--] .claude settings -> proxy base URL");
     // Mixed state: mcp_registered is true even though the project overall isn't initialized.
     expect(output).toContain("[ok] .mcp.json -> golem MCP server");
     expect(output).toContain("[--] /golem/* skills installed");
@@ -564,7 +562,7 @@ describe("renderStatus", () => {
 
       expect(output).toContain(`Golem ${VERSION} — ${projectDir}`);
       expect(output).toContain("Project wiring (run `golem init`)");
-      expect(output).toContain("[--] .claude/settings.json -> proxy base URL");
+      expect(output).toContain("[--] .claude settings -> proxy base URL");
       expect(output).toContain(
         "Proxy: http://localhost:4653 — not running — the SessionStart hook restarts it on project open",
       );

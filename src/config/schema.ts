@@ -545,6 +545,29 @@ export const SETTINGS_LEAVES = {
      */
     enforce: z.boolean(),
   },
+  claude: {
+    /**
+     * Which of Claude Code's two project-scope settings files `golem init` owns:
+     * `local` (`.claude/settings.local.json`, gitignored — the default) or
+     * `project` (`.claude/settings.json`, committed).
+     *
+     * Everything init writes for Claude Code goes to the chosen file: the `env`
+     * block, the `mcp__golem__*` permission rule, the hooks, the status line, the
+     * default permission mode. Local is the default because all of it is
+     * machine-local — a per-project port assigned on THIS machine, a
+     * machine-absolute CA path, hooks that need `golem` on PATH — and because
+     * `settings.local.json` sits ABOVE `settings.json` in Claude Code's
+     * precedence ladder (notes §13), so nothing about how the values are read
+     * changes. Choose `project` to put the wiring in version control for a team
+     * that all has `golem` installed.
+     *
+     * READERS are unaffected: every Golem surface that asks "is this project
+     * wired?" checks both files in Claude Code's own precedence order. Only the
+     * write target moves — and init sweeps the other file, so flipping this key
+     * MOVES the wiring rather than duplicating it (re-run `golem init`).
+     */
+    settings_scope: z.enum(["local", "project"]),
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -653,6 +676,9 @@ export type ModelsSettings = GolemSettings["models"];
 /** Decision 45 — the document-and-hold park at the usage limit. */
 export type SnoozeSettings = GolemSettings["snooze"];
 
+/** Which Claude Code settings file `golem init` owns (local vs committed). */
+export type ClaudeSettings = GolemSettings["claude"];
+
 /**
  * Built-in defaults (the lowest layer). Where the spec is silent the choice is
  * recorded in docs/plan/verification-notes.md §17:
@@ -731,6 +757,10 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   snooze: {
     enforce: true,
+  },
+  claude: {
+    // Machine-local wiring belongs in the gitignored file (see the leaf comment).
+    settings_scope: "local",
   },
 });
 

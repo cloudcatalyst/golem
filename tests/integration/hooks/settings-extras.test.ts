@@ -1,5 +1,5 @@
 /**
- * Coverage for src/hooks/settings-extras.ts — `.claude/settings.json` writers
+ * Coverage for src/hooks/settings-extras.ts — `.claude` settings writers
  * for the matcher-less event hooks (addEventHook/removeEventHook) and the
  * status line (writeStatusLine/removeStatusLine). Mirrors the conventions in
  * settings-writer.test.ts: merge-preserving, never clobber foreign config or
@@ -32,7 +32,8 @@ beforeEach(async () => {
   projectDir = await newTempDir();
 });
 
-const SETTINGS_REL = ".claude/settings.json";
+// Default write target since `claude.settings_scope`: the gitignored local file.
+const SETTINGS_REL = ".claude/settings.local.json";
 
 async function readSettings(): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path.join(projectDir, SETTINGS_REL), "utf8"));
