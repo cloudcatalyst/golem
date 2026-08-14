@@ -26,6 +26,7 @@
 import {
   anthropicToGemini,
   anthropicToOpenAIChat,
+  countTokensResponse,
   createGeminiToAnthropicSSE,
   createOpenAIToAnthropicSSE,
   geminiPath,
@@ -64,7 +65,22 @@ export interface UpstreamTransportInput {
   readonly reasoningEffort?: "low" | "high" | "max" | undefined;
   /** OpenAI-schema only: map `reasoning_content` to Anthropic thinking blocks. */
   readonly mapReasoning: boolean;
+  /**
+   * OpenAI-schema only (R10.14): does this model accept image input? `undefined`
+   * — the catalog does not say — forwards images as today, so an upstream that
+   * cannot see returns its own error instead of being silently blinded.
+   */
+  readonly vision?: boolean | undefined;
 }
+
+/**
+ * Does the model behind a target accept images? Resolved once at proxy start
+ * from R8.8's catalog, never per request.
+ */
+export type VisionLookup = (
+  provider: UpstreamProvider,
+  model: string | undefined,
+) => boolean | undefined;
 
 export interface UpstreamTransport {
   readonly mapUpstreamHeaders?: (
@@ -117,6 +133,7 @@ export function buildUpstreamTransport(input: UpstreamTransportInput): UpstreamT
       ...modelOpt,
       ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
       ...(keepVendorPrefix ? { keepVendorPrefix } : {}),
+      ...(input.vision !== undefined ? { vision: input.vision } : {}),
     };
     const respOpts = { mapReasoning: input.mapReasoning };
     translateUpstream = {
@@ -130,6 +147,8 @@ export function buildUpstreamTransport(input: UpstreamTransportInput): UpstreamT
           JSON.stringify(openAIChatToAnthropic(body, translateFallback, respOpts)),
           "utf8",
         ),
+      // R10.15: OpenAI has no count_tokens endpoint — answer it here.
+      countTokens: (body: Buffer | null): Buffer => countTokensResponse(body),
       createStreamTranslator: () =>
         createOpenAIToAnthropicSSE({ ...translateFallback, mapReasoning: input.mapReasoning }),
     };
@@ -175,6 +194,11 @@ export interface RouteResolverOptions {
   readonly bindings?: Map<string, string>;
   /** Derive a stable conversation key from a request body, for binding. */
   readonly conversationKeyOf?: (body: Buffer | null) => string | undefined;
+  /**
+   * R10.14: per-target image-input capability, resolved once from R8.8's
+   * catalog. Absent → every target keeps the pass-through behaviour.
+   */
+  readonly visionOf?: VisionLookup;
 }
 
 /** Read the `model` field from a JSON request body, if there is one. */
@@ -226,6 +250,7 @@ export function createRouteResolver(options: RouteResolverOptions): RouteResolve
         apiKey: apiKeyForTarget(target, env),
         reasoningEffort: settings.upstream_reasoning_effort,
         mapReasoning: settings.map_reasoning_to_thinking,
+        vision: options.visionOf?.(target.provider, target.model),
       }),
     });
   }

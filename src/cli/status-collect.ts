@@ -15,6 +15,7 @@ import { readFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
+import { unreachableHeadroomConfigKeys } from "../compression/headroom-adapter.js";
 import { loadConfig } from "../config/index.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { selectTarget } from "../inference/target-dispatcher.js";
@@ -298,6 +299,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     };
   }
 
+  const unreachableKeys = unreachableHeadroomConfigKeys(settings.compression.headroom_config);
   return {
     version: options.version,
     project_dir: projectDir,
@@ -325,6 +327,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // so those are different questions and both get reported.
       ...(daemon.version !== undefined ? { running_version: daemon.version } : {}),
       ...(daemon.stale === true ? { stale: true } : {}),
+      // R10.12: the shim serves the port with the pipeline off. Emitted here so
+      // `status --json` and the VS Code panel can say "bypass" instead of
+      // reporting a stopped pipeline as "running".
+      ...(daemon.shim === true ? { bypass: true } : {}),
     },
     upstream: {
       provider: upstream.provider,
@@ -342,6 +348,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     slider: sliderJson(slider),
     dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
     effective_compression: effectiveCompressionJson(effective),
+    ...(unreachableKeys.length > 0 ? { unreachable_headroom_config: unreachableKeys } : {}),
     config,
     local_model: {
       reachable: localInfo.reachable,

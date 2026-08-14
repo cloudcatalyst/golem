@@ -149,13 +149,17 @@ export function renderStatus(report: StatusReport): string {
   // the current config no longer named. Same lesson as the R8.32 note below:
   // say it on the proxy line the eye lands on, not somewhere it must be inferred.
   if (report.proxy.reachable && report.proxy.stale === true) {
-    const built =
-      report.proxy.running_version !== undefined
-        ? `build ${report.proxy.running_version}`
-        : "an unknown build";
+    // R10.13: staleness now has two causes, and the version-mismatch wording is
+    // nonsense for the other one — it rendered "running build 0.22.0, not
+    // 0.22.0" for a daemon whose VERSION matched and whose CODE did not, which
+    // is the case the fingerprint was added to catch.
+    const running = report.proxy.running_version;
     lines.push(
-      `  ⚠ running ${built}, not ${report.version} — it is still serving the code and ` +
-        "config it started with.",
+      running === undefined
+        ? `  ⚠ running an unknown build, not ${report.version} — it is still serving the code and config it started with.`
+        : running !== report.version
+          ? `  ⚠ running build ${running}, not ${report.version} — it is still serving the code and config it started with.`
+          : `  ⚠ running build ${running}, but from an earlier build of it — Golem has been rebuilt since this daemon started, so it is still serving the older code and the config it started with.`,
     );
     lines.push("    Fix: `golem proxy restart`");
   }
@@ -214,6 +218,19 @@ export function renderStatus(report: StatusReport): string {
   // do about it, which does not fit in a label.
   if (ec.degraded) {
     lines.push(`  ⚠ level ${ec.nominal} (${ec.nominal_name}) is inert here: ${ec.reason ?? ""}`);
+  }
+  // R10.19: a key that cannot reach Headroom, said WHERE the user is already
+  // looking when they wonder why compression did nothing. Both facts together —
+  // either alone misleads: the key would still be filtered if the stage were on,
+  // and the stage may be off regardless of the key.
+  const unreachable = report.unreachable_headroom_config ?? [];
+  if (unreachable.length > 0) {
+    lines.push(
+      `  ⚠ compression.headroom_config: ${unreachable.join(", ")} ` +
+        `${unreachable.length === 1 ? "is not a" : "are not"} Headroom config field` +
+        `${unreachable.length === 1 ? "" : "s"} — set, but never applied` +
+        (ec.degraded ? ", and the stage it would configure is off on this upstream anyway" : ""),
+    );
   }
   if (report.dials.brevity.effective !== "off") {
     lines.push(

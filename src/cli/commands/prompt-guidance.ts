@@ -36,6 +36,7 @@ import {
 import { buildKnowledgeStack } from "../build-knowledge.js";
 import { InitError } from "../init.js";
 import { proxyStatus, startDetached } from "../proxy-daemon.js";
+import { readProxyDesired } from "../proxy-state.js";
 import { proxyBaseUrl, readWiringState } from "../proxy-wiring.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
@@ -352,11 +353,26 @@ export default function register(program: Command): void {
         const { settings } = await loadConfig({ projectDir: cwd });
         const port = settings.proxy.port;
         // R9.23: if the URL is in settings, the daemon should be alive.
-        // If it's not, restart it — no separate state file needed.
+        // If it's not, restart it.
         const wiring = await readWiringState(cwd, proxyBaseUrl(port));
         if (wiring.owner !== "golem") return;
         if ((await proxyStatus(cwd, port)).running) return;
-        await startDetached(cwd, port, process.argv[1] ?? "", {});
+        // R10.12 / Decision 56: honour the recorded intent. A project left in
+        // `bypass` is still WIRED, so restarting it as the full pipeline would
+        // silently switch the pipeline back on for a user who turned it off —
+        // and `stopped` was chosen deliberately (`stop --hard`), so re-starting
+        // there would fight the user too. The R9.23 comment this replaces read
+        // "no separate state file needed"; that assumption is what dropped the
+        // desired state on the floor.
+        const desired = await readProxyDesired(cwd);
+        if (desired === "stopped") return;
+        await startDetached(
+          cwd,
+          port,
+          process.argv[1] ?? "",
+          {},
+          ...(desired === "bypass" ? [{ shim: true } as const] : []),
+        );
       } catch {
         /* fail-safe */
       }

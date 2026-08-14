@@ -12,8 +12,10 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildFingerprint,
   defaultProjectPort,
   isProcessAlive,
+  isStaleDaemon,
   PROXY_PORT_BASE,
   PROXY_PORT_SPAN,
   portInUse,
@@ -137,6 +139,68 @@ describe("proxyStatus", () => {
     it("round-trips the stamp through the pid file", async () => {
       await writeProxyPid(dir, { pid: 1, port: 2, ts: "t", version: "1.2.3" });
       expect((await readProxyPid(dir))?.version).toBe("1.2.3");
+    });
+
+    // R10.13 — the version check is correct ACROSS a release and blind WITHIN
+    // one. Every local `npm run build` leaves VERSION untouched, so a daemon
+    // started before the build kept reporting as current; the incident cost an
+    // hour of debugging a pipeline stage that was not running.
+    it("is stale when the version matches but the CODE changed", async () => {
+      await writeProxyPid(dir, {
+        pid: 4242,
+        port: 4653,
+        ts: "t",
+        version: "9.9.9",
+        build: "aaaaaaaaaaaaaaaa",
+      });
+      const st = await proxyStatus(dir, 4653, (pid) => pid === 4242, "9.9.9", "bbbbbbbbbbbbbbbb");
+      expect(st.running).toBe(true);
+      expect(st.stale).toBe(true);
+    });
+
+    it("is not stale when version AND code fingerprint both match", async () => {
+      // The common case must never false-positive, or the flag becomes noise and
+      // gets ignored — worse than the gap it closes.
+      await writeProxyPid(dir, {
+        pid: 4242,
+        port: 4653,
+        ts: "t",
+        version: "9.9.9",
+        build: "aaaaaaaaaaaaaaaa",
+      });
+      const st = await proxyStatus(dir, 4653, (pid) => pid === 4242, "9.9.9", "aaaaaaaaaaaaaaaa");
+      expect(st.stale).toBe(false);
+    });
+
+    it("falls back to the version check when either fingerprint is unknown", () => {
+      // An unknown build is not evidence of a stale one. Asserted on the pure
+      // function rather than through `proxyStatus`, because that parameter has a
+      // computed default — passing `undefined` there selects the default rather
+      // than meaning "none", which is exactly the case under test.
+      const info = { pid: 1, port: 2, ts: "t", version: "9.9.9" } as const;
+      expect(isStaleDaemon(info, "9.9.9", "bbbb")).toBe(false); // daemon has no stamp
+      expect(isStaleDaemon({ ...info, build: "aaaa" }, "9.9.9", undefined)).toBe(false); // we have none
+      expect(isStaleDaemon({ ...info, build: "aaaa" }, "9.9.9", "aaaa")).toBe(false); // both agree
+      expect(isStaleDaemon({ ...info, build: "aaaa" }, "9.9.9", "bbbb")).toBe(true); // both known, differ
+      // Version still wins outright, fingerprint or not.
+      expect(isStaleDaemon({ ...info, build: "aaaa" }, "0.0.1", "aaaa")).toBe(true);
+    });
+
+    it("round-trips the build fingerprint and the shim flag through the pid file", async () => {
+      await writeProxyPid(dir, { pid: 1, port: 2, ts: "t", build: "deadbeefdeadbeef", shim: true });
+      const info = await readProxyPid(dir);
+      expect(info?.build).toBe("deadbeefdeadbeef");
+      expect(info?.shim).toBe(true);
+    });
+
+    it("buildFingerprint is stable for one file and absent for a missing one", async () => {
+      const self = path.join(dir, "entry.js");
+      await writeFile(self, "console.log(1)", "utf8");
+      const a = buildFingerprint(self);
+      expect(a).toBeDefined();
+      expect(buildFingerprint(self)).toBe(a);
+      expect(buildFingerprint(path.join(dir, "nope.js"))).toBeUndefined();
+      expect(buildFingerprint("")).toBeUndefined();
     });
   });
 

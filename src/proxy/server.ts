@@ -84,6 +84,16 @@ function rewriteBodyModel(body: Buffer | null, model: string): Buffer | null {
 }
 
 /**
+ * Is this request the Anthropic `count_tokens` route (R10.15)? Matches on the
+ * path suffix so a gateway base-path prefix does not defeat it, and ignores any
+ * query string.
+ */
+function isCountTokensPath(url: string): boolean {
+  const path = url.split("?")[0]?.replace(/\/+$/, "") ?? "";
+  return path.endsWith("/v1/messages/count_tokens");
+}
+
+/**
  * R9.2: how many distinct upstream origins one proxy run will pool connections
  * for. Generous next to any real target registry, and present only so a bug (or
  * a config that generates origins) cannot grow the map without bound. Reaching
@@ -306,6 +316,26 @@ export class GolemProxy {
     let requestBody = forward.body;
     let requestHeaders = upstreamHeaders;
     let translateStreaming = false;
+    // R10.15: `/v1/messages/count_tokens` has no OpenAI-schema equivalent, so a
+    // translating upstream answers it here rather than forwarding it as a
+    // completion. Never reached on the Anthropic passthrough, where the real
+    // endpoint exists and the byte-faithful forward is correct.
+    if (translate?.countTokens !== undefined && isCountTokensPath(forward.url)) {
+      let counted: Buffer;
+      try {
+        counted = translate.countTokens(forward.body);
+      } catch (err) {
+        this.respondProxyError(
+          res,
+          400,
+          `golem proxy: could not count tokens for this request (${String(err)})`,
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(counted);
+      return;
+    }
     if (translate !== undefined) {
       let translated: { body: Buffer; stream: boolean; path?: string };
       try {
@@ -411,10 +441,18 @@ export class GolemProxy {
       try {
         translated = translate.translateResponse(raw);
       } catch (err) {
+        // R10.18: an empty completion is not a translation failure — the
+        // translation was fine, the upstream produced nothing. Say which it was,
+        // or the message sends the reader hunting the wrong bug. Matched by name
+        // rather than by class so the proxy keeps its layering and does not
+        // import from providers/.
+        const empty = err instanceof Error && err.name === "EmptyCompletionError";
         this.respondProxyError(
           res,
           502,
-          `golem proxy: could not translate the upstream response (${String(err)})`,
+          empty
+            ? `golem proxy: ${err.message}`
+            : `golem proxy: could not translate the upstream response (${String(err)})`,
         );
         return;
       }

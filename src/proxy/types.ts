@@ -270,6 +270,14 @@ export interface UpstreamTranslator {
   /** Upstream (OpenAI) NON-streaming response body → Anthropic response body bytes (b1). */
   translateResponse(body: Buffer): Buffer;
   /**
+   * R10.15 — answer `/v1/messages/count_tokens` locally, returning the Anthropic
+   * `{"input_tokens": N}` body. An OpenAI-schema upstream has no such endpoint,
+   * so there is nothing to forward: without this the request is translated into a
+   * chat completion and answered with prose. Absent = the route is not handled
+   * and the request forwards as before.
+   */
+  countTokens?(body: Buffer | null): Buffer;
+  /**
    * A fresh stream transform: OpenAI SSE bytes in → Anthropic SSE bytes out (b2).
    * The proxy pipes `upstream.body` through this to the client. One per response.
    */
