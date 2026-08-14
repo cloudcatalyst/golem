@@ -84,6 +84,16 @@ function rewriteBodyModel(body: Buffer | null, model: string): Buffer | null {
 }
 
 /**
+ * Is this request the Anthropic `count_tokens` route (R10.15)? Matches on the
+ * path suffix so a gateway base-path prefix does not defeat it, and ignores any
+ * query string.
+ */
+function isCountTokensPath(url: string): boolean {
+  const path = url.split("?")[0]?.replace(/\/+$/, "") ?? "";
+  return path.endsWith("/v1/messages/count_tokens");
+}
+
+/**
  * R9.2: how many distinct upstream origins one proxy run will pool connections
  * for. Generous next to any real target registry, and present only so a bug (or
  * a config that generates origins) cannot grow the map without bound. Reaching
@@ -306,6 +316,26 @@ export class GolemProxy {
     let requestBody = forward.body;
     let requestHeaders = upstreamHeaders;
     let translateStreaming = false;
+    // R10.15: `/v1/messages/count_tokens` has no OpenAI-schema equivalent, so a
+    // translating upstream answers it here rather than forwarding it as a
+    // completion. Never reached on the Anthropic passthrough, where the real
+    // endpoint exists and the byte-faithful forward is correct.
+    if (translate?.countTokens !== undefined && isCountTokensPath(forward.url)) {
+      let counted: Buffer;
+      try {
+        counted = translate.countTokens(forward.body);
+      } catch (err) {
+        this.respondProxyError(
+          res,
+          400,
+          `golem proxy: could not count tokens for this request (${String(err)})`,
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(counted);
+      return;
+    }
     if (translate !== undefined) {
       let translated: { body: Buffer; stream: boolean; path?: string };
       try {

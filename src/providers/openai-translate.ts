@@ -22,6 +22,7 @@
  */
 
 import { z } from "zod";
+import { estimateTokens } from "../compression/tokens.js";
 import { stripVendorPrefix } from "./model-display.js";
 
 /** Minimal Anthropic Messages request shape we read (tolerant — extra keys ignored). */
@@ -66,19 +67,73 @@ function textOf(content: string | Block[]): string {
   return parts.join("\n");
 }
 
-/** Anthropic tool_result `content` (string | blocks | object) → a plain string for OpenAI. */
-function toolResultText(content: unknown): string {
-  if (typeof content === "string") return content;
+/** Human-readable byte size for an image placeholder. Approximate on purpose. */
+function approxImageBytes(b: Block): number {
+  const src = b.source as { data?: unknown; url?: unknown } | undefined;
+  if (typeof src?.data === "string") return Math.floor((src.data.length * 3) / 4);
+  if (typeof src?.url === "string") return src.url.length;
+  return 0;
+}
+
+function imageMediaType(b: Block): string {
+  const src = b.source as { media_type?: unknown } | undefined;
+  return typeof src?.media_type === "string" ? src.media_type : "image";
+}
+
+/**
+ * One line standing in for an image the model will not receive. It must read as
+ * an omission: a model told nothing about a missing screenshot will answer
+ * confidently about something it never saw (R10.14).
+ */
+function imageOmittedMarker(b: Block, reason: string): string {
+  const kb = Math.round(approxImageBytes(b) / 1024);
+  return `[image omitted: ${imageMediaType(b)}, ~${kb} KB — ${reason}]`;
+}
+
+/** Placeholder for an image hoisted out of a tool_result into a following user turn. */
+function imageHoistedMarker(b: Block): string {
+  const kb = Math.round(approxImageBytes(b) / 1024);
+  return `[image: ${imageMediaType(b)}, ~${kb} KB — attached in the next message]`;
+}
+
+/**
+ * An Anthropic `tool_result`'s content, split into the text that can ride inside
+ * an OpenAI `role:"tool"` message and any images that cannot.
+ *
+ * OpenAI's tool messages carry text only, so an image returned BY a tool (which
+ * is exactly what Claude Code's `Read` of a `.png` produces) has to be hoisted
+ * into a following user turn — or replaced by a marker when the model has no
+ * vision. Before R10.14 it was neither: a non-text block fell through to
+ * `JSON.stringify`, so a 500 KB screenshot was handed to the model as base64
+ * PROSE. Three of those made one real conversation ~468k tokens of mostly
+ * base64, and the model answered with nothing at all.
+ */
+function toolResultParts(
+  content: unknown,
+  vision: boolean | undefined,
+): { readonly text: string; readonly images: Block[] } {
+  if (typeof content === "string") return { text: content, images: [] };
   if (Array.isArray(content)) {
     const parts: string[] = [];
+    const images: Block[] = [];
     for (const b of content) {
-      const bb = b as { type?: unknown; text?: unknown };
-      if (bb.type === "text" && typeof bb.text === "string") parts.push(bb.text);
-      else parts.push(JSON.stringify(b));
+      const bb = b as Block;
+      if (bb.type === "text" && typeof bb.text === "string") {
+        parts.push(bb.text);
+      } else if (bb.type === "image") {
+        if (vision === false) {
+          parts.push(imageOmittedMarker(bb, "this model has no vision support"));
+        } else {
+          parts.push(imageHoistedMarker(bb));
+          images.push(bb);
+        }
+      } else {
+        parts.push(JSON.stringify(b));
+      }
     }
-    return parts.join("\n");
+    return { text: parts.join("\n"), images };
   }
-  return content === undefined ? "" : JSON.stringify(content);
+  return { text: content === undefined ? "" : JSON.stringify(content), images: [] };
 }
 
 /**
@@ -200,7 +255,10 @@ function combineContent(
  * `tool_result` blocks becomes one `role:"tool"` message per result (emitted
  * before any user text, since they answer the prior assistant's tool calls).
  */
-function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAIChatMessage[] {
+function translateMessages(
+  messages: z.infer<typeof anthropicMessage>[],
+  vision?: boolean | undefined,
+): OpenAIChatMessage[] {
   const out: OpenAIChatMessage[] = [];
   for (const m of messages) {
     // Mid-conversation system messages → OpenAI system messages (text only).
@@ -222,8 +280,12 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
         if (b.type === "text" && typeof b.text === "string") {
           textParts.push(b.text);
         } else if (b.type === "image") {
-          const p = imagePart(b);
-          if (p !== null) imageParts.push(p);
+          if (vision === false) {
+            textParts.push(imageOmittedMarker(b, "this model has no vision support"));
+          } else {
+            const p = imagePart(b);
+            if (p !== null) imageParts.push(p);
+          }
         } else if (b.type === "tool_use") {
           toolCalls.push({
             id: String(b.id ?? ""),
@@ -232,9 +294,14 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
           });
         }
       }
+      // An assistant turn with neither content nor tool_calls is malformed for
+      // OpenAI-compatible endpoints, and a thinking-only turn produces exactly
+      // that (thinking blocks have no OpenAI equivalent, so nothing survives).
+      // 22 of them sat in one real transcript. Emit "" rather than null.
+      const combined = combineContent(textParts, imageParts);
       const msg: OpenAIChatMessage = {
         role: "assistant",
-        content: combineContent(textParts, imageParts),
+        content: combined === null && toolCalls.length === 0 ? "" : combined,
         ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
       };
       out.push(msg);
@@ -242,21 +309,44 @@ function translateMessages(messages: z.infer<typeof anthropicMessage>[]): OpenAI
       const textParts: string[] = [];
       const imageParts: OpenAIContentPart[] = [];
       const toolMsgs: OpenAIChatMessage[] = [];
+      // Images returned BY a tool. They cannot ride inside the role:"tool"
+      // message, so they are hoisted into a user turn emitted after every tool
+      // message for this turn — the tool replies must stay adjacent to the calls
+      // they answer, or a strict upstream rejects the ordering.
+      const hoisted: OpenAIContentPart[] = [];
       for (const b of blocks) {
         if (b.type === "text" && typeof b.text === "string") {
           textParts.push(b.text);
         } else if (b.type === "image") {
-          const p = imagePart(b);
-          if (p !== null) imageParts.push(p);
+          if (vision === false) {
+            textParts.push(imageOmittedMarker(b, "this model has no vision support"));
+          } else {
+            const p = imagePart(b);
+            if (p !== null) imageParts.push(p);
+          }
         } else if (b.type === "tool_result") {
+          const { text, images } = toolResultParts(b.content, vision);
           toolMsgs.push({
             role: "tool",
             tool_call_id: String(b.tool_use_id ?? ""),
-            content: toolResultText(b.content),
+            content: text,
           });
+          for (const img of images) {
+            const p = imagePart(img);
+            if (p !== null) hoisted.push(p);
+          }
         }
       }
       for (const tm of toolMsgs) out.push(tm);
+      if (hoisted.length > 0) {
+        out.push({
+          role: "user",
+          content: [
+            { type: "text", text: "Images returned by the tool call(s) above:" },
+            ...hoisted,
+          ],
+        });
+      }
       const content = combineContent(textParts, imageParts);
       if (content !== null) out.push({ role: "user", content });
     }
@@ -291,6 +381,12 @@ function translateToolChoice(tc: { type: string } | undefined): OpenAIToolChoice
  * the vendor segment — required for a multi-vendor gateway whose canonical ids
  * carry it (see `preservesVendorPrefix`). Throws on an unparseable body so the
  * caller can fail open.
+ *
+ * `opts.vision` is the model's image-input capability (R10.14): `false` replaces
+ * every image with a short placeholder, `true` forwards them, and `undefined`
+ * — the catalog does not say — forwards them too. Guessing "no vision" would
+ * silently blind a model that can see, whereas forwarding to one that cannot
+ * gets a clean upstream error naming the problem.
  */
 export function anthropicToOpenAIChat(
   body: Buffer | null,
@@ -298,6 +394,7 @@ export function anthropicToOpenAIChat(
     readonly model?: string;
     readonly reasoningEffort?: OpenAIReasoningEffort;
     readonly keepVendorPrefix?: boolean;
+    readonly vision?: boolean | undefined;
   } = {},
 ): OpenAIChatRequest {
   if (body === null) throw new Error("empty request body");
@@ -308,7 +405,7 @@ export function anthropicToOpenAIChat(
     const systemText = textOf(parsed.system as string | Block[]);
     if (systemText.length > 0) messages.push({ role: "system", content: systemText });
   }
-  messages.push(...translateMessages(parsed.messages));
+  messages.push(...translateMessages(parsed.messages, opts.vision));
 
   const requestedModel = opts.model ?? parsed.model ?? "";
   const model = opts.keepVendorPrefix === true ? requestedModel : stripVendorPrefix(requestedModel);
@@ -340,6 +437,68 @@ export function anthropicToOpenAIChat(
     ...(toolChoice !== undefined ? { tool_choice: toolChoice } : {}),
     ...(opts.reasoningEffort !== undefined ? { reasoning_effort: opts.reasoningEffort } : {}),
   };
+}
+
+/**
+ * R10.15 — answer `POST /v1/messages/count_tokens` locally for an OpenAI-schema
+ * upstream, which has no such endpoint.
+ *
+ * Before this, the proxy rewrote the path to `/v1/chat/completions` like any
+ * other request, so asking "how many tokens is this prompt?" returned a full
+ * assistant completion — and billed for it.
+ *
+ * The number is an ESTIMATE, not a count: `estimateTokens` is the deliberately
+ * tokenizer-free ~4 chars/token heuristic (a real BPE vocabulary is a
+ * heavyweight dependency the default install forbids). It is good enough for a
+ * context meter and must not be presented as authoritative anywhere.
+ *
+ * Counted over what actually goes upstream: system text, every message's text
+ * and tool_result text, and the tool definitions.
+ */
+/**
+ * Nominal token cost of one image. Images do NOT tokenize by their encoded
+ * length — a vision model bills roughly by pixel area — so counting a base64
+ * `data:` URI as text overstates a single screenshot by ~100k tokens. Without
+ * decoding the image there is no honest per-image number, so this is a flat,
+ * openly-approximate stand-in in the right order of magnitude (Anthropic's own
+ * guidance puts a ~1000×1000 image near 1.3k tokens).
+ */
+const IMAGE_TOKEN_ESTIMATE = 1_600;
+
+export function countAnthropicInputTokens(body: Buffer | null): number {
+  if (body === null) throw new Error("empty request body");
+  const parsed = anthropicRequest.parse(JSON.parse(body.toString("utf8")));
+
+  let total = 0;
+  if (parsed.system !== undefined)
+    total += estimateTokens(textOf(parsed.system as string | Block[]));
+  // Translate first so the count reflects the messages the upstream will see —
+  // including image placeholders rather than the base64 they replaced.
+  for (const m of translateMessages(parsed.messages)) {
+    const content = m.content;
+    if (typeof content === "string") {
+      total += estimateTokens(content);
+    } else if (Array.isArray(content)) {
+      for (const part of content) {
+        total += part.type === "text" ? estimateTokens(part.text) : IMAGE_TOKEN_ESTIMATE;
+      }
+    }
+    for (const call of m.tool_calls ?? []) {
+      total += estimateTokens(call.function.name) + estimateTokens(call.function.arguments);
+    }
+  }
+  for (const t of parsed.tools ?? []) {
+    total +=
+      estimateTokens(t.name) +
+      estimateTokens(t.description ?? "") +
+      estimateTokens(t.input_schema === undefined ? "" : JSON.stringify(t.input_schema));
+  }
+  return total;
+}
+
+/** The Anthropic-shaped `count_tokens` response body. Nothing beyond what the API promises. */
+export function countTokensResponse(body: Buffer | null): Buffer {
+  return Buffer.from(JSON.stringify({ input_tokens: countAnthropicInputTokens(body) }), "utf8");
 }
 
 /** Minimal OpenAI Chat Completions (non-streaming) response shape. */

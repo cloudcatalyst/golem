@@ -4,7 +4,12 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { anthropicToOpenAIChat, openAIChatToAnthropic } from "../../../src/providers/index.js";
+import {
+  anthropicToOpenAIChat,
+  countAnthropicInputTokens,
+  countTokensResponse,
+  openAIChatToAnthropic,
+} from "../../../src/providers/index.js";
 
 const buf = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8");
 
@@ -371,5 +376,165 @@ describe("reasoning_content → thinking (b4-kimi)", () => {
       { mapReasoning: false },
     );
     expect(out.content).toEqual([{ type: "text", text: "a" }]);
+  });
+});
+
+/**
+ * R10.14 — images. Claude Code's `Read` of a `.png` returns an image block
+ * INSIDE a tool_result. Before this, a non-text block fell through to
+ * `JSON.stringify`, so a 500 KB screenshot reached the model as base64 prose:
+ * three of them made one real conversation ~468k tokens and the model answered
+ * with nothing at all.
+ */
+describe("anthropicToOpenAIChat — images (R10.14)", () => {
+  const PNG = "iVBORw0KGgoAAAANSUhEUg";
+  const imageBlock = {
+    type: "image",
+    source: { type: "base64", media_type: "image/png", data: PNG },
+  };
+  const withToolImage = {
+    model: "m",
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.png" } }],
+      },
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: [imageBlock] }],
+      },
+    ],
+  };
+
+  it("hoists a tool_result image into a following user turn when the model has vision", () => {
+    const out = anthropicToOpenAIChat(buf(withToolImage), { model: "m", vision: true });
+    const tool = out.messages.find((m) => m.role === "tool");
+    // The tool message answers its call and carries NO base64.
+    expect(tool?.tool_call_id).toBe("t1");
+    expect(String(tool?.content)).not.toContain(PNG);
+    expect(String(tool?.content)).toContain("[image:");
+    // The image itself rides in a user turn AFTER the tool message.
+    const toolIdx = out.messages.findIndex((m) => m.role === "tool");
+    const userIdx = out.messages.findIndex(
+      (m) =>
+        m.role === "user" &&
+        Array.isArray(m.content) &&
+        m.content.some((p) => p.type === "image_url"),
+    );
+    expect(userIdx).toBeGreaterThan(toolIdx);
+    const parts = out.messages[userIdx]?.content;
+    expect(Array.isArray(parts) && parts.some((p) => p.type === "image_url")).toBe(true);
+  });
+
+  it("replaces a tool_result image with a placeholder when the model has no vision", () => {
+    const out = anthropicToOpenAIChat(buf(withToolImage), { model: "m", vision: false });
+    const serialized = JSON.stringify(out);
+    // The whole point: the base64 never reaches the model, in any form.
+    expect(serialized).not.toContain(PNG);
+    expect(serialized).not.toContain("image_url");
+    const tool = out.messages.find((m) => m.role === "tool");
+    expect(String(tool?.content)).toContain("no vision support");
+  });
+
+  it("forwards a tool_result image when capability is unknown, so the upstream can say so", () => {
+    // Guessing "no vision" would silently blind a model that can see; forwarding
+    // to one that cannot returns a clean 404 naming the problem.
+    const out = anthropicToOpenAIChat(buf(withToolImage), { model: "m" });
+    expect(JSON.stringify(out)).toContain("image_url");
+  });
+
+  it("never serializes an image block as JSON prose (the actual defect)", () => {
+    for (const vision of [true, false, undefined]) {
+      const out = anthropicToOpenAIChat(buf(withToolImage), { model: "m", vision });
+      const tool = out.messages.find((m) => m.role === "tool");
+      expect(String(tool?.content)).not.toContain('"base64"');
+    }
+  });
+
+  it("replaces a top-level user image with a placeholder when the model has no vision", () => {
+    const out = anthropicToOpenAIChat(
+      buf({ model: "m", messages: [{ role: "user", content: [imageBlock] }] }),
+      { model: "m", vision: false },
+    );
+    expect(JSON.stringify(out)).not.toContain(PNG);
+    expect(String(out.messages.at(-1)?.content)).toContain("[image omitted:");
+  });
+
+  it("gives a thinking-only assistant turn empty content, never null", () => {
+    // `{role:"assistant", content:null}` with no tool_calls is malformed for
+    // OpenAI-compatible endpoints; 22 such turns sat in one real transcript.
+    const out = anthropicToOpenAIChat(
+      buf({
+        model: "m",
+        messages: [
+          { role: "user", content: "hi" },
+          { role: "assistant", content: [{ type: "thinking", thinking: "hmm", signature: "s" }] },
+          { role: "user", content: "again" },
+        ],
+      }),
+      { model: "m" },
+    );
+    const assistant = out.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toBe("");
+    expect(assistant?.content).not.toBeNull();
+  });
+});
+
+/** R10.15 — count_tokens has no OpenAI equivalent, so it is answered locally. */
+describe("countTokensResponse (R10.15)", () => {
+  it("returns an Anthropic-shaped input_tokens body and nothing else", () => {
+    const out = JSON.parse(
+      countTokensResponse(
+        buf({ model: "m", system: "be terse", messages: [{ role: "user", content: "hello" }] }),
+      ).toString("utf8"),
+    );
+    expect(Object.keys(out)).toEqual(["input_tokens"]);
+    expect(out.input_tokens).toBeGreaterThan(0);
+  });
+
+  it("counts system, messages and tool definitions", () => {
+    const bare = countAnthropicInputTokens(
+      buf({ model: "m", messages: [{ role: "user", content: "hello" }] }),
+    );
+    const withTools = countAnthropicInputTokens(
+      buf({
+        model: "m",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "Bash",
+            description: "run a command",
+            input_schema: { type: "object", properties: { command: { type: "string" } } },
+          },
+        ],
+      }),
+    );
+    expect(withTools).toBeGreaterThan(bare);
+  });
+
+  it("counts the image placeholder, not the base64 it replaced", () => {
+    const withImage = countAnthropicInputTokens(
+      buf({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                source: { type: "base64", media_type: "image/png", data: "A".repeat(400_000) },
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    // Counted as text the 400 KB payload would be ~100k tokens. An image is
+    // billed by pixel area, not encoded length, so it gets a nominal estimate.
+    expect(withImage).toBeLessThan(5_000);
+  });
+
+  it("throws on an empty body so the caller can fail cleanly", () => {
+    expect(() => countAnthropicInputTokens(null)).toThrow(/empty request body/);
   });
 });

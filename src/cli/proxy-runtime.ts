@@ -31,7 +31,7 @@ import {
   createResponseTelemetryHooks,
 } from "./proxy-build/telemetry-hooks.js";
 import { buildUpstreamWiring, resolveProxyUpstream } from "./proxy-build/upstream-resolution.js";
-import { createRouteResolver } from "./route-resolver.js";
+import { createRouteResolver, type VisionLookup } from "./route-resolver.js";
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
@@ -84,6 +84,12 @@ export interface BuildProxyOptions {
    * eligible request.
    */
   readonly suppressLocalAnswer?: boolean;
+  /**
+   * R10.14 — per-target image-input capability, from R8.8's model catalog. The
+   * caller loads the catalog (async) and passes the lookup in, so this builder
+   * stays synchronous. Absent → images are forwarded as before.
+   */
+  readonly visionOf?: VisionLookup;
 }
 
 /**
@@ -146,7 +152,7 @@ export function buildProxyFromSettings(
     ...(localAnswer !== undefined ? { localAnswer } : {}),
   });
   const { upstreamProvider, upstreamModel, mapUpstreamHeaders, translateUpstream } =
-    buildUpstreamWiring(settings, upstream);
+    buildUpstreamWiring(settings, upstream, build.visionOf);
   const { onResponseUsage, onResponseHeaders } = createResponseTelemetryHooks({
     dir,
     telemetry,
@@ -173,6 +179,7 @@ export function buildProxyFromSettings(
       ? {
           resolveRoute: createRouteResolver({
             settings: proxyWithDefault,
+            ...(build.visionOf !== undefined ? { visionOf: build.visionOf } : {}),
             onRoute: ({ targetId, reason, sticky }) => {
               // ADR-0003 invariant 5: every (request → target, why) selection is
               // attributable. Non-secret by construction.

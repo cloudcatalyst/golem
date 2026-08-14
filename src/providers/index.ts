@@ -46,6 +46,8 @@ export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-st
 export {
   type AnthropicMessageResponse,
   anthropicToOpenAIChat,
+  countAnthropicInputTokens,
+  countTokensResponse,
   mapStopReason,
   type OpenAIChatMessage,
   type OpenAIChatRequest,

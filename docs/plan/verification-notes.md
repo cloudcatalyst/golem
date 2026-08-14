@@ -5832,3 +5832,34 @@ code does not implement: rewrite optimistically once, have the endpoint record t
 WebFetch arrived, and fall back to the deny floor for the rest of the session when no hit
 was recorded. Filed as R9.19. Not reproducible from a terminal session, which is why it was
 filed rather than guessed at.
+
+## §126 — models.dev exposes `modalities.input`, which is the image-capability signal Golem needed (2026-08-14)
+
+Checked live at `https://models.dev/api.json` while building R10.14.
+
+Every model entry carries a `modalities` block alongside `limit` and `cost`:
+
+```json
+"modalities": { "input": ["text"], "output": ["text"] }
+```
+
+`deepseek/deepseek-v4-flash` reports `input: ["text"]` — no vision. A vision
+model reports `input: ["text","image"]`. There is also a sibling `attachment:
+false` boolean, which appears to track the same fact; `modalities.input` was
+chosen because it is explicit about WHICH modalities rather than a single flag,
+and it is the field OpenRouter's own catalogue mirrors
+(`architecture.input_modalities`).
+
+This matters because R8.8 already fetches and caches this exact document, so the
+capability is **Golem's own cached data, not a runtime dependency** — the hard
+rule the models command was built around.
+
+Coverage is good at the id level: the refreshed catalog holds
+`openrouter | deepseek/deepseek-v4-flash-0731 | ["text"]` as an exact entry, so
+`lookupModel` with `preferProvider: "openrouter"` resolves it without falling
+back to the dated-snapshot rule (`-0731` is not `-YYYYMMDD`, so that fallback
+would NOT have matched — the exact entry is what makes this work).
+
+Caveat worth carrying: 6,320 entries came back, many ids repeated across dozens
+of providers with the same modalities. Disambiguation by provider is therefore
+load-bearing, not cosmetic.

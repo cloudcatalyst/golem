@@ -31,7 +31,7 @@ import type { InferenceService } from "../../interfaces/inference.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
-import { openTelemetryStore } from "../../telemetry/index.js";
+import { loadModelCatalog, modelAcceptsImages, openTelemetryStore } from "../../telemetry/index.js";
 import { planQueryEmbedder, resolvePersistedEmbedder } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
@@ -54,6 +54,7 @@ import {
   wireProxyEnv,
   wiringGap,
 } from "../proxy-wiring.js";
+import type { VisionLookup } from "../route-resolver.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -231,8 +232,17 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
       process.stderr.write(`golem proxy: local-answer disabled — ${reason}\n`);
     }
   }
+  // R10.14: resolve image-input capability ONCE, here, where awaiting is cheap —
+  // the proxy builder stays synchronous and nothing touches the catalog per
+  // request. An unknown model yields undefined, which forwards images as before.
+  const modelCatalog = await loadModelCatalog(dir);
+  const visionOf: VisionLookup = (provider, model) =>
+    model === undefined
+      ? undefined
+      : modelAcceptsImages(modelCatalog, model, { preferProvider: provider });
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     sliderStore,
+    visionOf,
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
   });

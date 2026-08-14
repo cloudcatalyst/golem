@@ -29,6 +29,7 @@ export {
 } from "./cost-benchmark.js";
 export { JsonlTelemetryStore, readTelemetryEvents, telemetryFilePath } from "./jsonl-store.js";
 export {
+  acceptsImageInput,
   BUILTIN_MODEL_CATALOG,
   type ContextWarning,
   catalogAgeDays,
@@ -40,6 +41,7 @@ export {
   type ModelCatalogEntry,
   type ModelMatch,
   mergeCatalogs,
+  modelAcceptsImages,
   modelCatalogPath,
   normaliseModelsDevPayload,
   priceUsage,

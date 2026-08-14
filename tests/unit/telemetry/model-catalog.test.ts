@@ -22,6 +22,7 @@ import {
   type ModelCatalog,
   type ModelCatalogEntry,
   mergeCatalogs,
+  modelAcceptsImages,
   modelCatalogPath,
   normaliseModelsDevPayload,
   priceUsage,
@@ -343,5 +344,62 @@ describe("catalogAgeDays", () => {
 
   it("is null for an unparseable date rather than a wrong number", () => {
     expect(catalogAgeDays({ source: "s", asOf: "whenever", entries: [] }, Date.now())).toBeNull();
+  });
+});
+
+/**
+ * R10.14 — the image-input capability signal. Three-valued on purpose: a caller
+ * must tell "no vision" from "no idea", because the safe default differs.
+ */
+describe("input modalities (R10.14)", () => {
+  it("reads modalities.input from a models.dev payload", () => {
+    const catalog = normaliseModelsDevPayload(
+      {
+        openrouter: {
+          models: {
+            "deepseek/deepseek-v4-flash-0731": {
+              modalities: { input: ["text"], output: ["text"] },
+            },
+            "anthropic/claude-opus-5": {
+              modalities: { input: ["text", "image"], output: ["text"] },
+            },
+          },
+        },
+      },
+      "https://models.dev/api.json",
+      "2026-08-14",
+    );
+    expect(modelAcceptsImages(catalog, "deepseek/deepseek-v4-flash-0731")).toBe(false);
+    expect(modelAcceptsImages(catalog, "anthropic/claude-opus-5")).toBe(true);
+  });
+
+  it("reports undefined — not false — when the catalog does not say", () => {
+    const catalog = normaliseModelsDevPayload(
+      { openrouter: { models: { "some/model": {} } } },
+      "https://models.dev/api.json",
+      "2026-08-14",
+    );
+    expect(modelAcceptsImages(catalog, "some/model")).toBeUndefined();
+    expect(modelAcceptsImages(catalog, "never/heard-of-it")).toBeUndefined();
+  });
+
+  it("knows the built-in Claude models accept images", () => {
+    expect(modelAcceptsImages(BUILTIN_MODEL_CATALOG, "claude-opus-5")).toBe(true);
+  });
+
+  it("round-trips inputModalities through the cache file", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "golem-catalog-"));
+    try {
+      const catalog = normaliseModelsDevPayload(
+        { openrouter: { models: { "a/b": { modalities: { input: ["text", "image"] } } } } },
+        "src",
+        "2026-08-14",
+      );
+      await writeModelCatalog(dir, catalog);
+      const read = await readModelCatalog(dir);
+      expect(read === null ? undefined : modelAcceptsImages(read, "a/b")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
