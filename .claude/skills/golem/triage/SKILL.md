@@ -23,5 +23,5 @@ paid model's tokens are for judgment the local model can't make. Route the work:
    call are what Claude is for.
 3. **Report** what was done locally vs escalated, so the token split is honest.
 
-If no local model is available (`golem devices` shows none), say so and proceed
-normally — the practice degrades, it doesn't block.
+If no local model is available (the `devices` MCP tool reports none pulled), say
+so and proceed normally — the practice degrades, it doesn't block.

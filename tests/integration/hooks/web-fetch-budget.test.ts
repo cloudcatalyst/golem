@@ -193,7 +193,7 @@ describe("web-fetch-pre budget (R9.21)", () => {
       },
     });
     const settings = JSON.parse(
-      await readFile(path.join(projectDir, ".claude", "settings.json"), "utf8"),
+      await readFile(path.join(projectDir, ".claude", "settings.local.json"), "utf8"),
     ) as {
       hooks?: {
         PreToolUse?: { matcher?: string; hooks?: { command?: string; timeout?: number }[] }[];

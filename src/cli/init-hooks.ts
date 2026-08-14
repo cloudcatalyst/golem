@@ -23,6 +23,7 @@ import {
   addEventHook,
   addMatcherHook,
   addPostToolUseHook,
+  type HookSettingsOptions,
   NOTIFICATION_COMMAND,
   PERSONAL_RULES_GITIGNORE,
   PROMPT_SUBMIT_COMMAND,
@@ -42,6 +43,12 @@ import {
   writeDefaultMode,
   writeStatusLine,
 } from "../hooks/index.js";
+import {
+  CLAUDE_SETTINGS_SCOPES,
+  type ClaudeSettingsScope,
+  otherClaudeSettingsScope,
+  resolveClaudeSettingsScope,
+} from "./claude-settings-target.js";
 import type { InitAction } from "./init.js";
 
 /**
@@ -98,15 +105,28 @@ async function ensureGitignored(
   };
 }
 
-/** Init steps 5, 6, 6b and 6c: every hook init installs, in report order. */
-export async function wireHooks(projectDir: string, dryRun: boolean): Promise<InitAction[]> {
+/**
+ * Init steps 5, 6, 6b and 6c: every hook init installs, in report order.
+ *
+ * Everything lands in the `.claude` settings file `claude.settings_scope` names
+ * (local by default). The other file is swept afterwards so flipping the scope
+ * and re-running init MOVES the hooks rather than leaving a duplicate set that
+ * Claude Code would either shadow or — worse — run twice.
+ */
+export async function wireHooks(
+  projectDir: string,
+  dryRun: boolean,
+  scope?: ClaudeSettingsScope,
+): Promise<InitAction[]> {
+  const target = scope ?? (await resolveClaudeSettingsScope(projectDir));
+  const options = { projectDir, dryRun, scope: target };
   const actions: InitAction[] = [];
 
   // 5. PostToolUse hook + Golem guidance. Guidance is seeded (once) as Claude
   // Code project rules — `.claude/rules/golem-<feature>.md` (committed, team-wide,
   // auto-loaded every session). Golem never edits the user's CLAUDE.md. Defaults
   // are user-owned after seeding: `golem guidance disable <feature>` sticks.
-  actions.push(await addPostToolUseHook({ projectDir, dryRun }));
+  actions.push(await addPostToolUseHook(options));
   actions.push(...(await seedDefaultGuidance(projectDir, dryRun)));
   // Keep personal (`--user`) golem rules AND the conventional personal
   // instructions file out of version control.
@@ -114,61 +134,60 @@ export async function wireHooks(projectDir: string, dryRun: boolean): Promise<In
   actions.push(await ensureGitignored(projectDir, PERSONAL_RULES_GITIGNORE, dryRun));
 
   // 6. Status line (21c) + blocked-state event hooks (21b).
-  actions.push(await writeStatusLine({ projectDir, dryRun }));
-  actions.push(await writeDefaultMode({ projectDir, dryRun }));
-  actions.push(await addEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
-  actions.push(
-    await addEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
-  );
+  actions.push(await writeStatusLine(options));
+  actions.push(await writeDefaultMode(options));
+  actions.push(await addEventHook(options, "Notification", NOTIFICATION_COMMAND));
+  actions.push(await addEventHook(options, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND));
   // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
   // default `manual` level). See PRE_TOOL_USE_HOOK_COMMAND.
-  actions.push(await addEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
+  actions.push(await addEventHook(options, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
 
   // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
   // capture every fetch into the KB (non-blocking post-capture) — §44.
   actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "PreToolUse",
-        matcher: WEB_FETCH_MATCHER,
-        command: WEB_FETCH_PRE_COMMAND,
-        async: false,
-        // R9.21 — the SAME constant the hook budgets itself against. The hook
-        // cannot read this value out of its payload, so a literal here would be a
-        // second number that has to agree with the first by hand. It did not: the
-        // raw fetch's own timeout was also 15s, which let it spend the entire
-        // window and get killed before it could serve what it had downloaded.
-        timeoutSeconds: WEB_FETCH_PRE_TIMEOUT_SECONDS,
-      },
-    ),
+    await addMatcherHook(options, {
+      event: "PreToolUse",
+      matcher: WEB_FETCH_MATCHER,
+      command: WEB_FETCH_PRE_COMMAND,
+      async: false,
+      // R9.21 — the SAME constant the hook budgets itself against. The hook
+      // cannot read this value out of its payload, so a literal here would be a
+      // second number that has to agree with the first by hand. It did not: the
+      // raw fetch's own timeout was also 15s, which let it spend the entire
+      // window and get killed before it could serve what it had downloaded.
+      timeoutSeconds: WEB_FETCH_PRE_TIMEOUT_SECONDS,
+    }),
   );
   actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "PostToolUse",
-        matcher: WEB_FETCH_MATCHER,
-        command: WEB_FETCH_POST_COMMAND,
-        async: true,
-        timeoutSeconds: 60,
-      },
-    ),
+    await addMatcherHook(options, {
+      event: "PostToolUse",
+      matcher: WEB_FETCH_MATCHER,
+      command: WEB_FETCH_POST_COMMAND,
+      async: true,
+      timeoutSeconds: 60,
+    }),
   );
 
   // 6c. SessionStart: auto-start the proxy on project open if it was running (§47).
   actions.push(
-    await addMatcherHook(
-      { projectDir, dryRun },
-      {
-        event: "SessionStart",
-        matcher: SESSION_START_MATCHER,
-        command: SESSION_START_COMMAND,
-        async: false,
-        timeoutSeconds: 15,
-      },
-    ),
+    await addMatcherHook(options, {
+      event: "SessionStart",
+      matcher: SESSION_START_MATCHER,
+      command: SESSION_START_COMMAND,
+      async: false,
+      timeoutSeconds: 15,
+    }),
   );
+
+  // 6d. Sweep the other scope's file (see the note on this function). Only the
+  // removals that actually did something are reported — a project that has never
+  // used the other scope would otherwise get nine "not installed" lines.
+  const swept = await removeHookSettings({
+    projectDir,
+    dryRun,
+    scope: otherClaudeSettingsScope(target),
+  });
+  actions.push(...swept.filter((action) => action.kind !== "skip"));
 
   return actions;
 }
@@ -182,32 +201,41 @@ export async function wireHooks(projectDir: string, dryRun: boolean): Promise<In
 export async function unwireHooks(projectDir: string, dryRun: boolean): Promise<InitAction[]> {
   const actions: InitAction[] = [];
 
-  // 4. Remove the PostToolUse hook entry + the seeded Golem guidance rules
-  // (`.claude/rules/golem-*.md`, both scopes) and the seed sentinel.
-  actions.push(await removePostToolUseHook({ projectDir, dryRun }));
+  // Both `.claude` settings files, always. `claude.settings_scope` says where
+  // init WRITES; it says nothing about where an older init, or the same project
+  // before a scope flip, left a hook. A hook uninit misses keeps firing at every
+  // tool call in a project that reports itself clean — the exact failure the
+  // "wireHooks and unwireHooks are exact inverses" rule above exists to prevent.
+  for (const scope of CLAUDE_SETTINGS_SCOPES) {
+    actions.push(...(await removeHookSettings({ projectDir, dryRun, scope })));
+  }
+
+  // The seeded Golem guidance rules (`.claude/rules/golem-*.md`, both scopes)
+  // and the seed sentinel — files, not settings, so they are swept once.
   actions.push(...(await removeAllGuidanceRules(projectDir, dryRun)));
 
-  // 5. Remove the status line + blocked-state event hooks.
-  actions.push(await removeStatusLine({ projectDir, dryRun }));
-  actions.push(await removeDefaultMode({ projectDir, dryRun }));
-  actions.push(await removeEventHook({ projectDir, dryRun }, "Notification", NOTIFICATION_COMMAND));
-  actions.push(
-    await removeEventHook({ projectDir, dryRun }, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
-  );
-  actions.push(
-    await removeEventHook({ projectDir, dryRun }, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
-  );
-
-  // 5b. Remove the WebFetch KB-cache hooks + the SessionStart auto-start hook.
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "PreToolUse", WEB_FETCH_PRE_COMMAND),
-  );
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "PostToolUse", WEB_FETCH_POST_COMMAND),
-  );
-  actions.push(
-    await removeMatcherHook({ projectDir, dryRun }, "SessionStart", SESSION_START_COMMAND),
-  );
-
   return actions;
+}
+
+/**
+ * Uninit steps 4 (hooks half), 5 and 5b against ONE settings file: the
+ * PostToolUse CCR hook, the status line, the default mode, the blocked-state
+ * event hooks, the WebFetch KB-cache pair and the SessionStart auto-start.
+ *
+ * Split out because it is needed twice — once per scope by {@link unwireHooks},
+ * and once against the non-target scope by {@link wireHooks}, which is what makes
+ * a `claude.settings_scope` flip move the hooks instead of duplicating them.
+ */
+async function removeHookSettings(options: HookSettingsOptions): Promise<InitAction[]> {
+  return [
+    await removePostToolUseHook(options),
+    await removeStatusLine(options),
+    await removeDefaultMode(options),
+    await removeEventHook(options, "Notification", NOTIFICATION_COMMAND),
+    await removeEventHook(options, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
+    await removeEventHook(options, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
+    await removeMatcherHook(options, "PreToolUse", WEB_FETCH_PRE_COMMAND),
+    await removeMatcherHook(options, "PostToolUse", WEB_FETCH_POST_COMMAND),
+    await removeMatcherHook(options, "SessionStart", SESSION_START_COMMAND),
+  ];
 }

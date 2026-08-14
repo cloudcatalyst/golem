@@ -10,4 +10,5 @@ Arguments: $ARGUMENTS
 Extract the CCR reference id from the arguments (or from the marker in recent
 context, e.g. `hash=<sha256>` / `[golem:ccr ref=...]`) and call the
 `expand` MCP tool with it. Show the retrieved original content. If the
-reference is unknown, report that and suggest `golem stats` to check the store.
+reference is unknown, report that and call the `stats` MCP tool to check the
+store — it reports `ccr_refs_stored`, which answers whether anything is there.

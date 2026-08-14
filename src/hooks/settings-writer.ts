@@ -1,7 +1,11 @@
 /**
- * `.claude/settings.json` writer for the Golem PostToolUse hook entry
+ * `.claude` settings writer for the Golem PostToolUse hook entry
  * (WS-B task B2). Called by the E2 init/uninit flows (wired by the
  * integrator — src/hooks/ never edits src/cli/).
+ *
+ * Which of the two settings files is written comes from `claude.settings_scope`
+ * (src/cli/claude-settings-target.ts) — `.claude/settings.local.json` by default
+ * — or from an explicit {@link HookSettingsOptions.scope}.
  *
  * Hook config schema re-verified 2026-07-04 (verification-notes §20):
  *   {"hooks": {"PostToolUse": [{"matcher": "...",
@@ -17,6 +21,7 @@
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { type ClaudeSettingsScope, claudeSettingsTarget } from "../cli/claude-settings-target.js";
 import { type InitAction, InitError } from "../cli/init.js";
 
 /**
@@ -100,8 +105,13 @@ function sameHookEntry(a: unknown, b: unknown): boolean {
   return JSON.stringify(canonicalize(a)) === JSON.stringify(canonicalize(b));
 }
 
-function settingsPath(projectDir: string): string {
-  return path.join(projectDir, ".claude", "settings.json");
+/**
+ * Which `.claude` settings file this call operates on: the one
+ * `claude.settings_scope` names (local by default), or an explicit scope —
+ * uninit passes both in turn, and init sweeps the one it is not writing.
+ */
+async function settingsPath(options: HookSettingsOptions): Promise<string> {
+  return claudeSettingsTarget(options.projectDir, options.scope);
 }
 
 /** The exact PostToolUse entry `addPostToolUseHook` installs. */
@@ -169,6 +179,11 @@ export interface HookSettingsOptions {
   readonly projectDir: string;
   /** Compute and report the action without writing anything. */
   readonly dryRun?: boolean;
+  /**
+   * Which `.claude` settings file to touch. Omitted, it is the configured write
+   * target (`claude.settings_scope` — local by default).
+   */
+  readonly scope?: ClaudeSettingsScope;
 }
 
 /**
@@ -178,7 +193,7 @@ export interface HookSettingsOptions {
  */
 export async function addPostToolUseHook(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
 
@@ -220,7 +235,7 @@ export async function addPostToolUseHook(options: HookSettingsOptions): Promise<
  */
 export async function removePostToolUseHook(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
   const hooks = settings?.hooks;
@@ -290,7 +305,7 @@ export async function addMatcherHook(
   spec: MatcherHookSpec,
 ): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
 
@@ -334,7 +349,7 @@ export async function removeMatcherHook(
   command: string,
 ): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
   const hooks = settings?.hooks;

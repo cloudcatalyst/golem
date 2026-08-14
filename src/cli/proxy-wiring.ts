@@ -1,7 +1,12 @@
 /**
- * Claude Code ↔ Golem proxy WIRING — the `.claude/settings.json` `env` entries
- * that point Claude Code at the local proxy, and the ownership rule that decides
- * when Golem may remove them.
+ * Claude Code ↔ Golem proxy WIRING — the `.claude` settings `env` entries that
+ * point Claude Code at the local proxy, and the ownership rule that decides when
+ * Golem may remove them.
+ *
+ * Which of the two settings files receives them is `claude.settings_scope`
+ * (claude-settings-target.ts): the gitignored `settings.local.json` by default.
+ * Writes go to that one file and sweep the other; READS always walk both, in
+ * Claude Code's own precedence order.
  *
  * Split out of `init.ts` for Decision 56: `golem proxy unwire`/`wire` need the
  * same ownership-guarded edit that `golem uninit` performs, and re-deriving that
@@ -22,8 +27,15 @@
  * that signal.
  */
 
-import path, { resolve } from "node:path";
+import { resolve } from "node:path";
 import { loopbackCaPath } from "../proxy/loopback-cert.js";
+import {
+  type ClaudeSettingsScope,
+  claudeLocalSettingsPath,
+  claudeProjectSettingsPath,
+  claudeSettingsReadOrder,
+  claudeSettingsTarget,
+} from "./claude-settings-target.js";
 import {
   type JsonObject,
   readJsonObject,
@@ -48,29 +60,19 @@ export function proxyBaseUrl(port: number): string {
   return `http://localhost:${port}`;
 }
 
-export function claudeSettingsPath(projectDir: string): string {
-  return path.join(projectDir, ".claude", "settings.json");
-}
-
-/**
- * R9.22 — the gitignored, machine-local settings scope, and the only correct
- * home for a machine-absolute path.
- *
- * `.claude/settings.json` is COMMITTED, so an absolute `NODE_EXTRA_CA_CERTS`
- * written there travels to every clone and resolves on none of them: Claude Code
- * then warns twice at every start about a certificate the reader never asked
- * for. The local file is gitignored and sits ABOVE the committed one in Claude
- * Code's precedence ladder (managed → CLI args → `settings.local.json` →
- * `settings.json` → `~/.claude/settings.json`, notes §13), so moving the key
- * here changes nothing about how it is read — only about who receives it.
- *
- * `ANTHROPIC_BASE_URL` deliberately stays in the committed file:
- * `http://localhost:<port>` is portable, and its presence is what tells a
- * teammate the project is wired.
- */
-export function claudeLocalSettingsPath(projectDir: string): string {
-  return path.join(projectDir, ".claude", "settings.local.json");
-}
+// The two file paths, the configured write target and the reader precedence
+// order all live in claude-settings-target.ts now (`claude.settings_scope`).
+// Re-exported here because this module has been the one definition of "where
+// does Claude Code's wiring live?" since R9.22, and every existing importer
+// asks it that question.
+export {
+  type ClaudeSettingsScope,
+  claudeLocalSettingsPath,
+  claudeProjectSettingsPath,
+  claudeSettingsPathForScope,
+  claudeSettingsReadOrder,
+  claudeSettingsTarget,
+} from "./claude-settings-target.js";
 
 /**
  * Path equality as the filesystem sees it: resolved, and case-folded on win32
@@ -177,10 +179,27 @@ function envOf(settings: JsonObject | null): JsonObject | null {
  * the loud one.
  */
 export async function readWiringState(projectDir: string, baseUrl: string): Promise<WiringState> {
-  const env = envOf(await readJsonObjectOrNull(claudeSettingsPath(projectDir)));
-  const current = env?.[ENV_BASE_URL];
-  if (typeof current !== "string") return { owner: "none", baseUrl: null };
+  // Both files, in Claude Code's own precedence order (local wins): which one
+  // Golem WRITES is a setting (`claude.settings_scope`), but which one Claude
+  // Code READS never was. Consulting only the configured scope would report an
+  // un-wired project the moment someone flipped the key — the exact
+  // "nothing fails, so nothing tells the user" failure R8.32 exists to catch.
+  const current = await readWiredBaseUrl(projectDir);
+  if (current === null) return { owner: "none", baseUrl: null };
   return { owner: current === baseUrl ? "golem" : "foreign", baseUrl: current };
+}
+
+/**
+ * `ANTHROPIC_BASE_URL` as Claude Code would resolve it for this project: the
+ * local scope shadows the committed one. Null when neither file sets it. Quiet
+ * on malformed files — every caller is a status/read path.
+ */
+export async function readWiredBaseUrl(projectDir: string): Promise<string | null> {
+  for (const file of claudeSettingsReadOrder(projectDir)) {
+    const value = envOf(await readJsonObjectOrNull(file))?.[ENV_BASE_URL];
+    if (typeof value === "string") return value;
+  }
+  return null;
 }
 
 /**
@@ -246,31 +265,49 @@ export async function unwireProxyEnv(
   baseUrl: string,
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<UnwireResult> {
-  const file = claudeSettingsPath(projectDir);
-  const settings = await readJsonObject(file);
-  const env = envOf(settings);
-
-  const current = env?.[ENV_BASE_URL];
-  if (typeof current === "string" && current !== baseUrl) {
+  const current = await readWiredBaseUrl(projectDir);
+  if (current !== null && current !== baseUrl) {
     return { changed: false, foreignBaseUrl: current, needsReload: false };
   }
 
-  // R9.22: the CA trust lives in the LOCAL scope now, so unwiring has to visit
-  // both files — and it must still run when the committed file has no `env` at
-  // all, which is the normal shape once the CA key moved out of it.
-  const localChanged = await removeLocalCaTrust(projectDir, opts);
-
-  let committedChanged = false;
-  if (settings !== null && env !== null) {
-    committedChanged = removeGolemEnv(env, baseUrl, loopbackCaPath(projectDir));
-    if (committedChanged) {
-      if (Object.keys(env).length === 0) delete settings.env;
-      if (opts.dryRun !== true) await writeJsonObject(file, settings);
-    }
+  // Both files, always — the CA trust has lived in the local scope since R9.22,
+  // `claude.settings_scope` decides where the rest goes, and a project that has
+  // been through a scope flip can legitimately have leftovers in either. Removal
+  // is ownership-guarded per key, so visiting a file we did not write is a no-op.
+  let changed = false;
+  for (const file of claudeSettingsReadOrder(projectDir)) {
+    if (await sweepGolemEnvFrom(file, baseUrl, loopbackCaPath(projectDir), opts)) changed = true;
   }
-
-  const changed = committedChanged || localChanged;
   return { changed, needsReload: changed };
+}
+
+/**
+ * Delete Golem's own env keys from ONE settings file (ownership-guarded — see
+ * {@link removeGolemEnv}). Returns whether the file changed. Missing file, no
+ * `env` block, or nothing of ours in it: false, nothing written.
+ *
+ * `caPath` undefined leaves `NODE_EXTRA_CA_CERTS` alone, which is what the WRITE
+ * paths want: the CA trust lives in the local scope whatever
+ * `claude.settings_scope` says (R9.22 — the path is machine-absolute), and
+ * {@link writeLocalCaTrust} owns it. Uninit passes the real path and takes it.
+ *
+ * Used by `unwireProxyEnv` (both files) and by the write paths, which point it at
+ * the scope they are NOT writing so a `claude.settings_scope` flip MOVES the
+ * wiring instead of leaving a shadowed copy behind.
+ */
+export async function sweepGolemEnvFrom(
+  file: string,
+  baseUrl: string,
+  caPath: string | undefined,
+  opts: { readonly dryRun?: boolean } = {},
+): Promise<boolean> {
+  const settings = await readJsonObject(file);
+  const env = envOf(settings);
+  if (settings === null || env === null) return false;
+  if (!removeGolemEnv(env, baseUrl, caPath)) return false;
+  if (Object.keys(env).length === 0) delete settings.env;
+  if (opts.dryRun !== true) await writeJsonObject(file, settings);
+  return true;
 }
 
 /**
@@ -331,7 +368,7 @@ export async function writeLocalCaTrust(
   opts: { readonly dryRun?: boolean } = {},
 ): Promise<LocalCaTrustResult> {
   const localFile = claudeLocalSettingsPath(projectDir);
-  const committedFile = claudeSettingsPath(projectDir);
+  const committedFile = claudeProjectSettingsPath(projectDir);
   const localSettings = (await readJsonObject(localFile)) ?? {};
   const committedSettings = await readJsonObject(committedFile);
 
@@ -376,6 +413,8 @@ export interface WireResult {
   /** A foreign base URL blocks re-wiring — we refuse rather than overwrite it. */
   readonly foreignBaseUrl?: string;
   readonly needsReload: boolean;
+  /** Set when our env was also cleared out of the OTHER scope's file (a scope flip). */
+  readonly movedFrom?: string;
 }
 
 /**
@@ -383,13 +422,17 @@ export interface WireResult {
  * {@link unwireProxyEnv}. Refuses when a foreign `ANTHROPIC_BASE_URL` is present,
  * matching `golem init`'s conflict rule: another gateway owning this project's
  * traffic is a decision for the human, not something to overwrite.
+ *
+ * Writes the file `claude.settings_scope` names (local by default) and clears our
+ * env out of the other one, so re-wiring after a scope flip moves the keys rather
+ * than leaving a shadowed duplicate.
  */
 export async function wireProxyEnv(
   projectDir: string,
   baseUrl: string,
-  opts: { readonly dryRun?: boolean } = {},
+  opts: { readonly dryRun?: boolean; readonly scope?: ClaudeSettingsScope } = {},
 ): Promise<WireResult> {
-  const file = claudeSettingsPath(projectDir);
+  const file = await claudeSettingsTarget(projectDir, opts.scope);
   // The loud reader, on purpose. This used to swallow a parse failure and fall
   // back to `{}` — which then got WRITTEN, replacing a user's whole
   // `.claude/settings.json` with nothing but an env block. `golem init` has
@@ -399,17 +442,36 @@ export async function wireProxyEnv(
   const existing = envOf(settings);
   const env: JsonObject = existing ?? {};
 
-  const current = env[ENV_BASE_URL];
+  // A foreign base URL anywhere in the ladder blocks the write, not just one in
+  // the file we happen to be writing: Claude Code reads both, and wiring "around"
+  // someone else's gateway by writing the higher-precedence file is exactly the
+  // overwrite the ownership rule forbids.
+  const current = (await readWiredBaseUrl(projectDir)) ?? undefined;
   if (typeof current === "string" && current !== baseUrl) {
     return { changed: false, foreignBaseUrl: current, needsReload: false };
   }
-  if (current === baseUrl && env[ENV_TOOL_SEARCH] === "true") {
-    return { changed: false, needsReload: false };
+  // "Already wired" means wired IN THE TARGET FILE. Our own base URL sitting in
+  // the other scope is not the same thing — that is a scope flip, and the whole
+  // point is to move it.
+  const alreadyHere = env[ENV_BASE_URL] === baseUrl && env[ENV_TOOL_SEARCH] === "true";
+  const other = otherClaudeSettingsFile(projectDir, file);
+  const movedFrom = (await sweepGolemEnvFrom(other, baseUrl, undefined, opts)) ? other : undefined;
+
+  if (alreadyHere) {
+    return movedFrom === undefined
+      ? { changed: false, needsReload: false }
+      : { changed: true, needsReload: true, movedFrom };
   }
 
   env[ENV_BASE_URL] = baseUrl;
   env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
   settings.env = env;
   if (opts.dryRun !== true) await writeJsonObject(file, settings);
-  return { changed: true, needsReload: true };
+  return { changed: true, needsReload: true, ...(movedFrom !== undefined && { movedFrom }) };
+}
+
+/** The settings file of the scope `target` is NOT (see claude-settings-target.ts). */
+export function otherClaudeSettingsFile(projectDir: string, target: string): string {
+  const local = claudeLocalSettingsPath(projectDir);
+  return samePath(target, local) ? claudeProjectSettingsPath(projectDir) : local;
 }

@@ -73,7 +73,12 @@ export default function register(program: Command): void {
 
   configCmd
     .command("set")
-    .description("Write a setting to a scope (project, local, or user)")
+    // Local is the default scope: a setting written here is one person's choice
+    // on one machine (a port, a local model, a dial) far more often than it is a
+    // team decision, and `.golem/settings.local.json` is gitignored — so the
+    // default cannot commit a personal preference into everyone's checkout.
+    // `--scope project` is the deliberate act of making it a team setting.
+    .description("Write a setting to a scope (local, project, or user)")
     .argument("<key>", "dotted section.key")
     .argument(
       "[value]",
@@ -83,8 +88,8 @@ export default function register(program: Command): void {
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option(
       "--scope <scope>",
-      "settings scope: project (default, committed), local (gitignored), user (~/.golem)",
-      "project",
+      "settings scope: local (default, gitignored), project (committed), user (~/.golem)",
+      "local",
     )
     .option(
       "--value-file <path>",
@@ -116,7 +121,7 @@ export default function register(program: Command): void {
     .description("Remove a setting from a scope so lower layers take effect again")
     .argument("<key>", "dotted section.key")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .option("--scope <scope>", "settings scope: project (default), local, or user", "project")
+    .option("--scope <scope>", "settings scope: local (default), project, or user", "local")
     .option("--json", "machine-readable output", false)
     .action(async (key: string, opts: { dir: string; scope: string; json: boolean }) => {
       try {
