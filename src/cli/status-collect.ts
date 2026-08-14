@@ -44,7 +44,7 @@ import {
 import { proxyLogPath, proxyStatus } from "./proxy-daemon.js";
 import {
   claudeLocalSettingsPath,
-  claudeSettingsPath,
+  claudeProjectSettingsPath,
   ENV_EXTRA_CA,
   proxyBaseUrl,
   readWiringState,
@@ -90,7 +90,7 @@ async function webFetchGreenStatus(
   // a project initialized before the move and for a value the user put there.
   const wiredValue =
     (await readCaFrom(claudeLocalSettingsPath(projectDir))) ??
-    (await readCaFrom(claudeSettingsPath(projectDir)));
+    (await readCaFrom(claudeProjectSettingsPath(projectDir)));
 
   const inProcess = process.env[ENV_EXTRA_CA];
   const foreign = [wiredValue, inProcess].find((v) => v !== undefined && v.length > 0 && !same(v));

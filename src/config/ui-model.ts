@@ -541,6 +541,20 @@ export const SETTING_META = {
       "Off is ADVISORY — one nudge per window that the agent can work past. Only ever " +
       "fires on a fresh rate-limit reading; a stale feed just warns.",
   },
+
+  // --- claude ---------------------------------------------------------------
+  "claude.settings_scope": {
+    label: "Claude settings file",
+    summary:
+      "Where `golem init` writes Claude Code's wiring: local (gitignored) or project (committed)",
+    detail:
+      "Covers the env block, the mcp__golem__* permission, every hook, the status line and the " +
+      "default mode. Local is the default — the wiring is machine-specific (per-project port, " +
+      "absolute CA path, `golem` on PATH) and settings.local.json outranks settings.json anyway. " +
+      "Readers always check both files; re-run `golem init` after changing this and the wiring " +
+      "MOVES to the other file.",
+    advanced: true,
+  },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
 /** Metadata for one leaf; undefined for an unknown path. */
@@ -591,6 +605,11 @@ export const SECTION_META = {
   },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
   slider: { title: "Savings", summary: "The compression dial", order: 80 },
+  claude: {
+    title: "Claude Code wiring",
+    summary: "Which .claude settings file `golem init` writes",
+    order: 75,
+  },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 
 export function sectionMeta(section: string): SectionMeta | undefined {

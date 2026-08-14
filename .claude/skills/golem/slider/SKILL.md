@@ -3,6 +3,10 @@ description: Show or set the Golem token-savings slider (0 passthrough … 3 agg
 invocationMode: user
 ---
 
+<!-- golem:layering-exception slider — level 0 turns redaction OFF, so by design no
+     tool call can reach it (the `level` tool refuses 0). Naming the CLI command for
+     the user to run in their OWN terminal is the point, not a shortcut around the tool. -->
+
 The user wants to view or change Golem's savings slider.
 
 Arguments: $ARGUMENTS

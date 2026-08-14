@@ -116,7 +116,8 @@ async function togglePipeline(dir: string, enabled: boolean, portOpt?: string): 
 }
 
 /**
- * The SessionStart hook's auto-recovery: read the URL from `.claude/settings.json`.
+ * The SessionStart hook's auto-recovery: read the URL from the project's `.claude`
+ * settings (either file — local shadows committed).
  * If it points at Golem's port and nothing is listening, restart the daemon.
  * Also defined here so `golem on` can share the same recovery path.
  */

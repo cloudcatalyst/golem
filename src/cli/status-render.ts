@@ -128,7 +128,7 @@ export function renderStatus(report: StatusReport): string {
 
   const init = report.initialized;
   lines.push(`Project wiring ${init.overall ? "(initialized)" : "(run `golem init`)"}`);
-  lines.push(`  ${checkbox(init.claude_settings)} .claude/settings.json -> proxy base URL`);
+  lines.push(`  ${checkbox(init.claude_settings)} .claude settings -> proxy base URL`);
   lines.push(`  ${checkbox(init.mcp_registered)} .mcp.json -> golem MCP server`);
   lines.push(`  ${checkbox(init.skills)} /golem/* skills installed`);
   lines.push(`  ${checkbox(init.golem_settings)} .golem/settings.json present`);
@@ -163,7 +163,7 @@ export function renderStatus(report: StatusReport): string {
     );
     lines.push("    Fix: `golem proxy restart`");
   }
-  // R8.32: the `[--] .claude/settings.json` checkbox above and this "reachable"
+  // R8.32: the `[--] .claude settings` checkbox above and this "reachable"
   // line could contradict each other two lines apart, and the reader was left to
   // notice. Say it here, attached to the proxy line the eye actually lands on.
   if (report.proxy.reachable && report.proxy.in_path === false) {

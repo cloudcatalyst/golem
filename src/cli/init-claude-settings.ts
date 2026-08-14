@@ -1,13 +1,19 @@
 /**
- * The `.claude/settings.json` half of `golem init` / `golem uninit`.
+ * The `.claude` settings half of `golem init` / `golem uninit`.
  *
  * Everything that owns a key inside Claude Code's own settings files:
  *   * the `env` block and the upstream mode it encodes — direct Anthropic
  *     (`ANTHROPIC_BASE_URL`), Azure AI Foundry (`CLAUDE_CODE_USE_FOUNDRY` +
  *     `ANTHROPIC_FOUNDRY_BASE_URL`), or a generic Anthropic-compatible gateway;
  *   * the loopback-CA trust (`NODE_EXTRA_CA_CERTS`), which lives in the
- *     gitignored `.claude/settings.local.json` rather than the committed file;
+ *     gitignored `.claude/settings.local.json` whatever the scope says — the path
+ *     is machine-absolute (R9.22);
  *   * the `permissions` pre-approval of Golem's own MCP tools.
+ *
+ * WHICH file gets the rest is `claude.settings_scope` (claude-settings-target.ts):
+ * `.claude/settings.local.json` by default, `.claude/settings.json` when the
+ * project wants the wiring committed. Init writes one file and sweeps the other;
+ * uninit sweeps both. Readers consult both, always.
  *
  * `configureClaudeSettings` and `removeClaudeSettings` are exact inverses and
  * must be changed together — split them and `golem uninit` stops undoing what
@@ -23,8 +29,13 @@
  * `.mcp.json`. The dependency is therefore one-directional: init.ts → here.
  */
 
-import path from "node:path";
 import { ensureLoopbackCert, loopbackCaPath } from "../proxy/loopback-cert.js";
+import {
+  claudeLocalSettingsPath,
+  claudeProjectSettingsPath,
+  claudeSettingsFiles,
+  claudeSettingsReadOrder,
+} from "./claude-settings-target.js";
 import type { InitAction, InitOptions } from "./init.js";
 import { InitError } from "./init-error.js";
 import {
@@ -36,14 +47,13 @@ import {
   writeJsonObject,
 } from "./json-file.js";
 import {
-  claudeLocalSettingsPath,
   ENV_BASE_URL,
   ENV_EXTRA_CA,
   ENV_FOUNDRY_BASE_URL,
   ENV_TOOL_SEARCH,
   ENV_USE_FOUNDRY,
-  removeGolemEnv,
-  removeLocalCaTrust,
+  samePath,
+  sweepGolemEnvFrom,
   writeLocalCaTrust,
 } from "./proxy-wiring.js";
 
@@ -113,8 +123,13 @@ export async function configureClaudeSettings(
   const { projectDir } = options;
   const actions: InitAction[] = [];
 
-  // 1. .claude/settings.json — env block (mode-aware).
-  const settingsPath = path.join(projectDir, ".claude", "settings.json");
+  // 1. The `.claude` settings file `claude.settings_scope` names (local by
+  // default) — env block (mode-aware). The other file is swept at the end of the
+  // step so a scope flip MOVES the wiring instead of shadowing it.
+  const { target: settingsPath, other: otherSettingsPath } = await claudeSettingsFiles(
+    projectDir,
+    options.claudeSettingsScope,
+  );
   const settingsExisting = await readJsonObject(settingsPath);
   const settings = settingsExisting ?? {};
   const settingsExisted = settingsExisting !== null;
@@ -157,15 +172,21 @@ export async function configureClaudeSettings(
     });
     if (changed && !dryRun) await writeJsonObject(settingsPath, settings);
   } else {
-    const currentBaseUrl = env[ENV_BASE_URL];
-    if (typeof currentBaseUrl === "string" && currentBaseUrl !== baseUrl) {
+    // Both files, not just the target: Claude Code reads the pair (local shadows
+    // committed), so another gateway's base URL in EITHER of them owns this
+    // project's traffic. Writing "past" it into the higher-precedence file would
+    // be the silent overwrite the ownership rule exists to prevent.
+    const foreign = await foreignBaseUrlIn(projectDir, baseUrl);
+    if (foreign !== undefined) {
       throw new InitError(
-        `${rel(projectDir, settingsPath)} already sets ${ENV_BASE_URL}=${currentBaseUrl}. ` +
+        `${rel(projectDir, foreign.file)} already sets ${ENV_BASE_URL}=${foreign.value}. ` +
           "Another proxy or gateway owns this project's Claude Code traffic — remove that " +
           "setting (or `headroom unwrap`) before running golem init.",
       );
     }
-    const envChanged = currentBaseUrl !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
+    // Against the TARGET file: our own base URL sitting in the other scope is a
+    // scope flip, not "already configured", and step 1d moves it here.
+    const envChanged = env[ENV_BASE_URL] !== baseUrl || env[ENV_TOOL_SEARCH] !== "true";
     env[ENV_BASE_URL] = baseUrl;
     env[ENV_TOOL_SEARCH] = "true"; // notes §12: re-enable tool search behind a gateway
     pushEnvAction(actions, envChanged, settingsExisted, rel(projectDir, settingsPath), {
@@ -197,16 +218,24 @@ export async function configureClaudeSettings(
       ? loopbackCaPath(projectDir)
       : (await ensureLoopbackCert(projectDir)).caPath;
     const trust = await writeLocalCaTrust(projectDir, caPath, { dryRun });
+    const targetIsLocal = samePath(settingsPath, localPath);
+
+    // When the local file IS the target, `writeLocalCaTrust` just wrote the CA
+    // into the same file `settings` describes — but through its own read, so the
+    // in-memory copy does not know. Step 1c writes `settings` again; without this
+    // line that write would drop the key that was just added.
+    if (targetIsLocal && trust.foreign === undefined) env[ENV_EXTRA_CA] = caPath;
 
     if (trust.healedCommitted) {
-      // The heal was performed against writeLocalCaTrust's own read of the file.
-      // `settings` is still live in this function and is written again below
-      // (step 1c), so the key has to go from the in-memory copy too — otherwise
-      // that write puts the machine-absolute path straight back.
-      delete env[ENV_EXTRA_CA];
+      // The heal was performed against writeLocalCaTrust's own read of the
+      // COMMITTED file. When that file is also our target, `settings` is still
+      // live here and is written again below (step 1c), so the key has to go from
+      // the in-memory copy too — otherwise that write puts the machine-absolute
+      // path straight back.
+      if (!targetIsLocal) delete env[ENV_EXTRA_CA];
       actions.push({
         kind: "modify",
-        path: rel(projectDir, settingsPath),
+        path: rel(projectDir, claudeProjectSettingsPath(projectDir)),
         detail: `${ENV_EXTRA_CA} moved to ${rel(projectDir, localPath)} — a machine-absolute path does not belong in a committed file`,
       });
     }
@@ -230,7 +259,7 @@ export async function configureClaudeSettings(
     }
   }
 
-  // 1c. .claude/settings.json — pre-approve Golem's own MCP tools so they don't
+  // 1c. The target file — pre-approve Golem's own MCP tools so they don't
   // prompt on first use. All of them, wiki_upsert included (Decision 44 / USER
   // 2026-07-30): wiki writes are un-gated because git makes them reviewable.
   {
@@ -280,7 +309,80 @@ export async function configureClaudeSettings(
     if (permsChanged && !dryRun) await writeJsonObject(settingsPath, settings);
   }
 
+  // 1d. Sweep the OTHER `.claude` settings file. Flipping `claude.settings_scope`
+  // and re-running init has to MOVE the wiring, not duplicate it: a leftover copy
+  // in the shadowed file is dead weight that still shows up in `git diff`, and a
+  // leftover copy in the SHADOWING one silently wins over the file the user just
+  // chose. Ownership-guarded throughout (our base URL, our rule), so a file we
+  // never wrote comes back untouched. The CA trust is excluded — it lives in the
+  // local scope whatever the scope key says (R9.22).
+  {
+    const envMoved = await sweepGolemEnvFrom(otherSettingsPath, baseUrl, undefined, { dryRun });
+    const permsMoved = await removeMcpPermissions(otherSettingsPath, { dryRun });
+    if (envMoved || permsMoved) {
+      actions.push({
+        kind: "modify",
+        path: rel(projectDir, otherSettingsPath),
+        detail: `moved Golem's Claude Code wiring to ${rel(projectDir, settingsPath)} (claude.settings_scope)`,
+      });
+    }
+  }
+
   return actions;
+}
+
+/**
+ * The first `ANTHROPIC_BASE_URL` in Claude Code's precedence order that is NOT
+ * ours, with the file that sets it; undefined when nothing foreign is wired.
+ * Loud reader — this runs on the write path, where a malformed settings file must
+ * stop init rather than read as "nothing there".
+ */
+async function foreignBaseUrlIn(
+  projectDir: string,
+  baseUrl: string,
+): Promise<{ readonly file: string; readonly value: string } | undefined> {
+  for (const file of claudeSettingsReadOrder(projectDir)) {
+    const env = (await readJsonObject(file))?.env;
+    if (typeof env !== "object" || env === null || Array.isArray(env)) continue;
+    const value = (env as JsonObject)[ENV_BASE_URL];
+    if (typeof value === "string" && value !== baseUrl) return { file, value };
+  }
+  return undefined;
+}
+
+/**
+ * Remove exactly the MCP permission rules init writes from ONE settings file
+ * (plus the legacy `ask` entry older inits left). Returns whether it changed.
+ * Emptied containers are pruned — an orphan `permissions: {}` is footprint.
+ */
+async function removeMcpPermissions(
+  file: string,
+  opts: { readonly dryRun?: boolean } = {},
+): Promise<boolean> {
+  const settings = await readJsonObject(file);
+  const perms = settings?.permissions;
+  if (settings === null || typeof perms !== "object" || perms === null || Array.isArray(perms)) {
+    return false;
+  }
+  const permsObj = perms as JsonObject;
+  let changed = false;
+  for (const [key, rule] of [
+    ["allow", MCP_ALLOW_RULE],
+    ["ask", LEGACY_MCP_ASK_RULE],
+  ] as const) {
+    const arr = permsObj[key];
+    if (!Array.isArray(arr)) continue;
+    const idx = arr.indexOf(rule);
+    if (idx !== -1) {
+      arr.splice(idx, 1);
+      changed = true;
+    }
+    if (arr.length === 0) delete permsObj[key];
+  }
+  if (!changed) return false;
+  if (Object.keys(permsObj).length === 0) delete settings.permissions;
+  if (opts.dryRun !== true) await writeJsonObject(file, settings);
+  return true;
 }
 
 /**
@@ -295,66 +397,33 @@ export async function removeClaudeSettings(
 ): Promise<InitAction[]> {
   const actions: InitAction[] = [];
 
-  // 1. Remove only the env keys init set, and only if they hold init's values.
-  const settingsPath = path.join(projectDir, ".claude", "settings.json");
-  const settings = await readJsonObject(settingsPath);
-  const env = settings?.env;
-  if (settings && typeof env === "object" && env !== null && !Array.isArray(env)) {
-    const envObj = env as JsonObject;
-    // Ownership-guarded: removes ANTHROPIC_BASE_URL / the Foundry pair /
-    // ENABLE_TOOL_SEARCH only where they hold OUR values (proxy-wiring.ts).
-    const changed = removeGolemEnv(envObj, baseUrl, loopbackCaPath(projectDir));
-    if (Object.keys(envObj).length === 0) delete settings.env;
-    if (changed) {
+  // BOTH files, always — `claude.settings_scope` says where init WRITES, and a
+  // project that has been through a flip (or through an older Golem) can hold our
+  // keys in either. Removal is ownership-guarded per key, so visiting a file we
+  // never wrote is a no-op, and uninit must not be the command that leaves half
+  // the wiring behind.
+  for (const settingsPath of claudeSettingsReadOrder(projectDir)) {
+    // 1. Remove only the env keys init set, and only if they hold init's values.
+    // Ownership-guarded: ANTHROPIC_BASE_URL / the Foundry pair /
+    // ENABLE_TOOL_SEARCH / our own CA path only (proxy-wiring.ts). R9.22: the CA
+    // trust lives in the local file, which this loop reaches too.
+    if (await sweepGolemEnvFrom(settingsPath, baseUrl, loopbackCaPath(projectDir), { dryRun })) {
       actions.push({
         kind: "modify",
         path: rel(projectDir, settingsPath),
         detail: "removed Golem env entries",
       });
-      if (!dryRun) await writeJsonObject(settingsPath, settings);
     }
-  }
 
-  // 1a-bis. R9.22 — the loopback CA trust lives in the gitignored local scope, so
-  // uninit has to visit that file too. Same ownership rule: a NODE_EXTRA_CA_CERTS
-  // that is not ours (and not a stale Golem path) is the user's and stays.
-  if (await removeLocalCaTrust(projectDir, { dryRun })) {
-    actions.push({
-      kind: "modify",
-      path: rel(projectDir, claudeLocalSettingsPath(projectDir)),
-      detail: `removed ${ENV_EXTRA_CA}`,
-    });
-  }
-
-  // 1b. Remove only the MCP permission rules init added (exact rules only). The
-  // `ask` rule is legacy — init no longer writes it — but a project initialized
-  // before 2026-07-30 still has one, so uninit must still clean it up.
-  const perms = settings?.permissions;
-  if (settings && typeof perms === "object" && perms !== null && !Array.isArray(perms)) {
-    const permsObj = perms as JsonObject;
-    let changed = false;
-    for (const [key, rule] of [
-      ["allow", MCP_ALLOW_RULE],
-      ["ask", LEGACY_MCP_ASK_RULE],
-    ] as const) {
-      const arr = permsObj[key];
-      if (Array.isArray(arr)) {
-        const idx = arr.indexOf(rule);
-        if (idx !== -1) {
-          arr.splice(idx, 1);
-          changed = true;
-        }
-        if (arr.length === 0) delete permsObj[key];
-      }
-    }
-    if (Object.keys(permsObj).length === 0) delete settings.permissions;
-    if (changed) {
+    // 2. Remove only the MCP permission rules init added (exact rules only). The
+    // `ask` rule is legacy — init no longer writes it — but a project initialized
+    // before 2026-07-30 still has one, so uninit must still clean it up.
+    if (await removeMcpPermissions(settingsPath, { dryRun })) {
       actions.push({
         kind: "modify",
         path: rel(projectDir, settingsPath),
         detail: "removed Golem MCP permission rules",
       });
-      if (!dryRun) await writeJsonObject(settingsPath, settings);
     }
   }
 
