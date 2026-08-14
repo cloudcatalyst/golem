@@ -95,6 +95,8 @@ export interface GolemState {
   readonly blocked?: boolean;
   /** Whether the Golem proxy is actually running (pid-file check), if known. */
   readonly proxyRunning?: boolean;
+  /** Decision 56: the bypass shim is serving (pipeline off, redaction still on). */
+  readonly proxyBypass?: boolean;
   /**
    * R8.32 — whether Claude Code is actually POINTED at the proxy
    * (`.claude/settings.json` `env.ANTHROPIC_BASE_URL`). Independent of
@@ -502,6 +504,7 @@ export async function collectGolemState(
     state = {
       ...state,
       proxyRunning: running,
+      ...(pid?.shim === true ? { proxyBypass: true } : {}),
     };
     // R8.32 — the pid file only proves a daemon exists. Ask the other half of
     // the question: is Claude Code pointed at it? One small local JSON read, on

@@ -41,9 +41,13 @@ export function buildProxySidecars(
   // `projectDir` is lifecycle bookkeeping, not behaviour: it stamps the worker's
   // command line with the project it belongs to, so a later start-up sweep can
   // reap THIS project's stray workers and no other project's (R10.3).
-  const semantic = settings.compression.headroom_sidecar
-    ? new HeadroomSidecar({ config: settings.compression.headroom_config, projectDir: dir })
-    : undefined;
+  // Decision 56: the bypass shim runs no compression at all, so the sidecar is
+  // never constructed — spawning a Python worker for a pipeline that is off is
+  // pure cost.
+  const semantic =
+    settings.compression.headroom_sidecar && build.shim !== true
+      ? new HeadroomSidecar({ config: settings.compression.headroom_config, projectDir: dir })
+      : undefined;
   // Same `.golem/ccr` directory `NativeLosslessCompression.forProjectDir(dir)`
   // writes to, shared by both the R2.4 Headroom backfill and R2.2 context
   // substitution below, so `expand` recovers either kind of marker uniformly.
@@ -66,7 +70,11 @@ export function buildProxySidecars(
   // `headroom_sidecar` above — this is an opt-in gate, not something the live
   // slider ever toggles (Decision 31: the slider stays a pure compression dial).
   const localAnswer =
-    settings.knowledge.local_answer_enabled && build.suppressLocalAnswer !== true
+    settings.knowledge.local_answer_enabled &&
+    build.suppressLocalAnswer !== true &&
+    // Decision 56: the shim answers nothing locally — "pipeline off" has to mean
+    // off, or a stopped proxy would still be intercepting questions.
+    build.shim !== true
       ? {
           service: new KnowledgeLocalAnswerService(
             openKnowledgeBase({

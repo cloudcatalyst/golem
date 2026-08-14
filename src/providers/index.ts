@@ -46,10 +46,14 @@ export { createOpenAIToAnthropicSSE, OpenAIChatSSETranslator } from "./openai-st
 export {
   type AnthropicMessageResponse,
   anthropicToOpenAIChat,
+  countAnthropicInputTokens,
+  countTokensResponse,
+  EmptyCompletionError,
   mapStopReason,
   type OpenAIChatMessage,
   type OpenAIChatRequest,
   openAIChatToAnthropic,
+  SYNTHESIZED_THINKING_LABEL,
 } from "./openai-translate.js";
 export { withDefaultTarget } from "./target-settings.js";
 export {

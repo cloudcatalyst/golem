@@ -54,8 +54,30 @@ export interface ModelCatalogEntry {
   readonly cacheWriteUsdPerMTok?: number;
   readonly contextTokens?: number;
   readonly maxOutputTokens?: number;
+  /**
+   * Input modalities the model accepts, verbatim from models.dev's
+   * `modalities.input` (`["text"]`, `["text","image"]`, …). R10.14 reads this to
+   * decide whether images may be forwarded to an OpenAI-schema upstream.
+   *
+   * Absent means UNKNOWN, not "text only" — the two must not be conflated. A
+   * model missing from the catalog keeps the pass-through behaviour, so an
+   * upstream that cannot see says so itself rather than being silently blinded.
+   */
+  readonly inputModalities?: readonly string[];
   /** Caveat a reader needs (introductory pricing, tier restrictions). Shown verbatim. */
   readonly note?: string;
+}
+
+/**
+ * Does this entry accept image input? `undefined` when the catalog does not say.
+ *
+ * Three-valued on purpose: a caller must be able to tell "no vision" from "no
+ * idea", because the safe default differs between them (R10.14).
+ */
+export function acceptsImageInput(entry: ModelCatalogEntry): boolean | undefined {
+  const modalities = entry.inputModalities;
+  if (modalities === undefined || modalities.length === 0) return undefined;
+  return modalities.includes("image");
 }
 
 export interface ModelCatalog {
@@ -75,6 +97,9 @@ export interface ModelCatalog {
  * Update `asOf` and the figures together when prices move. A stale entry is
  * detectable ({@link catalogAgeDays}); a silently-wrong one is not.
  */
+/** Every Claude model in this table accepts text and images. Stated once. */
+const CLAUDE_INPUT_MODALITIES: readonly string[] = ["text", "image"];
+
 export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
   source: "https://platform.claude.com/docs/en/pricing",
   asOf: "2026-07-31",
@@ -82,6 +107,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-opus-5",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 5,
       outputUsdPerMTok: 25,
       cacheReadUsdPerMTok: 0.5,
@@ -92,6 +118,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-opus-4-8",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 5,
       outputUsdPerMTok: 25,
       cacheReadUsdPerMTok: 0.5,
@@ -102,6 +129,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-opus-4-7",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 5,
       outputUsdPerMTok: 25,
       cacheReadUsdPerMTok: 0.5,
@@ -112,6 +140,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-sonnet-5",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       // The price in force today, not the list price — this feeds a cost report.
       inputUsdPerMTok: 2,
       outputUsdPerMTok: 10,
@@ -124,6 +153,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-sonnet-4-6",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 3,
       outputUsdPerMTok: 15,
       cacheReadUsdPerMTok: 0.3,
@@ -134,6 +164,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-haiku-4-5",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 1,
       outputUsdPerMTok: 5,
       cacheReadUsdPerMTok: 0.1,
@@ -144,6 +175,7 @@ export const BUILTIN_MODEL_CATALOG: ModelCatalog = {
     {
       id: "claude-fable-5",
       provider: "anthropic",
+      inputModalities: CLAUDE_INPUT_MODALITIES,
       inputUsdPerMTok: 10,
       outputUsdPerMTok: 50,
       cacheReadUsdPerMTok: 1,
@@ -201,6 +233,22 @@ function selectOne(
     if (preferred.length === 1 && only !== undefined) return { entry: only, confirmed: true };
   }
   return "ambiguous";
+}
+
+/**
+ * Can this model accept image input? `undefined` when the catalog cannot say —
+ * the id is unknown, ambiguous, or carries no `modalities` (R10.14).
+ *
+ * `preferProvider` disambiguates a shared id: OpenRouter's `deepseek/…` and a
+ * direct vendor's `…` can both be present with different capabilities.
+ */
+export function modelAcceptsImages(
+  catalog: ModelCatalog,
+  modelId: string,
+  opts?: { readonly preferProvider?: string },
+): boolean | undefined {
+  const match = lookupModel(catalog, modelId, opts);
+  return match.entry === null ? undefined : acceptsImageInput(match.entry);
 }
 
 /**
@@ -320,6 +368,12 @@ const modelsDevModelSchema = z
       })
       .partial()
       .optional(),
+    // R10.14: `{"input":["text","image"],"output":["text"]}`. The capability
+    // signal for whether images may be forwarded to this model at all.
+    modalities: z
+      .object({ input: z.array(z.string()).optional(), output: z.array(z.string()).optional() })
+      .partial()
+      .optional(),
   })
   .passthrough();
 
@@ -361,6 +415,11 @@ export function normaliseModelsDevPayload(
       const cacheWrite = usableNumber(model.cost?.cache_write);
       const context = usableNumber(model.limit?.context);
       const maxOutput = usableNumber(model.limit?.output);
+      // Keep the list verbatim; an empty array carries no more than absence does.
+      const inputModalities =
+        model.modalities?.input !== undefined && model.modalities.input.length > 0
+          ? model.modalities.input
+          : undefined;
       // Spread-free optional keys: exactOptionalPropertyTypes wants them ABSENT.
       entries.push({
         id,
@@ -371,6 +430,7 @@ export function normaliseModelsDevPayload(
         ...(cacheWrite !== undefined ? { cacheWriteUsdPerMTok: cacheWrite } : {}),
         ...(context !== undefined ? { contextTokens: context } : {}),
         ...(maxOutput !== undefined ? { maxOutputTokens: maxOutput } : {}),
+        ...(inputModalities !== undefined ? { inputModalities } : {}),
       });
     }
   }
@@ -410,6 +470,7 @@ const cachedCatalogSchema = z.object({
       cacheWriteUsdPerMTok: z.number().optional(),
       contextTokens: z.number().optional(),
       maxOutputTokens: z.number().optional(),
+      inputModalities: z.array(z.string()).optional(),
       note: z.string().optional(),
     }),
   ),
@@ -456,6 +517,7 @@ export async function readModelCatalog(projectDir: string): Promise<ModelCatalog
         : {}),
       ...(entry.contextTokens !== undefined ? { contextTokens: entry.contextTokens } : {}),
       ...(entry.maxOutputTokens !== undefined ? { maxOutputTokens: entry.maxOutputTokens } : {}),
+      ...(entry.inputModalities !== undefined ? { inputModalities: entry.inputModalities } : {}),
       ...(entry.note !== undefined ? { note: entry.note } : {}),
     }));
     return { source: parsed.data.source, asOf: parsed.data.asOf, entries };

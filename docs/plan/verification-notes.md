@@ -5832,3 +5832,65 @@ code does not implement: rewrite optimistically once, have the endpoint record t
 WebFetch arrived, and fall back to the deny floor for the rest of the session when no hit
 was recorded. Filed as R9.19. Not reproducible from a terminal session, which is why it was
 filed rather than guessed at.
+
+## §126 — models.dev exposes `modalities.input`, which is the image-capability signal Golem needed (2026-08-14)
+
+Checked live at `https://models.dev/api.json` while building R10.14.
+
+Every model entry carries a `modalities` block alongside `limit` and `cost`:
+
+```json
+"modalities": { "input": ["text"], "output": ["text"] }
+```
+
+`deepseek/deepseek-v4-flash` reports `input: ["text"]` — no vision. A vision
+model reports `input: ["text","image"]`. There is also a sibling `attachment:
+false` boolean, which appears to track the same fact; `modalities.input` was
+chosen because it is explicit about WHICH modalities rather than a single flag,
+and it is the field OpenRouter's own catalogue mirrors
+(`architecture.input_modalities`).
+
+This matters because R8.8 already fetches and caches this exact document, so the
+capability is **Golem's own cached data, not a runtime dependency** — the hard
+rule the models command was built around.
+
+Coverage is good at the id level: the refreshed catalog holds
+`openrouter | deepseek/deepseek-v4-flash-0731 | ["text"]` as an exact entry, so
+`lookupModel` with `preferProvider: "openrouter"` resolves it without falling
+back to the dated-snapshot rule (`-0731` is not `-YYYYMMDD`, so that fallback
+would NOT have matched — the exact entry is what makes this work).
+
+Caveat worth carrying: 6,320 entries came back, many ids repeated across dozens
+of providers with the same modalities. Disambiguation by provider is therefore
+load-bearing, not cosmetic.
+
+## §127 — Decision 56's bypass shim was removed by R9.23, not R10.1 (2026-08-14)
+
+R10.12's brief attributed the loss of `src/cli/proxy-state.ts` and the bypass
+shim to R10.1, the first-pancake rewrite, and asked for that to be confirmed
+from history rather than assumed. Confirmed, and it was wrong:
+
+```
+git log --diff-filter=D -- src/cli/proxy-state.ts
+1992445  R9.23: rename ext to pkg, fix Caveman detection, add pkg install   (2026-08-11)
+```
+
+R10.1 landed as 13a8f19 on 2026-08-13 — two days LATER. The same R9.23 commit
+rewrote `src/cli/commands/proxy.ts` by 365 lines, deleted the `stop` command
+entirely (not just the shim), and left the comment that records the reasoning:
+
+```ts
+// R9.23: if the URL is in settings, the daemon should be alive.
+// If it's not, restart it — no separate state file needed.
+```
+
+Worth carrying: the regression was NOT caused by the rewrite everyone would
+suspect. It came from a rename-and-simplify batch, where deleting a state file
+looks like tidying rather than reversing a decision. When attributing a
+regression, run `--diff-filter=D` before naming a culprit — the plausible
+candidate here was innocent, and the innocent one is still in the tree.
+
+Second finding from the same restore: the recovered guidance strings referenced
+`golem proxy start --detach`, a flag R9.23 had also removed. It is now
+`golem proxy restart`. A recovered message can be stale in ways a compiler
+cannot see — the strings were valid TypeScript naming a command that errors.

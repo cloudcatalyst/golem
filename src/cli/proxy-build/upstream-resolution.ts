@@ -35,7 +35,7 @@ import {
   withDefaultTarget,
 } from "../../providers/index.js";
 import type { UpstreamTranslator } from "../../proxy/index.js";
-import { buildUpstreamTransport } from "../route-resolver.js";
+import { buildUpstreamTransport, type VisionLookup } from "../route-resolver.js";
 
 export interface ResolvedProxyUpstream {
   readonly upstream: ResolvedUpstream;
@@ -122,6 +122,8 @@ export interface UpstreamWiring {
 export function buildUpstreamWiring(
   settings: GolemSettings,
   upstream: ResolvedUpstream,
+  /** R10.14: image-input capability for the resolved model; absent → pass images through. */
+  visionOf?: VisionLookup,
 ): UpstreamWiring {
   // R6.1 case (a): auth-header mapping for a non-Anthropic Anthropic-protocol
   // upstream. The credential is a secret the CLI resolved from the OS credential
@@ -161,6 +163,7 @@ export function buildUpstreamWiring(
     apiKey: upstreamApiKey,
     reasoningEffort: settings.proxy.upstream_reasoning_effort,
     mapReasoning: settings.proxy.map_reasoning_to_thinking,
+    vision: visionOf?.(upstreamProvider, upstreamModel),
   });
   if (isTranslatingProvider(upstreamProvider) && upstreamModel === undefined) {
     process.stderr.write(

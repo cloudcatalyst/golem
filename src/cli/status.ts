@@ -83,6 +83,13 @@ export interface StatusReport {
     /** The base URL actually wired, whoever owns it. Null when there is none. */
     readonly wiring_base_url?: string | null;
     /**
+     * Decision 56: what is listening is the redaction-only bypass shim, not the
+     * pipeline. `reachable` stays true — something IS serving — so a surface
+     * reading only `reachable` degrades to the old display rather than an
+     * incorrect one.
+     */
+    readonly bypass?: boolean;
+    /**
      * R8.32 — the question `reachable` was mistaken for: is Golem actually
      * carrying this project's traffic? `reachable && wiring === "golem"`.
      * A reachable proxy with no wiring pointing at it serves nothing.
@@ -183,6 +190,12 @@ export interface StatusReport {
     readonly degraded: boolean;
     readonly reason?: string;
   };
+  /**
+   * R10.19: `compression.headroom_config` keys that cannot reach Headroom.
+   * Reported here rather than only from the adapter, which runs too late (and,
+   * on a caching upstream, never) to tell anyone.
+   */
+  readonly unreachable_headroom_config?: readonly string[];
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
   /**

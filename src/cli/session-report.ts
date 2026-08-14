@@ -175,6 +175,10 @@ export async function collectSessionStateReport(
     proxy: {
       running: golem?.proxyRunning ?? null,
       upstream: golem?.upstreamLabel ?? upstreamLabel("https://api.anthropic.com"),
+      // R10.12: declared and zod-validated since Decision 56, but never assigned
+      // — so every consumer read `undefined` and the bypass state was
+      // unreachable from this report. Assigning it is the whole fix here.
+      ...(golem?.proxyBypass === true ? { bypass: true } : {}),
     },
     slider: { level, name, redaction_off: level === 0 },
     local_model: { reachable: golem?.localModelReachable ?? null },

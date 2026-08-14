@@ -2,7 +2,8 @@
  * Proxy daemon lifecycle — reliable start/stop/restart/status.
  *
  * The pain we're solving: a proxy started as a child of a transient shell dies
- * with that shell. So `golem proxy start --detach` spawns a DETACHED process
+ * with that shell. So the detached start path (`golem proxy restart`, and the SessionStart
+ * hook) spawns a DETACHED process
  * (survives its parent), and a PID file (`<project>/.golem/proxy.pid`) plus a
  * port check make start idempotent and stop/restart deterministic.
  *
@@ -12,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { connect } from "node:net";
@@ -57,6 +59,21 @@ export interface ProxyPidInfo {
    * {@link ProxyStatus.stale}.
    */
   readonly version?: string;
+  /**
+   * Decision 56: this listener is the redaction-only bypass SHIM, not the full
+   * pipeline. `golem proxy stop` replaces the daemon with it so the port stays
+   * bound — Claude Code's `ANTHROPIC_BASE_URL` cannot be un-set without a window
+   * reload (verification-notes §112b), so a released port is a dead socket the
+   * user cannot escape from.
+   */
+  readonly shim?: boolean;
+  /**
+   * R10.13 — {@link buildFingerprint} of the daemon's entry script at the moment
+   * it started listening. Lets a rebuild that leaves `VERSION` untouched still be
+   * reported as stale. Optional: absent for a daemon started before this existed,
+   * which the version check already treats as older.
+   */
+  readonly build?: string;
 }
 
 export function proxyPidPath(projectDir: string): string {
@@ -94,6 +111,8 @@ export async function readProxyPid(projectDir: string): Promise<ProxyPidInfo | n
       // rather than defaulted, so "unknown build" stays distinguishable from
       // "some particular build".
       ...(typeof o.version === "string" ? { version: o.version } : {}),
+      ...(o.shim === true ? { shim: true } : {}),
+      ...(typeof o.build === "string" ? { build: o.build } : {}),
     };
   } catch {
     return null;
@@ -167,6 +186,57 @@ export async function waitForPortFree(port: number, timeoutMs = 5000): Promise<b
   return false;
 }
 
+/**
+ * R10.13 — a cheap stamp of the CODE the daemon is running, so a rebuild that
+ * does not change `VERSION` is still detectable.
+ *
+ * `mtimeMs` + `size` of the daemon's own entry script, hashed. Deliberately not
+ * a hash of all of `dist/`: `proxyStatus` is on `golem status`, the status line
+ * and the VS Code poll (R10.10 measured that path carefully), and hashing every
+ * file there would trade this bug for a latency regression.
+ *
+ * **What this does not catch:** a rebuild that changes only a leaf module and
+ * leaves the entry script byte-identical with the same mtime. `tsc` rewrites
+ * every emitted file on a normal build, so the common `npm run build` loop is
+ * covered; a surgical single-file copy into `dist/` is not. Undefined when the
+ * script cannot be stat'd, which degrades to the version-only check rather than
+ * reporting a false positive.
+ */
+export function buildFingerprint(scriptPath: string = process.argv[1] ?? ""): string | undefined {
+  if (scriptPath === "") return undefined;
+  try {
+    const st = statSync(scriptPath);
+    return createHash("sha256")
+      .update(`${Math.trunc(st.mtimeMs)}:${st.size}`, "utf8")
+      .digest("hex")
+      .slice(0, 16);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Is the daemon described by `info` running something other than this build?
+ *
+ * Version first: a daemon from a different release is stale regardless of any
+ * fingerprint, and a daemon with NO stamp predates the stamp, so it is older by
+ * definition. The fingerprint is what closes the local dev loop, where every
+ * `npm run build` leaves `VERSION` untouched — the blind spot that let a daemon
+ * serve two-hour-old code while `golem status` called it current (R10.13).
+ *
+ * When either side has no fingerprint, fall back to the version comparison
+ * rather than guessing: an unknown build is not evidence of a stale one.
+ */
+export function isStaleDaemon(
+  info: ProxyPidInfo,
+  currentVersion: string,
+  currentFingerprint?: string,
+): boolean {
+  if (info.version !== currentVersion) return true;
+  if (currentFingerprint === undefined || info.build === undefined) return false;
+  return info.build !== currentFingerprint;
+}
+
 export interface ProxyStatus {
   readonly running: boolean;
   readonly pid?: number;
@@ -190,6 +260,13 @@ export interface ProxyStatus {
    * has had no effect on it.
    */
   readonly stale?: boolean;
+  /**
+   * Decision 56: what is listening is the bypass shim (pipeline off, redaction
+   * still on), not the full pipeline. Distinct from {@link running}, which stays
+   * true — that is what lets a surface reading only `running` degrade to the old
+   * display rather than an incorrect one.
+   */
+  readonly shim?: boolean;
 }
 
 /**
@@ -258,6 +335,7 @@ export async function proxyStatus(
   port: number,
   aliveFn: (pid: number) => boolean = isProcessAlive,
   currentVersion: string = VERSION,
+  currentFingerprint: string | undefined = buildFingerprint(),
 ): Promise<ProxyStatus> {
   const info = await readProxyPid(projectDir);
   if (info && aliveFn(info.pid)) {
@@ -267,8 +345,8 @@ export async function proxyStatus(
       port: info.port,
       source: "pidfile",
       ...(info.version !== undefined ? { version: info.version } : {}),
-      // No stamp => started before the stamp existed => older than this build.
-      stale: info.version !== currentVersion,
+      ...(info.shim === true ? { shim: true } : {}),
+      stale: isStaleDaemon(info, currentVersion, currentFingerprint),
     };
   }
   // A port hit tells us something is listening, not what it is. Unknowable
@@ -358,9 +436,13 @@ export async function startDetached(
   port: number,
   scriptPath: string,
   env: Readonly<Record<string, string>> = {},
-  opts: { readonly waitMs?: number } = {},
+  opts: { readonly shim?: boolean; readonly waitMs?: number } = {},
 ): Promise<number | null> {
   const args = ["proxy", "start", "--dir", projectDir, "--port", String(port)];
+  // Decision 56: the bypass shim is the same daemon with the pipeline pinned to
+  // level 1, so it is a flag rather than a second entry point — one lifecycle,
+  // one pid file, one port.
+  if (opts.shim === true) args.push("--shim");
   // R9.8: keep the daemon's diagnostics instead of discarding them. Falls back
   // to "ignore" if the log cannot be opened — a proxy that will not start
   // because of a log file would be a worse bug than the one being fixed.

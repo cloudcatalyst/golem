@@ -31,12 +31,13 @@ import type { InferenceService } from "../../interfaces/inference.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
-import { openTelemetryStore } from "../../telemetry/index.js";
+import { loadModelCatalog, modelAcceptsImages, openTelemetryStore } from "../../telemetry/index.js";
 import { planQueryEmbedder, resolvePersistedEmbedder } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
 import {
+  buildFingerprint,
   CREDENTIALS_INJECTED_ENV,
   portInUse,
   proxyStatus,
@@ -47,6 +48,7 @@ import {
   writeProxyPid,
 } from "../proxy-daemon.js";
 import { buildProxyFromSettings } from "../proxy-runtime.js";
+import { writeProxyDesired } from "../proxy-state.js";
 import {
   proxyBaseUrl,
   readWiringState,
@@ -54,6 +56,7 @@ import {
   wireProxyEnv,
   wiringGap,
 } from "../proxy-wiring.js";
+import type { VisionLookup } from "../route-resolver.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -140,7 +143,38 @@ export async function ensureProxyRunning(
   return { pid, port };
 }
 
-async function runProxyForeground(dir: string, portOpt?: string): Promise<void> {
+/**
+ * Decision 56: stop the pipeline but keep the port bound, by replacing the
+ * running daemon with the redaction-only shim. Claude Code's
+ * `ANTHROPIC_BASE_URL` cannot be un-set without a window reload
+ * (verification-notes §112b), so leaving the socket dead is the defect; this is
+ * the fix. Returns the shim's pid.
+ */
+async function startShimDetached(
+  dir: string,
+  portOpt?: string,
+): Promise<{ pid: number; port: number }> {
+  const { port } = await resolvePort(dir, portOpt);
+  await stopProxy(dir);
+  await waitForPortFree(port);
+  const pid = await startDetached(
+    dir,
+    port,
+    process.argv[1] ?? "",
+    await credentialEnvForProxy(dir),
+    { shim: true },
+  );
+  if (pid === null) {
+    // Loud, not silent: falling back to a dead port is precisely the state this
+    // command exists to prevent, so the user must be told the wiring is stale.
+    throw new InitError(
+      `the bypass shim did not come up on port ${port}. Claude Code is still wired to that port and will fail to connect — run \`golem proxy restart\` to restore the pipeline, or \`golem proxy unwire\` to send Claude Code direct.`,
+    );
+  }
+  return { pid, port };
+}
+
+async function runProxyForeground(dir: string, portOpt?: string, shim = false): Promise<void> {
   // R9.13: first start under a new version — rewrite retired setting names.
   for (const line of (await migrateOnVersionChange({ projectDir: dir, version: VERSION })).lines) {
     process.stderr.write(`golem config: ${line}\n`);
@@ -231,8 +265,18 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
       process.stderr.write(`golem proxy: local-answer disabled — ${reason}\n`);
     }
   }
+  // R10.14: resolve image-input capability ONCE, here, where awaiting is cheap —
+  // the proxy builder stays synchronous and nothing touches the catalog per
+  // request. An unknown model yields undefined, which forwards images as before.
+  const modelCatalog = await loadModelCatalog(dir);
+  const visionOf: VisionLookup = (provider, model) =>
+    model === undefined
+      ? undefined
+      : modelAcceptsImages(modelCatalog, model, { preferProvider: provider });
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     sliderStore,
+    visionOf,
+    ...(shim ? { shim: true } : {}),
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
   });
@@ -243,6 +287,7 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
   }
   await sweep;
   const addr = await proxy.listen(port);
+  const fingerprint = buildFingerprint();
   await writeProxyPid(dir, {
     pid: process.pid,
     port: addr.port,
@@ -250,11 +295,18 @@ async function runProxyForeground(dir: string, portOpt?: string): Promise<void> 
     // Stamp the build we are actually running, so every later "is the proxy
     // running" check can also answer "is it THIS build" (see ProxyStatus.stale).
     version: VERSION,
+    // R10.13: and the CODE stamp too — a local `npm run build` leaves VERSION
+    // untouched, so version alone reported a two-hour-old daemon as current.
+    ...(fingerprint !== undefined ? { build: fingerprint } : {}),
+    // Decision 56: which of the two listeners this is.
+    ...(shim ? { shim: true } : {}),
   });
   const via = upstream.accountId === null ? "" : ` [account ${upstream.accountId}]`;
   const model = upstream.model === undefined ? "" : ` model ${upstream.model}`;
   process.stdout.write(
-    `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
+    shim
+      ? `golem proxy: BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)\n`
+      : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
   );
 
   // Loopback serve for green WebFetch
@@ -365,6 +417,15 @@ export default function register(program: Command): void {
           }
           return;
         }
+        // Decision 56: a served port is not the same as a running pipeline. Say
+        // which one this is — calling the shim "running" is the dishonesty
+        // R8.31 closed and R10.12 restored.
+        if (st.shim === true) {
+          process.stdout.write(
+            `golem proxy: BYPASS shim (pid ${st.pid ?? "?"}) on port ${st.port ?? port} -> ${upstream}\n  pipeline off; redaction still on. \`golem proxy restart\` restores it.\n`,
+          );
+          return;
+        }
         process.stdout.write(
           `golem proxy: running (pid ${st.pid ?? "?"}) on port ${st.port ?? port} -> ${upstream}\n`,
         );
@@ -388,8 +449,56 @@ export default function register(program: Command): void {
     .description("Start the proxy in the foreground (detached daemon entry-point)")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--port <port>", "port number")
-    .action(async (opts: { dir: string; port: string | undefined }) => {
-      await runProxyForeground(opts.dir, opts.port);
+    // Decision 56: how the daemon is re-launched as the redaction-only bypass
+    // shim. Internal — `golem proxy stop` is the surface a user reaches for.
+    .option("--shim", "run as the redaction-only bypass shim (internal)", false)
+    .action(async (opts: { dir: string; port: string | undefined; shim: boolean }) => {
+      // Record the intent this listener represents, so the SessionStart hook
+      // restores the SAME one after a crash. Without it, a project left in
+      // bypass silently comes back with the pipeline on.
+      await writeProxyDesired(opts.dir, opts.shim ? "bypass" : "running", new Date().toISOString());
+      await runProxyForeground(opts.dir, opts.port, opts.shim);
+    });
+
+  proxyCmd
+    .command("stop")
+    .description("Stop the pipeline, keeping the port served by a redaction-only shim")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--port <port>", "listen port (overrides config)")
+    .option(
+      "--hard",
+      "also release the port — Claude Code will fail to connect until it is unwired or restarted",
+      false,
+    )
+    .action(async (opts: { dir: string; port?: string; hard: boolean }) => {
+      try {
+        // --hard is the pre-Decision-56 behaviour, kept for "get off my port"
+        // and made explicit about what it costs.
+        if (opts.hard) {
+          await writeProxyDesired(opts.dir, "stopped", new Date().toISOString());
+          const pid = await stopProxy(opts.dir);
+          process.stdout.write(
+            pid === null
+              ? "golem proxy: not running\n"
+              : `golem proxy stopped (pid ${pid}); port released\n`,
+          );
+          const { port } = await resolvePort(opts.dir, opts.port);
+          const wiring = await readWiringState(opts.dir, proxyBaseUrl(port));
+          if (wiring.owner === "golem") {
+            process.stdout.write(
+              `golem proxy: Claude Code is still wired to ${wiring.baseUrl} and nothing is listening there.\n  \`golem proxy unwire\` sends it direct (needs a window reload), \`golem proxy restart\` brings the pipeline back.\n`,
+            );
+          }
+          return;
+        }
+        await writeProxyDesired(opts.dir, "bypass", new Date().toISOString());
+        const { pid, port } = await startShimDetached(opts.dir, opts.port);
+        process.stdout.write(
+          `golem proxy: pipeline OFF — bypass shim serving port ${port} (pid ${pid}).\n  Redaction still runs; compression, brevity and local-answer are off.\n  \`golem proxy restart\` restores the pipeline; \`golem proxy unwire\` takes Golem out of the path entirely.\n`,
+        );
+      } catch (err) {
+        _fail(err);
+      }
     });
 
   proxyCmd
@@ -419,6 +528,10 @@ export default function register(program: Command): void {
           await credentialEnvForProxy(opts.dir),
         );
         if (pid === null) _fail(new InitError(`proxy did not come up on port ${port}`));
+        // R10.12: a restart establishes the RUNNING intent. Without recording it,
+        // a project stopped into bypass and then restarted would be brought back
+        // as the shim by the next SessionStart.
+        await writeProxyDesired(opts.dir, "running", new Date().toISOString());
         process.stdout.write(
           `golem proxy restarted (pid ${pid}) on http://localhost:${port} -> ${upstream}\n`,
         );
