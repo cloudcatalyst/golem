@@ -327,6 +327,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // so those are different questions and both get reported.
       ...(daemon.version !== undefined ? { running_version: daemon.version } : {}),
       ...(daemon.stale === true ? { stale: true } : {}),
+      // R10.12: the shim serves the port with the pipeline off. Emitted here so
+      // `status --json` and the VS Code panel can say "bypass" instead of
+      // reporting a stopped pipeline as "running".
+      ...(daemon.shim === true ? { bypass: true } : {}),
     },
     upstream: {
       provider: upstream.provider,

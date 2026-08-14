@@ -17,7 +17,7 @@ import type { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
 import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
-import { sliderPolicyForLevel } from "../interfaces/policy.js";
+import { SliderLevel, sliderPolicyForLevel } from "../interfaces/policy.js";
 import { contentHashIndex } from "../knowledge/web-cache.js";
 import type { SliderStore } from "../mcp/slider-store.js";
 import { createGolemPipeline } from "../pipeline/index.js";
@@ -32,6 +32,16 @@ import {
 } from "./proxy-build/telemetry-hooks.js";
 import { buildUpstreamWiring, resolveProxyUpstream } from "./proxy-build/upstream-resolution.js";
 import { createRouteResolver, type VisionLookup } from "./route-resolver.js";
+
+/**
+ * The bypass shim's fixed policy (Decision 56): slider level 1 — redaction ON,
+ * lossless, brevity `off`. `sliderPolicyForLevel`'s defaults already mean exactly
+ * this (`brevity` defaults to `off`, `compression` tracks the level), so the shim
+ * needs no new dial and no frozen-contract change; it is one pinned policy value.
+ *
+ * Frozen at module scope precisely so it cannot be reached by the live slider.
+ */
+const SHIM_POLICY = sliderPolicyForLevel(SliderLevel.Lossless);
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
@@ -90,6 +100,23 @@ export interface BuildProxyOptions {
    * stays synchronous. Absent → images are forwarded as before.
    */
   readonly visionOf?: VisionLookup;
+  /**
+   * Decision 56 — build the **bypass shim** rather than the full pipeline.
+   *
+   * `golem proxy stop` keeps the project port bound so Claude Code never dials a
+   * dead socket (its `ANTHROPIC_BASE_URL` cannot be un-set without a window
+   * reload — verification-notes §112b). This flag is what "pipeline off" means
+   * concretely: the live slider store is ignored and the policy is pinned to
+   * **level 1**, local-answer is suppressed, and the Headroom sidecar is never
+   * constructed.
+   *
+   * **Level 1, deliberately NOT level 0.** Level 0 / `x-golem-bypass` forwards
+   * untouched, i.e. with redaction OFF — the single sanctioned redaction-off path,
+   * which CLAUDE.md permits only when it is never the default and always surfaced
+   * loudly. A Stop button that quietly routed unredacted prompts upstream would
+   * breach that hard rule while looking like a convenience. So the shim redacts.
+   */
+  readonly shim?: boolean;
 }
 
 /**
@@ -118,6 +145,10 @@ export function buildProxyFromSettings(
   // there is a (rare, documented) race if the level changes between a
   // request and its response — acceptable for a batch/alternating A/B.
   const resolvePolicy = async () => {
+    // Decision 56: pinned, and deliberately ignores the live slider store — a
+    // shim that tracked the slider could be moved to level 0 (redaction off)
+    // while presenting itself as "stopped".
+    if (build.shim === true) return SHIM_POLICY;
     if (sliderStore === undefined) return policyFromSettings(settings);
     const level = await sliderStore.get();
     // Decision 52: the runtime slider store owns the LEVEL only; the two dial
@@ -175,7 +206,7 @@ export function buildProxyFromSettings(
     // — with one target the resolver would decide the same thing on every
     // request, so leaving it absent keeps the single-upstream path byte-for-byte
     // the code it has always been.
-    ...(listTargets(proxyWithDefault).length > 1
+    ...(listTargets(proxyWithDefault).length > 1 && build.shim !== true
       ? {
           resolveRoute: createRouteResolver({
             settings: proxyWithDefault,

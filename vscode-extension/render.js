@@ -43,12 +43,10 @@ const SLIDER_LEVELS = [
 const STATUS_FIELDS_READ = [
   { path: ["version"], required: true },
   { path: ["proxy", "reachable"], required: true },
-  // Decision 56 — the redaction-only bypass shim. `stopProxy` currently just
-  // kills the pid: there is no shim and no third desired-state, so nothing ever
-  // sets this and the panel can never show "bypass — pipeline off". Tracked by
-  // R10.12; the display code here is kept because it is correct for the state,
-  // not because the state exists yet.
-  { path: ["proxy", "bypass"], unemitted: "R10.12" },
+  // Decision 56 — the redaction-only bypass shim. Emitted by `collectStatus`
+  // since R10.12 restored the shim and the third desired-state; optional
+  // because it is present only while the shim is actually serving.
+  { path: ["proxy", "bypass"], required: false },
   { path: ["slider", "level"], required: true },
   { path: ["slider", "name"], required: true },
   { path: ["dials", "brevity", "effective"], required: true },

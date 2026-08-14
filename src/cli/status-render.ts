@@ -149,13 +149,17 @@ export function renderStatus(report: StatusReport): string {
   // the current config no longer named. Same lesson as the R8.32 note below:
   // say it on the proxy line the eye lands on, not somewhere it must be inferred.
   if (report.proxy.reachable && report.proxy.stale === true) {
-    const built =
-      report.proxy.running_version !== undefined
-        ? `build ${report.proxy.running_version}`
-        : "an unknown build";
+    // R10.13: staleness now has two causes, and the version-mismatch wording is
+    // nonsense for the other one — it rendered "running build 0.22.0, not
+    // 0.22.0" for a daemon whose VERSION matched and whose CODE did not, which
+    // is the case the fingerprint was added to catch.
+    const running = report.proxy.running_version;
     lines.push(
-      `  ⚠ running ${built}, not ${report.version} — it is still serving the code and ` +
-        "config it started with.",
+      running === undefined
+        ? `  ⚠ running an unknown build, not ${report.version} — it is still serving the code and config it started with.`
+        : running !== report.version
+          ? `  ⚠ running build ${running}, not ${report.version} — it is still serving the code and config it started with.`
+          : `  ⚠ running build ${running}, but from an earlier build of it — Golem has been rebuilt since this daemon started, so it is still serving the older code and the config it started with.`,
     );
     lines.push("    Fix: `golem proxy restart`");
   }

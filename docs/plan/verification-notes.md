@@ -5863,3 +5863,34 @@ would NOT have matched — the exact entry is what makes this work).
 Caveat worth carrying: 6,320 entries came back, many ids repeated across dozens
 of providers with the same modalities. Disambiguation by provider is therefore
 load-bearing, not cosmetic.
+
+## §127 — Decision 56's bypass shim was removed by R9.23, not R10.1 (2026-08-14)
+
+R10.12's brief attributed the loss of `src/cli/proxy-state.ts` and the bypass
+shim to R10.1, the first-pancake rewrite, and asked for that to be confirmed
+from history rather than assumed. Confirmed, and it was wrong:
+
+```
+git log --diff-filter=D -- src/cli/proxy-state.ts
+1992445  R9.23: rename ext to pkg, fix Caveman detection, add pkg install   (2026-08-11)
+```
+
+R10.1 landed as 13a8f19 on 2026-08-13 — two days LATER. The same R9.23 commit
+rewrote `src/cli/commands/proxy.ts` by 365 lines, deleted the `stop` command
+entirely (not just the shim), and left the comment that records the reasoning:
+
+```ts
+// R9.23: if the URL is in settings, the daemon should be alive.
+// If it's not, restart it — no separate state file needed.
+```
+
+Worth carrying: the regression was NOT caused by the rewrite everyone would
+suspect. It came from a rename-and-simplify batch, where deleting a state file
+looks like tidying rather than reversing a decision. When attributing a
+regression, run `--diff-filter=D` before naming a culprit — the plausible
+candidate here was innocent, and the innocent one is still in the tree.
+
+Second finding from the same restore: the recovered guidance strings referenced
+`golem proxy start --detach`, a flag R9.23 had also removed. It is now
+`golem proxy restart`. A recovered message can be stale in ways a compiler
+cannot see — the strings were valid TypeScript naming a command that errors.
