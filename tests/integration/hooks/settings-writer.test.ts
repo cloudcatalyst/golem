@@ -1,5 +1,5 @@
 /**
- * WS-B task B2 — .claude/settings.json hook writer round-trip: add + remove
+ * WS-B task B2 — .claude settings hook writer round-trip: add + remove
  * preserves foreign hooks, is idempotent, and never clobbers foreign config.
  */
 
@@ -22,7 +22,8 @@ beforeEach(async () => {
   projectDir = await newTempDir();
 });
 
-const SETTINGS_REL = ".claude/settings.json";
+// Default write target since `claude.settings_scope`: the gitignored local file.
+const SETTINGS_REL = ".claude/settings.local.json";
 
 async function readSettings(): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path.join(projectDir, SETTINGS_REL), "utf8"));

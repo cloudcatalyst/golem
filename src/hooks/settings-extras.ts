@@ -1,13 +1,15 @@
 /**
- * `.claude/settings.json` writers for the rest of the Golem wiring `golem init`
+ * `.claude` settings writers for the rest of the Golem wiring `golem init`
  * installs: the status line (Decision 21c) and the matcher-less event hooks
  * (Notification / UserPromptSubmit → blocked-state, Decision 21b groundwork).
+ *
+ * Target file: `claude.settings_scope`, exactly as in settings-writer.ts.
  *
  * Same conventions as settings-writer.ts: merge-preserving, never clobber
  * malformed files or FOREIGN settings, report InitAction, honor dryRun.
  */
 
-import path from "node:path";
+import { claudeSettingsFiles, claudeSettingsTarget } from "../cli/claude-settings-target.js";
 import type { InitAction } from "../cli/init.js";
 // R10.1: this module used to carry its OWN readJsonObject/writeJsonObject/rel —
 // a fourth copy, differing from the others only in an error message. It now
@@ -46,8 +48,9 @@ type JsonObject = Record<string, unknown>;
 const isRecord = (v: unknown): v is JsonObject =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-const settingsPath = (projectDir: string): string =>
-  path.join(projectDir, ".claude", "settings.json");
+/** The `.claude` settings file this call operates on — see settings-writer.ts. */
+const settingsPath = (options: HookSettingsOptions): Promise<string> =>
+  claudeSettingsTarget(options.projectDir, options.scope);
 
 /** A matcher-less command-hook entry: `{ hooks: [{ type, command }] }`. */
 function eventEntry(command: string): JsonObject {
@@ -63,7 +66,7 @@ export async function addEventHook(
   command: string,
 ): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
 
@@ -106,7 +109,7 @@ export async function removeEventHook(
   command: string,
 ): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
   const hooks = settings?.hooks;
@@ -142,9 +145,25 @@ export async function removeEventHook(
 /** Set `statusLine` to the Golem command, unless a FOREIGN status line is set. */
 export async function writeStatusLine(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const { target: file, other } = await claudeSettingsFiles(options.projectDir, options.scope);
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
+
+  // A foreign status line in the OTHER file is just as much theirs as one in
+  // this file — and writing ours into the higher-precedence file would take it
+  // over without touching a byte of it. Same rule, one file further out.
+  const otherLine = (await readJsonObject(other).catch(() => null))?.statusLine;
+  if (
+    isRecord(otherLine) &&
+    typeof otherLine.command === "string" &&
+    otherLine.command !== STATUS_LINE_COMMAND
+  ) {
+    return {
+      kind: "skip",
+      path: rel(projectDir, other),
+      detail: "status line set to a non-Golem command; left as is",
+    };
+  }
 
   const current = settings.statusLine;
   const desired = {
@@ -191,7 +210,7 @@ export async function writeStatusLine(options: HookSettingsOptions): Promise<Ini
 /** Remove the status line only if it is ours. */
 export async function removeStatusLine(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
   const current = settings?.statusLine;
@@ -210,9 +229,20 @@ export async function removeStatusLine(options: HookSettingsOptions): Promise<In
  */
 export async function writeDefaultMode(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const { target: file, other } = await claudeSettingsFiles(options.projectDir, options.scope);
   const existing = await readJsonObject(file);
   const settings = existing ?? {};
+
+  // A deliberate mode in the OTHER file is still the user's choice — writing
+  // ours into the file that outranks it would end that choice silently.
+  const otherMode = (await readJsonObject(other).catch(() => null))?.defaultMode;
+  if (typeof otherMode === "string" && otherMode !== GOLEM_DEFAULT_MODE) {
+    return {
+      kind: "skip",
+      path: rel(projectDir, other),
+      detail: `defaultMode set to "${otherMode}"; left as is`,
+    };
+  }
 
   const current = settings.defaultMode;
   if (current === GOLEM_DEFAULT_MODE) {
@@ -238,7 +268,7 @@ export async function writeDefaultMode(options: HookSettingsOptions): Promise<In
 /** Remove the `defaultMode` override only if it is ours. */
 export async function removeDefaultMode(options: HookSettingsOptions): Promise<InitAction> {
   const { projectDir } = options;
-  const file = settingsPath(projectDir);
+  const file = await settingsPath(options);
   const relPath = rel(projectDir, file);
   const settings = await readJsonObject(file);
   const current = settings?.defaultMode;

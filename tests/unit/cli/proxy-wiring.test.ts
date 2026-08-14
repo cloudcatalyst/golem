@@ -38,15 +38,35 @@ beforeEach(async () => {
   projectDir = await newTempDir();
 });
 
+// The DEFAULT write target since `claude.settings_scope` landed: the gitignored
+// local file. The committed one is still read (and swept), which the migration
+// tests below exercise explicitly.
+async function writeSettingsFile(file: string, value: unknown): Promise<void> {
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(value, null, 2), "utf8");
+}
+
+async function readSettingsFile(file: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+}
+
+const localFile = (): string => path.join(projectDir, ".claude", "settings.local.json");
+const committedFile = (): string => path.join(projectDir, ".claude", "settings.json");
+
 async function writeClaudeSettings(value: unknown): Promise<void> {
-  const dir = path.join(projectDir, ".claude");
-  await mkdir(dir, { recursive: true });
-  await writeFile(path.join(dir, "settings.json"), JSON.stringify(value, null, 2), "utf8");
+  await writeSettingsFile(localFile(), value);
 }
 
 async function readClaudeSettings(): Promise<Record<string, unknown>> {
-  const raw = await readFile(path.join(projectDir, ".claude", "settings.json"), "utf8");
-  return JSON.parse(raw) as Record<string, unknown>;
+  return readSettingsFile(localFile());
+}
+
+async function writeCommittedSettings(value: unknown): Promise<void> {
+  await writeSettingsFile(committedFile(), value);
+}
+
+async function readCommittedSettings(): Promise<Record<string, unknown>> {
+  return readSettingsFile(committedFile());
 }
 
 describe("removeGolemEnv — ownership", () => {
@@ -137,7 +157,7 @@ describe("unwireProxyEnv", () => {
     expect(env[ENV_BASE_URL]).toBe(OURS);
   });
 
-  it("is a no-op on a project with no .claude/settings.json", async () => {
+  it("is a no-op on a project with no .claude settings at all", async () => {
     const result = await unwireProxyEnv(projectDir, OURS);
     expect(result).toEqual({ changed: false, needsReload: false });
   });
@@ -190,12 +210,74 @@ describe("wireProxyEnv", () => {
   it("refuses to overwrite a MALFORMED settings file, leaving its bytes untouched", async () => {
     const dir = path.join(projectDir, ".claude");
     await mkdir(dir, { recursive: true });
-    const file = path.join(dir, "settings.json");
+    const file = localFile();
     const original = '{ "env": { "MY_VAR": "keep me" },, }';
     await writeFile(file, original, "utf8");
 
     await expect(wireProxyEnv(projectDir, OURS)).rejects.toThrow(/not valid JSON/);
     expect(await readFile(file, "utf8")).toBe(original);
+  });
+});
+
+/**
+ * `claude.settings_scope` — WHICH of the two files Golem writes. The rule the
+ * tests below pin: writes go to exactly one file and the other is swept, so a
+ * scope flip MOVES the wiring. A duplicate left in the shadowed file is dead
+ * weight in everyone's diff; a duplicate left in the SHADOWING file silently
+ * wins over the file the user just chose.
+ */
+describe("wireProxyEnv — settings scope", () => {
+  it("writes the gitignored local file by default", async () => {
+    await wireProxyEnv(projectDir, OURS);
+
+    expect((await readClaudeSettings()).env).toMatchObject({ [ENV_BASE_URL]: OURS });
+    await expect(readCommittedSettings()).rejects.toThrow();
+  });
+
+  it("writes the committed file when the scope says project", async () => {
+    await wireProxyEnv(projectDir, OURS, { scope: "project" });
+
+    expect((await readCommittedSettings()).env).toMatchObject({ [ENV_BASE_URL]: OURS });
+    await expect(readClaudeSettings()).rejects.toThrow();
+  });
+
+  it("MOVES wiring out of the committed file, keeping that file's foreign keys", async () => {
+    await writeCommittedSettings({
+      env: { [ENV_BASE_URL]: OURS, [ENV_TOOL_SEARCH]: "true", MY_VAR: "keep me" },
+      permissions: { allow: ["Bash(ls:*)"] },
+    });
+
+    const result = await wireProxyEnv(projectDir, OURS);
+
+    expect(result.changed).toBe(true);
+    expect(result.movedFrom).toBe(committedFile());
+    expect((await readClaudeSettings()).env).toMatchObject({ [ENV_BASE_URL]: OURS });
+    const committed = await readCommittedSettings();
+    expect(committed.env).toEqual({ MY_VAR: "keep me" });
+    expect(committed.permissions).toEqual({ allow: ["Bash(ls:*)"] });
+  });
+
+  it("leaves the local CA trust alone when moving wiring the other way", async () => {
+    // R9.22: NODE_EXTRA_CA_CERTS lives in the local file whatever the scope is —
+    // the path is machine-absolute. Sweeping for a `project` write must not take it.
+    const caPath = path.join(projectDir, ".golem", "loopback", "ca.pem");
+    await writeClaudeSettings({ env: { [ENV_BASE_URL]: OURS, [ENV_EXTRA_CA]: caPath } });
+
+    await wireProxyEnv(projectDir, OURS, { scope: "project" });
+
+    expect((await readClaudeSettings()).env).toEqual({ [ENV_EXTRA_CA]: caPath });
+    expect((await readCommittedSettings()).env).toMatchObject({ [ENV_BASE_URL]: OURS });
+  });
+
+  it("unwires BOTH files, so a project that flipped scope comes out clean", async () => {
+    await writeCommittedSettings({ env: { [ENV_BASE_URL]: OURS, [ENV_TOOL_SEARCH]: "true" } });
+    await writeClaudeSettings({ env: { [ENV_BASE_URL]: OURS } });
+
+    const result = await unwireProxyEnv(projectDir, OURS);
+
+    expect(result.changed).toBe(true);
+    expect(await readCommittedSettings()).toEqual({});
+    expect(await readClaudeSettings()).toEqual({});
   });
 });
 
@@ -208,6 +290,17 @@ describe("readWiringState", () => {
 
     await writeClaudeSettings({ env: { [ENV_BASE_URL]: FOREIGN } });
     expect(await readWiringState(projectDir, OURS)).toEqual({ owner: "foreign", baseUrl: FOREIGN });
+  });
+
+  it("reads the committed file too — the scope key moves writes, not reads", async () => {
+    await writeCommittedSettings({ env: { [ENV_BASE_URL]: OURS } });
+    expect(await readWiringState(projectDir, OURS)).toEqual({ owner: "golem", baseUrl: OURS });
+  });
+
+  it("lets the local file shadow the committed one, as Claude Code does (notes §13)", async () => {
+    await writeCommittedSettings({ env: { [ENV_BASE_URL]: FOREIGN } });
+    await writeClaudeSettings({ env: { [ENV_BASE_URL]: OURS } });
+    expect(await readWiringState(projectDir, OURS)).toEqual({ owner: "golem", baseUrl: OURS });
   });
 });
 
@@ -290,27 +383,27 @@ describe("writeLocalCaTrust — R9.22", () => {
   }
 
   it("writes the local file and leaves the committed one without the key", async () => {
-    await writeClaudeSettings({ env: { [ENV_BASE_URL]: OURS } });
+    await writeCommittedSettings({ env: { [ENV_BASE_URL]: OURS } });
     const result = await writeLocalCaTrust(projectDir, caPath());
 
     expect(result).toStrictEqual({ wrote: true, healedCommitted: false });
     expect((await readLocal()).env).toStrictEqual({ [ENV_EXTRA_CA]: caPath() });
-    expect((await readClaudeSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
+    expect((await readCommittedSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
   });
 
   it("heals a stale Golem path out of the committed file, keeping its other keys", async () => {
-    await writeClaudeSettings({
+    await writeCommittedSettings({
       env: { [ENV_BASE_URL]: OURS, [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem" },
     });
     const result = await writeLocalCaTrust(projectDir, caPath());
 
     expect(result.healedCommitted).toBe(true);
-    expect((await readClaudeSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
+    expect((await readCommittedSettings()).env).toStrictEqual({ [ENV_BASE_URL]: OURS });
     expect((await readLocal()).env).toStrictEqual({ [ENV_EXTRA_CA]: caPath() });
   });
 
   it("writes nothing at all when the value is the user's (§121-C)", async () => {
-    await writeClaudeSettings({ env: { [ENV_EXTRA_CA]: "/corp/zscaler-root.pem" } });
+    await writeCommittedSettings({ env: { [ENV_EXTRA_CA]: "/corp/zscaler-root.pem" } });
     const result = await writeLocalCaTrust(projectDir, caPath());
 
     expect(result).toStrictEqual({
@@ -319,7 +412,7 @@ describe("writeLocalCaTrust — R9.22", () => {
       foreign: "/corp/zscaler-root.pem",
     });
     // Neither file touched: the committed value survives and no local file appears.
-    expect((await readClaudeSettings()).env).toStrictEqual({
+    expect((await readCommittedSettings()).env).toStrictEqual({
       [ENV_EXTRA_CA]: "/corp/zscaler-root.pem",
     });
     await expect(readLocal()).rejects.toThrow();
@@ -334,13 +427,13 @@ describe("writeLocalCaTrust — R9.22", () => {
   });
 
   it("dry run computes the result without touching either file", async () => {
-    await writeClaudeSettings({
+    await writeCommittedSettings({
       env: { [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem" },
     });
     const result = await writeLocalCaTrust(projectDir, caPath(), { dryRun: true });
 
     expect(result).toStrictEqual({ wrote: true, healedCommitted: true });
-    expect((await readClaudeSettings()).env).toStrictEqual({
+    expect((await readCommittedSettings()).env).toStrictEqual({
       [ENV_EXTRA_CA]: "/elsewhere/golem/.golem/loopback/ca.pem",
     });
     await expect(readLocal()).rejects.toThrow();

@@ -44,6 +44,14 @@ beforeEach(async () => {
   projectDir = await newTempDir();
 });
 
+/**
+ * Where `golem init` writes Claude Code's wiring by default since
+ * `claude.settings_scope`: the gitignored local file. `.claude/settings.json`
+ * is only read below where the point is that Golem did NOT write there.
+ */
+const CLAUDE_TARGET = ".claude/settings.local.json";
+const CLAUDE_COMMITTED = ".claude/settings.json";
+
 async function readJson(rel: string): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(path.join(projectDir, rel), "utf8")) as Record<string, unknown>;
 }
@@ -65,14 +73,18 @@ describe("golem init", () => {
     expect(report.dryRun).toBe(false);
 
     const port = defaultProjectPort(projectDir);
-    const settings = await readJson(".claude/settings.json");
-    // Only portable values live in the COMMITTED file. R9.12's loopback CA trust
-    // is a machine-absolute path, so R9.22 moved it to settings.local.json —
-    // asserted on its own below.
+    const settings = await readJson(CLAUDE_TARGET);
+    // The wiring lands in the gitignored local file (claude.settings_scope,
+    // default `local`) — including R9.12's loopback CA trust, whose path is
+    // machine-absolute and has been local-only since R9.22.
     expect(settings.env).toStrictEqual({
       ANTHROPIC_BASE_URL: `http://localhost:${port}`,
       ENABLE_TOOL_SEARCH: "true",
+      NODE_EXTRA_CA_CERTS: loopbackCaPath(projectDir),
     });
+    // Nothing of ours in the committed file — the point of the default scope is
+    // that a clone inherits no wiring it cannot honour.
+    await expect(readJson(CLAUDE_COMMITTED)).rejects.toThrow();
 
     const mcp = await readJson(".mcp.json");
     expect(mcp.mcpServers).toStrictEqual({
@@ -96,7 +108,7 @@ describe("golem init", () => {
     expect(golemLocal).toStrictEqual({ slider: { level: 1 }, proxy: { port } });
 
     // Status line (21c) + blocked-state event hooks (21b) are installed.
-    const cs = await readJson(".claude/settings.json");
+    const cs = await readJson(CLAUDE_TARGET);
     expect(cs.statusLine).toStrictEqual({
       type: "command",
       command: "golem statusline",
@@ -121,7 +133,7 @@ describe("golem init", () => {
   it("uninit removes the status line and blocked-state hooks", async () => {
     await golemInit({ projectDir, probe: okProbe });
     await golemUninit({ projectDir, probe: okProbe });
-    const cs = await readJson(".claude/settings.json");
+    const cs = await readJson(CLAUDE_TARGET);
     expect(cs.statusLine).toBeUndefined();
     expect(cs.defaultMode).toBeUndefined();
     // hooks object is gone entirely once all Golem hooks are removed.
@@ -137,10 +149,14 @@ describe("golem init", () => {
     );
 
     await golemInit({ projectDir, probe: okProbe });
-    expect((await readJson(".claude/settings.json")).defaultMode).toBe("acceptEdits");
+    expect((await readJson(CLAUDE_COMMITTED)).defaultMode).toBe("acceptEdits");
+    // …and not SHADOWED either: writing our mode into the local file, which
+    // outranks the committed one, would end the user's choice without touching a
+    // byte of the file that states it.
+    expect((await readJson(CLAUDE_TARGET)).defaultMode).toBeUndefined();
 
     await golemUninit({ projectDir, probe: okProbe });
-    expect((await readJson(".claude/settings.json")).defaultMode).toBe("acceptEdits");
+    expect((await readJson(CLAUDE_COMMITTED)).defaultMode).toBe("acceptEdits");
   });
 
   it("never clobbers a NODE_EXTRA_CA_CERTS that someone else owns (§121-C)", async () => {
@@ -169,12 +185,18 @@ describe("golem init", () => {
     // A machine-absolute cert path must never land in the file teammates receive
     // via git: it resolves on no other clone, and Claude Code then warns about it
     // twice at every start.
-    await golemInit({ projectDir, probe: okProbe });
+    // Pinned to `project` scope on purpose: that is the only configuration where
+    // the committed file receives wiring at all, so it is the only one where the
+    // machine-absolute CA path could wrongly land there.
+    await golemInit({ projectDir, probe: okProbe, claudeSettingsScope: "project" });
 
-    const committedEnv = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    const committedEnv = (await readJson(CLAUDE_COMMITTED)).env as Record<string, unknown>;
+    expect(committedEnv.ANTHROPIC_BASE_URL).toBe(
+      `http://localhost:${defaultProjectPort(projectDir)}`,
+    );
     expect(committedEnv.NODE_EXTRA_CA_CERTS).toBeUndefined();
 
-    const localEnv = (await readJson(".claude/settings.local.json")).env as Record<string, unknown>;
+    const localEnv = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(localEnv.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
   });
 
@@ -194,10 +216,12 @@ describe("golem init", () => {
 
     await golemInit({ projectDir, probe: okProbe });
 
-    const committedEnv = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
-    expect(committedEnv.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    const committedEnv = (await readJson(CLAUDE_COMMITTED)).env as
+      | Record<string, unknown>
+      | undefined;
+    expect(committedEnv?.NODE_EXTRA_CA_CERTS).toBeUndefined();
 
-    const localEnv = (await readJson(".claude/settings.local.json")).env as Record<string, unknown>;
+    const localEnv = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(localEnv.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
   });
 
@@ -217,7 +241,11 @@ describe("golem init", () => {
     const env = local.env as Record<string, unknown>;
     expect(env.MY_TOKEN).toBe("keep-me");
     expect(env.NODE_EXTRA_CA_CERTS).toBe(loopbackCaPath(projectDir));
-    expect((local.permissions as Record<string, unknown>).allow).toStrictEqual(["Bash"]);
+    // Merged, not replaced: the user's rule survives and ours is appended.
+    expect((local.permissions as Record<string, unknown>).allow).toStrictEqual([
+      "Bash",
+      "mcp__golem__*",
+    ]);
   });
 
   it("uninit removes the CA trust from settings.local.json but leaves a foreign one", async () => {
@@ -249,13 +277,13 @@ describe("golem init", () => {
 
   it("skips the loopback CA entirely with noLoopbackCert", async () => {
     await golemInit({ projectDir, probe: okProbe, noLoopbackCert: true });
-    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    const env = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
   it("respects a configured proxy port", async () => {
     await golemInit({ projectDir, probe: okProbe, proxyPort: 9999 });
-    const settings = await readJson(".claude/settings.json");
+    const settings = await readJson(CLAUDE_TARGET);
     expect((settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL).toBe(
       "http://localhost:9999",
     );
@@ -285,13 +313,14 @@ describe("golem init", () => {
 
     await golemInit({ projectDir, probe: okProbe });
 
-    const settings = await readJson(".claude/settings.json");
-    // The unrelated allow rule is preserved (merged, not replaced); init adds its
-    // own Golem MCP rules alongside it.
-    expect(settings.permissions).toStrictEqual({
-      allow: ["Bash(ls:*)", "mcp__golem__*"],
-    });
-    expect((settings.env as Record<string, unknown>).FOO).toBe("bar");
+    // The committed file is not ours to write under the default scope, so both of
+    // the user's keys survive it untouched…
+    const committed = await readJson(CLAUDE_COMMITTED);
+    expect(committed.permissions).toStrictEqual({ allow: ["Bash(ls:*)"] });
+    expect((committed.env as Record<string, unknown>).FOO).toBe("bar");
+    // …and our rule goes to the file the scope names.
+    const settings = await readJson(CLAUDE_TARGET);
+    expect((settings.permissions as { allow?: string[] }).allow).toStrictEqual(["mcp__golem__*"]);
     const mcp = await readJson(".mcp.json");
     expect((mcp.mcpServers as Record<string, unknown>).other).toStrictEqual({
       type: "http",
@@ -301,7 +330,7 @@ describe("golem init", () => {
 
   it("pre-approves every Golem MCP tool including wiki_upsert, and uninit removes them", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const settings = await readJson(".claude/settings.json");
+    const settings = await readJson(CLAUDE_TARGET);
     const perms = settings.permissions as { allow?: string[]; ask?: string[] };
     // All Golem tools auto-approved via the anchored wildcard rule. wiki_upsert is
     // NOT held on `ask` (USER decision 2026-07-30): Decision 44 un-gated wiki
@@ -312,7 +341,7 @@ describe("golem init", () => {
     expect(perms.ask).toBeUndefined();
 
     await golemUninit({ projectDir, probe: okProbe });
-    const after = await readJson(".claude/settings.json");
+    const after = await readJson(CLAUDE_TARGET);
     // The rules are gone; on a project init created (no other permission rules),
     // the now-empty permissions object is cleaned up entirely.
     expect(after.permissions).toBeUndefined();
@@ -332,12 +361,69 @@ describe("golem init", () => {
 
     await golemInit({ projectDir, probe: okProbe });
 
-    const perms = (await readJson(".claude/settings.json")).permissions as {
+    // The legacy entry goes from the file that holds it — the sweep reaches the
+    // non-target scope precisely so an older init's leftovers still get cleaned.
+    const committedPerms = (await readJson(CLAUDE_COMMITTED)).permissions as {
       allow?: string[];
       ask?: string[];
     };
-    expect(perms.ask).toStrictEqual(["Bash(rm:*)"]);
+    expect(committedPerms.ask).toStrictEqual(["Bash(rm:*)"]);
+    expect(committedPerms.allow).toBeUndefined();
+    // …and the live rule now sits in the scope init writes.
+    const perms = (await readJson(CLAUDE_TARGET)).permissions as {
+      allow?: string[];
+      ask?: string[];
+    };
     expect(perms.allow).toContain("mcp__golem__*");
+  });
+
+  /**
+   * `claude.settings_scope` — flipping it and re-running init has to MOVE the
+   * wiring. Two failure modes if it merely re-writes: a copy left in the shadowed
+   * file is dead weight nobody prunes, and a copy left in the SHADOWING file
+   * quietly wins over the file the user just chose. Hooks are the loud case —
+   * Claude Code merges hooks from both files, so a duplicate does not shadow, it
+   * RUNS TWICE.
+   */
+  it("moves the whole wiring when the settings scope flips, leaving no duplicate", async () => {
+    await golemInit({ projectDir, probe: okProbe, claudeSettingsScope: "project" });
+    const committedAfterFirst = await readJson(CLAUDE_COMMITTED);
+    expect((committedAfterFirst.env as Record<string, unknown>).ANTHROPIC_BASE_URL).toBeDefined();
+    expect(committedAfterFirst.hooks).toBeDefined();
+
+    await golemInit({ projectDir, probe: okProbe, claudeSettingsScope: "local" });
+
+    // Everything is now in the local file…
+    const local = await readJson(CLAUDE_TARGET);
+    expect((local.env as Record<string, unknown>).ANTHROPIC_BASE_URL).toBe(
+      `http://localhost:${defaultProjectPort(projectDir)}`,
+    );
+    expect((local.permissions as { allow?: string[] }).allow).toContain("mcp__golem__*");
+    expect(local.statusLine).toBeDefined();
+    expect(local.defaultMode).toBe("default");
+    expect(Object.keys(local.hooks as Record<string, unknown>)).toContain("PostToolUse");
+
+    // …and nothing of ours is left in the committed one.
+    const committed = await readJson(CLAUDE_COMMITTED);
+    expect(committed.env).toBeUndefined();
+    expect(committed.permissions).toBeUndefined();
+    expect(committed.hooks).toBeUndefined();
+    expect(committed.statusLine).toBeUndefined();
+    expect(committed.defaultMode).toBeUndefined();
+  });
+
+  it("uninit cleans BOTH files, whichever scope wrote them", async () => {
+    await golemInit({ projectDir, probe: okProbe, claudeSettingsScope: "project" });
+    // Simulate the pre-flip state a project can genuinely be in: wiring in the
+    // committed file, and a local file init has also touched (the CA trust).
+    await golemUninit({ projectDir, probe: okProbe });
+
+    const committed = await readJson(CLAUDE_COMMITTED);
+    expect(committed.env).toBeUndefined();
+    expect(committed.hooks).toBeUndefined();
+    expect(committed.permissions).toBeUndefined();
+    const local = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown> | undefined;
+    expect(local?.NODE_EXTRA_CA_CERTS).toBeUndefined();
   });
 
   it("dry-run reports actions but writes nothing", async () => {
@@ -424,7 +510,7 @@ describe("golem init", () => {
     const resource = "https://my-res.services.ai.azure.com";
     await golemInit({ projectDir, probe: okProbe, foundry: resource });
 
-    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    const env = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
     expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe(
       `http://localhost:${defaultProjectPort(projectDir)}/anthropic`,
@@ -441,7 +527,7 @@ describe("golem init", () => {
     const foundryUrl = `http://localhost:${defaultProjectPort(projectDir)}/anthropic`;
     await mkdir(path.join(projectDir, ".claude"), { recursive: true });
     await writeFile(
-      path.join(projectDir, ".claude", "settings.json"),
+      path.join(projectDir, CLAUDE_TARGET),
       JSON.stringify({
         env: {
           CLAUDE_CODE_USE_FOUNDRY: "true",
@@ -454,7 +540,7 @@ describe("golem init", () => {
 
     // A plain `golem init` (no --foundry) must NOT add ANTHROPIC_BASE_URL.
     await golemInit({ projectDir, probe: okProbe });
-    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    const env = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(env.CLAUDE_CODE_USE_FOUNDRY).toBe("true");
     expect(env.ANTHROPIC_FOUNDRY_BASE_URL).toBe(foundryUrl);
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined();
@@ -508,7 +594,7 @@ describe("golem init", () => {
 
   it("--upstream fronts a generic gateway (Claude Code still uses ANTHROPIC_BASE_URL)", async () => {
     await golemInit({ projectDir, probe: okProbe, upstream: "https://openrouter.ai/api" });
-    const env = (await readJson(".claude/settings.json")).env as Record<string, unknown>;
+    const env = (await readJson(CLAUDE_TARGET)).env as Record<string, unknown>;
     expect(env.ANTHROPIC_BASE_URL).toBe(`http://localhost:${defaultProjectPort(projectDir)}`);
     const local = await readJson(".golem/settings.local.json");
     expect((local.proxy as Record<string, unknown>).upstream_base_url).toBe(
@@ -608,13 +694,13 @@ describe("golem uninit", () => {
   it("does not remove a user-customized base URL", async () => {
     await golemInit({ projectDir, probe: okProbe });
     // User later pointed Claude Code somewhere else; uninit must not delete it.
-    const settingsPath = path.join(projectDir, ".claude", "settings.json");
-    const settings = await readJson(".claude/settings.json");
+    const settingsPath = path.join(projectDir, CLAUDE_TARGET);
+    const settings = await readJson(CLAUDE_TARGET);
     (settings.env as Record<string, unknown>).ANTHROPIC_BASE_URL = "http://localhost:7777";
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), "utf8");
 
     await golemUninit({ projectDir, probe: okProbe });
-    const after = await readJson(".claude/settings.json");
+    const after = await readJson(CLAUDE_TARGET);
     expect((after.env as Record<string, unknown>).ANTHROPIC_BASE_URL).toBe("http://localhost:7777");
   });
 

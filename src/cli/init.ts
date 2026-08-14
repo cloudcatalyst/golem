@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { removeVersionStamp, writeSetting } from "../config/index.js";
 import type { SliderLevel } from "../interfaces/index.js";
+import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
 // because the permission rules are built from it at module scope.
@@ -53,7 +54,7 @@ import { removeManagedState } from "./managed-files.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
-import { ENV_BASE_URL, proxyBaseUrl } from "./proxy-wiring.js";
+import { proxyBaseUrl, readWiredBaseUrl } from "./proxy-wiring.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** External-state checks, injectable for tests. */
@@ -139,6 +140,13 @@ export interface InitOptions {
    * (red) tool calls — the behaviour R9.7 shipped — instead of green.
    */
   readonly noLoopbackCert?: boolean;
+  /**
+   * Which `.claude` settings file to write: `local`
+   * (`.claude/settings.local.json`, gitignored) or `project`
+   * (`.claude/settings.json`, committed). Omitted, it comes from
+   * `claude.settings_scope` — local by default. See claude-settings-target.ts.
+   */
+  readonly claudeSettingsScope?: ClaudeSettingsScope;
   /** Override the VS Code extension source dir (tests). Default: the bundled one. */
   readonly vscodeSourceDir?: string;
   /** External-state probe; tests inject a fake. */
@@ -202,7 +210,7 @@ export function golemMcpEntry(): JsonObject {
 
 /** Per-artifact result of the "is this project wired to Golem?" checks (E3). */
 export interface InitStatus {
-  /** `.claude/settings.json` env.ANTHROPIC_BASE_URL points at the Golem proxy. */
+  /** `env.ANTHROPIC_BASE_URL` in EITHER `.claude` settings file points at the Golem proxy. */
   readonly claudeSettingsWired: boolean;
   /** `.mcp.json` registers the golem MCP server with init's stdio entry. */
   readonly mcpRegistered: boolean;
@@ -232,13 +240,11 @@ export async function golemInitStatus(
     }
   };
 
-  const settings = await readSafe(path.join(projectDir, ".claude", "settings.json"));
-  const env = settings?.env;
-  const claudeSettingsWired =
-    typeof env === "object" &&
-    env !== null &&
-    !Array.isArray(env) &&
-    (env as JsonObject)[ENV_BASE_URL] === baseUrl;
+  // Either `.claude` settings file counts: `claude.settings_scope` decides which
+  // one init WRITES, and Claude Code reads both (local shadows committed). A
+  // probe that only looked at one would call a wired project un-wired the moment
+  // the scope changed.
+  const claudeSettingsWired = (await readWiredBaseUrl(projectDir)) === baseUrl;
 
   const mcp = await readSafe(path.join(projectDir, ".mcp.json"));
   const servers = mcp?.mcpServers;
@@ -414,7 +420,7 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // (and the `.gitignore` lines for personal instruction files), the status line
   // and blocked-state event hooks, the WebFetch KB-cache pre/post hooks, and the
   // SessionStart proxy auto-start. See init-hooks.ts.
-  actions.push(...(await wireHooks(projectDir, dryRun)));
+  actions.push(...(await wireHooks(projectDir, dryRun, options.claudeSettingsScope)));
 
   // 7. .vscode/settings.json — exclude Golem's churny runtime dirs (telemetry,
   // state, webcache, CCR, knowledge, notes, distill) from VS Code's file

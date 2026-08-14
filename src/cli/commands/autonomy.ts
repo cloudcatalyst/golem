@@ -112,7 +112,7 @@ export default function register(program: Command): void {
 
   autonomyCmd
     .command("wire")
-    .description("Install the PreToolUse gate hook in .claude/settings.json")
+    .description("Install the PreToolUse gate hook in the project's .claude settings")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .action(async (opts: { dir: string }) => {
       try {

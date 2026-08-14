@@ -3,6 +3,9 @@ description: Send the next request(s) untouched — bypass Golem compression
 invocationMode: user
 ---
 
+<!-- golem:layering-exception slider — same reason as the `slider` skill: a true full
+     bypass is level 0, which no tool call may set. The CLI command is named FOR the user. -->
+
 The user wants to bypass Golem's compression pipeline.
 
 Golem's proxy honors the `x-golem-bypass` header for pure passthrough, and

@@ -72,6 +72,7 @@ export {
   USER_DIR_NAME,
 } from "./paths.js";
 export type {
+  ClaudeSettings,
   CompressionSettings,
   GolemSettings,
   InferenceSettings,
