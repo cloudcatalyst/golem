@@ -9,6 +9,7 @@ import {
   countAnthropicInputTokens,
   countTokensResponse,
   openAIChatToAnthropic,
+  SYNTHESIZED_THINKING_LABEL,
 } from "../../../src/providers/index.js";
 
 const buf = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8");
@@ -364,8 +365,11 @@ describe("reasoning_content → thinking (b4-kimi)", () => {
       }),
       fallback,
     );
+    // R10.20: labelled, so a synthesized block is never mistaken for an
+    // Anthropic one — a model reciting its own context inside an unlabelled
+    // block read as a cross-project data leak.
     expect(out.content).toEqual([
-      { type: "thinking", thinking: "let me reason" },
+      { type: "thinking", thinking: `${SYNTHESIZED_THINKING_LABEL}let me reason` },
       { type: "text", text: "the answer" },
     ]);
   });
@@ -602,6 +606,8 @@ describe("empty completions (R10.18)", () => {
       buf({ choices: [{ message: { reasoning_content: "hmm", content: "" } }] }),
       fallback,
     );
-    expect(out.content).toEqual([{ type: "thinking", thinking: "hmm" }]);
+    expect(out.content).toEqual([
+      { type: "thinking", thinking: `${SYNTHESIZED_THINKING_LABEL}hmm` },
+    ]);
   });
 });

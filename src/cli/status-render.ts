@@ -215,6 +215,19 @@ export function renderStatus(report: StatusReport): string {
   if (ec.degraded) {
     lines.push(`  ⚠ level ${ec.nominal} (${ec.nominal_name}) is inert here: ${ec.reason ?? ""}`);
   }
+  // R10.19: a key that cannot reach Headroom, said WHERE the user is already
+  // looking when they wonder why compression did nothing. Both facts together —
+  // either alone misleads: the key would still be filtered if the stage were on,
+  // and the stage may be off regardless of the key.
+  const unreachable = report.unreachable_headroom_config ?? [];
+  if (unreachable.length > 0) {
+    lines.push(
+      `  ⚠ compression.headroom_config: ${unreachable.join(", ")} ` +
+        `${unreachable.length === 1 ? "is not a" : "are not"} Headroom config field` +
+        `${unreachable.length === 1 ? "" : "s"} — set, but never applied` +
+        (ec.degraded ? ", and the stage it would configure is off on this upstream anyway" : ""),
+    );
+  }
   if (report.dials.brevity.effective !== "off") {
     lines.push(
       `  ⚠ brevity ${report.dials.brevity.effective} is active: replies are shortened ` +

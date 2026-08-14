@@ -183,6 +183,12 @@ export interface StatusReport {
     readonly degraded: boolean;
     readonly reason?: string;
   };
+  /**
+   * R10.19: `compression.headroom_config` keys that cannot reach Headroom.
+   * Reported here rather than only from the adapter, which runs too late (and,
+   * on a caching upstream, never) to tell anyone.
+   */
+  readonly unreachable_headroom_config?: readonly string[];
   /** Dotted `section.key` -> effective value + provenance. */
   readonly config: Readonly<Record<string, ConfigKeyStatus>>;
   /**

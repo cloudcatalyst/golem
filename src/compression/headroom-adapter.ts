@@ -484,6 +484,51 @@ class HeadroomWorkerProcess {
   }
 }
 
+/**
+ * R10.19 — `CompressConfig` field names Golem knows are reachable, for the
+ * STATIC check that runs when the worker is not up.
+ *
+ * The worker introspects the installed `CompressConfig` and reports
+ * `supported_config`, which is authoritative and stays correct across Headroom
+ * releases; this list does not. It exists only so `golem status` can say
+ * something true without starting a Python process on a path it is called on
+ * constantly — so it is used to flag a key as UNREACHABLE only when that key is
+ * absent here AND no worker report is available, and it must never be used to
+ * claim a key IS reachable.
+ *
+ * Keep in step with R9.8's documented set; a Headroom release that adds a field
+ * makes this list incomplete, which is why the failure mode is "we did not warn"
+ * rather than "we warned wrongly".
+ */
+export const KNOWN_HEADROOM_CONFIG_FIELDS: readonly string[] = [
+  "compress_user_messages",
+  "compress_system_messages",
+  "protect_recent",
+  "protect_analysis_context",
+  "target_ratio",
+  "min_tokens_to_compress",
+  "kompress_model",
+  "savings_profile",
+  "lossless_only",
+];
+
+/**
+ * Keys in `compression.headroom_config` that cannot reach Headroom.
+ *
+ * R9.8 shipped a warning for this, but only inside the adapter — so it fired
+ * only when Headroom actually compressed something. On a prompt-caching upstream
+ * the semantic stage is gated off before the adapter is ever reached, so the
+ * warning never fired at all: a project carried a no-op
+ * `plugins: [openrouter-context-compression]` for weeks with zero log lines,
+ * which is precisely the silent-drop failure R9.8 existed to prevent.
+ */
+export function unreachableHeadroomConfigKeys(
+  config: Readonly<Record<string, unknown>>,
+  supported: readonly string[] = KNOWN_HEADROOM_CONFIG_FIELDS,
+): string[] {
+  return Object.keys(config).filter((key) => !supported.includes(key));
+}
+
 export interface HeadroomSidecarOptions {
   /** Launcher command (default "uv"). */
   readonly command?: string;

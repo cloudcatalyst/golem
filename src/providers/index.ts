@@ -53,6 +53,7 @@ export {
   type OpenAIChatMessage,
   type OpenAIChatRequest,
   openAIChatToAnthropic,
+  SYNTHESIZED_THINKING_LABEL,
 } from "./openai-translate.js";
 export { withDefaultTarget } from "./target-settings.js";
 export {

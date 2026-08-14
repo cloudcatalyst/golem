@@ -286,6 +286,20 @@ function translateMessages(
             const p = imagePart(b);
             if (p !== null) imageParts.push(p);
           }
+        } else if (b.type === "thinking" || b.type === "redacted_thinking") {
+          // R10.20 — DELIBERATELY dropped, not overlooked.
+          //
+          // There is no OpenAI-schema equivalent to send a model its own prior
+          // reasoning: most endpoints ignore an inbound `reasoning_content`, and
+          // replaying traces is expensive for a benefit nobody here has measured.
+          // Folding them into the assistant text would be worse — it would turn
+          // private reasoning into content the model treats as its own prior
+          // output.
+          //
+          // Until that is measured, dropping is the honest default. Keeping it as
+          // an explicit branch is the point: the previous behaviour was identical
+          // but arose from the ABSENCE of a branch, which reads as an oversight
+          // and gave a thinking-only turn no content at all (fixed in R10.14).
         } else if (b.type === "tool_use") {
           toolCalls.push({
             id: String(b.id ?? ""),
@@ -552,6 +566,22 @@ export function mapStopReason(finish: string | null | undefined): string {
   }
 }
 
+/**
+ * R10.20 — labels a `thinking` block Golem SYNTHESIZED from an OpenAI-schema
+ * upstream's `reasoning_content`. It is not an Anthropic thinking block: it
+ * carries no signature and Golem, not the vendor, decided to render the trace
+ * this way.
+ *
+ * A user hit this the hard way: a reasoning model spent its trace half-echoing
+ * its own context — hook names, tool lists, an invented `mcp__golem__log` — and
+ * an unlabelled block made it look like the proxy was mixing projects together.
+ * The content was the model's own, but nothing on screen said so. Golem must
+ * never be mistaken for the model, nor its reconstruction for the vendor's
+ * (Decision 25, and the local-answer rail's precedent).
+ */
+export const SYNTHESIZED_THINKING_LABEL =
+  "[Golem: the upstream model's own reasoning trace, relayed verbatim — not an Anthropic thinking block]\n\n";
+
 /** An Anthropic content block we emit (thinking, text, or tool_use). */
 export type AnthropicOutBlock =
   | { readonly type: "thinking"; readonly thinking: string }
@@ -616,7 +646,7 @@ export function openAIChatToAnthropic(
   // block (no signature — synthesized, non-Anthropic origin; display-only).
   const reasoning = choice?.message.reasoning_content;
   if (opts.mapReasoning !== false && typeof reasoning === "string" && reasoning.length > 0) {
-    content.push({ type: "thinking", thinking: reasoning });
+    content.push({ type: "thinking", thinking: SYNTHESIZED_THINKING_LABEL + reasoning });
   }
   if (typeof text === "string" && text.length > 0) content.push({ type: "text", text });
   for (const tc of choice?.message.tool_calls ?? []) {
