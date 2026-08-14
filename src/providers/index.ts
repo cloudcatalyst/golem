@@ -48,6 +48,7 @@ export {
   anthropicToOpenAIChat,
   countAnthropicInputTokens,
   countTokensResponse,
+  EmptyCompletionError,
   mapStopReason,
   type OpenAIChatMessage,
   type OpenAIChatRequest,

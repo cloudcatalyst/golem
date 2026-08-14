@@ -101,11 +101,15 @@ describe("OpenAI → Anthropic SSE translation", () => {
     expect(firstData(sse, "message_delta").delta).toMatchObject({ stop_reason: "max_tokens" });
   });
 
-  it("emits a valid empty message when the stream carries no content", async () => {
+  it("emits a well-formed message when the stream carries no content", async () => {
     const sse = await run(["data: [DONE]\n\n"]);
+    // R10.18: the block is no longer EMPTY — it carries a notice saying the
+    // upstream produced nothing (asserted in the "empty stream" block below).
+    // The event sequence must still be a valid Anthropic stream.
     expect(events(sse)).toEqual([
       "message_start",
       "content_block_start",
+      "content_block_delta",
       "content_block_stop",
       "message_delta",
       "message_stop",
@@ -213,5 +217,64 @@ describe("OpenAI → Anthropic SSE translation", () => {
     );
     expect(starts[0]).toMatchObject({ index: 0, content_block: { type: "text" } });
     expect(starts[1]).toMatchObject({ index: 1, content_block: { type: "tool_use", name: "f" } });
+  });
+});
+
+/**
+ * R10.18 — a stream that produced nothing. Headers and `message_start` are
+ * already out by `_flush`, so an HTTP status is no longer available: say it
+ * in-band, in a block the user can read. A well-formed EMPTY stream is what made
+ * the R10.14 failure undiagnosable.
+ */
+describe("empty stream (R10.18)", () => {
+  it("emits a readable, Golem-attributed notice instead of an empty text block", async () => {
+    const sse = await run(["data: [DONE]\n\n"]);
+    expect(events(sse)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+    const deltas = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)].map((m) =>
+      JSON.parse(m[1] as string),
+    );
+    const text = deltas.map((d) => d.delta.text).join("");
+    // Attributed to Golem — the proxy must never appear to speak as the model.
+    expect(text).toContain("**Golem**");
+    expect(text).toContain("empty completion");
+  });
+
+  it("names the max_tokens case when that is why nothing came back", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    const text = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)]
+      .map((m) => JSON.parse(m[1] as string).delta.text)
+      .join("");
+    expect(text).toContain("max_tokens");
+  });
+
+  it("leaves a stream that DID produce content untouched", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"content":"real answer"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    const text = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)]
+      .map((m) => JSON.parse(m[1] as string).delta.text)
+      .join("");
+    expect(text).toBe("real answer");
+    expect(text).not.toContain("**Golem**");
+  });
+
+  it("does not fire for a tool-only stream", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"f","arguments":"{}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(sse).not.toContain("**Golem**");
   });
 });

@@ -441,10 +441,18 @@ export class GolemProxy {
       try {
         translated = translate.translateResponse(raw);
       } catch (err) {
+        // R10.18: an empty completion is not a translation failure — the
+        // translation was fine, the upstream produced nothing. Say which it was,
+        // or the message sends the reader hunting the wrong bug. Matched by name
+        // rather than by class so the proxy keeps its layering and does not
+        // import from providers/.
+        const empty = err instanceof Error && err.name === "EmptyCompletionError";
         this.respondProxyError(
           res,
           502,
-          `golem proxy: could not translate the upstream response (${String(err)})`,
+          empty
+            ? `golem proxy: ${err.message}`
+            : `golem proxy: could not translate the upstream response (${String(err)})`,
         );
         return;
       }

@@ -139,6 +139,26 @@ export interface TextSlot {
  */
 const TEXT_KEYS = ["output", "stdout", "content", "text", "result"] as const;
 
+/**
+ * Nested slots, probed after the top-level keys. R10.17: `Read` answers with
+ * `{type:"text", file:{filePath, content, numLines, startLine, totalLines}}`, so
+ * its text is one level down and NO top-level key matches — the swap therefore
+ * never once fired for `Read`, for any file, despite `Read` sitting in the
+ * PostToolUse matcher every `golem init` writes. Measured on real transcripts:
+ * 62 `Read` results in one project, none of them ever eligible.
+ *
+ * That is R9.12's bug again (`result` was missing from the list above, so
+ * WebFetch never swapped either). Both times the fail-safe — an unrecognized
+ * shape passes through untouched — was correct policy that doubled as perfect
+ * camouflage: a tool that never swaps looks exactly like a tool whose output was
+ * never big enough.
+ *
+ * An explicit path list rather than a recursive hunt: the set of shapes Golem
+ * claims to understand should be readable, and a recursive search would happily
+ * find some unrelated string in a payload it does not understand at all.
+ */
+const NESTED_TEXT_PATHS = [["file", "content"]] as const;
+
 export function findTextSlot(response: unknown): TextSlot | null {
   if (typeof response === "string") {
     return { text: response, rebuild: (next) => next };
@@ -149,6 +169,18 @@ export function findTextSlot(response: unknown): TextSlot | null {
       const value = record[key];
       if (typeof value === "string") {
         return { text: value, rebuild: (next) => ({ ...record, [key]: next }) };
+      }
+    }
+    for (const [outer, inner] of NESTED_TEXT_PATHS) {
+      const nested = record[outer];
+      if (typeof nested !== "object" || nested === null || Array.isArray(nested)) continue;
+      const holder = nested as Record<string, unknown>;
+      const value = holder[inner];
+      if (typeof value === "string") {
+        return {
+          text: value,
+          rebuild: (next) => ({ ...record, [outer]: { ...holder, [inner]: next } }),
+        };
       }
     }
   }

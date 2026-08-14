@@ -530,3 +530,67 @@ describe("R9.12 — served-WebFetch provenance label", () => {
     expect(io.out.join("")).toBe("");
   });
 });
+
+/**
+ * R10.17 — `Read` nests its text at `file.content`, so no TOP-LEVEL key matched
+ * and the oversized-output swap never once fired for it, for any file. Measured
+ * on real transcripts: 62 `Read` results in one project, none ever eligible —
+ * despite `Read` sitting in the PostToolUse matcher every `golem init` writes.
+ *
+ * The shapes below are the RECORDED ones, not invented payloads. An invented
+ * payload is what let this pass for two releases.
+ */
+describe("nested text slots (R10.17)", () => {
+  /** Exactly what Claude Code's `Read` puts in `tool_response`. */
+  const readResponse = (content: string) => ({
+    type: "text",
+    file: { filePath: "d:/x/a.ts", content, numLines: 3, startLine: 1, totalLines: 3 },
+  });
+
+  it("finds the text `Read` nests at file.content", () => {
+    const slot = findTextSlot(readResponse("hello from a file"));
+    expect(slot?.text).toBe("hello from a file");
+  });
+
+  it("rebuilds without disturbing the rest of the payload", () => {
+    const slot = findTextSlot(readResponse("original"));
+    const rebuilt = slot?.rebuild("excerpt") as {
+      type: string;
+      file: { filePath: string; content: string; totalLines: number };
+    };
+    expect(rebuilt.file.content).toBe("excerpt");
+    expect(rebuilt.type).toBe("text");
+    expect(rebuilt.file.filePath).toBe("d:/x/a.ts");
+    expect(rebuilt.file.totalLines).toBe(3);
+  });
+
+  it("swaps an oversized Read for a digest end to end", async () => {
+    const big = "x".repeat(DEFAULT_MAX_INLINE_CHARS + 1_000);
+    const io = fakeIo(payload("Read", readResponse(big)));
+    const code = await runPostToolUseHook(io, { projectDir });
+    expect(code).toBe(0);
+    // Before R10.17 this wrote nothing at all.
+    expect(io.out[0]).toBeDefined();
+    const decision = JSON.parse(io.out[0] ?? "{}");
+    const updated = decision.hookSpecificOutput?.updatedToolOutput;
+    expect(updated.file.content).toMatch(CCR_MARKER_RE);
+    expect(updated.file.content.length).toBeLessThan(big.length);
+    expect(updated.file.filePath).toBe("d:/x/a.ts");
+  });
+
+  it("still passes a small Read through untouched", async () => {
+    const io = fakeIo(payload("Read", readResponse("tiny")));
+    expect(await runPostToolUseHook(io, { projectDir })).toBe(0);
+    expect(io.out).toEqual([]);
+  });
+
+  it("keeps the fail-safe for a shape with no text anywhere", () => {
+    expect(findTextSlot({ type: "image", file: { filePath: "a.png", numLines: 0 } })).toBeNull();
+    expect(findTextSlot({ newTodos: [], oldTodos: [] })).toBeNull();
+  });
+
+  it("prefers a top-level key over a nested one when both exist", () => {
+    const slot = findTextSlot({ content: "top", file: { content: "nested" } });
+    expect(slot?.text).toBe("top");
+  });
+});

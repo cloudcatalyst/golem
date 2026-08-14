@@ -576,6 +576,28 @@ export interface AnthropicMessageResponse {
 }
 
 /**
+ * R10.18 — the upstream returned a well-formed response carrying no content and
+ * no tool calls. Distinct from a transport failure: the call succeeded and the
+ * model produced nothing.
+ */
+export class EmptyCompletionError extends Error {
+  readonly model: string;
+  readonly finishReason: string | null;
+  constructor(model: string, finishReason: string | null) {
+    super(
+      finishReason === "length"
+        ? `upstream model "${model}" returned no content — it hit max_tokens before ` +
+            "emitting any output; raise max_tokens or shorten the request"
+        : `upstream model "${model}" returned an empty completion (no content, no tool calls)` +
+            (finishReason === null ? "" : ` — finish_reason "${finishReason}"`),
+    );
+    this.name = "EmptyCompletionError";
+    this.model = model;
+    this.finishReason = finishReason;
+  }
+}
+
+/**
  * Translate a non-streaming OpenAI Chat Completions response body (raw bytes)
  * into an Anthropic Messages response object. The `model` reported is the
  * upstream's REAL serving model (never a Claude name). `fallback` covers a
@@ -605,7 +627,17 @@ export function openAIChatToAnthropic(
       input: parseArgs(tc.function?.arguments),
     });
   }
-  if (content.length === 0) content.push({ type: "text", text: "" });
+  // R10.18: an upstream that produced NOTHING must not be dressed up as a valid
+  // answer that happens to be empty. Manufacturing `{type:"text", text:""}` here
+  // is what made the R10.14 failure undiagnosable: HTTP 200, end_turn,
+  // output_tokens 0, and no way for a client to tell it from a model choosing to
+  // say nothing — so Claude Code looped on it for a day. A thrown error becomes
+  // a clean proxy error naming the model instead.
+  //
+  // Gate on content AND tool calls: a tool-only turn legitimately has no text.
+  if (content.length === 0) {
+    throw new EmptyCompletionError(parsed.model ?? fallback.model, choice?.finish_reason ?? null);
+  }
   return {
     id: parsed.id ?? fallback.id,
     type: "message",

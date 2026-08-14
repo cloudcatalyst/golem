@@ -149,14 +149,17 @@ describe("openAIChatToAnthropic", () => {
     expect(reason("content_filter")).toBe("end_turn");
   });
 
-  it("tolerates a missing content / usage and falls back to id+model", () => {
+  it("tolerates a missing usage and falls back to id+model", () => {
+    // R10.18 changed the no-content case from "an empty text block" to a throw,
+    // so the fallback coverage this test exists for now rides on a response that
+    // HAS content. The empty case is asserted in its own describe block below.
     const out = openAIChatToAnthropic(
-      buf({ choices: [{ message: { role: "assistant", content: null } }] }),
+      buf({ choices: [{ message: { role: "assistant", content: "hi" } }] }),
       fallback,
     );
     expect(out.id).toBe("msg_x");
     expect(out.model).toBe("fallback-model");
-    expect(out.content).toEqual([{ type: "text", text: "" }]);
+    expect(out.content).toEqual([{ type: "text", text: "hi" }]);
     expect(out.usage).toEqual({ input_tokens: 0, output_tokens: 0 });
   });
 
@@ -536,5 +539,69 @@ describe("countTokensResponse (R10.15)", () => {
 
   it("throws on an empty body so the caller can fail cleanly", () => {
     expect(() => countAnthropicInputTokens(null)).toThrow(/empty request body/);
+  });
+});
+
+/**
+ * R10.18 — an empty upstream completion must surface as an error, not be dressed
+ * up as a valid answer that happens to be empty. Manufacturing
+ * `{type:"text", text:""}` is what made the R10.14 failure undiagnosable: HTTP
+ * 200, end_turn, output_tokens 0, indistinguishable from a model choosing to say
+ * nothing — so Claude Code looped on it for a day.
+ */
+describe("empty completions (R10.18)", () => {
+  const fallback = { id: "msg_x", model: "deepseek/deepseek-v4-flash-0731" };
+
+  it("throws instead of returning an empty text block", () => {
+    expect(() =>
+      openAIChatToAnthropic(
+        buf({ choices: [{ message: { role: "assistant", content: null } }] }),
+        fallback,
+      ),
+    ).toThrow(/empty completion/);
+  });
+
+  it("names the real serving model, so the error is actionable", () => {
+    expect(() =>
+      openAIChatToAnthropic(
+        buf({ model: "deepseek/deepseek-v4-flash-0731", choices: [{ message: { content: "" } }] }),
+        fallback,
+      ),
+    ).toThrow(/deepseek\/deepseek-v4-flash-0731/);
+  });
+
+  it("distinguishes hitting max_tokens before emitting anything", () => {
+    expect(() =>
+      openAIChatToAnthropic(
+        buf({ choices: [{ message: { content: "" }, finish_reason: "length" }] }),
+        fallback,
+      ),
+    ).toThrow(/max_tokens/);
+  });
+
+  it("does NOT fire for a tool-only turn, which legitimately has no text", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        choices: [
+          {
+            message: {
+              content: null,
+              tool_calls: [{ id: "c1", function: { name: "f", arguments: "{}" } }],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      }),
+      fallback,
+    );
+    expect(out.content).toEqual([{ type: "tool_use", id: "c1", name: "f", input: {} }]);
+  });
+
+  it("does NOT fire when only a thinking trace came back", () => {
+    const out = openAIChatToAnthropic(
+      buf({ choices: [{ message: { reasoning_content: "hmm", content: "" } }] }),
+      fallback,
+    );
+    expect(out.content).toEqual([{ type: "thinking", thinking: "hmm" }]);
   });
 });

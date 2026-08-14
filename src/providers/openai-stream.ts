@@ -105,8 +105,25 @@ export class OpenAIChatSSETranslator extends Transform {
     const tail = this.#buf.trim();
     if (tail.length > 0) this.#handleLine(tail);
     this.#ensureStarted();
-    if (this.#current === null) {
-      // No content at all — emit a valid empty text block.
+    if (this.#blockCount === 0) {
+      // R10.18: the upstream produced nothing. On this path the status line and
+      // `message_start` have already gone out, so an HTTP error is no longer
+      // available — say it IN-BAND, in a block the user can actually read,
+      // rather than closing a well-formed empty stream. An empty stream is what
+      // made the R10.14 failure undiagnosable: indistinguishable from a model
+      // choosing to say nothing, so Claude Code looped on it for a day.
+      //
+      // Golem-prefixed and attributed: the proxy must never appear to speak as
+      // the model (Decision 25, and the local-answer rail's precedent).
+      this.#switchTo({ kind: "text" });
+      this.push(
+        sse("content_block_delta", {
+          type: "content_block_delta",
+          index: this.#currentIndex,
+          delta: { type: "text_delta", text: this.#emptyCompletionNotice() },
+        }),
+      );
+    } else if (this.#current === null) {
       this.#switchTo({ kind: "text" });
     }
     this.#closeCurrent();
@@ -194,6 +211,18 @@ export class OpenAIChatSSETranslator extends Transform {
     }
 
     if (choice?.finish_reason != null) this.#stopReason = mapStopReason(choice.finish_reason);
+  }
+
+  /**
+   * The in-band text for an upstream that streamed no content at all (R10.18).
+   * Names the model and, when it is the cause, the max_tokens case — a reader
+   * has to be able to act on it.
+   */
+  #emptyCompletionNotice(): string {
+    const base = `**Golem** The upstream model "${this.#model}" returned an empty completion — no text and no tool calls.`;
+    return this.#stopReason === "max_tokens"
+      ? `${base} It hit max_tokens before emitting any output; raise max_tokens or shorten the request.`
+      : `${base} This is the upstream's response, not a reply from the model.`;
   }
 
   /** Emit message_start exactly once, lazily (using the id/model seen so far). */
