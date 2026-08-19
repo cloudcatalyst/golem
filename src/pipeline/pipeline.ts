@@ -270,6 +270,51 @@ function isMessagesRequest(request: ProxyRequest): boolean {
  * `pipeline` to {@link GolemProxy}; the proxy recomputes content-length from
  * the returned body.
  */
+/**
+ * R10.23 — how long the local-answer stage may hold a live request before Golem
+ * gives up on it and forwards upstream.
+ *
+ * The stage runs a vector search inline, which means an embedder call, which on
+ * a cold local model is seconds — and it is eligible precisely on the
+ * single-turn requests that START a session, so the first turn of a session was
+ * the one that paid, presenting as the client sitting on "waiting for API".
+ * Two seconds is chosen to be longer than a warm search (milliseconds) and far
+ * shorter than a user's patience.
+ */
+const LOCAL_ANSWER_BUDGET_MS = 2_000;
+
+/**
+ * R10.23 — how long Golem's own pre-forward work may take before it is worth
+ * telling the operator about. Under this, the pipeline is invisible against
+ * normal upstream latency; over it, the client is showing "waiting for API" for
+ * time the API is not responsible for, and the honesty rail (Decision 25) says
+ * name the real cause rather than let the upstream wear it.
+ */
+const HELD_REQUEST_LOG_MS = 750;
+
+/**
+ * Log — once, on one line — that Golem held a request longer than
+ * {@link HELD_REQUEST_LOG_MS}, with the per-stage breakdown that says which
+ * stage did it. Observation only: it can neither change nor fail a request.
+ */
+function reportHeldRequest(
+  startedAt: number,
+  stageMs: Record<string, number>,
+  outcome: string,
+): void {
+  const total = performance.now() - startedAt;
+  if (total < HELD_REQUEST_LOG_MS) return;
+  const breakdown = Object.entries(stageMs)
+    .filter(([, ms]) => ms >= 1)
+    .sort((a, b) => b[1] - a[1])
+    .map(([stage, ms]) => `${stage}=${Math.round(ms)}ms`)
+    .join(" ");
+  process.stderr.write(
+    `golem proxy: pipeline held this request ${Math.round(total)}ms before ` +
+      `forwarding (${outcome})${breakdown.length > 0 ? ` — ${breakdown}` : ""}\n`,
+  );
+}
+
 export function createGolemPipeline(options: GolemPipelineOptions): RequestPipeline {
   const emit = options.onEvent ?? ((): void => {});
   // R8.1 — one observer per pipeline instance (i.e. per proxy process), because
@@ -280,6 +325,12 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
   return {
     name: "golem",
     async process(request: ProxyRequest): Promise<ProxyRequest> {
+      // R10.23 — every stage below runs BEFORE the request is forwarded, so
+      // whatever they cost, the user is watching the client say "waiting for
+      // API" for exactly that long, with nothing in the log to say Golem is the
+      // one holding it. Time the stages and, past the threshold, say so.
+      const startedAt = performance.now();
+      const stageMs: Record<string, number> = {};
       if (request.body === null || !isMessagesRequest(request)) {
         return request;
       }
@@ -332,11 +383,32 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       if (options.localAnswer !== undefined) {
         const queryText = eligibleLocalAnswerText(body);
         if (queryText !== undefined) {
+          const localAnswerAt = performance.now();
           try {
-            const result = await options.localAnswer.service.tryAnswer({
-              text: queryText,
-              projectId: options.projectId,
-            });
+            // R10.23 — BOUND it. This stage runs a vector search (and therefore
+            // an embedder, which on a cold local model is a multi-second first
+            // call) inline on a live request, and it is eligible on exactly the
+            // single-turn requests that open a session — so the very first turn
+            // was the one that paid. Past the budget, abandon the local answer
+            // and forward upstream: the KB answer is an optimisation, and no
+            // optimisation may hold a user's turn open indefinitely. Fail-open
+            // is already this stage's contract for errors; a timeout is just the
+            // slow flavour of the same verdict.
+            const result = await Promise.race([
+              options.localAnswer.service.tryAnswer({
+                text: queryText,
+                projectId: options.projectId,
+              }),
+              new Promise<never>((_resolve, reject) => {
+                const timer = setTimeout(
+                  () =>
+                    reject(new Error(`local-answer stage exceeded ${LOCAL_ANSWER_BUDGET_MS}ms`)),
+                  LOCAL_ANSWER_BUDGET_MS,
+                );
+                // Never let a pending budget timer hold the process open.
+                timer.unref?.();
+              }),
+            ]);
             if (result.answered) {
               const stream = body.stream === true;
               const respondDirectly = synthesizeLocalAnswerResponse(queryText, result.text, stream);
@@ -358,6 +430,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
                 brevity: "off",
                 brevityDirectiveTokens: 0,
               });
+              reportHeldRequest(startedAt, stageMs, "answered locally");
               return { ...request, respondDirectly };
             }
           } catch (err) {
@@ -371,6 +444,8 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
                 err instanceof Error ? err.message : String(err)
               })\n`,
             );
+          } finally {
+            stageMs["local-answer"] = performance.now() - localAnswerAt;
           }
         }
       }
@@ -378,7 +453,9 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       // Stage 2 — lossless compression (level >= 1).
       if (stages.losslessCompression && Array.isArray(body.messages)) {
         const messagesIn = body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
+        const compressAt = performance.now();
         const result = await options.compression.compress(messagesIn, policy, options.projectId);
+        stageMs.compression = performance.now() - compressAt;
         for (const [stage, delta] of Object.entries(result.stageSavings)) {
           stageSavings[stage] = delta;
         }
@@ -413,10 +490,12 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         const messagesInSemantic = body.messages as ReadonlyArray<
           Readonly<Record<string, unknown>>
         >;
+        const semanticAt = performance.now();
         const semantic = await options.semantic.compress(
           messagesInSemantic,
           stages.semanticCompression,
         );
+        stageMs.semantic = performance.now() - semanticAt;
         if (semantic !== null) {
           if (options.headroomCcrStore !== undefined) {
             ccrRefsStored += await backfillHeadroomCcrRefs(
@@ -449,6 +528,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         Array.isArray(body.messages)
       ) {
         const messagesInSub = body.messages as ReadonlyArray<Readonly<Record<string, unknown>>>;
+        const substitutionAt = performance.now();
         const lookup = await options.contextSubstitution.lookup();
         const substituted = await substituteKnownContent(
           messagesInSub,
@@ -456,6 +536,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
           options.contextSubstitution.ccrStore,
           options.contextSubstitution.minChars,
         );
+        stageMs.substitution = performance.now() - substitutionAt;
         if (substituted.substitutions > 0) {
           body = { ...body, messages: [...substituted.messages] };
           stageSavings.contextSubstitution = {
@@ -502,6 +583,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
 
       if (!changed) {
         // Nothing to do — preserve original bytes exactly.
+        reportHeldRequest(startedAt, stageMs, "forwarded unchanged");
         return request;
       }
 
@@ -536,6 +618,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }),
         cacheMessageCount: cacheObservation.messageCount,
       });
+      reportHeldRequest(startedAt, stageMs, "forwarded rewritten");
       return { ...request, body: Buffer.from(finalJson, "utf8") };
     },
   };
