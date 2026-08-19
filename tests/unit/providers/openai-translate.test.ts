@@ -8,8 +8,10 @@ import {
   anthropicToOpenAIChat,
   countAnthropicInputTokens,
   countTokensResponse,
+  EmptyCompletionError,
   openAIChatToAnthropic,
   SYNTHESIZED_THINKING_LABEL,
+  UpstreamErrorResponse,
 } from "../../../src/providers/index.js";
 
 const buf = (o: unknown) => Buffer.from(JSON.stringify(o), "utf8");
@@ -601,13 +603,109 @@ describe("empty completions (R10.18)", () => {
     expect(out.content).toEqual([{ type: "tool_use", id: "c1", name: "f", input: {} }]);
   });
 
-  it("does NOT fire when only a thinking trace came back", () => {
+  it("keeps a thinking-only trace but appends a visible notice (R10.23)", () => {
+    // R10.23: erroring here would throw the trace away, and returning the trace
+    // ALONE hands Claude Code a turn with no visible output — the loop R10.18
+    // was written to end. So: keep the trace, and say what is missing next to it.
     const out = openAIChatToAnthropic(
       buf({ choices: [{ message: { reasoning_content: "hmm", content: "" } }] }),
       fallback,
     );
+    expect(out.content[0]).toEqual({
+      type: "thinking",
+      thinking: `${SYNTHESIZED_THINKING_LABEL}hmm`,
+    });
+    const notice = out.content[1] as { type: string; text: string };
+    expect(notice.type).toBe("text");
+    expect(notice.text).toContain("**Golem**");
+    expect(notice.text).toContain("only a reasoning trace");
+  });
+});
+
+/**
+ * R10.23 — the non-streaming half of the same two blind spots: OpenRouter's
+ * response-side reasoning field, and an error-shaped 200 body.
+ */
+describe("OpenRouter response fields (R10.23)", () => {
+  const fallback = { id: "msg_x", model: "deepseek/deepseek-v4-flash" };
+
+  it("maps message.reasoning to a labelled thinking block", () => {
+    const out = openAIChatToAnthropic(
+      buf({
+        model: "deepseek/deepseek-v4-flash",
+        choices: [{ message: { reasoning: "worked it out", content: "391" } }],
+      }),
+      fallback,
+    );
     expect(out.content).toEqual([
-      { type: "thinking", thinking: `${SYNTHESIZED_THINKING_LABEL}hmm` },
+      { type: "thinking", thinking: `${SYNTHESIZED_THINKING_LABEL}worked it out` },
+      { type: "text", text: "391" },
     ]);
+  });
+
+  it("falls back to reasoning_details, and does not duplicate when both are sent", () => {
+    const structured = openAIChatToAnthropic(
+      buf({
+        choices: [
+          {
+            message: {
+              reasoning_details: [{ type: "reasoning.text", text: "structured" }],
+              content: "ok",
+            },
+          },
+        ],
+      }),
+      fallback,
+    );
+    expect(structured.content[0]).toEqual({
+      type: "thinking",
+      thinking: `${SYNTHESIZED_THINKING_LABEL}structured`,
+    });
+    const both = openAIChatToAnthropic(
+      buf({
+        choices: [
+          {
+            message: {
+              reasoning: "We",
+              reasoning_details: [{ type: "reasoning.text", text: "We" }],
+              content: "ok",
+            },
+          },
+        ],
+      }),
+      fallback,
+    );
+    expect(both.content[0]).toEqual({
+      type: "thinking",
+      thinking: `${SYNTHESIZED_THINKING_LABEL}We`,
+    });
+  });
+
+  it("relays an error-shaped 200 body as the upstream's own refusal", () => {
+    // Previously this failed Zod's `choices.min(1)` and surfaced as "could not
+    // translate the upstream response (ZodError: …)", which points the reader at
+    // Golem's translator instead of at the upstream's message.
+    expect(() =>
+      openAIChatToAnthropic(
+        buf({ model: "deepseek/deepseek-v4-flash", error: { code: 429, message: "rate-limited" } }),
+        fallback,
+      ),
+    ).toThrow(UpstreamErrorResponse);
+    try {
+      openAIChatToAnthropic(
+        buf({ model: "deepseek/deepseek-v4-flash", error: { code: 429, message: "rate-limited" } }),
+        fallback,
+      );
+    } catch (err) {
+      expect((err as Error).message).toContain("rate-limited");
+      expect((err as Error).message).toContain("code 429");
+      expect((err as Error).message).toContain("deepseek/deepseek-v4-flash");
+    }
+  });
+
+  it("still errors when NOTHING at all came back (R10.18 unchanged)", () => {
+    expect(() =>
+      openAIChatToAnthropic(buf({ choices: [{ message: { content: "" } }] }), fallback),
+    ).toThrow(EmptyCompletionError);
   });
 });

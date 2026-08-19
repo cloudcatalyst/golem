@@ -49,11 +49,13 @@ export {
   countAnthropicInputTokens,
   countTokensResponse,
   EmptyCompletionError,
+  emptyAnswerNotice,
   mapStopReason,
   type OpenAIChatMessage,
   type OpenAIChatRequest,
   openAIChatToAnthropic,
   SYNTHESIZED_THINKING_LABEL,
+  UpstreamErrorResponse,
 } from "./openai-translate.js";
 export { withDefaultTarget } from "./target-settings.js";
 export {

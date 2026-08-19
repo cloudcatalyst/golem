@@ -106,20 +106,20 @@ describe("OpenAI → Anthropic SSE translation", () => {
     expect(firstData(sse, "message_delta").delta).toMatchObject({ stop_reason: "max_tokens" });
   });
 
-  it("emits a well-formed message when the stream carries no content", async () => {
+  it("reports a stream that carried no content as an error, not as a turn", async () => {
+    // R10.23 supersedes R10.18's in-band notice for THIS case (nothing at all
+    // came back): a completed turn made the client stop and wait for the user,
+    // which is the "no further updates" dead end. Anthropic's streaming `error`
+    // event is the protocol's own way to say a stream did not finish.
     const sse = await run(["data: [DONE]\n\n"]);
-    // R10.18: the block is no longer EMPTY — it carries a notice saying the
-    // upstream produced nothing (asserted in the "empty stream" block below).
-    // The event sequence must still be a valid Anthropic stream.
-    expect(events(sse)).toEqual([
-      "message_start",
-      "content_block_start",
-      "content_block_delta",
-      "content_block_stop",
-      "message_delta",
-      "message_stop",
+    expect(events(sse)).toEqual(["error"]);
+  });
+
+  it("falls back to the provided id/model when the stream never announced them", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n',
+      "data: [DONE]\n\n",
     ]);
-    // Falls back to the provided id/model when the stream never announced them.
     expect(firstData(sse, "message_start").message).toMatchObject({
       id: "msg_fb",
       model: "fb-model",
@@ -236,23 +236,16 @@ describe("OpenAI → Anthropic SSE translation", () => {
  * the R10.14 failure undiagnosable.
  */
 describe("empty stream (R10.18)", () => {
-  it("emits a readable, Golem-attributed notice instead of an empty text block", async () => {
+  it("says an empty completion happened, as a retryable error (R10.23)", async () => {
     const sse = await run(["data: [DONE]\n\n"]);
-    expect(events(sse)).toEqual([
-      "message_start",
-      "content_block_start",
-      "content_block_delta",
-      "content_block_stop",
-      "message_delta",
-      "message_stop",
-    ]);
-    const deltas = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)].map((m) =>
-      JSON.parse(m[1] as string),
-    );
-    const text = deltas.map((d) => d.delta.text).join("");
-    // Attributed to Golem — the proxy must never appear to speak as the model.
-    expect(text).toContain("**Golem**");
-    expect(text).toContain("empty completion");
+    expect(events(sse)).toEqual(["error"]);
+    const err = firstData(sse, "error").error as { type: string; message: string };
+    // Retryable: empty completions are intermittent (live-probed 2026-08-19),
+    // so the client must be free to try again rather than end the turn.
+    expect(err.type).toBe("api_error");
+    expect(err.message).toContain("empty completion");
+    // Attributed — the proxy must never appear to speak as the model.
+    expect(err.message).toContain("**Golem**");
   });
 
   it("names the max_tokens case when that is why nothing came back", async () => {
@@ -351,5 +344,180 @@ describe("keepalive (R10.16)", () => {
     t.end();
     await done;
     expect(Buffer.concat(out).toString("utf8")).not.toContain("event: ping");
+  });
+});
+
+/**
+ * R10.23 — an OpenAI-schema gateway that fails AFTER the headers have gone out
+ * cannot change the status, so it reports the failure as an ordinary `data:`
+ * frame carrying a top-level `error` (OpenRouter documents exactly this shape;
+ * `finish_reason: "error"` usually rides along). The translator used to drop
+ * every frame without a `delta`, so the real cause was discarded and the generic
+ * "empty completion" notice went out in its place — with `stop_reason:
+ * end_turn`, which reads to the client as a turn that finished normally.
+ */
+describe("mid-stream upstream error (R10.23)", () => {
+  const ERROR_FRAME =
+    'data: {"model":"deepseek/deepseek-v4-flash","provider":"StreamLake",' +
+    '"error":{"code":"server_error","message":"Provider disconnected unexpectedly"},' +
+    '"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]}\n\n';
+
+  it("relays it as an Anthropic error event naming the model, provider and cause", async () => {
+    const sse = await run([ERROR_FRAME, "data: [DONE]\n\n"]);
+    expect(events(sse)).toEqual(["error"]);
+    const err = firstData(sse, "error").error as { type: string; message: string };
+    expect(err.type).toBe("api_error");
+    expect(err.message).toContain("deepseek/deepseek-v4-flash");
+    expect(err.message).toContain("StreamLake");
+    expect(err.message).toContain("Provider disconnected unexpectedly");
+    // Attributed to the upstream: Golem witnessed this fault, it did not own it.
+    expect(err.message).toContain("Reported by the upstream");
+  });
+
+  it("no longer hides the cause behind an empty-completion notice", async () => {
+    const sse = await run([ERROR_FRAME, "data: [DONE]\n\n"]);
+    expect(sse).not.toContain("empty completion");
+  });
+
+  it("maps the upstream code onto Anthropic's own error types", async () => {
+    const rate = await run(['data: {"error":{"code":429,"message":"rate-limited"}}\n\n']);
+    expect((firstData(rate, "error").error as { type: string }).type).toBe("rate_limit_error");
+    const auth = await run(['data: {"error":{"code":401,"message":"bad key"}}\n\n']);
+    expect((firstData(auth, "error").error as { type: string }).type).toBe("authentication_error");
+    const over = await run(['data: {"error":{"code":503,"message":"busy"}}\n\n']);
+    expect((firstData(over, "error").error as { type: string }).type).toBe("overloaded_error");
+  });
+
+  it("reads a failure nested in the choice as well as at the top level", async () => {
+    const sse = await run([
+      'data: {"choices":[{"error":{"code":502,"message":"upstream boom"}}]}\n\n',
+    ]);
+    expect((firstData(sse, "error").error as { message: string }).message).toContain(
+      "upstream boom",
+    );
+  });
+
+  it("keeps text already streamed, closes the block, and does not pretend the turn ended", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"content":"partial answer"}}]}\n\n',
+      ERROR_FRAME,
+      "data: [DONE]\n\n",
+    ]);
+    expect(sse).toContain("partial answer");
+    expect(events(sse)).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "error",
+    ]);
+    // A `message_stop` here would tell the client the turn completed normally,
+    // which is precisely the dead end R10.23 exists to remove.
+    expect(events(sse)).not.toContain("message_stop");
+  });
+
+  it("ignores whatever the upstream sends after the error", async () => {
+    const sse = await run([
+      ERROR_FRAME,
+      'data: {"choices":[{"delta":{"content":"late"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(sse).not.toContain("late");
+    expect(events(sse)).toEqual(["error"]);
+  });
+});
+
+/**
+ * R10.23 — OpenRouter streams the reasoning trace as `delta.reasoning` (with the
+ * same text repeated in `delta.reasoning_details`) and NEVER as
+ * `reasoning_content`, which it documents as a request-side alias. Reading only
+ * `reasoning_content` therefore dropped the whole trace of every reasoning model
+ * reached through OpenRouter — the "no thinking deltas arrive" open question in
+ * verification-notes §84. Field names captured live on 2026-08-19 against
+ * `deepseek/deepseek-v4-flash` and `qwen/qwen3.7-flash`.
+ */
+describe("OpenRouter reasoning fields (R10.23)", () => {
+  /** The full text of every thinking_delta, in order. */
+  function thinking(sse: string): string {
+    return [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)]
+      .map((m) => JSON.parse(m[1] as string).delta)
+      .filter((d: { type: string }) => d.type === "thinking_delta")
+      .map((d: { thinking: string }) => d.thinking)
+      .join("");
+  }
+
+  it("maps delta.reasoning to a labelled thinking block", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"reasoning":"We need 17*23"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"391"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(thinking(sse)).toBe(`${SYNTHESIZED_THINKING_LABEL}We need 17*23`);
+    expect(sse).toContain("391");
+  });
+
+  it("falls back to reasoning_details when no plaintext field is sent", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"structured only"}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(thinking(sse)).toContain("structured only");
+  });
+
+  it("does not duplicate a trace that arrives in BOTH fields (OpenRouter sends both)", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"reasoning":"We","reasoning_details":[{"type":"reasoning.text","text":"We"}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"x"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(thinking(sse)).toBe(`${SYNTHESIZED_THINKING_LABEL}We`);
+  });
+
+  it("still maps reasoning_content (DeepSeek direct, Moonshot)", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"reasoning_content":"legacy field"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"y"}}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(thinking(sse)).toContain("legacy field");
+  });
+
+  it("keeps a reasoning-only answer and appends a visible notice in-band", async () => {
+    // The trace is real output, so this is NOT the empty-completion case — but a
+    // turn of pure thinking has no visible output, which is the loop R10.18 was
+    // written to end. Keep the trace, say what is missing beside it.
+    const sse = await run([
+      'data: {"model":"deepseek/deepseek-v4-flash","choices":[{"delta":{"reasoning":"thought hard"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    expect(events(sse)).not.toContain("error");
+    expect(events(sse)).toContain("message_stop");
+    expect(sse).toContain("thought hard");
+    const text = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)]
+      .map((m) => JSON.parse(m[1] as string).delta)
+      .filter((d: { type: string }) => d.type === "text_delta")
+      .map((d: { text: string }) => d.text)
+      .join("");
+    expect(text).toContain("**Golem**");
+    expect(text).toContain("only a reasoning trace");
+  });
+
+  it("says the budget ran out when a truncated trace ate it all", async () => {
+    const sse = await run([
+      'data: {"choices":[{"delta":{"reasoning":"still thinking"}}]}\n\n',
+      'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n',
+      "data: [DONE]\n\n",
+    ]);
+    const text = [...sse.matchAll(/event: content_block_delta\ndata: (.+)/g)]
+      .map((m) => JSON.parse(m[1] as string).delta)
+      .filter((d: { type: string }) => d.type === "text_delta")
+      .map((d: { text: string }) => d.text)
+      .join("");
+    // Deterministic: a retry spends the budget the same way, so this one stays
+    // in-band where the reader can act on it rather than becoming an error.
+    expect(text).toContain("max_tokens");
+    expect(events(sse)).not.toContain("error");
   });
 });
