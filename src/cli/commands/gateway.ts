@@ -3,60 +3,31 @@
  */
 
 import type { Command } from "commander";
-import { findProjectDir, loadConfig } from "../../config/index.js";
+import { findProjectDir } from "../../config/index.js";
 import {
   isKeylessProvider,
-  resolveUpstreamDisplay,
   UPSTREAM_AUTH_SCHEMES,
   UPSTREAM_PROVIDERS,
 } from "../../providers/index.js";
 import {
   addGateway,
   collectGateways,
-  credentialEnvForProxy,
   loginGateway,
   logoutGateway,
   type NewGateway,
   removeGateway,
   renderGateways,
-  useGateway,
 } from "../gateways.js";
 import { InitError } from "../init.js";
-import { portInUse, startDetached, stopProxy, waitForPortFree } from "../proxy-daemon.js";
+// R10.24: shared with `golem target use` so one selector cannot be applied two
+// different ways.
+import { selectTarget } from "./select-target.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(err instanceof InitError ? 2 : 1);
-}
-
-async function resolvePort(
-  dir: string,
-  portOpt?: string,
-): Promise<{ port: number; upstream: string; sliderLevel: number }> {
-  const { settings } = await loadConfig({ projectDir: dir });
-  const port = portOpt === undefined ? settings.proxy.port : Number(portOpt);
-  if (!Number.isInteger(port) || port < 0 || port > 65535)
-    throw new InitError(`invalid port "${portOpt}"`);
-  return {
-    port,
-    upstream: resolveUpstreamDisplay(settings.proxy).baseUrl,
-    sliderLevel: settings.slider.level,
-  };
-}
-
-async function restartProxyDetached(
-  dir: string,
-  portOpt?: string,
-): Promise<{ pid: number; port: number; upstream: string }> {
-  const { port, upstream } = await resolvePort(dir, portOpt);
-  await stopProxy(dir);
-  await waitForPortFree(port);
-  const credEnv = await credentialEnvForProxy(dir);
-  const pid = await startDetached(dir, port, process.argv[1] ?? "", credEnv);
-  if (pid === null) throw new InitError(`proxy did not come up on port ${port}`);
-  return { pid, port, upstream };
 }
 
 export default function register(program: Command): void {
@@ -86,9 +57,10 @@ export default function register(program: Command): void {
   gatewayCmd
     .command("use")
     .description(
-      "Switch the active gateway (use 'none' to clear and revert to the top-level config)",
+      "Switch the active gateway (use 'none' to clear and revert to the top-level config). " +
+        "A target id also works — see `golem target use` to pick a specific MODEL.",
     )
-    .argument("<id>", "a gateway id from proxy.gateways, or 'none' to clear")
+    .argument("<id>", "a gateway id from proxy.gateways, a target id, or 'none' to clear")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--no-restart", "do not auto-restart a running proxy to apply the switch")
     .option(
@@ -98,25 +70,12 @@ export default function register(program: Command): void {
     )
     .action(async (id: string, opts: { dir: string; restart: boolean; yes: boolean }) => {
       try {
-        const target = id === "none" ? null : id;
-        const { active } = await useGateway(opts.dir, target, new Date().toISOString(), {
-          assumeYes: opts.yes,
-        });
-        const label =
-          active === null
-            ? "active gateway cleared — using the top-level (default) upstream config"
-            : `active gateway: ${active}`;
-        const report = await collectGateways(opts.dir);
-        const activeUrl = report.gateways.find((a) => a.active)?.base_url;
-        const dest = activeUrl !== undefined ? ` -> ${activeUrl}` : "";
-        const { port } = await resolvePort(opts.dir);
-        const running = await portInUse(port);
-        if (opts.restart && running) {
-          const { pid } = await restartProxyDetached(opts.dir);
-          process.stdout.write(`${label} — proxy restarted (pid ${pid})${dest}\n`);
-        } else if (running)
-          process.stdout.write(`${label} (restart the proxy to apply: golem proxy restart)\n`);
-        else process.stdout.write(`${label}.\n`);
+        process.stdout.write(
+          await selectTarget(opts.dir, id === "none" ? null : id, {
+            restart: opts.restart,
+            yes: opts.yes,
+          }),
+        );
       } catch (err) {
         _fail(err);
       }

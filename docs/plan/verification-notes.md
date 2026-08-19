@@ -5999,3 +5999,88 @@ Rule worth keeping, since this is the third time it has come up (§84's banner,
 R10.19's `headroom_config`, now this): **if Golem spends a user's time, Golem has
 to be the one to say so.** An honest-observability tool that lets the upstream
 wear its own latency is lying by omission.
+
+---
+
+## §130 — two status surfaces, no shared contract: what drifted and what now pins it (2026-08-20)
+
+Found by the user reading both lines in one VS Code window. `golem statusline`
+(TypeScript, `src/cli/statusline.ts`) and the VS Code status bar (plain CommonJS,
+`vscode-extension/render.js`) render the same facts and share **no module** — by
+design, since the extension must not import the CLI's graph. What they also
+shared was no contract, and they had drifted apart in four ways at once:
+
+| | CLI | status bar |
+| --- | --- | --- |
+| dial position | after the destination | BETWEEN brand and arrow |
+| role order | workers first, chat last | workers first, chat last |
+| destination label | gateway (`openrouter`) | model's vendor (`deepseek`) |
+| model precedence | last-served, else configured | configured, else last-served |
+| proxy states | 4 (running/unwired/bypass/off) | 2, and `in_path` unread |
+| bypass glyph | filled ⬢ (green) | hollow ⬡ |
+
+`role-marks-parity.test.ts` (R9.4) already pinned the GLYPHS the two use, and
+that test is why the marks agreed while everything around them diverged — a
+narrow pin gives real, and misleading, confidence. The new
+`statusline-parity.test.ts` renders equivalent state through both implementations
+and asserts ONE identical string; it found the bypass-glyph disagreement
+immediately, which nobody had reported.
+
+**Rule worth keeping: when two implementations of one surface cannot share code,
+the test is the only place the contract can live — so pin the OUTPUT, not the
+constants.** Pinning constants proves they agree about symbols while they
+disagree about meaning.
+
+**Second finding, from the same read: a dial shown in a state where it cannot
+act is a misreport, not a detail.** Both surfaces printed the configured
+compression and brevity while the proxy was stopped, unwired, or serving the
+redaction-only bypass shim. R8.32 established this for the GLYPH (a running
+daemon nothing points at must not look active) and Decision 56 for the bypass
+label, but neither reached the dials — so the most confident-looking part of the
+line kept advertising transforms no stage was running. The dials are now
+suppressed in all three states and the state is NAMED, in one vocabulary, because
+colour and glyph fill are not readable under NO_COLOR, in a screenshot, or by
+anyone who has not memorised ⬢ vs ⬡.
+
+Note the R8.32 test whose name was `does not claim a compression level when Golem
+is not in the path` and whose body asserted `expect(line).toContain("aggressive")`
+— it pinned the very claim its name forbade. A test can be green, precise, and
+pointed at the wrong behaviour; read the name against the assertion.
+
+---
+
+## §131 — `inference.default_target` could not be set to a target (2026-08-20)
+
+The VS Code "switch upstream" picker offered gateways, and `golem gateway use`
+rejected anything that was not a gateway id. So a gateway fronting several models
+— `openrouter` with a qwen entry and a deepseek entry — could only be selected as
+a whole, and selecting it served `models[0]`. The other model was unreachable from
+every UI, and from the CLI, despite:
+
+- R9.1 resolving TARGETS (`<gateway>:<model>`) in the registry,
+- R9.2 routing per target (virtual `golem/<id>` model ids, `x-golem-target`,
+  conversation bindings),
+- R10.8 making `inference.default_target` the chat fall-through,
+- and the leaf being *named* `default_target`.
+
+Every mechanism existed except a verb to set it. Fixed by teaching `useGateway`
+to accept a target id (preflighting the credential of the gateway BEHIND the
+target, not the target id, which resolves to nothing) and adding
+`golem target use`. `collectGateways` now reports `active_target` — the selection
+verbatim — while `active` stays the backing GATEWAY id so no existing consumer
+changes meaning.
+
+**Rule: a setting named after a concept must accept that concept.** The registry
+and the router spoke targets; the only writer spoke gateways; nothing failed
+loudly, the picker just quietly offered one of the two models the user had
+configured.
+
+Also fixed here: `collectGateways` reported each gateway's model as `models[0]`
+unconditionally, so even after switching, every surface named the first model.
+
+**Test-isolation note (same batch):** `tests/integration/cli-status.test.ts`'s
+"no warnings for an uninitialized project" case read the MACHINE's installed VS
+Code extension via R9.16's staleness check, so it went red on any working tree
+that had edited the extension and not yet redeployed — a fact about the machine,
+not the project. It now passes `vscodeExtensionsDir: null`, as
+`tests/contract/vscode-status-fields.contract.test.ts` already did.
