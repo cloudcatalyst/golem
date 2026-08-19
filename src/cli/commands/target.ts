@@ -10,6 +10,7 @@ import type { Command } from "commander";
 import { TARGET_TRUST_LEVELS, type TargetTrust } from "../../providers/index.js";
 import { InitError } from "../init.js";
 import { addTarget, collectTargets, renderTargets, showTarget, testTarget } from "../targets.js";
+import { selectTarget } from "./select-target.js";
 
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -35,6 +36,38 @@ export default function register(program: Command): void {
         const report = await collectTargets(opts.dir);
         process.stdout.write(
           opts.json ? `${JSON.stringify(report, null, 2)}\n` : renderTargets(report),
+        );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  // R10.24 — the missing verb. Every piece of per-target routing existed
+  // (R9.1/R9.2 resolve targets, `inference.default_target` selects one) except a
+  // way to SET it: `gateway use` rejected target ids, so a gateway fronting two
+  // models could only ever serve whichever one it listed first. This is the
+  // command the VS Code model picker drives.
+  targetCmd
+    .command("use")
+    .description(
+      "Choose the target (gateway AND model) this project's chat traffic goes to " +
+        "(use 'none' to clear and revert to the top-level config)",
+    )
+    .argument("<id>", "a target id from `golem target list`, or 'none' to clear")
+    .option("--dir <path>", "project directory", process.cwd())
+    .option("--no-restart", "do not auto-restart a running proxy to apply the switch")
+    .option(
+      "--yes",
+      "switch even if the backing gateway's credential does not resolve (fail-closed override)",
+      false,
+    )
+    .action(async (id: string, opts: { dir: string; restart: boolean; yes: boolean }) => {
+      try {
+        process.stdout.write(
+          await selectTarget(opts.dir, id === "none" ? null : id, {
+            restart: opts.restart,
+            yes: opts.yes,
+          }),
         );
       } catch (err) {
         _fail(err);

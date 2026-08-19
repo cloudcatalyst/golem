@@ -305,12 +305,48 @@ async function wireProxy() {
 }
 
 /**
- * Show a quick-pick of configured upstream accounts and switch to the chosen
- * one. `golem gateway use` auto-restarts a running proxy, so the switch applies
- * immediately; we just refresh afterwards. The synthetic default (e.g.
- * `anthropic`) is a first-class entry — selecting it reverts to the top-level
- * config.
+ * Show a quick-pick of every TARGET — a gateway AND one of its models — and
+ * switch to the chosen one. `golem target use` auto-restarts a running proxy, so
+ * the switch applies immediately; we just refresh afterwards. The synthetic
+ * default (e.g. `anthropic`) is a first-class entry — selecting it reverts to the
+ * top-level config.
+ *
+ * R10.24 — this used to pick a GATEWAY, which is why it did not work as a model
+ * picker: a gateway fronting two models (an OpenRouter with a qwen and a deepseek
+ * entry) offered one row and switching to it served whichever model the gateway
+ * listed first. The other model was unreachable from here entirely. Targets are
+ * the thing routing actually resolves, so they are what the picker offers.
  */
+async function pickTarget() {
+  let targets = lastModel && Array.isArray(lastModel.targets) ? lastModel.targets : [];
+  if (targets.length === 0) {
+    const report = await golemJson(["target", "list", "--json", "--dir", cwd()]);
+    targets = report && Array.isArray(report.targets) ? report.targets : [];
+  }
+  // No targets at all means an older CLI (pre-R9.1) — fall back to the gateway
+  // picker rather than telling the user nothing is configured.
+  if (targets.length === 0) return pickAccount();
+  const active = lastModel && lastModel.activeTarget ? lastModel.activeTarget : null;
+  const items = targets.map((t) => {
+    const isActive = active ? t.id === active : !!t.is_default;
+    const key = t.key_set === false && t.account ? " · key missing" : "";
+    return {
+      label: `${isActive ? "$(check) " : ""}${t.model || t.id}`,
+      description: `${t.account || t.provider}${t.is_default ? " (default)" : ""} · ${t.trust}${key}`,
+      detail: t.base_url,
+      id: t.id,
+      active: isActive,
+    };
+  });
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: "Golem — switch upstream model (gateway · model)",
+  });
+  if (!pick || pick.active) return; // cancelled, or already active
+  await golemText(["target", "use", pick.id, "--dir", cwd()]);
+  await refresh();
+}
+
+/** The gateway-level picker, kept as the pre-R9.1 fallback for {@link pickTarget}. */
 async function pickAccount() {
   // Use the cached account list from the last refresh so the quick-pick appears
   // instantly; only block on a CLI round-trip the first time it is opened.
@@ -421,7 +457,9 @@ function activate(context) {
     vscode.commands.registerCommand("golem.unwireProxy", unwireProxy),
     vscode.commands.registerCommand("golem.wireProxy", wireProxy),
     vscode.commands.registerCommand("golem.update", runUpdate),
-    vscode.commands.registerCommand("golem.setAccount", pickAccount),
+    // R10.24: the command id stays `setAccount` (it is in keybindings and menus),
+    // but it now picks a target — a gateway AND a model.
+    vscode.commands.registerCommand("golem.setAccount", pickTarget),
     // The Settings section lives in the panel, so "Configure" just focuses it.
     vscode.commands.registerCommand("golem.configure", () =>
       vscode.commands.executeCommand("golem.panel.focus"),
@@ -446,7 +484,7 @@ function activate(context) {
       const bypass = lastModel?.proxyBypass === true;
       const items = [
         { label: "$(arrow-both) Set slider level…", action: "slider" },
-        { label: "$(account) Switch upstream…", action: "account" },
+        { label: "$(account) Switch upstream model…", action: "account" },
         {
           label: bypass
             ? "$(play) Restore pipeline"

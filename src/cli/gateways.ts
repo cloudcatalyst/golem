@@ -20,7 +20,7 @@
 
 import { defaultUserDir, loadConfig, writeSetting } from "../config/index.js";
 import { type CredentialStore, createCredentialStore } from "../credentials/index.js";
-import { doubledVersionSegment, isTranslatingProvider } from "../providers/index.js";
+import { doubledVersionSegment, isTranslatingProvider, listTargets } from "../providers/index.js";
 import { clearServedModel } from "../proxy/index.js";
 import { logoutGateway } from "./gateways/credentials.js";
 import {
@@ -75,18 +75,41 @@ export async function useGateway(
   const { settings } = await loadConfig({ projectDir, env });
 
   // Resolve the target: null / the default id both mean "clear inference.default_target
-  // and revert to the top-level config". Any other id must be a known account.
+  // and revert to the top-level config". Any other id must be a known gateway OR
+  // a known TARGET.
+  //
+  // R10.24 — targets were rejected here, and the setting this writes is
+  // `inference.default_target`, a TARGET selector. A gateway that fronts several
+  // models (OpenRouter with a qwen and a deepseek entry) collapses to ONE target
+  // when selected by gateway id — whichever model the gateway lists first — so a
+  // user with two models configured could reach exactly one of them, and the VS
+  // Code picker could only ever offer the gateway. Accepting a target id makes
+  // the selector mean what its name says.
   let target = id;
+  // The credential to preflight: a target's credential belongs to the gateway
+  // BEHIND it (`accountId`), which is not its own id.
+  let credentialAccount = id;
   if (id !== null) {
     if (id === defaultGatewayId(settings.proxy.upstream_provider)) {
       target = null; // selecting the synthetic default = clear
+      credentialAccount = null;
     } else {
-      const known = (settings.proxy.gateways ?? []).some((g) => g.id === id);
-      if (!known) {
-        const ids =
+      const knownGateway = (settings.proxy.gateways ?? []).some((g) => g.id === id);
+      const knownTarget = listTargets(settings.proxy).find((t) => t.id === id);
+      if (!knownGateway && knownTarget === undefined) {
+        const gatewayIds =
           (settings.proxy.gateways ?? []).map((g) => g.id).join(", ") || "(none configured)";
-        throw new InitError(`unknown gateway "${id}"; configured gateways: ${ids}`);
+        const targetIds = listTargets(settings.proxy)
+          .map((t) => t.id)
+          .join(", ");
+        throw new InitError(
+          `unknown gateway or target "${id}"; configured gateways: ${gatewayIds}; ` +
+            `targets: ${targetIds}`,
+        );
       }
+      // A target inheriting the client's own auth (accountId null) has no
+      // credential of its own to preflight — the Anthropic default path.
+      if (!knownGateway && knownTarget !== undefined) credentialAccount = knownTarget.accountId;
     }
   }
 
@@ -97,13 +120,13 @@ export async function useGateway(
   // (Anthropic `inherit` forwards the client's own auth), so gating it would
   // break the normal revert path. This is the guarantee that "set the key
   // first" is enforced rather than advised.
-  if (opts.assumeYes !== true && target !== null) {
+  if (opts.assumeYes !== true && target !== null && credentialAccount !== null) {
     const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
-    const hit = await store.resolve(target);
+    const hit = await store.resolve(credentialAccount);
     if (hit === null) {
       throw new InitError(
-        `no credential is stored for "${target}". Set one first:\n` +
-          `  golem gateway login ${target}    (prompts, verifies it, stores it in the OS credential store)\n` +
+        `no credential is stored for "${credentialAccount}". Set one first:\n` +
+          `  golem gateway login ${credentialAccount}    (prompts, verifies it, stores it in the OS credential store)\n` +
           `Then retry. To switch anyway (fail-closed override): golem gateway use ${target} --yes`,
       );
     }

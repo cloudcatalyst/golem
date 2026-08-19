@@ -557,6 +557,14 @@ describe("renderStatus", () => {
         // GOLEM_* var (e.g. a credential for an account) raise an
         // unknown-setting warning and break the no-warnings assertion.
         env: {},
+        // R10.24: and for the same reason, do not inspect the MACHINE's installed
+        // VS Code extension. R9.16's staleness check warns when the deployed copy
+        // differs from the shipped one, which is true of every working tree that
+        // has edited the extension and not yet redeployed — a fact about the
+        // machine, not about this project's status, and it broke the no-warnings
+        // assertion here. Same reasoning (and the same injection point) as
+        // tests/contract/vscode-status-fields.contract.test.ts.
+        vscodeExtensionsDir: null,
       });
       const output = renderStatus(report);
 
