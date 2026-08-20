@@ -26,12 +26,3 @@ export {
   pageToHit,
 } from "./server.js";
 export { GOLEM_MCP_SERVER_NAME, GOLEM_MCP_SERVER_VERSION } from "./shared.js";
-export type { SliderStore } from "./slider-store.js";
-export {
-  DEFAULT_SLIDER_LEVEL,
-  defaultGolemSettingsPath,
-  InMemorySliderStore,
-  JsonFileSliderStore,
-  LEGACY_SLIDER_LEVEL_KEY,
-  SLIDER_LEVEL_SETTINGS_KEY,
-} from "./slider-store.js";

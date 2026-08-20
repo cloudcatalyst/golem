@@ -13,7 +13,7 @@ import type {
   LocalAnswerResult,
   LocalAnswerService,
 } from "../../../src/interfaces/local-answer.js";
-import { sliderPolicyForLevel } from "../../../src/interfaces/policy.js";
+import { policyFor } from "../../../src/interfaces/policy.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
 
@@ -58,7 +58,7 @@ function makePipeline(
   const compression = new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr"));
   return createGolemPipeline({
     compression,
-    policy: () => sliderPolicyForLevel(1),
+    policy: () => policyFor(1),
     projectId: "proj",
     onEvent,
     ...(service !== undefined ? { localAnswer: { service } } : {}),
@@ -148,7 +148,7 @@ describe("pipeline local-answer stage (R2.3)", () => {
     const events: PipelineEvent[] = [];
     const pipe = createGolemPipeline({
       compression,
-      policy: () => sliderPolicyForLevel(0),
+      policy: () => policyFor(0),
       projectId: "proj",
       onEvent: (e) => events.push(e),
       localAnswer: { service: stubService({ answersFor: "how do I deploy?" }) },
@@ -166,7 +166,7 @@ describe("pipeline local-answer stage (R2.3)", () => {
     const compression = new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr"));
     const pipe = createGolemPipeline({
       compression,
-      policy: () => sliderPolicyForLevel(0),
+      policy: () => policyFor(0),
       projectId: "proj",
       localAnswer: { service: stubService({ calls }) },
     });

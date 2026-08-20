@@ -8,7 +8,7 @@
  * because an observability file must never be able to affect a request.
  */
 
-import type { SliderPolicy } from "../../interfaces/policy.js";
+import { compressionRank, type PipelinePolicy } from "../../interfaces/policy.js";
 import type { PipelineEvent } from "../../pipeline/index.js";
 import { sniffRequestModel, type UpstreamProvider } from "../../providers/index.js";
 import {
@@ -67,7 +67,7 @@ export interface ResponseTelemetryInput {
   readonly dir: string;
   readonly telemetry: TelemetryStore;
   /** Shared with the pipeline so a usage sample is tagged with the SAME level (R1.1). */
-  readonly resolvePolicy: () => Promise<SliderPolicy>;
+  readonly resolvePolicy: () => Promise<PipelinePolicy>;
   readonly forceSemanticOnCaching: boolean;
   readonly upstreamProvider: UpstreamProvider;
   readonly upstreamModel: string | undefined;
@@ -112,7 +112,10 @@ export function createResponseTelemetryHooks(
         // changed between request and response tags the sample with the new
         // value, which is acceptable for an alternating A/B.
         const policy = await resolvePolicy();
-        const level = policy.level;
+        // R11.1: the sample's numeric bucket is the compression level's rank
+        // (`off` → 0). See `compressionRank` for why that bucket keeps its
+        // meaning across the slider's retirement.
+        const level = compressionRank(policy.compression);
         await recordUsageEvent(
           telemetry,
           {

@@ -21,7 +21,7 @@
  * - CPU-heavy work must not block the proxy's event loop (worker_threads).
  */
 
-import type { SliderPolicy } from "./policy.js";
+import type { PipelinePolicy } from "./policy.js";
 
 /**
  * An Anthropic Messages-API message object (`{"role": ..., "content": ...}`).
@@ -82,7 +82,7 @@ export class UnknownRefError extends Error {
 export interface CompressionService {
   compress(
     messages: readonly Message[],
-    policy: SliderPolicy,
+    policy: PipelinePolicy,
     projectId: string,
   ): Promise<CompressResult>;
 

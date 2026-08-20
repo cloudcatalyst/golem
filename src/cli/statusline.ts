@@ -28,7 +28,11 @@ import { loadConfig } from "../config/index.js";
 // pulls every hook handler) for one function.
 import { readSessionState } from "../hooks/session-state.js";
 import { isKnownWorker, KNOWN_WORKERS } from "../inference/workers.js";
-import { resolveBrevity, resolveCompressionLevel, type SliderLevel } from "../interfaces/policy.js";
+import {
+  coerceCompressionLevel,
+  type CompressionLevel,
+  compressionName,
+} from "../interfaces/policy.js";
 import {
   listTargets,
   resolveUpstreamDisplay,
@@ -47,9 +51,6 @@ import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { proxyBaseUrl, readWiringState } from "./proxy-wiring.js";
-// `./slider-read.js`, not `./slider.js`: the latter imports `./init.js` for the
-// write path (~426ms) and all that's wanted here is a lookup table.
-import { SLIDER_LEVEL_NAMES } from "./slider-read.js";
 // Shared with status.ts and the control-panel header; lives in its own module so
 // rendering a label costs nothing to import (see upstream-display.ts).
 import { upstreamLabel } from "./upstream-display.js";
@@ -67,15 +68,16 @@ export interface SessionInput {
 
 /** Golem-side state for the line. */
 export interface GolemState {
-  readonly sliderLevel: number;
+  /** R11.1: the compression DIAL, which since ADR-0004 is the only such number. */
+  readonly compression: CompressionLevel;
   /**
    * §103 — the level the pipeline will ACTUALLY apply, when it differs from
-   * `sliderLevel`. The status line runs on every prompt, so it is the surface a
+   * `compression`. The status line runs on every prompt, so it is the surface a
    * user actually reads their configuration off: showing "Aggressive" here while
    * the pipeline ran lossless was the most-seen version of that misreport.
-   * Absent → nothing is degraded and `sliderLevel` is the truth.
+   * Absent → nothing is degraded and `compression` is the truth.
    */
-  readonly effectiveLevel?: number;
+  readonly effectiveLevel?: CompressionLevel;
   /**
    * Decision 52 — the effective brevity level ("off" when the dial is off).
    * Surfaced because brevity changes the model's own output style: an unexplained
@@ -149,9 +151,8 @@ export function isBlockedFresh(ts: string, nowMs: number = Date.now()): boolean 
 }
 
 /** Human-facing name for a slider level, Title-cased ("balanced" → "Balanced"). */
-export function levelName(level: number): string {
-  const raw = SLIDER_LEVEL_NAMES[level as SliderLevel] ?? `level ${level}`;
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
+export function levelName(level: CompressionLevel): string {
+  return compressionName(level);
 }
 
 function num(v: unknown): number | undefined {
@@ -375,7 +376,7 @@ export function renderStatusLine(
       : active
         ? green("⬢ Golem")
         : dim("⬡ Golem");
-  const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
+  const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.compression;
 
   // Brand [state] → destination · dials
   // R10.24: the arrow rides WITH the brand rather than after a separator, so the
@@ -392,7 +393,7 @@ export function renderStatusLine(
   // bypass. One rule now, both dials, both surfaces.
   if (stateWord === "") {
     const compLabel = levelName(
-      inert ? (golem.effectiveLevel as number) : golem.sliderLevel,
+      inert ? (golem.effectiveLevel as CompressionLevel) : golem.compression,
     ).toLowerCase();
     parts.push(`${dim("🗜")} ${compLabel}`);
     parts.push(`${dim("✂")} ${golem.brevity ?? "off"}`);
@@ -414,7 +415,7 @@ export async function collectGolemState(
     ) => Promise<LocalModelInfo>;
   } = {},
 ): Promise<GolemState> {
-  let sliderLevel = 1;
+  let compression: CompressionLevel = 1;
   let brevity = "off";
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
@@ -424,18 +425,15 @@ export async function collectGolemState(
   let model: string | undefined;
   let workerTargetModels: readonly { worker: string; model?: string }[] = [];
   let activeAccount: string | null = null;
-  let effectiveLevel: number | undefined;
+  let effectiveLevel: CompressionLevel | undefined;
   let proxyPort: number | undefined;
   try {
     const { settings } = await loadConfig({ projectDir: dir });
-    sliderLevel = settings.slider.level;
+    compression = coerceCompressionLevel(settings.compression.level);
     proxyPort = settings.proxy.port;
-    // Resolved here rather than imported from dials.ts: the status line runs on
-    // every prompt, and this is a two-field lookup on settings we already have.
-    brevity =
-      settings.brevity.level === "auto"
-        ? resolveBrevity(settings.slider.level, "auto")
-        : settings.brevity.level;
+    // R11.1: both dials are read straight from settings — there is no preset to
+    // resolve against, which is the point of retiring the slider.
+    brevity = settings.brevity.level;
     ollamaBaseUrl = settings.inference.ollama_base_url;
 
     providers = settings.inference.providers as readonly LocalProviderEntry[];
@@ -468,18 +466,11 @@ export async function collectGolemState(
     model = upstream.model;
     activeAccount = upstream.accountId;
     // §103. Pure computation on settings already loaded — no extra I/O, which is
-    // the constraint that matters on a per-prompt surface. The compression DIAL,
-    // not the slider, is what the pipeline reads (Decision 52).
+    // the constraint that matters on a per-prompt surface. This is the ONE
+    // remaining set-vs-ran gap (Decision 31), and it is a real one.
     const assumeCaching = upstreamAssumesCaching(upstream.provider);
-    // The dial is stored as a string enum ("auto" | "1" | "2" | "3"); coerce the
-    // same way dials.ts does rather than inventing a second convention.
-    const pin = settings.compression.level;
-    const dialLevel = resolveCompressionLevel(
-      settings.slider.level,
-      pin === "auto" ? "auto" : (Number(pin) as SliderLevel),
-    );
     const eff = resolveEffectiveCompression({
-      level: dialLevel,
+      level: compression,
       upstreamBaseUrl: upstream.baseUrl,
       ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
       headroomSidecar: settings.compression.headroom_sidecar,
@@ -490,7 +481,7 @@ export async function collectGolemState(
     // defaults
   }
   let state: GolemState = {
-    sliderLevel,
+    compression,
     brevity,
     upstreamLabel: label,
     coderEnabled: coderEnabled,

@@ -13,7 +13,7 @@ import { LocalDirBlobStore } from "../../../src/compression/local-blob-store.js"
 import {
   type BrevityDial,
   type SliderLevel,
-  sliderPolicyForLevel,
+  policyFor,
 } from "../../../src/interfaces/policy.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
@@ -25,7 +25,7 @@ function makePipeline(
 ) {
   return createGolemPipeline({
     compression: new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr")),
-    policy: () => sliderPolicyForLevel(level, { brevity }),
+    policy: () => policyFor(level, { brevity }),
     projectId: "proj",
     ...(onEvent !== undefined ? { onEvent } : {}),
   });

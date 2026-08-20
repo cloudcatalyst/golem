@@ -30,7 +30,7 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { removeVersionStamp, writeSetting } from "../config/index.js";
-import type { SliderLevel } from "../interfaces/index.js";
+import type { CompressionLevel } from "../interfaces/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
@@ -115,12 +115,12 @@ export interface InitOptions {
   /** Proxy port the base URL should point at (from Golem config; default 4653). */
   readonly proxyPort?: number;
   /**
-   * Slider level to persist on first activation (when `.golem/settings.json`
+   * Compression level to persist on first activation (when `.golem/settings.json`
    * doesn't exist yet). Default 1 (lossless). Lets a level-setting entry point
    * (e.g. `golem slider <n>`) activate the project at the chosen level instead
    * of always defaulting to 1 and then immediately overwriting it.
    */
-  readonly initialLevel?: SliderLevel;
+  readonly initialLevel?: CompressionLevel;
   /**
    * Front an Azure AI Foundry resource: wires Claude Code's Foundry env
    * (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`)

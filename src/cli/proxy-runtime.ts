@@ -17,9 +17,9 @@ import type { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
 import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
-import { SliderLevel, sliderPolicyForLevel } from "../interfaces/policy.js";
+import { CompressionLevel, policyFor } from "../interfaces/policy.js";
 import { contentHashIndex } from "../knowledge/web-cache.js";
-import type { SliderStore } from "../mcp/slider-store.js";
+
 import { createGolemPipeline } from "../pipeline/index.js";
 import { listTargets, type UpstreamProvider } from "../providers/index.js";
 import { GolemProxy } from "../proxy/index.js";
@@ -34,14 +34,14 @@ import { buildUpstreamWiring, resolveProxyUpstream } from "./proxy-build/upstrea
 import { createRouteResolver, type VisionLookup } from "./route-resolver.js";
 
 /**
- * The bypass shim's fixed policy (Decision 56): slider level 1 — redaction ON,
- * lossless, brevity `off`. `sliderPolicyForLevel`'s defaults already mean exactly
+ * The bypass shim's fixed policy (Decision 56): compression 1 — redaction ON,
+ * lossless, brevity `off`. `policyFor`'s defaults already mean exactly
  * this (`brevity` defaults to `off`, `compression` tracks the level), so the shim
  * needs no new dial and no frozen-contract change; it is one pinned policy value.
  *
- * Frozen at module scope precisely so it cannot be reached by the live slider.
+ * Frozen at module scope precisely so no dial can reach it.
  */
-const SHIM_POLICY = sliderPolicyForLevel(SliderLevel.Lossless);
+const SHIM_POLICY = policyFor(CompressionLevel.Lossless);
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
@@ -69,7 +69,7 @@ export interface BuildProxyOptions {
    * instead of frozen at construction time — makes `level` /
    * `golem slider` double as the live per-task toggle (Decision 25/30).
    */
-  readonly sliderStore?: SliderStore;
+
   /**
    * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): local inference
    * service, used ONLY to select the SEMANTIC embedder for the local-answer
@@ -138,23 +138,20 @@ export function buildProxyFromSettings(
     settings,
     build,
   );
-  const { sliderStore } = build;
-  // Shared with onResponseUsage below so a usage sample is tagged with the
-  // SAME level-resolution logic the pipeline used for this request's gross
-  // savings (R1.1). Re-read rather than threaded through per-request, so
-  // there is a (rare, documented) race if the level changes between a
-  // request and its response — acceptable for a batch/alternating A/B.
+  // Shared with onResponseUsage below so a usage sample is tagged with the SAME
+  // policy the pipeline used for this request's gross savings (R1.1).
+  //
+  // R11.1: this used to consult a live `SliderStore` (a JSON reader over
+  // settings.local.json) so the retired `level` MCP tool could change the level
+  // without a proxy restart. The two dials that replaced it come from the
+  // settings captured at build time, so a dial change now takes effect on the
+  // next proxy start — `golem compression`/`golem brevity` say so when they
+  // write, rather than leaving the user to wonder.
   const resolvePolicy = async () => {
-    // Decision 56: pinned, and deliberately ignores the live slider store — a
-    // shim that tracked the slider could be moved to level 0 (redaction off)
-    // while presenting itself as "stopped".
+    // Decision 56: pinned. The shim runs redaction and nothing else, whatever
+    // the dials say.
     if (build.shim === true) return SHIM_POLICY;
-    if (sliderStore === undefined) return policyFromSettings(settings);
-    const level = await sliderStore.get();
-    // Decision 52: the runtime slider store owns the LEVEL only; the two dial
-    // pins still come from settings, so a pinned brevity/compression level
-    // survives a `golem slider` change (a pin wins and sticks).
-    return sliderPolicyForLevel(level, dialsFromSettings(settings));
+    return policyFromSettings(settings);
   };
   // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
   // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.

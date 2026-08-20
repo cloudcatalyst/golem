@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../src/compression/index.js";
-import { type SliderLevel, sliderPolicyForLevel } from "../../src/interfaces/policy.js";
+import { type SliderLevel, policyFor } from "../../src/interfaces/policy.js";
 import { createGolemPipeline } from "../../src/pipeline/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 import { rawRequest, startProxy, startUpstream } from "./helpers/test-servers.js";
@@ -35,7 +35,7 @@ function recordingUpstream() {
 function pipelineFor(level: SliderLevel) {
   return createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(projectDir),
-    policy: () => sliderPolicyForLevel(level),
+    policy: () => policyFor(level),
     projectId: projectDir,
   });
 }
@@ -71,7 +71,7 @@ describe("pipeline through the proxy", () => {
     const compression = NativeLosslessCompression.forProjectDir(projectDir);
     const pipeline = createGolemPipeline({
       compression,
-      policy: () => sliderPolicyForLevel(1),
+      policy: () => policyFor(1),
       projectId: projectDir,
     });
     const proxy = await startProxy({ upstreamBaseUrl: upstream.origin, pipeline });

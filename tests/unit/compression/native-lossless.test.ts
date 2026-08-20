@@ -16,10 +16,10 @@ import {
   STAGE_DEDUP,
 } from "../../../src/compression/index.js";
 import type { Message } from "../../../src/interfaces/compression.js";
-import { sliderPolicyForLevel, tokensSaved } from "../../../src/interfaces/index.js";
+import { policyFor, tokensSaved } from "../../../src/interfaces/index.js";
 
-const LEVEL_0 = sliderPolicyForLevel(0);
-const LEVEL_1 = sliderPolicyForLevel(1);
+const LEVEL_0 = policyFor(0);
+const LEVEL_1 = policyFor(1);
 const PROJECT = "unit-test-project";
 
 /** Large, whitespace-clean payload (compaction is a no-op on it). */

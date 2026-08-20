@@ -13,11 +13,11 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { mcpCompressionService, statsSourceForCli } from "../../../src/cli/mcp-compression.js";
-import { sliderPolicyForLevel } from "../../../src/interfaces/index.js";
+import { policyFor } from "../../../src/interfaces/index.js";
 import { JsonlTelemetryStore, recordPipelineEvent } from "../../../src/telemetry/index.js";
 import { useTempDirs } from "../../helpers/tmp.js";
 
-const LEVEL_1 = sliderPolicyForLevel(1);
+const LEVEL_1 = policyFor(1);
 
 /** Poll until a predicate holds, for asserting on a fire-and-forget write. */
 async function waitFor(predicate: () => Promise<boolean>): Promise<void> {

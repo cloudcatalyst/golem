@@ -37,7 +37,7 @@ const WORKING_DOC_RE = /(^|\/)docs\/plan\//;
  *  1. Prose only. A raw source-code or test chunk is almost never a good answer to
  *     a definitional/conceptual question, and dense-token code/test chunks reliably
  *     OUTRANK explanatory prose for such questions — e.g. `const LEVEL_0 =
- *     sliderPolicyForLevel(0)` in a test file scored *above* the correct "slider
+ *     policyFor(0)` in a test file scored *above* the correct "slider
  *     level 0 = passthrough" prose.
  *  2. Durable prose only. Among prose, exclude working/planning docs (`docs/plan/`)
  *     so an answer comes from the durable knowledge store (wiki + spec + root docs

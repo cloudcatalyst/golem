@@ -23,7 +23,11 @@ import {
   type TargetDispatcher,
   type TargetDispatcherOptions,
 } from "../../inference/target-dispatcher.js";
-import type { InferenceService, KnowledgeBase } from "../../interfaces/index.js";
+import {
+  coerceCompressionLevel,
+  type InferenceService,
+  type KnowledgeBase,
+} from "../../interfaces/index.js";
 import {
   perGatewayEnvVar,
   resolveUpstreamDisplay,
@@ -195,7 +199,7 @@ export default function register(program: Command): void {
           }
         }
         const telemetry = openTelemetryStore(opts.dir);
-        const { JsonFileSliderStore, serveStdio } = await import("../../mcp/index.js");
+        const { serveStdio } = await import("../../mcp/index.js");
         const lspBridge =
           settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
             ? await (async () => {
@@ -222,7 +226,10 @@ export default function register(program: Command): void {
         await serveStdio({
           compression: mcpCompressionService(opts.dir, telemetry),
           telemetry,
-          sliderStore: new JsonFileSliderStore(settingsFilePaths({ projectDir: opts.dir }).local),
+          // R11.1: read-only. The `level` tool is gone with the slider
+          // (ADR-0004), so nothing on the MCP surface can change how much of the
+          // pipeline runs — `stats` only reports it.
+          compressionLevel: () => coerceCompressionLevel(settings.compression.level),
           compressionGate: (level) => {
             const up = resolveUpstreamDisplay(settings.proxy);
             const assumeCaching = upstreamAssumesCaching(up.provider);
