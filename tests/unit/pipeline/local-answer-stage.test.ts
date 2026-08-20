@@ -200,3 +200,81 @@ describe("pipeline local-answer stage (R2.3)", () => {
     }
   });
 });
+
+/**
+ * R10.23 — this stage runs a vector search, and therefore an embedder, INLINE on
+ * a live request, and it is eligible on exactly the single-turn requests that
+ * open a session. So a cold local model made the first turn of a session sit on
+ * "waiting for API" with nothing in the log naming Golem as the cause. The stage
+ * is an optimisation; it may not hold a user's turn open.
+ */
+describe("local-answer time budget (R10.23)", () => {
+  it("abandons a local answer that outruns its budget and forwards upstream", async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      // A service that never resolves — the cold-embedder case, taken to its limit.
+      const hangs: LocalAnswerService = { tryAnswer: () => new Promise<never>(() => {}) };
+      const pipe = makePipeline(hangs, () => {});
+
+      const pending = pipe.process(
+        messagesRequest([{ role: "user", content: "how do I deploy?" }]),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      const out = await pending;
+
+      // Fail-open: the request goes upstream exactly as if the KB had declined.
+      expect(out.respondDirectly).toBeUndefined();
+      expect(writes.join("")).toContain("local-answer stage exceeded");
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("says so when the pipeline held a request, naming the stage that did it", async () => {
+    vi.useFakeTimers();
+    const writes: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      const hangs: LocalAnswerService = { tryAnswer: () => new Promise<never>(() => {}) };
+      const pipe = makePipeline(hangs, () => {});
+      const pending = pipe.process(
+        messagesRequest([{ role: "user", content: "how do I deploy?" }]),
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await pending;
+
+      const log = writes.join("");
+      // Honest observability: the client showed "waiting for API" for time the
+      // API was not responsible for, so the log must name the real cause.
+      expect(log).toContain("pipeline held this request");
+      expect(log).toContain("local-answer=");
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stays silent about timing on a fast request", async () => {
+    const writes: string[] = [];
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      writes.push(String(chunk));
+      return true;
+    });
+    try {
+      const pipe = makePipeline(stubService({ answersFor: "how do I deploy?" }), () => {});
+      await pipe.process(messagesRequest([{ role: "user", content: "how do I deploy?" }]));
+      expect(writes.join("")).not.toContain("pipeline held this request");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});

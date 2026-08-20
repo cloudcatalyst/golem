@@ -5894,3 +5894,108 @@ Second finding from the same restore: the recovered guidance strings referenced
 `golem proxy start --detach`, a flag R9.23 had also removed. It is now
 `golem proxy restart`. A recovered message can be stale in ways a compiler
 cannot see — the strings were valid TypeScript naming a command that errors.
+
+---
+
+## §128 — OpenRouter's streaming reasoning fields and its mid-stream error frame (2026-08-19, answers §84's open question)
+
+Captured live against the user's own OpenRouter account (`deepseek/deepseek-v4-flash`,
+`qwen/qwen3.7-flash`), raw SSE dumped before any translation.
+
+**Reasoning is `reasoning`, never `reasoning_content`.** Every chunk of a real
+deepseek stream carried both `delta.reasoning` (plaintext) and
+`delta.reasoning_details` (structured, same text), and `reasoning_content` never
+appeared once:
+
+```json
+{"id":"…","model":"deepseek/deepseek-v4-flash","provider":"StreamLake",
+ "choices":[{"index":0,"delta":{"content":"","role":"assistant","reasoning":"We",
+ "reasoning_details":[{"type":"reasoning.text","text":"We","format":"unknown","index":0}]},
+ "finish_reason":null,"native_finish_reason":null}]}
+```
+
+OpenRouter's own docs confirm the direction of the alias: *"You can also use
+`reasoning_content` as an alias — it functions identically to `reasoning`"* is
+about the **request**. Responses use `message.reasoning` /
+`choices[].delta.reasoning_details`. Golem read only `reasoning_content`, so
+**every** reasoning trace from **every** OpenRouter model was silently dropped —
+which is §84's *"map_reasoning_to_thinking is on yet no thinking deltas arrived,
+suggesting OpenRouter needs an explicit `reasoning: {...}` request field —
+UNVERIFIED"*. **That inference was wrong**: no request field is needed to
+*receive* the trace, Golem was reading the wrong field name. Fixed in R10.23.
+Both fields are read now, plaintext first, because reading both duplicates the
+whole trace.
+
+**A mid-stream failure is a `data:` frame with a top-level `error`.** Once tokens
+are flowing the status is already 200, so OpenRouter reports the failure in-band:
+`"error":{"code":"server_error","message":"Provider disconnected unexpectedly"}`
+at the top level, alongside
+`"choices":[{"index":0,"delta":{"content":""},"finish_reason":"error"}]`, and the
+stream ends. Golem's translator dropped every frame carrying no `delta`, so the
+cause was discarded and R10.18's generic "empty completion" notice went out in
+its place — with `stop_reason: end_turn`, because `mapStopReason` maps an
+unrecognised `finish_reason` (including `"error"`) to `end_turn`. A dropped cause
+plus a normal-looking stop is what produced the user's *"I would get no further
+updates"*.
+
+**The Anthropic side has a first-class shape for this**, verified the same day at
+platform.claude.com/docs/en/build-with-claude/streaming: *"The API may
+occasionally send errors in the event stream"*, as
+
+```sse
+event: error
+data: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+```
+
+and it may arrive at any point, including after `message_start` and content
+deltas. So R10.18's premise — *"the headers have already gone out, so an HTTP
+error is no longer available"* — was true about the STATUS and wrong about the
+options: the protocol carries the failure in-band as an error, not as prose. It
+matters because in-band prose is a COMPLETED turn.
+
+**Two operational facts.** (i) `qwen/qwen3.7-flash` streams a reasoning trace
+too, so the reported "deepseek fails, qwen does not" asymmetry is not about which
+model reasons — it is how much of `max_tokens` the trace eats and which provider
+OpenRouter routes to. At `max_tokens: 400` qwen spent the whole budget on
+reasoning and emitted **zero** content; deepseek at 200 answered. (ii) Repeated
+agentic-shaped probes (tools, `max_tokens: 2000`) succeeded on both models —
+`finish_reason: tool_calls`, 5–7 tool calls, no content, no error. Empty
+completions here are **intermittent**, which is why R10.23 makes them a retryable
+`error` event rather than a completed turn.
+
+**Still unverified, deliberately:** whether `proxy.upstream_reasoning_effort` (sent
+as OpenAI's top-level `reasoning_effort`) does anything at OpenRouter. Their docs
+describe a nested `reasoning: {effort|max_tokens|exclude|enabled}` object and do
+not mention `reasoning_effort`; a probe with `reasoning_effort: "high"` returned a
+normal answer, which neither confirms nor denies that it was honoured. If it is
+inert, it is the "config that cannot take effect" trap §84 named — it needs its
+own task, because changing what Golem SENDS changes cost.
+
+---
+
+## §129 — Golem's own pipeline can hold a live request, and used to do it silently (2026-08-19)
+
+From the user's second report: one occurrence of Claude Code sitting on "waiting
+for API" against the default Anthropic upstream. The Anthropic path is a raw byte
+pipe with no retry, so the proxy cannot stall a response — but the REQUEST side
+awaits four stages before forwarding: redaction, local answer (Decision 33),
+lossless compression, semantic compression + context substitution.
+
+Stage 1.5 is the one that can block for seconds: `tryAnswer` awaits a vector
+search, which awaits an embedder, which on a cold local model is a multi-second
+first call. It is gated to single-turn requests — i.e. exactly the requests that
+OPEN a session — so the FIRST turn of a session was the one that paid, and only
+that turn, which matches "one occurrence" better than any upstream explanation.
+Nothing bounded the wait and nothing logged it, so it was indistinguishable from
+upstream latency: the API wore a delay Golem caused.
+
+R10.23 bounds it at 2s (fail-open, the same verdict the stage already reached on
+error) and logs `golem proxy: pipeline held this request Nms before forwarding
+(…) — <stage>=Nms` past 750ms. The threshold exists so the line is rare enough to
+mean something: under it, the pipeline is invisible against normal upstream
+latency.
+
+Rule worth keeping, since this is the third time it has come up (§84's banner,
+R10.19's `headroom_config`, now this): **if Golem spends a user's time, Golem has
+to be the one to say so.** An honest-observability tool that lets the upstream
+wear its own latency is lying by omission.

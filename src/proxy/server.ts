@@ -446,11 +446,17 @@ export class GolemProxy {
         // or the message sends the reader hunting the wrong bug. Matched by name
         // rather than by class so the proxy keeps its layering and does not
         // import from providers/.
-        const empty = err instanceof Error && err.name === "EmptyCompletionError";
+        // R10.23 adds UpstreamErrorResponse: an error-shaped 200 body. Same
+        // reasoning as R10.18 — the translation worked, the upstream refused —
+        // so relay ITS message rather than blaming the translator. Still matched
+        // by name so the proxy keeps its layering and does not import providers/.
+        const relayed =
+          err instanceof Error &&
+          (err.name === "EmptyCompletionError" || err.name === "UpstreamErrorResponse");
         this.respondProxyError(
           res,
           502,
-          empty
+          relayed
             ? `golem proxy: ${err.message}`
             : `golem proxy: could not translate the upstream response (${String(err)})`,
         );
