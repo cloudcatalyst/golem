@@ -5,7 +5,7 @@
  *   - the effective config with per-key provenance (E1 loader),
  *   - whether this project is wired to Golem (init.ts file checks),
  *   - whether the proxy answers on the configured port (short HTTP probe),
- *   - the effective slider level.
+ *   - the effective compression and brevity dials.
  *
  * Split out of `./status.ts`, which remains the public surface and re-exports
  * everything below that was exported before the split.
@@ -51,14 +51,8 @@ import {
   samePath,
   type WiringState,
 } from "./proxy-wiring.js";
-import { getSliderInfo } from "./slider.js";
 import type { ConfigKeyStatus, StatusOptions, StatusReport } from "./status.js";
-import {
-  dialJson,
-  effectiveCompressionJson,
-  sliderJson,
-  sliderLevelFromDial,
-} from "./status-render.js";
+import { compressionFromDial, dialJson, effectiveCompressionJson } from "./status-render.js";
 import { inspectVscodeExtension, staleExtensionWarning } from "./vscode-extension.js";
 
 /**
@@ -145,7 +139,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     options.vscodeExtensionsDir === undefined ? {} : { extensionsDir: options.vscodeExtensionsDir },
   );
 
-  const sliderOpts = {
+  const dialOpts = {
     projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
@@ -160,7 +154,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
-  const [init, reachable, daemon, slider, brevityDial, compressionDial, localInfo, servedModel] =
+  const [init, reachable, daemon, brevityDial, compressionDial, localInfo, servedModel] =
     await Promise.all([
       golemInitStatus(projectDir, settings.proxy.port),
       probeProxy(settings.proxy.port, options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS),
@@ -168,11 +162,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       // the code and config it started with, so a rebuild since then has not
       // reached it — and every other field here would still look healthy.
       proxyStatus(projectDir, settings.proxy.port),
-      getSliderInfo(sliderOpts),
-      // Decision 52: the slider is a preset over two dials, so status must report
-      // BOTH and say which of them the slider is actually driving.
-      getDialInfo("brevity", sliderOpts),
-      getDialInfo("compression", sliderOpts),
+      // R11.1: the two dials ARE the control surface (ADR-0004) — there is no
+      // longer a preset above them to report alongside.
+      getDialInfo("brevity", dialOpts),
+      getDialInfo("compression", dialOpts),
       localProbe(
         projectDir,
         settings.inference.ollama_base_url,
@@ -274,14 +267,14 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
             : {}),
         };
 
-  // §103: what the compression dial will ACTUALLY do on this upstream. The dial —
-  // not the slider — is the input-side level the pipeline reads (Decision 52), and
-  // it may be pinned away from the slider, so predict from the dial's effective
-  // value. The provider override wins over the URL heuristic exactly as it does in
-  // the pipeline; `undefined` means "use the heuristic" and must not be passed.
+  // §103: what the compression dial will ACTUALLY do on this upstream — the one
+  // remaining gap between what was set and what runs (Decision 31), now that
+  // R11.1 has removed the preset that created the other one. The provider
+  // override wins over the URL heuristic exactly as it does in the pipeline;
+  // `undefined` means "use the heuristic" and must not be passed.
   const assumeCaching = upstreamAssumesCaching(upstream.provider);
   const effective = resolveEffectiveCompression({
-    level: sliderLevelFromDial(compressionDial.effective, slider.level),
+    level: compressionFromDial(compressionDial.effective),
     upstreamBaseUrl: upstream.baseUrl,
     ...(assumeCaching !== undefined && { assumeCachingUpstream: assumeCaching }),
     headroomSidecar: settings.compression.headroom_sidecar,
@@ -345,7 +338,6 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     // otherwise the `upstream` block above already answers the question and a
     // one-row table would be noise.
     ...(targetRows.length > 1 ? { targets: targetRows } : {}),
-    slider: sliderJson(slider),
     dials: { brevity: dialJson(brevityDial), compression: dialJson(compressionDial) },
     effective_compression: effectiveCompressionJson(effective),
     ...(unreachableKeys.length > 0 ? { unreachable_headroom_config: unreachableKeys } : {}),
@@ -371,8 +363,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
     ...(limits !== undefined ? { limits } : {}),
     warnings: [
       ...(cachedUpdate?.latest != null && semverGt(cachedUpdate.latest, options.version)
-        ? [...updateWarnings(cachedUpdate.latest, slider.level), ...warnings]
-        : slider.level === 0
+        ? [...updateWarnings(cachedUpdate.latest), ...warnings]
+        : // R11.1: redaction-off is `proxy.bypass_all` now, not a level (ADR-0004).
+          // Same warning, keyed off the setting that actually does it.
+          settings.proxy.bypass_all
           ? [...warnings, REDACTION_OFF_WARNING]
           : warnings),
       ...(limits?.stale ? [LIMIT_STALE_WARNING] : []),
@@ -421,14 +415,26 @@ export const LIMIT_STALE_WARNING =
   "emit `anthropic-ratelimit-unified-*` headers (common after an account switch). " +
   "Watch Claude Code's own limit indicator and park manually if needed.";
 
-/** Warning lines when a newer version is known (plus the level-0 redaction one). */
-function updateWarnings(latest: string, sliderLevel: number): string[] {
-  const w = [`A newer Golem is available (${latest}). Run \`golem update\`.`];
-  if (sliderLevel === 0) w.push(REDACTION_OFF_WARNING);
-  return w;
+/**
+ * Warning lines when a newer version is known.
+ *
+ * R11.1 dropped the level argument: redaction-off is no longer a value of a
+ * level, so the caller adds {@link REDACTION_OFF_WARNING} from the setting that
+ * actually does it (`proxy.bypass_all`) rather than this helper inferring it from
+ * a number.
+ */
+function updateWarnings(latest: string): string[] {
+  return [`A newer Golem is available (${latest}). Run \`golem update\`.`];
 }
 
-/** Shown whenever the slider is at level 0 (passthrough): redaction is disabled. */
+/**
+ * Shown whenever `proxy.bypass_all` is on: redaction is disabled.
+ *
+ * R11.1 / ADR-0004 — this used to say "slider level 0". The bypass kept every
+ * rail it had (never default, CLI-only, surfaced loudly); only its name changed,
+ * and now the name says what it does instead of encoding it in a number.
+ */
 export const REDACTION_OFF_WARNING =
-  "Slider level 0 (passthrough) is a FULL BYPASS: redaction is OFF, so secrets/PII " +
-  "reach the upstream unredacted. Use level 1 to keep redaction on.";
+  "proxy.bypass_all is ON: every request is forwarded byte-faithfully, so redaction " +
+  "is OFF and secrets/PII reach the upstream unredacted. Turn it off with " +
+  "`golem config set proxy.bypass_all false`.";

@@ -47,10 +47,10 @@ describe("loadConfig precedence", () => {
   });
 
   it("user settings override defaults", async () => {
-    await writeJson(userFile(), { slider: { level: 2 } });
+    await writeJson(userFile(), { compression: { level: "2" } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(2);
-    expect(config.provenance["slider.level"]).toEqual({
+    expect(config.settings.compression.level).toBe("2");
+    expect(config.provenance["compression.level"]).toEqual({
       layer: "user",
       source: userFile(),
     });
@@ -60,12 +60,12 @@ describe("loadConfig precedence", () => {
   });
 
   it("project overrides user, local overrides project", async () => {
-    await writeJson(userFile(), { slider: { level: 0 }, proxy: { port: 5000 } });
-    await writeJson(projectFile(), { slider: { level: 1 } });
-    await writeJson(localFile(), { slider: { level: 2 } });
+    await writeJson(userFile(), { compression: { level: "off" }, proxy: { port: 5000 } });
+    await writeJson(projectFile(), { compression: { level: "1" } });
+    await writeJson(localFile(), { compression: { level: "2" } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(2);
-    expect(config.provenance["slider.level"]).toEqual({
+    expect(config.settings.compression.level).toBe("2");
+    expect(config.provenance["compression.level"]).toEqual({
       layer: "local",
       source: localFile(),
     });
@@ -78,26 +78,26 @@ describe("loadConfig precedence", () => {
   });
 
   it("env overrides local; per-request overrides beat env", async () => {
-    await writeJson(localFile(), { slider: { level: 1 } });
+    await writeJson(localFile(), { compression: { level: "1" } });
     // Legacy env value 5 is accepted and migrated onto the 0–3 scale (→ 3).
-    const env = { GOLEM_SLIDER_LEVEL: "5", GOLEM_TELEMETRY_ENABLED: "false" };
+    const env = { GOLEM_COMPRESSION_LEVEL: "3", GOLEM_TELEMETRY_ENABLED: "false" };
 
     const envOnly = await loadConfig({ projectDir, userDir, env });
-    expect(envOnly.settings.slider.level).toBe(3);
+    expect(envOnly.settings.compression.level).toBe("3");
     expect(envOnly.settings.telemetry.enabled).toBe(false);
-    expect(envOnly.provenance["slider.level"]).toEqual({
+    expect(envOnly.provenance["compression.level"]).toEqual({
       layer: "env",
-      source: "GOLEM_SLIDER_LEVEL",
+      source: "GOLEM_COMPRESSION_LEVEL",
     });
 
     const withOverrides = await loadConfig({
       projectDir,
       userDir,
       env,
-      overrides: { slider: { level: 0 } },
+      overrides: { compression: { level: "off" } },
     });
-    expect(withOverrides.settings.slider.level).toBe(0);
-    expect(withOverrides.provenance["slider.level"]).toEqual({ layer: "override" });
+    expect(withOverrides.settings.compression.level).toBe("off");
+    expect(withOverrides.provenance["compression.level"]).toEqual({ layer: "override" });
     // env value not shadowed by overrides still wins over defaults.
     expect(withOverrides.settings.telemetry.enabled).toBe(false);
   });
@@ -121,16 +121,16 @@ describe("loadConfig precedence", () => {
     expect(Object.isFrozen(config.settings.knowledge.watch_paths)).toBe(true);
     expect(Object.isFrozen(config.provenance)).toBe(true);
     expect(() => {
-      (config.settings.slider as { level: number }).level = 5;
+      (config.settings.compression as { level: string }).level = "3";
     }).toThrow(TypeError);
   });
 
   it("treats empty and BOM-prefixed files gracefully", async () => {
     await mkdir(path.dirname(projectFile()), { recursive: true });
     await writeFile(projectFile(), "   \n", "utf8");
-    await writeFile(localFile(), `﻿{"slider":{"level":3}}`, "utf8");
+    await writeFile(localFile(), `﻿{"compression":{"level":"3"}}`, "utf8");
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(3);
+    expect(config.settings.compression.level).toBe("3");
   });
 
   it("defaults knowledge.wiki_dir to docs/wiki and lets layers override it", async () => {
@@ -147,12 +147,11 @@ describe("loadConfig precedence", () => {
     });
   });
 
-  it("policyFromSettings maps slider settings onto the frozen contract", async () => {
-    // Legacy 5 migrates to 3 (aggressive).
-    await writeJson(projectFile(), { slider: { level: 5 } });
+  it("policyFromSettings maps the dials onto the frozen contract", async () => {
+    await writeJson(projectFile(), { compression: { level: "3" } });
     const config = await loadConfig({ projectDir, userDir, env: {} });
     const policy = policyFromSettings(config.settings);
-    expect(policy.level).toBe(3);
+    expect(policy.compression).toBe(3);
     expect(policy.stages.semanticCompression).toBe("aggressive");
   });
 

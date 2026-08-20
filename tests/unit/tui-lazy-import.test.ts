@@ -100,7 +100,12 @@ describe("the CLI keeps the panel off the hot path", () => {
     expect(specifiers).not.toContain("../cli/slider.js");
     expect(specifiers).not.toContain("../hooks/index.js");
     // ...and the cheap read-only substitutes ARE used.
-    expect(specifiers).toContain("../cli/slider-read.js");
+    // R11.1: the runtime group reads the dial straight from `loadConfig` and
+    // imports `../cli/dials.js` LAZILY for the write path (it was `slider-read.js`
+    // statically, because the slider's read half had to be a separate cheap
+    // module). The cheap-read requirement is unchanged; what satisfies it is now
+    // the loader itself.
+    expect(specifiers).toContain("./loader.js");
     expect(specifiers).toContain("../hooks/guidance.js");
   });
 

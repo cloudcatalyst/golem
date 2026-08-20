@@ -112,7 +112,7 @@ export class GolemProxy {
    * construction; changed via {@link setPipelineEnabled} or on an admin
    * request to `/__golem/pipeline/<enabled>`.
    */
-  #pipelineEnabled = true;
+  #pipelineEnabled: boolean;
 
   setPipelineEnabled(enabled: boolean): void {
     this.#pipelineEnabled = enabled;
@@ -138,6 +138,11 @@ export class GolemProxy {
 
   constructor(options: ProxyServerOptions = {}) {
     this.config = resolveProxyConfig(options);
+    // R11.1: `proxy.bypass_all` starts the proxy with the pipeline OFF, which is
+    // the same state `golem off` reaches at runtime — the difference is that this
+    // one survives a restart, and the restart is the reason the runtime toggle
+    // could not be the bypass's home (ADR-0004).
+    this.#pipelineEnabled = options.pipelineEnabled !== false;
     const upstream = new URL(this.config.upstreamBaseUrl);
     this.basePath = upstream.pathname.replace(/\/+$/, "");
     this.server = createServer((req, res) => {

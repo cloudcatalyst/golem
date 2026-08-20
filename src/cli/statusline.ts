@@ -29,8 +29,8 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState } from "../hooks/session-state.js";
 import { isKnownWorker, KNOWN_WORKERS } from "../inference/workers.js";
 import {
-  coerceCompressionLevel,
   type CompressionLevel,
+  coerceCompressionLevel,
   compressionName,
 } from "../interfaces/policy.js";
 import {
@@ -70,6 +70,12 @@ export interface SessionInput {
 export interface GolemState {
   /** R11.1: the compression DIAL, which since ADR-0004 is the only such number. */
   readonly compression: CompressionLevel;
+  /**
+   * R11.1 — `proxy.bypass_all`: nothing runs, redaction included (ADR-0004).
+   * Read here because every surface that renders this state has to shout about
+   * it, and they all read this shape.
+   */
+  readonly proxyBypassAll?: boolean;
   /**
    * §103 — the level the pipeline will ACTUALLY apply, when it differs from
    * `compression`. The status line runs on every prompt, so it is the surface a
@@ -416,6 +422,7 @@ export async function collectGolemState(
   } = {},
 ): Promise<GolemState> {
   let compression: CompressionLevel = 1;
+  let bypassAll = false;
   let brevity = "off";
   let label = upstreamLabel("https://api.anthropic.com");
   let ollamaBaseUrl = "http://localhost:11434";
@@ -430,6 +437,7 @@ export async function collectGolemState(
   try {
     const { settings } = await loadConfig({ projectDir: dir });
     compression = coerceCompressionLevel(settings.compression.level);
+    bypassAll = settings.proxy.bypass_all;
     proxyPort = settings.proxy.port;
     // R11.1: both dials are read straight from settings — there is no preset to
     // resolve against, which is the point of retiring the slider.
@@ -482,6 +490,7 @@ export async function collectGolemState(
   }
   let state: GolemState = {
     compression,
+    proxyBypassAll: bypassAll,
     brevity,
     upstreamLabel: label,
     coderEnabled: coderEnabled,

@@ -30,7 +30,7 @@ function pair(situation: {
   readonly bypass?: boolean;
 }): { cli: string; bar: string } {
   const cli: GolemState = {
-    sliderLevel: 1,
+    compression: 1 as const,
     upstreamLabel: "openrouter",
     upstreamModel: "deepseek/deepseek-v4-flash",
     brevity: "full",
@@ -43,8 +43,8 @@ function pair(situation: {
     proxyReachable: situation.running,
     proxyInPath: situation.wired,
     proxyBypass: situation.bypass === true,
-    slider: 1,
-    sliderName: "lossless",
+    compression: "1",
+    compressionName: "lossless",
     brevity: "full",
     upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
     lastServedModel: "deepseek/deepseek-v4-flash",

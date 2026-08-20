@@ -6,7 +6,6 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { SLIDER_LEVEL_NAMES } from "../../../src/cli/slider-read.js";
 import {
   effectiveLevelBadge,
   effectiveLevelSuffix,
@@ -14,7 +13,11 @@ import {
   levelLabel,
   resolveEffectiveCompression,
 } from "../../../src/compression/effective-level.js";
-import type { SliderLevel } from "../../../src/interfaces/policy.js";
+import {
+  COMPRESSION_LEVELS,
+  type CompressionLevel,
+  compressionName,
+} from "../../../src/interfaces/policy.js";
 
 /** A non-caching upstream with the sidecar available — levels 2-3 fully live. */
 const LIVE = {
@@ -49,7 +52,7 @@ describe("isCachingUpstream", () => {
 
 describe("resolveEffectiveCompression", () => {
   it("never degrades levels 0 and 1 — they have no lossy stage to gate", () => {
-    for (const level of [0, 1] as SliderLevel[]) {
+    for (const level of [0, 1] as CompressionLevel[]) {
       const r = resolveEffectiveCompression({
         level,
         upstreamBaseUrl: "https://api.anthropic.com",
@@ -61,7 +64,7 @@ describe("resolveEffectiveCompression", () => {
   });
 
   it("collapses levels 2 and 3 to 1 on a caching upstream (Decision 31)", () => {
-    for (const level of [2, 3] as SliderLevel[]) {
+    for (const level of [2, 3] as CompressionLevel[]) {
       const r = resolveEffectiveCompression({
         level,
         upstreamBaseUrl: "https://api.anthropic.com",
@@ -86,7 +89,7 @@ describe("resolveEffectiveCompression", () => {
   });
 
   it("does not degrade on a non-caching upstream with the sidecar on", () => {
-    for (const level of [2, 3] as SliderLevel[]) {
+    for (const level of [2, 3] as CompressionLevel[]) {
       const r = resolveEffectiveCompression({ ...LIVE, level });
       expect(r).toEqual({ nominal: level, effective: level, degraded: false });
     }
@@ -140,11 +143,14 @@ describe("resolveEffectiveCompression", () => {
 });
 
 describe("display helpers", () => {
-  // The level names are duplicated so this module stays importable by the status
-  // line without the config loader (§86). Duplication is fine; silent drift is not.
-  it("keeps its level names identical to the CLI's", () => {
-    for (const level of [0, 1, 2, 3] as SliderLevel[]) {
-      expect(levelLabel(level)).toBe(SLIDER_LEVEL_NAMES[level]);
+  // R11.1: the names USED to be duplicated here (so the status line could label a
+  // level without importing the config loader — §86) with this test pinning that
+  // the two copies agreed. Both surfaces now call the contract's own namer, so
+  // what is left to assert is that this module still delegates rather than
+  // growing a second table.
+  it("labels every level with the contract's own name", () => {
+    for (const level of COMPRESSION_LEVELS) {
+      expect(levelLabel(level)).toBe(compressionName(level));
     }
   });
 

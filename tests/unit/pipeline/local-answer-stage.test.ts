@@ -148,7 +148,7 @@ describe("pipeline local-answer stage (R2.3)", () => {
     const events: PipelineEvent[] = [];
     const pipe = createGolemPipeline({
       compression,
-      policy: () => policyFor(0),
+      policy: () => policyFor("off"),
       projectId: "proj",
       onEvent: (e) => events.push(e),
       localAnswer: { service: stubService({ answersFor: "how do I deploy?" }) },
@@ -166,7 +166,7 @@ describe("pipeline local-answer stage (R2.3)", () => {
     const compression = new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr"));
     const pipe = createGolemPipeline({
       compression,
-      policy: () => policyFor(0),
+      policy: () => policyFor("off"),
       projectId: "proj",
       localAnswer: { service: stubService({ calls }) },
     });

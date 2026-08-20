@@ -44,7 +44,7 @@ describe("SETTING_META covers the schema exactly", () => {
   it("names a real control in every ownedBy hint", () => {
     // A leaf claiming another control owns it must point at a runtime control that
     // actually exists, or the key would be silently unreachable in every UI.
-    const runtimeIds = new Set(["runtime:slider", "runtime:account", "runtime:proxy"]);
+    const runtimeIds = new Set(["runtime:compression", "runtime:account", "runtime:proxy"]);
     // Via settingMeta(), not Object.entries: `as const satisfies` keeps each entry's
     // narrow literal type, so the union's members don't all declare `ownedBy`.
     for (const path of allLeafPaths()) {
@@ -89,11 +89,11 @@ describe("deriveKind", () => {
   });
 
   it("unwraps optional and transformed leaves", () => {
-    // proxy.upstream_model is `.optional()`; slider.level is `.transform()`ed
+    // proxy.upstream_model is `.optional()`; compression.level is an enum
     // through the legacy 0-5 remap. Both must report their underlying type.
     expect(kindOf("proxy", "upstream_model")).toBe("text");
     expect(kindOf("knowledge", "vector_db_url")).toBe("url");
-    expect(kindOf("slider", "level")).toBe("number");
+    expect(kindOf("compression", "level")).toBe("enum");
   });
 
   it("treats a structured array as opaque, not an editable list", () => {

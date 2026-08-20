@@ -52,14 +52,14 @@ describe("env override mapping", () => {
   });
 
   it("rejects case-colliding names with different values", () => {
-    expect(() => readEnvLayer({ GOLEM_SLIDER_LEVEL: "2", golem_slider_level: "3" })).toThrow(
-      ConfigError,
-    );
-    expect(() => readEnvLayer({ GOLEM_SLIDER_LEVEL: "2", golem_slider_level: "3" })).toThrow(
-      /ambiguous/i,
-    );
+    expect(() =>
+      readEnvLayer({ GOLEM_COMPRESSION_LEVEL: "2", golem_compression_level: "3" }),
+    ).toThrow(ConfigError);
+    expect(() =>
+      readEnvLayer({ GOLEM_COMPRESSION_LEVEL: "2", golem_compression_level: "3" }),
+    ).toThrow(/ambiguous/i);
     // Identical values are tolerated.
-    const layer = readEnvLayer({ GOLEM_SLIDER_LEVEL: "2", golem_slider_level: "2" });
+    const layer = readEnvLayer({ GOLEM_COMPRESSION_LEVEL: "2", golem_compression_level: "2" });
     expect(layer.overrides).toHaveLength(1);
   });
 
@@ -106,25 +106,25 @@ describe("env override mapping", () => {
   });
 
   it("rejects schema-invalid values, naming variable and key", async () => {
-    const err = await load({ GOLEM_SLIDER_LEVEL: "9" }).catch((e: unknown) => e);
+    const err = await load({ GOLEM_COMPRESSION_LEVEL: "9" }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
-    expect((err as ConfigError).message).toContain("GOLEM_SLIDER_LEVEL");
-    expect((err as ConfigError).key).toBe("slider.level");
+    expect((err as ConfigError).message).toContain("GOLEM_COMPRESSION_LEVEL");
+    expect((err as ConfigError).key).toBe("compression.level");
   });
 
   it("warns on unrecognized GOLEM_* variables instead of failing", async () => {
-    const config = await load({ GOLEM_NOPE_KEY: "x", GOLEM_SLIDER_LEVEL: "2" });
-    expect(config.settings.slider.level).toBe(2);
+    const config = await load({ GOLEM_NOPE_KEY: "x", GOLEM_COMPRESSION_LEVEL: "2" });
+    expect(config.settings.compression.level).toBe("2");
     expect(config.warnings.some((w) => w.includes("GOLEM_NOPE_KEY"))).toBe(true);
   });
 
   it("ignores empty-string values and non-GOLEM variables", async () => {
     const config = await load({
-      GOLEM_SLIDER_LEVEL: "",
+      GOLEM_COMPRESSION_LEVEL: "",
       PATH: "C:\\Windows",
       HOME: "/home/user",
     });
-    expect(config.settings.slider.level).toBe(1); // default
+    expect(config.settings.compression.level).toBe("1"); // default
     expect(config.warnings).toEqual([]);
   });
 });

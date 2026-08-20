@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CcrStore, NativeLosslessCompression } from "../../../src/compression/index.js";
 import { LocalDirBlobStore } from "../../../src/compression/local-blob-store.js";
 import type { SemanticCompressor, SemanticMode } from "../../../src/compression/semantic.js";
-import { type SliderLevel, policyFor } from "../../../src/interfaces/policy.js";
+import { type CompressionLevel, policyFor } from "../../../src/interfaces/policy.js";
 import type { BlobStore } from "../../../src/interfaces/storage.js";
 import { BlobNotFoundError } from "../../../src/interfaces/storage.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
@@ -56,7 +56,7 @@ function bodyOf(req: ProxyRequest): { messages: Array<{ role: string; content: u
 
 /** A pipeline over an in-memory CCR store + an injected semantic compressor. */
 function makePipeline(
-  level: SliderLevel,
+  level: CompressionLevel,
   semantic: SemanticCompressor | undefined,
   onEvent?: (e: PipelineEvent) => void,
   opts: {

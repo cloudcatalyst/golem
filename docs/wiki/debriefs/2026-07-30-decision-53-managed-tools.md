@@ -107,6 +107,6 @@ worker still keeps CI Python-free.
 ## Related
 
 - [[Managed Tools]] — the concept page this decision creates
-- [[Compression]] · [[Slider Levels]] — the gate behind the Headroom row
+- [[Compression]] · [[Compression Levels]] — the gate behind the Headroom row
 - [[Configuration Surfaces]] — where `enabledBy` keys are edited
 - verification-notes §90 (RTK), §91 (hook precedence — **open**), §92 (the audit)

@@ -28,11 +28,7 @@ import type {
   Role,
   Vector,
 } from "../../src/interfaces/index.js";
-import {
-  CapabilityUnavailableError,
-  HardwareTier,
-  policyFor,
-} from "../../src/interfaces/index.js";
+import { CapabilityUnavailableError, HardwareTier, policyFor } from "../../src/interfaces/index.js";
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { MAX_EDIT_LINES } from "../../src/mcp/coder-edit.js";
 import { createGolemMcpServer, createStandaloneDeps, serveHttp } from "../../src/mcp/index.js";
@@ -41,7 +37,7 @@ import { rmTemp } from "../helpers/tmp.js";
 
 // Unconditionally-registered tools (need no injected service): the P0 trio +
 // `devices` + `snooze` (park-until-reset, proposal golem-snooze.md).
-const P0_TOOLS = ["expand", "stats", "level", "devices", "snooze"] as const;
+const P0_TOOLS = ["expand", "stats", "devices", "snooze"] as const;
 const ALL_PROMPTS = [
   "slider",
   "index",
@@ -163,112 +159,46 @@ describe("golem MCP server (in-memory transport)", () => {
     });
   });
 
-  describe("level + stats", () => {
-    it("sets a valid level, persists it, and reports it via stats", async () => {
+  describe("stats", () => {
+    it("reports the compression level from settings", async () => {
       const deps = createStandaloneDeps();
-      const client = await connectInMemory(deps);
-
-      const setResult = await client.callTool({
-        name: "level",
-        arguments: { level: 3 },
-      });
-      expect(setResult.isError).toBeFalsy();
-      expect(setResult.structuredContent).toMatchObject({
-        slider_level: 3,
-        slider_level_name: "aggressive",
-      });
-      await expect(deps.sliderStore.get()).resolves.toBe(3);
-
-      const statsResult = await client.callTool({ name: "stats", arguments: {} });
-      expect(statsResult.isError).toBeFalsy();
-      expect(statsResult.structuredContent).toMatchObject({ slider_level: 3 });
-    });
-
-    // R8.33 — the security boundary: no sequence of tool calls may reach a
-    // state where redaction is off. Level 0 stays a supported setting, but it
-    // is CLI-only (`golem slider 0`), mirroring ADR-0002 threat item 4.
-    it("refuses level 0 and leaves the persisted level untouched", async () => {
-      const deps = createStandaloneDeps();
-      await deps.sliderStore.set(2);
-      const client = await connectInMemory(deps);
-
-      const result = await client.callTool({ name: "level", arguments: { level: 0 } });
-
-      expect(result.isError).toBe(true);
-      expect(textOf(result)).toContain("golem slider 0");
-      // The refusal must land BEFORE the write, not as a warning after it.
-      await expect(deps.sliderStore.get()).resolves.toBe(2);
-    });
-
-    it("still reports a level 0 set out-of-band via the CLI", async () => {
-      const deps = createStandaloneDeps();
-      await deps.sliderStore.set(0); // as `golem slider 0` would
       const client = await connectInMemory(deps);
 
       const statsResult = await client.callTool({ name: "stats", arguments: {} });
       expect(statsResult.isError).toBeFalsy();
       expect(statsResult.structuredContent).toMatchObject({
-        slider_level: 0,
-        slider_level_name: "passthrough",
+        compression_level: "1",
+        compression_level_name: "lossless",
       });
     });
 
-    it.each([
-      -1, 6, 2.5,
-    ])("maps out-of-range level %s to an InvalidParams error result", async (level) => {
+    /**
+     * R11.1 / ADR-0004 supersedes R8.33's level-0 refusal with something stronger.
+     *
+     * R8.33's boundary was "no tool call may set level 0", because level 0 was the
+     * one value that disabled redaction — a refusal enforced inside the `level`
+     * tool. That tool no longer exists, and neither does a level that can disable
+     * redaction: `proxy.bypass_all` is CLI-only and no dial reaches it. So the
+     * assertion is no longer "the write is refused" but "there is nothing to
+     * refuse" — which is the version that cannot be regressed by a new tool
+     * forgetting to check.
+     */
+    it("exposes NO tool that can change how much of the pipeline runs", async () => {
       const deps = createStandaloneDeps();
       const client = await connectInMemory(deps);
-      const result = await client.callTool({ name: "level", arguments: { level } });
-      expectInvalidParamsResult(result);
-      // Invalid calls must not have changed persisted state.
-      await expect(deps.sliderStore.get()).resolves.toBe(1);
-    });
 
-    it("maps a non-numeric level to an InvalidParams error result", async () => {
-      const client = await connectInMemory(createStandaloneDeps());
-      const result = await client.callTool({
-        name: "level",
-        arguments: { level: "high" },
-      });
-      expectInvalidParamsResult(result);
-    });
-
-    it("stats reports snake_case savings fields, globally and per project", async () => {
-      const deps = createStandaloneDeps();
-      await seedCcrRef(deps); // one compress() against "mcp-test-project"
-      const client = await connectInMemory(deps);
-
-      const globalStats = await client.callTool({ name: "stats", arguments: {} });
-      expect(globalStats.structuredContent).toMatchObject({
-        project_id: null,
-        slider_level: 1,
-        slider_level_name: "lossless",
-        requests: 1,
-        ccr_refs_stored: 1,
-      });
-      const structured = globalStats.structuredContent as Record<string, number>;
-      expect(structured.tokens_saved).toBe(
-        (structured.tokens_before ?? 0) - (structured.tokens_after ?? 0),
-      );
-      expect(structured.tokens_saved).toBeGreaterThan(0);
-
-      const projectStats = await client.callTool({
-        name: "stats",
-        arguments: { project_id: "mcp-test-project" },
-      });
-      expect(projectStats.structuredContent).toMatchObject({
-        project_id: "mcp-test-project",
-        requests: 1,
-      });
-    });
-
-    it("maps a wrongly-typed project_id to an InvalidParams error result", async () => {
-      const client = await connectInMemory(createStandaloneDeps());
-      const result = await client.callTool({
-        name: "stats",
-        arguments: { project_id: 7 },
-      });
-      expectInvalidParamsResult(result);
+      const { tools } = await client.listTools();
+      const names = tools.map((t) => t.name);
+      expect(names).not.toContain("level");
+      expect(names).not.toContain("slider");
+      // Nothing else quietly took over the job: no tool advertises a compression
+      // or redaction input.
+      for (const tool of tools) {
+        const schema = JSON.stringify(tool.inputSchema ?? {});
+        expect(schema).not.toContain("compression");
+        expect(schema).not.toContain("redaction");
+        expect(schema).not.toContain("bypass");
+      }
     });
   });
 
@@ -1310,17 +1240,17 @@ describe("golem MCP server (streamable HTTP transport)", () => {
     const { tools } = await clientA.listTools();
     expect(tools.map((t) => t.name).sort()).toStrictEqual([...P0_TOOLS].sort());
 
-    const setResult = await clientA.callTool({
-      name: "level",
-      arguments: { level: 3 },
-    });
-    expect(setResult.structuredContent).toMatchObject({ slider_level: 3 });
+    // R11.1: the `level` tool is gone (ADR-0004), so shared state is shown with
+    // the read-only `stats` tool instead — the point of the test is that two
+    // sessions see the SAME injected deps, not that a tool can mutate them.
+    const statsA = await clientA.callTool({ name: "stats", arguments: {} });
+    expect(statsA.structuredContent).toMatchObject({ compression_level: "1" });
 
     // A second, independent session sees the same injected deps (shared state).
     const clientB = new Client({ name: "http-client-b", version: "0.0.0" });
     await clientB.connect(new StreamableHTTPClientTransport(handle.url) as Transport);
     const stats = await clientB.callTool({ name: "stats", arguments: {} });
-    expect(stats.structuredContent).toMatchObject({ slider_level: 3 });
+    expect(stats.structuredContent).toMatchObject({ compression_level: "1" });
 
     await clientA.close();
     await clientB.close();

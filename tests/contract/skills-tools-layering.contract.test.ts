@@ -42,14 +42,13 @@ import { createGolemMcpServer, createStandaloneDeps } from "../../src/mcp/index.
 /**
  * CLI verbs that are the twin of an MCP tool under a different name.
  *
- * Without this the check would miss the one case it most needs to see: the
- * `slider` skill's `golem slider 0`, whose tool twin is `level`. A literal
- * name-match would call that clean and the exception mechanism would never be
- * exercised — a check that cannot fire is not a check.
+ * R11.1 emptied this table. Its one entry mapped the `slider` skill's
+ * `golem slider 0` to its tool twin `level` — and ADR-0004 retired both, so the
+ * only CLI verb that had a differently-named tool no longer exists. The table
+ * stays because the mechanism is the point: the next such pair must be declared
+ * here rather than slipping past a literal name-match.
  */
-const CLI_VERB_TOOL_TWINS: Readonly<Record<string, string>> = {
-  slider: "level",
-};
+const CLI_VERB_TOOL_TWINS: Readonly<Record<string, string>> = {};
 
 /**
  * Verbs that share a prefix with a tool but are a DIFFERENT capability, so they

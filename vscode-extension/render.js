@@ -3,15 +3,21 @@
 "use strict";
 
 /**
- * The current slider scale (spec Decision 30 — levels 0–3, mirrors the CLI's
- * SLIDER_LEVEL_NAMES in src/cli/slider.ts). Single source of truth for the
- * panel buttons and the status-bar quick-pick so neither drifts to a stale range.
+ * The compression scale (R11.1 / ADR-0004 — mirrors `COMPRESSION_NAMES` in
+ * src/interfaces/policy.ts). Single source of truth for the panel buttons and the
+ * status-bar quick-pick so neither drifts to a stale range.
+ *
+ * `0` is deliberately absent. It used to be the slider's full bypass — the one
+ * value that turned REDACTION off — and a panel button is exactly the wrong place
+ * for that: one click, no confirmation, no mention of redaction in the label.
+ * It is now `proxy.bypass_all`, which the Settings section renders with its own
+ * danger confirmation.
  */
-const SLIDER_LEVELS = [
-  { level: 0, name: "Passthrough" },
-  { level: 1, name: "Lossless" },
-  { level: 2, name: "Balanced" },
-  { level: 3, name: "Aggressive" },
+const COMPRESSION_LEVELS = [
+  { level: "off", name: "Off" },
+  { level: "1", name: "Lossless" },
+  { level: "2", name: "Balanced" },
+  { level: "3", name: "Aggressive" },
 ];
 
 /**
@@ -52,12 +58,13 @@ const STATUS_FIELDS_READ = [
   // confident filled hexagon. Optional so an older CLI that omits it is treated
   // as wired rather than raising a false alarm.
   { path: ["proxy", "in_path"], required: false },
-  { path: ["slider", "level"], required: true },
-  { path: ["slider", "name"], required: true },
-  { path: ["dials", "brevity", "effective"], required: true },
-  { path: ["dials", "brevity", "pinned"], required: true },
+  // R11.1: `status --json` no longer carries a `slider` block (ADR-0004); the
+  // dials below are the whole control surface.
   { path: ["dials", "compression", "effective"], required: true },
-  { path: ["dials", "compression", "pinned"], required: true },
+  { path: ["dials", "brevity", "effective"], required: true },
+
+  { path: ["dials", "compression", "effective"], required: true },
+
   { path: ["upstream", "provider"], required: true },
   { path: ["upstream", "account"], required: true },
   { path: ["upstream", "base_url"], required: true },
@@ -139,7 +146,7 @@ function formatGatewayModel(gatewayLabel, modelId) {
 }
 
 /**
- * The slider level label, "Passthrough" whenever Golem isn't transforming
+ * The compression level label, "Passthrough" whenever Golem isn't transforming
  * traffic (proxy stopped, or level 0 full bypass — Decision 30). Shared by the
  * status bar and the hover summary so they never disagree.
  */
@@ -147,8 +154,8 @@ function levelLabel(model) {
   // Decision 56: the bypass shim is serving and redacting, so it is neither
   // "stopped" nor a level-0 passthrough — it gets its own label.
   if (model.proxyBypass) return "Bypass";
-  if (!model.proxyReachable || model.slider === 0) return "Passthrough";
-  return model.sliderName ? cap(model.sliderName) : `L${model.slider}`;
+  if (!model.proxyReachable) return "Passthrough";
+  return model.compressionName ? cap(model.compressionName) : String(model.compression);
 }
 
 /**
@@ -168,7 +175,7 @@ function levelLabel(model) {
  */
 function dialLabel(model) {
   const label = levelLabel(model);
-  return model.sliderName ? label.toLowerCase() : label;
+  return model.compressionName ? label.toLowerCase() : label;
 }
 
 function proxyStateWord(model) {
@@ -179,19 +186,16 @@ function proxyStateWord(model) {
 }
 
 /**
- * Decision 52 — one line describing both dials, saying explicitly which of them
- * the slider is driving. A pinned dial must never look like a preset, so
- * "pinned" is always spelled out.
+ * One line describing both dials.
+ *
+ * R11.1 dropped the "(pinned)"/"(auto)" suffixes: they existed to say whether the
+ * slider was driving a dial, and there is no slider. A dial's value is its value.
  */
 function dialsSummary(model) {
   // Decision 56: in bypass neither dial is in force. Say so rather than
   // reporting the configuration as though it were running.
   if (model.proxyBypass) return "pipeline off (bypass) — redaction only";
-  const brevity = `brevity ${model.brevity || "off"}${model.brevityPinned ? " (pinned)" : " (auto)"}`;
-  const compression = model.compressionLevel
-    ? `compression ${model.compressionLevel}${model.compressionPinned ? " (pinned)" : " (auto)"}`
-    : "compression auto";
-  return `${brevity} · ${compression}`;
+  return `brevity ${model.brevity || "off"} · compression ${model.compressionLevel || model.compression || "1"}`;
 }
 
 /**
@@ -298,16 +302,23 @@ function buildModel(stats, status, update, accounts, surface) {
     savedPct,
     savedTokens: Math.max(0, before - after),
     perStage,
-    slider: st.slider && typeof st.slider.level === "number" ? st.slider.level : 1,
-    sliderName: (st.slider && st.slider.name) || "",
+    // R11.1: the compression dial replaces the slider. `dials.compression` is
+    // where it lives; an older CLI's `slider.level` is read as a fallback so a
+    // stale daemon does not blank the panel.
+    compression:
+      (st.dials && st.dials.compression && st.dials.compression.effective) ||
+      (st.slider && String(st.slider.level)) ||
+      "1",
+    compressionName:
+      (st.effective_compression && st.effective_compression.nominal_name) ||
+      (st.slider && st.slider.name) ||
+      "",
     // Decision 52: the slider is a preset over two dials. `brevity` changes how
     // the MODEL talks, so it is surfaced in the status bar too — an unexplained
     // terse assistant should trace back to a visible dial, not look like a
     // model regression. Older CLIs have no `dials` block; default to off.
     brevity: (st.dials && st.dials.brevity && st.dials.brevity.effective) || "off",
-    brevityPinned: Boolean(st.dials && st.dials.brevity && st.dials.brevity.pinned),
     compressionLevel: (st.dials && st.dials.compression && st.dials.compression.effective) || "",
-    compressionPinned: Boolean(st.dials && st.dials.compression && st.dials.compression.pinned),
     upstream,
     upstreamLabel: label,
     upstreamDisplay,
@@ -659,9 +670,9 @@ function controlValueText(control, fallback = "(unset)") {
 }
 
 function renderHtml(model, nonce) {
-  const sliderButtons = SLIDER_LEVELS.map(
+  const compressionButtons = COMPRESSION_LEVELS.map(
     (l) =>
-      `<button class="lvl ${l.level === model.slider ? "on" : ""}" data-level="${l.level}" title="${esc(
+      `<button class="lvl ${l.level === String(model.compression) ? "on" : ""}" data-level="${l.level}" title="${esc(
         l.name,
       )}">${l.level}</button>`,
   ).join("");
@@ -748,8 +759,8 @@ function renderHtml(model, nonce) {
       : `<span class="sub">${esc(model.currentVersion || "unknown")}</span>`
   }</span></div>
 
-  <h2>Slider (level ${model.slider}${model.sliderName ? ` · ${esc(model.sliderName)}` : ""})</h2>
-  <div>${sliderButtons}</div>
+  <h2>Compression (${esc(String(model.compression))}${model.compressionName ? ` · ${esc(model.compressionName)}` : ""})</h2>
+  <div>${compressionButtons}</div>
   <div class="row"><span>Dials</span><span class="sub">${esc(dialsSummary(model))}</span></div>${
     model.brevity !== "off"
       ? `\n  <div class="row"><span class="warn">Brevity active</span><span class="sub">replies are shortened (${esc(
@@ -771,7 +782,7 @@ function renderHtml(model, nonce) {
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     for (const b of document.querySelectorAll('.lvl')) {
-      b.addEventListener('click', () => vscode.postMessage({ type: 'setSlider', level: Number(b.dataset.level) }));
+      b.addEventListener('click', () => vscode.postMessage({ type: 'setCompression', level: String(b.dataset.level) }));
     }
     const pt = document.getElementById('proxyToggle');
     if (pt) pt.addEventListener('click', () => vscode.postMessage({ type: pt.dataset.running === '1' ? 'proxyStop' : 'proxyStart' }));
@@ -822,7 +833,7 @@ function renderHtml(model, nonce) {
 }
 
 module.exports = {
-  SLIDER_LEVELS,
+  COMPRESSION_LEVELS,
   STATUS_FIELDS_READ,
   gatewayRows,
   fmtTokens,

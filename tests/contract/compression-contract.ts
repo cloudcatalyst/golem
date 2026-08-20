@@ -44,7 +44,7 @@ export function describeCompressionServiceContract(
   describe(`CompressionService contract: ${name}`, () => {
     it("level 0 is byte-faithful passthrough", async () => {
       const svc = await makeService();
-      const result = await svc.compress(MESSAGES, policyFor(0), PROJECT);
+      const result = await svc.compress(MESSAGES, policyFor("off"), PROJECT);
       expect(result.messagesOut).toStrictEqual(MESSAGES);
       expect(result.refs).toHaveLength(0);
     });

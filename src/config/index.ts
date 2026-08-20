@@ -17,8 +17,8 @@
 
 import {
   type BrevityLevel,
-  coerceCompressionLevel,
   type CompressionLevel,
+  coerceCompressionLevel,
   type PipelinePolicy,
   policyFor,
 } from "../interfaces/policy.js";

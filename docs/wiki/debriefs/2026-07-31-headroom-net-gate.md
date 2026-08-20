@@ -139,7 +139,7 @@ the fail-safe direction, since guessing wrong the other way costs ~9×.
 ## See also
 
 - [[Compression]] — the pipeline's stages and which of them are lossy
-- [[Slider Levels]] — what each level promises, and what it delivers per upstream
+- [[Compression Levels]] — what each level promises, and what it delivers per upstream
 - [[Dogfooding Golem]] — the sidecar's opt-in story and where it does pay
 - [[Cache Observability]] — the prefix-stability machinery this finding leans on
 - Spec Decisions Log: **23** (compression is situational), **31** (the lossy stage is

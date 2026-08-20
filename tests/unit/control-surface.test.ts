@@ -114,7 +114,7 @@ describe("collectControlSurface", () => {
     expect(tabs).toEqual(new Set(["settings", "guidance", "runtime"]));
     expect(ids(surface)).toContain("setting:knowledge.enabled");
     expect(ids(surface)).toContain("guidance:coder-first");
-    expect(ids(surface)).toEqual(expect.arrayContaining(["runtime:slider", "runtime:proxy"]));
+    expect(ids(surface)).toEqual(expect.arrayContaining(["runtime:compression", "runtime:proxy"]));
   });
 
   /**
@@ -153,7 +153,7 @@ describe("collectControlSurface", () => {
     expect(surface.header).not.toBeNull();
     expect(surface.header?.version).toBe("9.9.9-test");
     expect(surface.header?.project_dir).toBe(path.resolve(projectDir));
-    expect(surface.header?.slider.level).toBe(1);
+    expect(surface.header?.effective_compression.nominal).toBe("1");
   });
 
   it("collectHeader builds the same report on its own", async () => {
@@ -164,10 +164,10 @@ describe("collectControlSurface", () => {
 
   it("omits leaves a runtime control owns, so nothing is editable twice", async () => {
     const surface = await collectControlSurface(OPTS());
-    // slider.level is edited as runtime:slider; active_account as runtime:account.
+    // compression.level is edited as runtime:compression; default_target as runtime:account.
     expect(ids(surface)).not.toContain("setting:slider.level");
     expect(ids(surface)).not.toContain("setting:proxy.active_account");
-    expect(ids(surface)).toContain("runtime:slider");
+    expect(ids(surface)).toContain("runtime:compression");
     expect(ids(surface)).toContain("runtime:account");
   });
 
@@ -209,12 +209,22 @@ describe("collectControlSurface", () => {
     expect(find(surface, "setting:knowledge.enabled").advanced).toBe(false);
   });
 
-  it("passes the slider's danger warning through, with its levels", async () => {
-    const slider = find(await collectControlSurface(OPTS()), "runtime:slider");
-    expect(slider.options?.map((o) => o.value)).toEqual(["0", "1", "2", "3"]);
-    expect(slider.danger).toContain("redaction");
-    // The slider is a personal dial (Decision 43) — always local scope.
-    expect(slider.writableScopes).toEqual(["local"]);
+  it("offers the compression levels, and does NOT offer a redaction-off one", async () => {
+    const dial = find(await collectControlSurface(OPTS()), "runtime:compression");
+    // R11.1: `0` is gone from this control. It was the one value that turned
+    // redaction off, and a panel enum is exactly the wrong place for that — one
+    // click, no confirmation, no mention of redaction in the label. The bypass is
+    // `proxy.bypass_all`, a settings control that carries its own danger text.
+    expect(dial.options?.map((o) => o.value)).toEqual(["off", "1", "2", "3"]);
+    expect(dial.options?.map((o) => o.value)).not.toContain("0");
+    // A dial is personal (Decision 43) — always local scope.
+    expect(dial.writableScopes).toEqual(["local"]);
+  });
+
+  it("keeps the redaction warning on the bypass setting, where it belongs", async () => {
+    const surface = await collectControlSurface(OPTS());
+    const bypass = find(surface, "setting:proxy.bypass_all");
+    expect(bypass.danger).toContain("REDACTION");
   });
 
   it("reads a guidance rule's presence per scope, not the coder-first setting", async () => {
@@ -337,13 +347,19 @@ describe("applyControl", () => {
     await expect(readFile(rulePath("durable-tasks", true), "utf8")).rejects.toThrow();
   });
 
-  it("writes the slider to local scope whatever scope is asked for", async () => {
-    const result = await applyControl("runtime:slider", "2", "user", OPTS());
+  it("writes the compression dial to local scope whatever scope is asked for", async () => {
+    const result = await applyControl("runtime:compression", "2", "user", OPTS());
     expect(result.value).toBe("2");
     expect(result.file).toBe(path.join(projectDir, ".golem", "settings.local.json"));
   });
 
-  it("rejects an out-of-range slider level", async () => {
-    await expect(applyControl("runtime:slider", "7", "local", OPTS())).rejects.toThrow(/0–3/);
+  it("rejects a value outside the dial's enum", async () => {
+    await expect(applyControl("runtime:compression", "7", "local", OPTS())).rejects.toThrow(
+      /invalid compression value/,
+    );
+    // And the retired bypass value is refused with a pointer to where it went.
+    await expect(applyControl("runtime:compression", "0", "local", OPTS())).rejects.toThrow(
+      /bypass_all/,
+    );
   });
 });

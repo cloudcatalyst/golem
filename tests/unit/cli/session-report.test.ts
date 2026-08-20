@@ -13,7 +13,7 @@ import { markBlocked } from "../../../src/hooks/index.js";
 import { useTempDirs } from "../../helpers/tmp.js";
 
 const fakeState: GolemState = {
-  sliderLevel: 1,
+  compression: 1 as const,
   upstreamLabel: "anthropic",
   proxyRunning: true,
   localModelReachable: false,
@@ -37,8 +37,8 @@ describe("collectSessionStateReport", () => {
     expect(report.project_dir).toBe(dir);
     expect(report.proxy.running).toBe(true);
     expect(report.proxy.upstream).toBe("anthropic");
-    expect(report.slider.level).toBe(1);
-    expect(report.slider.redaction_off).toBe(false);
+    expect(report.compression.level).toBe("1");
+    expect(report.compression.redaction_off).toBe(false);
     expect(report.local_model.reachable).toBe(false);
     expect(report.blocked.waiting).toBe(false);
   });
@@ -50,7 +50,7 @@ describe("collectSessionStateReport", () => {
     expect(() => sessionStateReportSchema.parse(report)).not.toThrow();
     expect(report.proxy.running).toBeNull(); // unknown, not a false "off"
     expect(report.local_model.reachable).toBeNull();
-    expect(report.slider.level).toBe(1); // config default still resolves
+    expect(report.compression.level).toBe("1"); // config default still resolves
   });
 
   it("surfaces a fresh blocked flag with its reason", async () => {

@@ -41,12 +41,17 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
   const ec = report.effective_compression;
   const slider: HeaderSegment = {
     label: "Level",
-    // Level 0 is the redaction-off bypass — flagged in the header, not just in a
-    // warning line, so it can't be running unnoticed.
+    // R11.1: `proxy.bypass_all` is the redaction-off bypass — flagged in the
+    // header, not just in a warning line, so it cannot be running unnoticed.
     value: ec.degraded
       ? `${ec.effective} ${ec.effective_name} (${ec.nominal} inert)`
-      : `${report.slider.level} ${report.slider.name}`,
-    tone: report.slider.level === 0 ? "error" : ec.degraded ? "warn" : undefined,
+      : `${ec.nominal} ${ec.nominal_name}`,
+    tone:
+      report.config["proxy.bypass_all"]?.value === true
+        ? "error"
+        : ec.degraded
+          ? "warn"
+          : undefined,
   };
 
   const local = report.local_model;

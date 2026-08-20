@@ -123,6 +123,6 @@ of assuming.
 ## Related
 
 - [[Compression]] — why input-side compression pays ~0% on cached traffic (Decision 23)
-- [[Slider Levels]] — level 0 is a full bypass, so it is never observed
+- [[Compression Levels]] — level 0 is a full bypass, so it is never observed
 - [[Tool Search]] — why the `tools` block is the most expensive thing to churn
 - [[Managed Tools]] — the same honesty rule applied to capability reporting

@@ -30,19 +30,19 @@ const load = () => loadConfig({ projectDir, userDir, env: {} });
 
 describe("config validation errors", () => {
   it("names the file and the key when a value has the wrong type", async () => {
-    await writeRaw(projectFile(), JSON.stringify({ slider: { level: "three" } }));
+    await writeRaw(projectFile(), JSON.stringify({ compression: { level: "three" } }));
     const err = await load().catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConfigError);
     const configError = err as ConfigError;
     expect(configError.message).toContain(projectFile());
-    expect(configError.message).toContain("slider.level");
+    expect(configError.message).toContain("compression.level");
     expect(configError.source).toBe(projectFile());
-    expect(configError.key).toBe("slider.level");
+    expect(configError.key).toBe("compression.level");
   });
 
   it("names the file and key for range violations", async () => {
-    await writeRaw(localFile(), JSON.stringify({ slider: { level: 7 } }));
-    await expect(load()).rejects.toThrow(/settings\.local\.json.*slider\.level/s);
+    await writeRaw(localFile(), JSON.stringify({ compression: { level: "7" } }));
+    await expect(load()).rejects.toThrow(/settings\.local\.json.*compression\.level/s);
   });
 
   it("names the file on malformed JSON", async () => {
@@ -70,14 +70,16 @@ describe("config validation errors", () => {
     await writeRaw(
       projectFile(),
       JSON.stringify({
-        slider: { level: 2, future_flag: true },
+        compression: { level: "2", future_flag: true },
         third_party: { anything: 1 },
       }),
     );
     const config = await load();
-    expect(config.settings.slider.level).toBe(2);
+    expect(config.settings.compression.level).toBe("2");
     expect(
-      config.warnings.some((w) => w.includes("slider.future_flag") && w.includes(projectFile())),
+      config.warnings.some(
+        (w) => w.includes("compression.future_flag") && w.includes(projectFile()),
+      ),
     ).toBe(true);
     expect(
       config.warnings.some((w) => w.includes('"third_party"') && w.includes(projectFile())),
@@ -90,8 +92,8 @@ describe("config validation errors", () => {
         projectDir,
         userDir,
         env: {},
-        overrides: { slider: { level: 42 as never } },
+        overrides: { compression: { level: 42 as never } },
       }),
-    ).rejects.toThrow(/per-request overrides.*slider\.level/s);
+    ).rejects.toThrow(/per-request overrides.*compression\.level/s);
   });
 });

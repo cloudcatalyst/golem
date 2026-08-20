@@ -28,7 +28,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../src/compression/index.js";
-import { type SliderLevel, policyFor } from "../../src/interfaces/policy.js";
+import { type CompressionLevel, policyFor } from "../../src/interfaces/policy.js";
 import { createGolemPipeline } from "../../src/pipeline/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 import { rawRequest, startProxy, startUpstream } from "./helpers/test-servers.js";
@@ -53,7 +53,7 @@ function recordingUpstream() {
   };
 }
 
-function pipelineFor(level: SliderLevel) {
+function pipelineFor(level: CompressionLevel) {
   return createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(projectDir),
     policy: () => policyFor(level),
@@ -104,7 +104,7 @@ function toolSearchBody(): string {
 }
 
 describe("tool search request fidelity through the proxy", () => {
-  for (const level of [0, 1] as const) {
+  for (const level of ["off", 1] as const) {
     it(`level ${level}: forwards a tool-search request body byte-for-byte`, async () => {
       const up = recordingUpstream();
       const upstream = await startUpstream(up.handler);
@@ -134,7 +134,7 @@ describe("tool search request fidelity through the proxy", () => {
     // Levels 2/3 may legitimately transform *message* content; the tools block
     // is not theirs to touch, and the three flags below are the ones whose loss
     // is silent rather than loud.
-    for (const level of [0, 1, 2, 3] as const) {
+    for (const level of ["off", 1, 2, 3] as const) {
       const up = recordingUpstream();
       const upstream = await startUpstream(up.handler);
       const proxy = await startProxy({

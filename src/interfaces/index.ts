@@ -46,9 +46,9 @@ export type {
 export {
   BREVITY_LEVELS,
   BrevityLevel,
-  coerceCompressionLevel,
   COMPRESSION_LEVELS,
   CompressionLevel,
+  coerceCompressionLevel,
   compressionName,
   compressionRank,
   policyFor,

@@ -142,6 +142,36 @@ async function parseFile(file: string): Promise<ParsedFile | null | string> {
 }
 
 /**
+ * R11.1 — resolve a dial still set to the retired `"auto"` when no `slider.level`
+ * is stored. `auto` followed the slider; with none stored it followed the
+ * DEFAULT level (1), so compression becomes `1` and brevity its level-1 preset
+ * (`off`).
+ *
+ * Separate from {@link migrateRetiredSlider} because it is not a transform of a
+ * retired key — it is a retired VALUE of a live key, and unlike a retired key
+ * (which loads with a warning) a retired enum value makes the whole file fail to
+ * load.
+ */
+function migrateLoneAutoDials(next: Record<string, unknown>): readonly SettingChange[] {
+  const changes: SettingChange[] = [];
+  for (const [section, resolved] of [
+    ["compression", "1"],
+    ["brevity", "off"],
+  ] as const) {
+    const value = next[section];
+    if (!isPlainObject(value) || value.level !== "auto") continue;
+    next[section] = { ...value, level: resolved };
+    changes.push({
+      from: `${section}.level = "auto"`,
+      to: `${section}.level = "${resolved}"`,
+      since: "R11.1",
+      action: "resolved",
+    });
+  }
+  return changes;
+}
+
+/**
  * R11.1 / ADR-0004 — resolve a retired `slider.level` into the two explicit dial
  * values it was producing, and rewrite the file to say so.
  *
@@ -163,7 +193,17 @@ async function parseFile(file: string): Promise<ParsedFile | null | string> {
  */
 function migrateRetiredSlider(next: Record<string, unknown>): readonly SettingChange[] {
   const slider = next.slider;
-  if (!isPlainObject(slider) || !Object.hasOwn(slider, "level")) return [];
+  if (!isPlainObject(slider) || !Object.hasOwn(slider, "level")) {
+    // No slider — but a dial may still say `"auto"`, which meant "follow the
+    // slider" and is no longer a legal value, so the file would hard-FAIL to load
+    // rather than merely warning. With no slider level stored, what `auto`
+    // followed was the default (1), which is what it resolves to here.
+    //
+    // Found the hard way: this repo's own settings.local.json said
+    // `compression.level: "auto"` with no slider level, and every `golem` command
+    // died on it until the sweep learned this case.
+    return migrateLoneAutoDials(next);
+  }
   const raw = slider.level;
   const level = typeof raw === "number" ? Math.round(raw) : Number.parseInt(String(raw), 10);
   if (!Number.isFinite(level)) return [];
