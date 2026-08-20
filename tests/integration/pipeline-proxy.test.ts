@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../src/compression/index.js";
-import { type SliderLevel, policyFor } from "../../src/interfaces/policy.js";
+import { type CompressionLevel, policyFor } from "../../src/interfaces/policy.js";
 import { createGolemPipeline } from "../../src/pipeline/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 import { rawRequest, startProxy, startUpstream } from "./helpers/test-servers.js";
@@ -32,7 +32,7 @@ function recordingUpstream() {
   };
 }
 
-function pipelineFor(level: SliderLevel) {
+function pipelineFor(level: CompressionLevel) {
   return createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(projectDir),
     policy: () => policyFor(level),
@@ -124,7 +124,10 @@ describe("pipeline through the proxy", () => {
   it("level 0: secret-free body is forwarded byte-identical", async () => {
     const up = recordingUpstream();
     const upstream = await startUpstream(up.handler);
-    const proxy = await startProxy({ upstreamBaseUrl: upstream.origin, pipeline: pipelineFor(0) });
+    const proxy = await startProxy({
+      upstreamBaseUrl: upstream.origin,
+      pipeline: pipelineFor("off"),
+    });
     try {
       const body = JSON.stringify({
         model: "claude-x",

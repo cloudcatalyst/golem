@@ -20,7 +20,7 @@ Shipped under [spec Decision 50], then reworked the same day under
 slow. **The sections below are in the order they happened**, so the early ones
 describe the ink-era code; "And then ink came out again" is where it lands. The
 concept page [[Configuration Surfaces]] describes the *current* state; related:
-[[Guidance Rules]], [[Slider Levels]], [[Architecture]].
+[[Guidance Rules]], [[Compression Levels]], [[Architecture]].
 
 ## The config did NOT need refactoring
 

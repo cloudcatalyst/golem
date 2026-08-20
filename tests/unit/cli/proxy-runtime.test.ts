@@ -73,7 +73,7 @@ describe("buildProxyFromSettings — R2.2 context-substitution wiring", () => {
       projectDir,
       userDir: fakeUserDir,
       overrides: {
-        slider: { level: 2 },
+        compression: { level: "2" },
         proxy: { upstream_base_url: "https://openrouter.ai/api/v1" },
       },
     });

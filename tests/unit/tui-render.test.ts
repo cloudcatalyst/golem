@@ -38,15 +38,14 @@ const REPORT: StatusReport = {
     base_url: "https://api.anthropic.com",
     default_model: null,
   },
-  slider: { level: 1, name: "lossless", layer: "default" },
   dials: {
-    brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
-    compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
+    brevity: { setting: "off", effective: "off", layer: "default" },
+    compression: { setting: "1", effective: "1", layer: "default" },
   },
   effective_compression: {
-    nominal: 1,
+    nominal: "1",
     nominal_name: "lossless",
-    effective: 1,
+    effective: "1",
     effective_name: "lossless",
     degraded: false,
   },
@@ -248,8 +247,16 @@ describe("headerLines", () => {
     expect(headerLines(down)[1]?.[0]?.value).toContain("not running");
   });
 
-  it("marks slider level 0 as an error, because redaction is off there", () => {
-    const bypass = { ...REPORT, slider: { level: 0, name: "passthrough", layer: "local" } };
+  it("marks proxy.bypass_all as an error, because redaction is off there", () => {
+    // R11.1 / ADR-0004: redaction-off is a setting of its own, so the header reads
+    // the setting rather than inferring it from a level.
+    const bypass = {
+      ...REPORT,
+      config: {
+        ...REPORT.config,
+        "proxy.bypass_all": { value: true, layer: "local" as const },
+      },
+    };
     expect(headerLines(bypass)[1]?.[1]?.tone).toBe("error");
   });
 

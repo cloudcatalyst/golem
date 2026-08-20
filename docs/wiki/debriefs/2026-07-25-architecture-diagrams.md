@@ -25,7 +25,7 @@ README:
 - New **[[Knowledge Base]]** — RAG ingest path and the graph-first-then-vector
   search path; scopes/federation; notes that the shipped driver is
   `FileVectorDriver`, not spec §3.1's Qdrant.
-- Embedded focused diagrams into [[Slider Levels]] (per-level stage gating),
+- Embedded focused diagrams into [[Compression Levels]] (per-level stage gating),
   [[Redaction Stage]] (redaction-first ordering), [[Compression]] (CCR ref
   lifecycle), and [[Distillation Pipeline]] (capture→distill→promote + zones).
 - README got a lean two-diagram "How it works" section linking to the hub; the

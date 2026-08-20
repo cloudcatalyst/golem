@@ -97,8 +97,8 @@ describe("golem init -> Claude Code smoke (T-C2)", () => {
     // committed settings.json is a content-free marker (spec Decision 43).
     const golemLocal = JSON.parse(
       await readFile(path.join(projectDir, ".golem", "settings.local.json"), "utf8"),
-    ) as { slider: { level: number } };
-    expect(golemLocal.slider.level).toBe(1);
+    ) as { compression: { level: string } };
+    expect(golemLocal.compression.level).toBe("1");
 
     // Second run against the same project: no writes, every action a skip.
     const before = await snapshot(projectDir);
@@ -135,7 +135,7 @@ describe("golem init -> Claude Code smoke (T-C2)", () => {
         userDir: fakeUserDir,
         overrides: { proxy: { upstream_base_url: upstream.origin } },
       });
-      expect(settings.slider.level).toBe(1);
+      expect(settings.compression.level).toBe("1");
 
       // The REAL construction path: exactly what `golem proxy`'s
       // `runProxyForeground` (src/cli/main.ts) calls to build its

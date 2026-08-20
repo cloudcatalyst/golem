@@ -163,6 +163,17 @@ export const identityPipeline: RequestPipeline = {
 /** Constructor options for {@link GolemProxy}. All fields optional. */
 export interface ProxyServerOptions {
   /**
+   * R11.1 / ADR-0004 — start with the pipeline OFF: every request forwarded
+   * byte-faithfully, redaction included in what is skipped. Set from
+   * `proxy.bypass_all`, the explicit successor to slider level 0.
+   *
+   * Distinct from the in-process `golem on`/`golem off` toggle only in that this
+   * one is a starting state read from settings, so it survives the restarts that
+   * silently reset that toggle. Defaults to enabled — the bypass is never the
+   * default (CLAUDE.md hard rule).
+   */
+  readonly pipelineEnabled?: boolean;
+  /**
    * Upstream base URL. May include a path prefix (e.g. an LLM gateway at
    * `https://gw.example/anthropic`); the incoming request target is appended
    * to it verbatim. Default: {@link DEFAULT_UPSTREAM_BASE_URL}.

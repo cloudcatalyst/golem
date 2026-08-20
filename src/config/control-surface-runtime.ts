@@ -1,57 +1,55 @@
 import { proxyStatus, startDetached, stopProxy } from "../cli/proxy-daemon.js";
 import { proxyBaseUrl, readWiringState, type WiringState, wiringGap } from "../cli/proxy-wiring.js";
-// `./slider-read.js`, not `./slider.js`: the write path imports cli/init.js and
 // costs ~530ms to load, and collecting the surface only needs to READ the level.
 // `setSliderLevel` is imported lazily in applyRuntime. (verification-notes §86)
-import { getSliderInfo, SLIDER_LEVEL_NAMES } from "../cli/slider-read.js";
-import { migrateSliderLevel } from "../interfaces/policy.js";
+import { coerceCompressionLevel, compressionName } from "../interfaces/policy.js";
 import {
   type ApplyControlOptions,
   type ApplyResult,
+  COMPRESSION_CHOICES,
   type Control,
   type ControlGroup,
-  coerceLevel,
   ENV_LOCKED,
-  SLIDER_LEVELS,
 } from "./control-surface-types.js";
 import { ConfigError } from "./errors.js";
 import { loadConfig } from "./loader.js";
 import { settingMeta } from "./ui-model.js";
 
-/** Slider level, active account, and the proxy daemon. */
+/** Compression level, active account, and the proxy daemon. */
 export async function runtimeControlGroup(shared: {
   projectDir: string;
   userDir?: string;
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<ControlGroup> {
-  const [slider, { settings, provenance }] = await Promise.all([
-    getSliderInfo(shared),
-    loadConfig(shared),
-  ]);
+  const { settings, provenance } = await loadConfig(shared);
   const proxy = await proxyStatus(shared.projectDir, settings.proxy.port);
 
-  const sliderMeta = settingMeta("slider.level");
-  const sliderLocked = slider.layer === "env" ? ENV_LOCKED(slider.source) : undefined;
-  const sliderControl: Control = {
-    id: "runtime:slider",
+  // R11.1 / ADR-0004: the panel's headline runtime control is the compression
+  // DIAL. It used to be the slider, whose value the two dials then followed —
+  // two controls for one thing, on the one surface that shows them side by side.
+  const compMeta = settingMeta("compression.level");
+  const compEntry = provenance["compression.level"];
+  const compLocked = compEntry?.layer === "env" ? ENV_LOCKED(compEntry.source) : undefined;
+  const compressionControl: Control = {
+    id: "runtime:compression",
     family: "runtime",
-    label: sliderMeta?.label ?? "Savings level",
-    summary: sliderMeta?.summary ?? "",
-    ...(sliderMeta?.detail !== undefined && { detail: sliderMeta.detail }),
+    label: compMeta?.label ?? "Compression",
+    summary: compMeta?.summary ?? "",
+    ...(compMeta?.detail !== undefined && { detail: compMeta.detail }),
     kind: "enum",
-    value: String(slider.level),
-    options: SLIDER_LEVELS.map((level) => ({
+    value: String(settings.compression.level),
+    options: COMPRESSION_CHOICES.map((level: string) => ({
       value: String(level),
-      label: `${level} ${SLIDER_LEVEL_NAMES[level]}`,
+      label: `${level} ${compressionName(coerceCompressionLevel(level))}`,
     })),
-    layer: slider.layer,
-    ...(slider.source !== undefined && { source: slider.source }),
-    // The slider is a personal, transient dial: it always writes local scope
-    // (Decision 43), so it offers no scope choice.
-    writableScopes: sliderLocked === undefined ? ["local"] : [],
-    ...(sliderLocked !== undefined && { locked: sliderLocked }),
-    ...(sliderMeta?.danger !== undefined && { danger: sliderMeta.danger }),
-    restart: "proxy",
+    layer: compEntry?.layer ?? "default",
+    ...(compEntry?.source !== undefined && { source: compEntry.source }),
+    // A dial is personal and transient: it writes local scope (Decision 43), so
+    // it offers no scope choice.
+    writableScopes: compLocked === undefined ? ["local"] : [],
+    ...(compLocked !== undefined && { locked: compLocked }),
+    ...(compMeta?.danger !== undefined && { danger: compMeta.danger }),
+    // R11.1: the proxy re-reads the dials live, so setting this needs no restart.
     advanced: false,
   };
 
@@ -113,7 +111,7 @@ export async function runtimeControlGroup(shared: {
     title: "Runtime",
     summary: "Live state — not stored settings",
     tab: "runtime",
-    controls: [sliderControl, accountControl, proxyControl],
+    controls: [compressionControl, accountControl, proxyControl],
   };
 }
 
@@ -137,29 +135,22 @@ export async function applyRuntime(
   },
 ): Promise<ApplyResult> {
   switch (name) {
-    case "slider": {
-      const level = migrateSliderLevel(coerceLevel(value));
-      // Lazy: the write path imports cli/init.js (it can activate a project on the
-      // first level choice), which is exactly the ~530ms this module avoids paying
-      // just to display a level.
-      const { setSliderLevel } = await import("../cli/slider.js");
-      // Forward the init probe: on an uninitialized project this call ACTIVATES it,
-      // and `golemInit`'s default probe reads the developer's HOME (`~/.claude`).
-      // Without a way to inject one, this path could not be tested anywhere Claude
-      // Code is absent — which is every CI runner.
-      const result = await setSliderLevel(level, {
-        ...shared,
-        ...(options.initProbe !== undefined && { probe: options.initProbe }),
-      });
+    case "compression": {
+      // R11.1 / ADR-0004 — the panel writes the DIAL. It used to write the slider
+      // through `setSliderLevel`, which imported cli/init.js because choosing a
+      // level could ACTIVATE an uninitialized project; a dial write has no such
+      // side effect, so this path no longer needs the ~530ms import (or the init
+      // probe that made it testable).
+      const { setDial } = await import("../cli/dials.js");
+      const raw = typeof value === "string" ? value : String(value);
+      const result = await setDial("compression", raw, shared);
       return {
-        id: "runtime:slider",
-        value: String(result.effective.level),
-        message:
-          `slider level ${result.effective.level} (${result.effective.name})` +
-          (result.justInitialized === true ? " — project initialized" : ""),
+        id: "runtime:compression",
+        value: result.info.effective,
+        message: `compression ${result.info.setting} (${result.info.label})`,
         file: result.file,
         ...(result.overriddenBy !== undefined && {
-          overridden: `a higher layer wins — effective level is ${result.overriddenBy.level} from ${result.overriddenBy.layer}`,
+          overridden: `a higher layer wins — the effective value comes from ${result.overriddenBy.layer}`,
         }),
       };
     }

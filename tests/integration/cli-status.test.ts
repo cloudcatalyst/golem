@@ -61,9 +61,9 @@ describe("collectStatus", () => {
     expect(report.initialized.golem_settings).toBe(false);
     // Defaults: proxy 4653, slider level 1 from the default layer.
     expect(report.proxy.port).toBe(4653);
-    expect(report.slider.level).toBe(1);
-    expect(report.slider.layer).toBe("default");
-    expect(report.config["slider.level"]).toEqual({ value: 1, layer: "default" });
+    expect(report.effective_compression.nominal).toBe("1");
+    expect(report.dials.compression.layer).toBe("default");
+    expect(report.config["compression.level"]).toEqual({ value: "1", layer: "default" });
     expect(report.config["proxy.port"]).toEqual({ value: 4653, layer: "default" });
   });
 
@@ -159,8 +159,8 @@ describe("collectStatus", () => {
     expect(report.initialized.skills).toBe(true);
     expect(report.initialized.golem_settings).toBe(true);
     // init writes slider.level=1 to the gitignored local scope (spec Decision 43).
-    expect(report.config["slider.level"]?.layer).toBe("local");
-    expect(report.config["slider.level"]?.source).toContain("settings.local.json");
+    expect(report.config["compression.level"]?.layer).toBe("local");
+    expect(report.config["compression.level"]?.source).toContain("settings.local.json");
   });
 
   it("surfaces an env override with env provenance", async () => {
@@ -169,15 +169,15 @@ describe("collectStatus", () => {
       version: VERSION,
       userDir,
       probeTimeoutMs: 200,
-      env: { GOLEM_SLIDER_LEVEL: "3" },
+      env: { GOLEM_COMPRESSION_LEVEL: "3" },
     });
-    expect(report.slider.level).toBe(3);
-    expect(report.slider.layer).toBe("env");
-    expect(report.slider.source).toBe("GOLEM_SLIDER_LEVEL");
-    expect(report.config["slider.level"]).toEqual({
-      value: 3,
+    expect(report.effective_compression.nominal).toBe("3");
+    expect(report.dials.compression.layer).toBe("env");
+    expect(report.dials.compression.source).toBe("GOLEM_COMPRESSION_LEVEL");
+    expect(report.config["compression.level"]).toEqual({
+      value: "3",
       layer: "env",
-      source: "GOLEM_SLIDER_LEVEL",
+      source: "GOLEM_COMPRESSION_LEVEL",
     });
   });
 
@@ -266,20 +266,24 @@ describe("renderStatus", () => {
       base_url: "https://api.moonshot.ai/v1",
       default_model: "kimi-k3",
     },
-    slider: { level: 1, name: "lossless", layer: "project", source: ".golem/settings.json" },
     dials: {
-      brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
-      compression: { setting: "auto", effective: "1", pinned: false, layer: "default" },
+      brevity: { setting: "off", effective: "off", layer: "default" },
+      compression: {
+        setting: "1",
+        effective: "1",
+        layer: "project",
+        source: ".golem/settings.json",
+      },
     },
     effective_compression: {
-      nominal: 1,
+      nominal: "1",
       nominal_name: "lossless",
-      effective: 1,
+      effective: "1",
       effective_name: "lossless",
       degraded: false,
     },
     config: {
-      "slider.level": { value: 1, layer: "project", source: ".golem/settings.json" },
+      "compression.level": { value: "1", layer: "project", source: ".golem/settings.json" },
       "proxy.port": { value: 4653, layer: "default" },
     },
     local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
@@ -303,24 +307,28 @@ describe("renderStatus", () => {
       base_url: "https://api.anthropic.com",
       default_model: null,
     },
-    slider: { level: 3, name: "aggressive", layer: "env", source: "GOLEM_SLIDER_LEVEL" },
     dials: {
-      brevity: { setting: "off", effective: "off", pinned: true, layer: "default" },
-      compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+      brevity: { setting: "off", effective: "off", layer: "default" },
+      compression: {
+        setting: "3",
+        effective: "3",
+        layer: "env",
+        source: "GOLEM_COMPRESSION_LEVEL",
+      },
     },
     // Level 3 against Anthropic: the §103 degraded case, so renderStatus must say
     // the effective level is 1 rather than letting "aggressive" stand alone.
     effective_compression: {
-      nominal: 3,
+      nominal: "3",
       nominal_name: "aggressive",
-      effective: 1,
+      effective: "1",
       effective_name: "lossless",
       degraded: true,
       reason:
         "the lossy semantic and context-substitution stages are off on a prompt-caching upstream",
     },
     config: {
-      "slider.level": { value: 3, layer: "env", source: "GOLEM_SLIDER_LEVEL" },
+      "compression.level": { value: "3", layer: "env", source: "GOLEM_COMPRESSION_LEVEL" },
       "proxy.port": { value: 4653, layer: "default" },
     },
     local_model: { reachable: true, model: "qwen2.5-coder:7b", base_url: "http://localhost:11434" },
@@ -397,9 +405,9 @@ describe("renderStatus", () => {
     expect(output).toContain("[ok] .golem/settings.json present");
     expect(output).toContain("Proxy: http://localhost:4653 — reachable");
     expect(output).toContain("Upstream: kimi (openai) · api.moonshot.ai · model kimi-k3");
-    expect(output).toContain("Slider: level 1 (lossless) — set by project (.golem/settings.json)");
+    expect(output).toContain("Compression: 1 (lossless) — set by project (.golem/settings.json)");
     expect(output).toContain("Config (value — layer):");
-    expect(output).toContain("slider.level = 1 — project (.golem/settings.json)");
+    expect(output).toContain('compression.level = "1" — project (.golem/settings.json)');
     // Default-layer entry has no `source`, so no trailing "(...)" suffix.
     expect(output).toContain("proxy.port = 4653 — default");
     expect(output).not.toContain("proxy.port = 4653 — default (");
@@ -428,11 +436,13 @@ describe("renderStatus", () => {
     // name the level that runs. A warning line under a headline still reading
     // "aggressive" was the bug — assert the label, not just the footnote.
     expect(output).toContain(
-      "Slider: level 3 (aggressive) → effectively 1 (lossless) — set by env (GOLEM_SLIDER_LEVEL)",
+      "Compression: 3 (aggressive) → effectively 1 (lossless) — set by env (GOLEM_COMPRESSION_LEVEL)",
     );
-    expect(output).toContain("compression 3→1 (auto — follows slider 3)");
+    // R11.1: the headline above already carries the degraded level; the dials line
+    // is brevity only, and there is no preset to describe.
+    expect(output).toContain("Dials: brevity");
     expect(output).toContain("⚠ level 3 (aggressive) is inert here:");
-    expect(output).toContain("slider.level = 3 — env (GOLEM_SLIDER_LEVEL)");
+    expect(output).toContain('compression.level = "3" — env (GOLEM_COMPRESSION_LEVEL)');
     expect(output).toContain("Warnings:");
     expect(output).toContain(
       "  - config file .golem/settings.json is malformed JSON; using defaults",
@@ -574,8 +584,8 @@ describe("renderStatus", () => {
       expect(output).toContain(
         "Proxy: http://localhost:4653 — not running — the SessionStart hook restarts it on project open",
       );
-      expect(output).toContain("Slider: level 1 (lossless) — set by default");
-      expect(output).toContain("slider.level = 1 — default");
+      expect(output).toContain("Compression: 1 (lossless) — default");
+      expect(output).toContain('compression.level = "1" — default');
       expect(output).not.toContain("Warnings:");
     } finally {
     }

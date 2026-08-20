@@ -3,7 +3,6 @@
  */
 
 import type { Command } from "commander";
-import { InvalidArgumentError } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
 import { readContextLedger } from "../../proxy/index.js";
 import { aggregateCacheStats, renderCacheReport } from "../../telemetry/cache-report.js";
@@ -59,9 +58,7 @@ export default function register(program: Command): void {
           // R11.1: one note per dial, so `compression off` explains that redaction
           // still runs — the question a reader of that word actually has.
           const effectNote = (value: string): string =>
-            kind === "brevity"
-              ? brevityEffectNote(value as never)
-              : compressionEffectNote(value);
+            kind === "brevity" ? brevityEffectNote(value as never) : compressionEffectNote(value);
           try {
             if (value === undefined) {
               const info = await getDialInfo(kind, { projectDir: opts.dir });
@@ -91,9 +88,10 @@ export default function register(program: Command): void {
               process.stdout.write(
                 `⚠ a higher layer wins — the effective value comes from ${result.overriddenBy.layer}${result.overriddenBy.source !== undefined ? ` (${result.overriddenBy.source})` : ""}\n`,
               );
-            process.stdout.write(
-              "restart the proxy for this to take effect: golem proxy restart\n",
-            );
+            // R11.1: the proxy re-reads the dials live (DIAL_RELOAD_TTL_MS in
+            // proxy-runtime.ts), so there is nothing to restart — telling the user
+            // otherwise would send them to do work Golem no longer needs.
+            process.stdout.write("in effect within a second — no proxy restart needed\n");
           } catch (err) {
             if (err instanceof DialError) {
               process.stderr.write(`golem: ${err.message}\n`);

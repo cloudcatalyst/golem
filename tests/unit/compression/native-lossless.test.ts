@@ -18,7 +18,7 @@ import {
 import type { Message } from "../../../src/interfaces/compression.js";
 import { policyFor, tokensSaved } from "../../../src/interfaces/index.js";
 
-const LEVEL_0 = policyFor(0);
+const LEVEL_0 = policyFor("off");
 const LEVEL_1 = policyFor(1);
 const PROJECT = "unit-test-project";
 

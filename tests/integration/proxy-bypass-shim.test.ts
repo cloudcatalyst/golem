@@ -18,7 +18,6 @@ import { createServer, type Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildProxyFromSettings } from "../../src/cli/proxy-runtime.js";
 import { loadConfig } from "../../src/config/index.js";
-import type { SliderStore } from "../../src/mcp/slider-store.js";
 import { JsonlTelemetryStore } from "../../src/telemetry/jsonl-store.js";
 import { useTempDirs } from "../helpers/tmp.js";
 
@@ -52,10 +51,6 @@ async function captureUpstream(): Promise<{
   };
 }
 
-/** A slider store pinned to one level, standing in for the live runtime store. */
-const fixedSlider = (level: number): SliderStore =>
-  ({ get: async () => level, set: async () => {} }) as unknown as SliderStore;
-
 beforeEach(async () => {
   projectDir = await newTempDir();
 });
@@ -68,18 +63,24 @@ afterEach(async () => {
 
 /** Build a proxy against the capture upstream and POST one message through it. */
 async function postThrough(
-  opts: { shim: boolean; sliderLevel: number },
+  opts: { shim: boolean; bypassAll?: boolean },
   body: unknown,
 ): Promise<{ sentUpstream: string }> {
   upstream = await captureUpstream();
   const { settings } = await loadConfig({ projectDir });
   const withUpstream = {
     ...settings,
-    proxy: { ...settings.proxy, upstream_base_url: upstream.url },
+    proxy: {
+      ...settings.proxy,
+      upstream_base_url: upstream.url,
+      // R11.1: the full bypass is a setting of its own now (ADR-0004), so the
+      // control case turns THAT on rather than choosing a dial value that used to
+      // mean the same thing.
+      ...(opts.bypassAll === true ? { bypass_all: true } : {}),
+    },
   };
   const telemetry = new JsonlTelemetryStore(projectDir);
   const { proxy } = buildProxyFromSettings(projectDir, withUpstream, telemetry, {
-    sliderStore: fixedSlider(opts.sliderLevel),
     ...(opts.shim ? { shim: true } : {}),
   });
   const addr = await proxy.listen(0);
@@ -106,10 +107,7 @@ const messageWith = (text: string) => ({
 
 describe("bypass shim (R10.12 / Decision 56)", () => {
   it("still forwards upstream — the port serves rather than refusing", async () => {
-    const { sentUpstream } = await postThrough(
-      { shim: true, sliderLevel: 1 },
-      messageWith("hello there"),
-    );
+    const { sentUpstream } = await postThrough({ shim: true }, messageWith("hello there"));
     // The whole point of the shim: a request through a "stopped" proxy completes.
     expect(sentUpstream).toContain("hello there");
   });
@@ -120,18 +118,18 @@ describe("bypass shim (R10.12 / Decision 56)", () => {
     // "stopped" — a hard-rule breach arriving as a convenience feature. The
     // shim's policy is pinned at module scope precisely so this cannot happen.
     const { sentUpstream } = await postThrough(
-      { shim: true, sliderLevel: 0 },
+      { shim: true, bypassAll: true },
       messageWith(`my key is ${secret()}`),
     );
     expect(sentUpstream).not.toContain(secret());
     expect(sentUpstream).toContain("REDACTED");
   });
 
-  it("CONTROL: a level-0 NON-shim build really does forward the secret", async () => {
+  it("CONTROL: a NON-shim build with proxy.bypass_all really does forward the secret", async () => {
     // The load-bearing half. Without it, the test above could keep passing
     // because the contrast disappeared rather than because the shim held.
     const { sentUpstream } = await postThrough(
-      { shim: false, sliderLevel: 0 },
+      { shim: false, bypassAll: true },
       messageWith(`my key is ${secret()}`),
     );
     expect(sentUpstream).toContain(secret());

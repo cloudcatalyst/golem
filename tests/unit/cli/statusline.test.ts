@@ -108,7 +108,7 @@ describe("isBlockedFresh (stale 'waiting' self-heals)", () => {
  */
 describe("renderStatusLine — unwired proxy (R8.32)", () => {
   const unwired = {
-    sliderLevel: 3,
+    compression: 3 as const,
     upstreamLabel: "anthropic",
     brevity: "full" as const,
     proxyRunning: true,
@@ -161,7 +161,7 @@ describe("renderStatusLine", () => {
       // Session signals are captured but intentionally not rendered yet (deferred).
       { contextUsedPct: 8, costUsd: 0.0123, fiveHourPct: 23 },
       {
-        sliderLevel: 3,
+        compression: 3 as const,
         upstreamLabel: "foundry",
         tokensBefore: 12300,
         tokensAfter: 8100,
@@ -183,7 +183,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
@@ -202,7 +202,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         coderEnabled: true,
@@ -220,7 +220,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: false,
@@ -239,7 +239,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: true,
@@ -259,7 +259,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "anthropic",
         lastServedModel: "claude-opus-5[1m]",
         localModelReachable: false,
@@ -274,7 +274,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "kimi",
         upstreamProvider: "openai",
         upstreamModel: "kimi-k3",
@@ -288,7 +288,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "kimi",
         upstreamProvider: "openai",
         upstreamModel: "kimi-k3",
@@ -302,7 +302,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "kimi",
         upstreamModel: "kimi-k3",
         localModelReachable: true,
@@ -318,7 +318,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 1,
+        compression: 1 as const,
         upstreamLabel: "kimi",
         upstreamModel: "kimi-k3",
         localModelReachable: true,
@@ -335,7 +335,7 @@ describe("renderStatusLine", () => {
   it("omits the parenthetical for a plain Anthropic passthrough (no model known)", () => {
     const line = renderStatusLine(
       {},
-      { sliderLevel: 1, upstreamLabel: "anthropic", upstreamProvider: "anthropic" },
+      { compression: 1 as const, upstreamLabel: "anthropic", upstreamProvider: "anthropic" },
     );
     expect(line).toContain("→ ◆ anthropic");
     expect(line).not.toContain("(");
@@ -344,7 +344,7 @@ describe("renderStatusLine", () => {
   it("renders a stopped proxy as hollow 'off' and still shows the destination", () => {
     const line = renderStatusLine(
       {},
-      { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
+      { compression: 1 as const, upstreamLabel: "foundry", proxyRunning: false },
     );
     // R10.24: a stopped proxy is "off" — its own state, named in the same
     // vocabulary the VS Code status bar uses — and it advertises no dials,
@@ -361,7 +361,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 0,
+        compression: "off" as const,
         upstreamLabel: "anthropic",
         proxyRunning: true,
         localModelReachable: true,
@@ -375,7 +375,7 @@ describe("renderStatusLine", () => {
     const line = renderStatusLine(
       {},
       {
-        sliderLevel: 2,
+        compression: 2 as const,
         upstreamLabel: "anthropic",
         proxyRunning: true,
         blocked: true,
@@ -390,7 +390,7 @@ describe("renderStatusLine", () => {
   it("emits ANSI escapes when color is on", () => {
     const line = renderStatusLine(
       {},
-      { sliderLevel: 1, upstreamLabel: "foundry" },
+      { compression: 1 as const, upstreamLabel: "foundry" },
       { color: true },
     );
     expect(line).toContain(String.fromCharCode(27));
@@ -406,7 +406,7 @@ describe("collectGolemState", () => {
 
   it("returns sane defaults for a bare project dir with no Golem state", async () => {
     const state = await collectGolemState(dir);
-    expect(state.sliderLevel).toBe(1);
+    expect(state.compression).toBe(1);
     expect(state.upstreamLabel).toBe("anthropic");
     expect(state.tokensBefore).toBeUndefined();
     expect(state.tokensAfter).toBeUndefined();
@@ -618,9 +618,13 @@ describe("collectGolemState", () => {
     await expect(
       collectGolemState(dir, { localReachable: async () => ({ reachable: false }) }),
     ).resolves.toStrictEqual({
-      sliderLevel: 1,
-      // Decision 52: the shipped default is a pinned "off", so the status line
-      // shows no brevity badge until someone turns the dial on.
+      compression: 1 as const,
+      // R11.1: read from settings alongside the dials, so a corrupt-state run
+      // still reports the bypass as OFF rather than leaving it undefined — the
+      // fail-safe direction for the one setting that disables redaction.
+      proxyBypassAll: false,
+      // The shipped default is `off`, so the status line shows no brevity badge
+      // until someone turns the dial on.
       brevity: "off",
       upstreamLabel: "anthropic",
       upstreamProvider: "anthropic",

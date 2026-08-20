@@ -6084,3 +6084,67 @@ Code extension via R9.16's staleness check, so it went red on any working tree
 that had edited the extension and not yet redeployed — a fact about the machine,
 not the project. It now passes `vscodeExtensionsDir: null`, as
 `tests/contract/vscode-status-fields.contract.test.ts` already did.
+
+---
+
+## §132 — Retiring the slider: what the refactor found that the design did not (2026-08-20)
+
+R11.1/ADR-0004 replaced a preset-over-two-dials with the two dials. Four findings
+worth keeping, none of which were visible from the design.
+
+**1. `golem on`/`golem off` forgets, so it could not be the bypass's home.** The
+obvious place for old level 0 was the existing pipeline toggle. It is in-process
+only (`#pipelineEnabled`, flipped by a POST to `/__golem/pipeline/<enabled>`), so
+it resets to ON at every proxy restart — and the proxy restarts on project open
+(the SessionStart hook) and on every `gateway use`. A durable bypass cannot live
+in a flag that forgets, so `proxy.bypass_all` is a persisted setting and the
+proxy applies it at construction. **That the toggle forgets is its own honesty
+bug and is still open**: `golem off` reports success and silently reverts.
+
+**2. The safety property moved from "defended" to "unrepresentable".** Before,
+`LEVEL_TABLE[0]` had `redaction: false` and `MIN_ACTIVE_COMPRESSION_LEVEL`
+existed solely to stop a *pinned* dial selecting that row. Deleting the row
+deleted the clamp and the class of bug: no value of any dial can now express
+redaction-off. The contract test that used to assert the clamp works now asserts
+there is nothing to clamp — a strictly stronger statement.
+
+**3. Live reload had to become opt-in, and a test caught why.** The retired
+slider had a property the dials did not: a `SliderStore` re-read
+settings.local.json per request so the `level` MCP tool could change the level
+without a restart, while a *pinned* dial needed one. Losing that with the slider
+would have made the replacement worse than the thing it replaced, so
+`resolvePolicy` re-reads config (TTL 1s, full precedence, fail-safe to the
+build-time policy). First implementation re-read **unconditionally**, which
+silently discarded settings a caller had *built* rather than loaded — caught by
+the R2.2 context-substitution test, which passes
+`overrides: { compression: { level: "2" } }` and would have been served the
+file's default. Hence `reloadDials`, opt-in, with the daemon (which did load from
+disk) the caller that opts in.
+
+**Rule: a live re-read must not silently outrank the values the caller handed
+you.** "Refresh from source" is only equivalent to "keep what I was given" when
+the caller's values came from that source.
+
+**4. A retired ENUM VALUE is harder than a retired KEY.** R9.6's machinery
+handles renamed keys, which load with a warning. `compression.level: "auto"` is a
+live key with a dead value, so the whole settings file fails to load and *every*
+`golem` command dies — found on this repo's own `settings.local.json`, which said
+`auto` with no slider level (so the slider-transform branch never ran). The sweep
+now resolves a lone `auto` against the default the slider used to supply.
+
+**Also: the slider migration is the first migration that TRANSFORMS.** One
+retired key becomes two or three live ones with computed values, which
+`SettingMigration` (a `from`/`to` rename) cannot express — hence a separate
+function and a third `action`, `resolved`. It reproduces the retired resolvers
+exactly, so a real pin still wins, `"auto"` is replaced rather than treated as a
+pin, and `slider.level: 0` becomes `proxy.bypass_all: true` with both dials off.
+Live-verified on seven fixtures plus this repo's real file (backup at
+`.golem/state/config-backups/local-0.24.0.json`).
+
+**Numbers.** 379 slider references across 63 files at the start; `tsc` was the
+worklist. Deleted: `src/cli/slider.ts`, `src/cli/slider-read.ts`,
+`src/mcp/slider-store.ts`, the `level` MCP tool, `golem slider`,
+`golem.setSlider`, the `slider` block in `status --json`, `SliderPolicy`,
+`SliderLevel`, `Pinned`, `resolveBrevity`, `resolveCompressionLevel`,
+`brevityPresetForLevel`, `MAX_SLIDER_LEVEL`, `MIN_ACTIVE_COMPRESSION_LEVEL`,
+`migrateSliderLevel`, and the `auto` state on both dials. Suite: 2,763 green.

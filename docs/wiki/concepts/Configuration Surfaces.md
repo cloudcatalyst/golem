@@ -20,7 +20,7 @@ scopes and its own write path:
 
 | Family | Store | Scopes | Owned by |
 |---|---|---|---|
-| **Settings** | `.golem/settings.json` (+ `GOLEM_*` env) | user · project · local · env | `writeSetting` ← [[Slider Levels]] etc. |
+| **Settings** | `.golem/settings.json` (+ `GOLEM_*` env) | user · project · local · env | `writeSetting` ← [[Compression Levels]] etc. |
 | **Guidance** | `.claude/rules/golem-<name>.md` — the file's *presence* is the toggle | project (committed) · user (`.local.md`) | [[Guidance Rules]] |
 | **Runtime** | slider level, active account, proxy daemon up/down | each decides its own | `golem slider` / `account use` / `proxy` |
 
@@ -253,4 +253,4 @@ suppressing it; `context_warn_fraction` only fires when the catalog knows the wi
 
 ## Related
 
-[[Guidance Rules]] · [[Slider Levels]] · [[Architecture]] · [[Dogfooding Golem]]
+[[Guidance Rules]] · [[Compression Levels]] · [[Architecture]] · [[Dogfooding Golem]]

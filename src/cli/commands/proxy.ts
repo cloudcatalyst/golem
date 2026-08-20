@@ -269,6 +269,10 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       : modelAcceptsImages(modelCatalog, model, { preferProvider: provider });
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     visionOf,
+    // R11.1: the daemon loaded its settings from disk, so re-reading the dials on
+    // a live request is the same question asked again — and it is what makes
+    // `golem compression 2` take effect without a restart.
+    reloadDials: true,
     ...(shim ? { shim: true } : {}),
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),

@@ -4,12 +4,7 @@
 
 import type { Command } from "commander";
 import { resolveEffectiveCompression } from "../../compression/effective-level.js";
-import {
-  findProjectDir,
-  type GolemSettings,
-  loadConfig,
-  settingsFilePaths,
-} from "../../config/index.js";
+import { findProjectDir, type GolemSettings, loadConfig } from "../../config/index.js";
 import { DEFAULT_KEY_ENV } from "../../credentials/backends.js";
 import { createClaudeCliDrafter } from "../../inference/claude-cli.js";
 import {

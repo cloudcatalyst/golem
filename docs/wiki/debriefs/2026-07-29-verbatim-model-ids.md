@@ -14,7 +14,7 @@ into a marketing family + version. `claude-opus-4-8[1m]` rendered as `Opus 4.8`,
 `qwen2.5-coder:7b` as `Qwen 2.5`. Fixed under [spec Decision 49] (USER
 decision).
 
-Related: [[Architecture]] (the status/statusline surfaces), [[Slider Levels]]
+Related: [[Architecture]] (the status/statusline surfaces), [[Compression Levels]]
 (the destination one-liner those surfaces render).
 
 ## The defect

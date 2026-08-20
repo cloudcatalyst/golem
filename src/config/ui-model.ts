@@ -156,22 +156,20 @@ export interface SettingMeta {
  * comments — that file stays the authority on *why* a default is what it is.
  */
 export const SETTING_META = {
-  // --- slider ---------------------------------------------------------------
-  "slider.level": {
-    label: "Savings level",
-    summary: "0 passthrough · 1 lossless · 2 balanced · 3 aggressive",
-    detail:
-      "Since Decision 52 this is a PRESET over two dials — compression (input) and " +
-      "brevity (output). Pin either one to stop the slider driving it. Level 0 is a " +
-      "FULL bypass — nothing runs, redaction included. It never auto-engages the local model.",
-    danger:
-      "Level 0 (passthrough) disables redaction: secrets and PII reach the upstream " +
-      "unredacted. Level 1 keeps redaction on with real savings.",
-    restart: "proxy",
-    ownedBy: "runtime:slider",
-  },
-
   // --- proxy ----------------------------------------------------------------
+  "proxy.bypass_all": {
+    label: "Bypass everything (no redaction)",
+    summary: "Forward every request byte-faithfully — redaction included in what is skipped",
+    detail:
+      "R11.1 / ADR-0004: the explicit home for what slider level 0 used to mean. It is a " +
+      "setting of its own, not a compression value, because compression and redaction are " +
+      "different guarantees — `compression off` still redacts. Never the default; a tool " +
+      "call cannot set it (R8.33), only the CLI or this panel.",
+    danger:
+      "This disables REDACTION: secrets and PII reach the upstream unredacted. If you want " +
+      "no compression but still want redaction, set compression to `off` instead.",
+    restart: "proxy",
+  },
   "proxy.port": {
     label: "Proxy port",
     summary: "Local port the Anthropic-compatible proxy listens on",
@@ -326,15 +324,15 @@ export const SETTING_META = {
     label: "Force semantic stage on caching upstreams",
     summary: "Research only — bypass the Decision-31 gate",
     detail:
-      "No effect unless the Headroom sidecar is on and the slider is ≥2. Risks the " +
+      "No effect unless the Headroom sidecar is on and compression is ≥2. Risks the " +
       "cached-prefix cost cliff; only for A/B measurement.",
     advanced: true,
   },
   "compression.level": {
     label: "Compression level",
-    summary: "auto (follow the slider) · 1 lossless · 2 balanced · 3 aggressive",
+    summary: "off (redaction only) · 1 lossless · 2 balanced · 3 aggressive",
     detail:
-      "Decision 52: the input-side dial. Pinning it stops the slider driving compression " +
+      "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). " +
       "until you set it back to auto. 0 is not offerable — passthrough belongs to the " +
       "slider, where turning redaction off is surfaced loudly.",
     restart: "proxy",
@@ -604,7 +602,6 @@ export const SECTION_META = {
     order: 65,
   },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
-  slider: { title: "Savings", summary: "The compression dial", order: 80 },
   claude: {
     title: "Claude Code wiring",
     summary: "Which .claude settings file `golem init` writes",
