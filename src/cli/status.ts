@@ -24,12 +24,15 @@ import type { VscodeExtensionReport } from "./vscode-extension.js";
 
 /** Decision 52 — one dial's state in the JSON report. */
 export interface DialStatus {
-  /** The configured value: `"auto"` or a pinned value. */
+  /** The configured value. */
   readonly setting: string;
-  /** The value in force once the slider preset is applied. */
+  /**
+   * The value in force. R11.1 removed `pinned` along with the slider: with no
+   * preset above the dials, "pinned" had nothing left to mean, and `effective`
+   * always equals `setting`. Decision 31's degradation is reported separately in
+   * `effective_compression`, which is the only place the two can differ.
+   */
   readonly effective: string;
-  /** True when the slider is NOT driving this dial. */
-  readonly pinned: boolean;
   readonly layer: string;
   readonly source?: string;
 }
@@ -161,15 +164,11 @@ export interface StatusReport {
     readonly last_served_model?: string;
     readonly last_served_at?: string;
   }[];
-  readonly slider: {
-    readonly level: number;
-    readonly name: string;
-    readonly layer: string;
-    readonly source?: string;
-  };
   /**
-   * Decision 52 — the two dials the slider is a preset over. `pinned` is the
-   * field that matters: when true the slider is NOT driving that dial, and every
+   * R11.1 — the two dials, which since ADR-0004 are the whole control surface.
+   * The `slider` block that used to sit above them is gone, and with it the
+   * `pinned` field: a dial's configured value IS its value. The one remaining
+   * set-vs-ran gap is Decision 31's, reported in `effective_compression`. Every
    * surface must say so rather than implying the slider is in charge.
    */
   readonly dials: {
@@ -183,9 +182,10 @@ export interface StatusReport {
    * told the user "aggressive" while the pipeline ran lossless.
    */
   readonly effective_compression: {
-    readonly nominal: number;
+    // R11.1: strings, because the scale is `off|1|2|3` (ADR-0004).
+    readonly nominal: string;
     readonly nominal_name: string;
-    readonly effective: number;
+    readonly effective: string;
     readonly effective_name: string;
     readonly degraded: boolean;
     readonly reason?: string;

@@ -118,4 +118,4 @@ Anthropic's implementation — see [[Tool Search]].
 - A Claude-tier chooser would make a clean verdict meaningful. Today a REGRESSED
   verdict is credible and a clean one is weak.
 
-Related: [[Tool Search]] · [[Compression]] · [[Slider Levels]] · [[Architecture]]
+Related: [[Tool Search]] · [[Compression]] · [[Compression Levels]] · [[Architecture]]

@@ -55,7 +55,7 @@ describe("KnowledgeLocalAnswerService prose restriction", () => {
     const svc = new KnowledgeLocalAnswerService(
       fakeSearch([
         hit("tests/unit/compression/native-lossless.test.ts", 0.7, "const LEVEL_0 = ..."),
-        hit("src/interfaces/policy.ts", 0.64, "export type SliderLevel = 0 | 1 | 2 | 3;"),
+        hit("src/interfaces/policy.ts", 0.64, "export type CompressionLevel = 0 | 1 | 2 | 3;"),
       ]),
     );
     const res = await svc.tryAnswer({ text: "what does slider level 0 mean?", projectId: "p" });

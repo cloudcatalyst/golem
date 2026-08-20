@@ -17,7 +17,7 @@ spec and the shipped code differ, the diagrams follow the **code** and say so.
 Diagrams are [Mermaid](https://mermaid.js.org) — plain text that renders on GitHub,
 in the VS Code preview, and in Obsidian, and diffs in git like the rest of the wiki.
 
-Related pages: [[Slider Levels]] · [[Redaction Stage]] · [[Compression]] ·
+Related pages: [[Compression Levels]] · [[Redaction Stage]] · [[Compression]] ·
 [[Web Cache]] · [[Knowledge Base]] · [[Distillation Pipeline]] ·
 [[Wiki-First Knowledge]] · [[Guidance Rules]].
 
@@ -91,7 +91,7 @@ Every `POST /v1/messages` runs the pipeline in `src/pipeline/pipeline.ts`. **Sta
 order is a hard rule: redaction runs first and is never reordered after
 compression.** The lossy stages (semantic, context-substitution) are gated OFF on
 Anthropic-style caching upstreams so the byte-identical cached prefix survives — see
-[[Compression]] and [[Slider Levels]].
+[[Compression]] and [[Compression Levels]].
 
 ```mermaid
 flowchart TB
@@ -280,7 +280,7 @@ printed suggestion, a bad rewrite costs a glance rather than a wrong request.
 
 ## Where to go next
 
-- The compression dial and per-level stage gating: [[Slider Levels]].
+- The compression dial and per-level stage gating: [[Compression Levels]].
 - Why higher levels give ~0% honest savings on cached Anthropic traffic:
   [[Compression]].
 - The redaction floor and its one exception: [[Redaction Stage]].

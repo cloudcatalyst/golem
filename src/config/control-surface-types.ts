@@ -3,7 +3,6 @@
 // plus the rule read/write helpers.
 import type { InitProbe } from "../cli/init.js";
 import type { GuidanceScope } from "../hooks/guidance.js";
-import type { SliderLevel } from "../interfaces/policy.js";
 import { ConfigError } from "./errors.js";
 import { type SettingKind, settingMeta } from "./ui-model.js";
 import type { SettingsScope } from "./write-setting.js";
@@ -42,7 +41,7 @@ export interface Control {
   readonly writableScopes: readonly string[];
   /** Set when the control cannot be written; the string explains why. */
   readonly locked?: string;
-  /** Loud warning to confirm before applying (e.g. slider 0 turns redaction off). */
+  /** Loud warning to confirm before applying (e.g. `proxy.bypass_all` turns redaction off). */
   readonly danger?: string;
   /** What must restart before the change takes effect. */
   readonly restart?: "proxy" | "mcp";
@@ -86,11 +85,15 @@ export interface ControlSurfaceOptions {
   readonly withHeader?: boolean;
 }
 /**
- * The selectable slider levels. Declared here rather than in interfaces/policy.ts
- * — that file is a frozen contract (CLAUDE.md), and this is a display concern.
- * `SliderLevel` keeps it honest if the contract's range ever changes.
+ * The selectable compression values, as the settings file spells them (strings,
+ * so the panel renders a picker and an env override parses).
+ *
+ * Declared here rather than in interfaces/policy.ts — that file is a frozen
+ * contract (CLAUDE.md), and this is a display concern. R11.1: `0` is gone with
+ * the slider; the full bypass is `proxy.bypass_all`, which is its own control and
+ * carries its own confirmation.
  */
-export const SLIDER_LEVELS: readonly SliderLevel[] = [0, 1, 2, 3];
+export const COMPRESSION_CHOICES: readonly string[] = ["off", "1", "2", "3"];
 /** The scopes a settings control accepts, most-local first (what a UI defaults to). */
 export const SETTING_SCOPES: readonly SettingsScope[] = ["project", "local", "user"];
 /** The scopes a guidance rule accepts: committed project rule, or personal. */

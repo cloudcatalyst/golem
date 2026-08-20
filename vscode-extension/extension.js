@@ -15,7 +15,7 @@ const {
   levelLabel,
   fmtTokens,
   gatewayRows,
-  SLIDER_LEVELS,
+  COMPRESSION_LEVELS,
 } = require("./render.js");
 
 const cwd = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
@@ -141,8 +141,8 @@ async function applyControlChange(id, value, scope) {
     const verb = value === true || value === "true" ? "enable" : "disable";
     const personal = scope === "user" ? ["--user"] : [];
     out = await golemText(["guidance", verb, name, ...personal, ...dir]);
-  } else if (family === "runtime" && name === "slider") {
-    await applySlider(Number(value));
+  } else if (family === "runtime" && name === "compression") {
+    await applyCompression(String(value));
     return;
   } else if (family === "runtime" && name === "account") {
     out = await golemText(["gateway", "use", String(value), ...dir]);
@@ -186,8 +186,8 @@ class GolemViewProvider {
     view.webview.options = { enableScripts: true };
     view.webview.onDidReceiveMessage(async (msg) => {
       if (!msg) return;
-      if (msg.type === "setSlider" && typeof msg.level === "number") {
-        await applySlider(msg.level);
+      if (msg.type === "setCompression" && typeof msg.level === "string") {
+        await applyCompression(msg.level);
       } else if (msg.type === "proxyStart") {
         await setProxy(true);
       } else if (msg.type === "proxyStop") {
@@ -224,25 +224,32 @@ function scheduleRefresh() {
   }, 150);
 }
 
-/** Slider level → its lowercase display name, from the shared SLIDER_LEVELS table. */
-function sliderNameFor(level) {
-  const found = SLIDER_LEVELS.find((l) => l.level === level);
+/** Compression level → its lowercase display name, from the shared table. */
+function compressionNameFor(level) {
+  const found = COMPRESSION_LEVELS.find((l) => l.level === String(level));
   return found ? found.name.toLowerCase() : "";
 }
 
 /**
- * Apply a slider change with instant feedback: repaint the status bar + panel
- * from the chosen level immediately (no CLI round-trip), then persist via the
- * CLI and refresh to reconcile — a higher-precedence config layer could still
- * override the level, and the refresh also updates savings and the tooltip.
+ * Apply a compression change with instant feedback: repaint the status bar +
+ * panel from the chosen value immediately (no CLI round-trip), then persist via
+ * the CLI and refresh to reconcile — a higher-precedence config layer could still
+ * override it, and the refresh also updates savings and the tooltip.
+ *
+ * R11.1: `golem compression <v>` replaces `golem slider <n>`, and the proxy
+ * re-reads the dial live, so there is no restart to prompt for.
  */
-async function applySlider(level) {
+async function applyCompression(level) {
   if (lastModel) {
-    lastModel = { ...lastModel, slider: level, sliderName: sliderNameFor(level) };
+    lastModel = {
+      ...lastModel,
+      compression: String(level),
+      compressionName: compressionNameFor(level),
+    };
     if (statusBar) statusBar.text = statusBarText(lastModel);
     if (provider) provider.render(lastModel);
   }
-  await golemJson(["slider", String(level), "--json"]);
+  await golemJson(["compression", String(level), "--json"]);
   await refresh();
 }
 
@@ -464,17 +471,19 @@ function activate(context) {
     vscode.commands.registerCommand("golem.configure", () =>
       vscode.commands.executeCommand("golem.panel.focus"),
     ),
-    vscode.commands.registerCommand("golem.setSlider", async () => {
+    vscode.commands.registerCommand("golem.setCompression", async () => {
       const pick = await vscode.window.showQuickPick(
-        SLIDER_LEVELS.map((l) => ({
-          label: `${l.level === lastModel?.slider ? "$(check) " : ""}Level ${l.level} · ${l.name}`,
-          // Level 0 is a full bypass with redaction OFF (Decision 30) — flag it.
-          description: l.level === 0 ? "full bypass — redaction OFF" : "",
+        COMPRESSION_LEVELS.map((l) => ({
+          label: `${l.level === String(lastModel?.compression) ? "$(check) " : ""}${l.level} · ${l.name}`,
+          // R11.1: `off` still redacts — say so, because the word alone invites the
+          // opposite reading. The redaction-off bypass is `proxy.bypass_all`, which
+          // is not on this menu by design.
+          description: l.level === "off" ? "redaction only — nothing else runs" : "",
           level: l.level,
         })),
-        { placeHolder: "Golem savings slider" },
+        { placeHolder: "Golem compression level" },
       );
-      if (pick) await applySlider(pick.level);
+      if (pick) await applyCompression(pick.level);
     }),
     vscode.commands.registerCommand("golem.menu", async () => {
       const running = lastModel?.proxyReachable ?? false;
@@ -483,7 +492,7 @@ function activate(context) {
       // reads as already-stopped.
       const bypass = lastModel?.proxyBypass === true;
       const items = [
-        { label: "$(arrow-both) Set slider level…", action: "slider" },
+        { label: "$(arrow-both) Set compression level…", action: "compression" },
         { label: "$(account) Switch upstream model…", action: "account" },
         {
           label: bypass
@@ -514,7 +523,8 @@ function activate(context) {
       // restoring the pipeline is a start.
       if (pick.action === "proxy") await setProxy(bypass ? true : !running);
       else if (pick.action === "unwire") await unwireProxy();
-      else if (pick.action === "slider") await vscode.commands.executeCommand("golem.setSlider");
+      else if (pick.action === "compression")
+        await vscode.commands.executeCommand("golem.setCompression");
       else if (pick.action === "account") await vscode.commands.executeCommand("golem.setAccount");
       else if (pick.action === "panel") await vscode.commands.executeCommand("golem.showPanel");
       else if (pick.action === "update") runUpdate();
@@ -528,7 +538,7 @@ function activate(context) {
   // near-instantly rather than waiting for the poll. `settings.local.json` is
   // watched too — the gitignored local scope holds the slider level, the account
   // selection, and anything written with `--scope local` (Decision 43).
-  // Changes made IN the extension already repaint optimistically via applySlider.
+  // Changes made IN the extension already repaint optimistically via applyCompression.
   // The periodic timer below is now just a safety net (proxy up/down, telemetry
   // savings, update checks), so it can run less often.
   const folder = vscode.workspace.workspaceFolders?.[0];

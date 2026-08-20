@@ -89,7 +89,7 @@ export function renderWatchFrame(
         : red("proxy OFF");
   L.push(`${proxyText}  ${cyan(`→${report.proxy.upstream}`)}`);
   L.push(
-    `slider ${cyan(`L${report.slider.level} ${report.slider.name}`)}   ` +
+    `compression ${cyan(`${report.compression.level} ${report.compression.name}`)}   ` +
       `local model ${known(report.local_model.reachable, green("reachable"), dim("down"))}`,
   );
 
@@ -97,9 +97,9 @@ export function renderWatchFrame(
   const auto = report.autonomy.level;
   L.push(`autonomy ${auto === "manual" ? dim(auto) : yellow(auto)}`);
 
-  // Redaction-off is a loud, un-missable warning (Decision 30 / CLAUDE.md rule).
-  if (report.slider.redaction_off) {
-    L.push(red("⚠ REDACTION OFF — level 0 passthrough: secrets/PII reach the upstream unredacted"));
+  // Redaction-off is a loud, un-missable warning (ADR-0004 / CLAUDE.md rule).
+  if (report.compression.redaction_off) {
+    L.push(red("⚠ REDACTION OFF — proxy.bypass_all: secrets/PII reach the upstream unredacted"));
   }
   if (report.blocked.waiting) {
     const why = report.blocked.reason !== undefined ? `: ${report.blocked.reason}` : "";

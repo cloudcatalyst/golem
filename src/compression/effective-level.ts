@@ -1,12 +1,17 @@
 /**
  * What the compression level ACTUALLY does, as opposed to what it is set to.
  *
- * Why this module exists: `golem status` reported `Slider: level 3 (aggressive)`
- * against Anthropic while the two stages that distinguish levels 2–3 from level 1
- * were both gated off, so the observed behaviour was level 1. The number was true
- * and the impression it gave was false — a user reasonably read "aggressive" as
+ * Why this module exists: `golem status` reported `level 3 (aggressive)` against
+ * Anthropic while the two stages that distinguish levels 2–3 from level 1 were
+ * both gated off, so the observed behaviour was level 1. The number was true and
+ * the impression it gave was false — a user reasonably read "aggressive" as
  * "aggressive compression is running". Nothing was wrong with the pipeline; the
  * reporting was wrong.
+ *
+ * R11.1 note: retiring the slider (ADR-0004) removed the OTHER discrepancy — a
+ * preset level that disagreed with the dial it drove. This one is real and stays:
+ * a caching upstream genuinely degrades 2/3 to lossless, and every surface must
+ * keep saying so.
  *
  * Levels 2 and 3 differ from level 1 by exactly two stages — the Headroom lossy
  * semantic stage and context substitution — and BOTH are gated off on a
@@ -23,7 +28,7 @@
  * the gate's own truth table.
  */
 
-import type { SliderLevel } from "../interfaces/policy.js";
+import { type CompressionLevel, compressionName } from "../interfaces/policy.js";
 
 /**
  * Whether the upstream is an Anthropic-style prompt-caching endpoint, where
@@ -48,8 +53,8 @@ export function isCachingUpstream(upstreamBaseUrl: string | undefined): boolean 
 
 /** Everything needed to predict what the configured level will actually do. */
 export interface EffectiveCompressionInput {
-  /** The configured (nominal) level — `slider.level`, or the pinned `compression.level`. */
-  readonly level: SliderLevel;
+  /** The configured (nominal) level — `compression.level`. */
+  readonly level: CompressionLevel;
   /** `proxy.upstream_base_url`; absent → the Anthropic default. */
   readonly upstreamBaseUrl?: string;
   /**
@@ -67,9 +72,9 @@ export interface EffectiveCompressionInput {
 /** The nominal level, what actually runs, and why they differ. */
 export interface EffectiveCompression {
   /** What the user set. */
-  readonly nominal: SliderLevel;
+  readonly nominal: CompressionLevel;
   /** What the pipeline will actually apply. */
-  readonly effective: SliderLevel;
+  readonly effective: CompressionLevel;
   /** `effective < nominal` — the level is not delivering what its name implies. */
   readonly degraded: boolean;
   /** One sentence naming the cause and the lever. Present only when degraded. */
@@ -85,9 +90,9 @@ export function resolveEffectiveCompression(
 ): EffectiveCompression {
   const nominal = input.level;
 
-  // Levels 0 (passthrough) and 1 (lossless) have no lossy stage to gate, so they
+  // `off` (redaction only) and 1 (lossless) have no lossy stage to gate, so they
   // always deliver what they say.
-  if (nominal <= 1) {
+  if (nominal === "off" || nominal <= 1) {
     return { nominal, effective: nominal, degraded: false };
   }
 
@@ -122,21 +127,17 @@ export function resolveEffectiveCompression(
 }
 
 /**
- * Human names for the four levels. Duplicated from `cli/slider-read.ts` on
- * purpose: this module must stay importable by the status line without dragging
- * in the config loader (verification-notes §86 — the status line runs on every
- * prompt). `tests/unit/compression/effective-level.test.ts` asserts the two lists
- * agree, so the duplication cannot drift silently.
+ * Human names for the levels.
+ *
+ * R11.1: this used to duplicate `cli/slider-read.ts`'s table, with a test pinning
+ * that the two agreed — the duplication existed so the status line could name a
+ * level without importing the config loader (verification-notes §86; it runs on
+ * every prompt). Now that the scale lives in the frozen contract with no config
+ * dependency of its own, both surfaces call `compressionName` and there is
+ * nothing left to drift.
  */
-const LEVEL_NAMES: Readonly<Record<SliderLevel, string>> = {
-  0: "passthrough",
-  1: "lossless",
-  2: "balanced",
-  3: "aggressive",
-};
-
-export function levelLabel(level: SliderLevel): string {
-  return LEVEL_NAMES[level];
+export function levelLabel(level: CompressionLevel): string {
+  return compressionName(level);
 }
 
 /**

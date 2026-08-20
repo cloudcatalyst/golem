@@ -38,25 +38,21 @@ export type {
 export { DEFAULT_SCOPES, UnknownChunkError } from "./knowledge.js";
 
 export type {
-  BrevityDial,
-  CompressionDial,
-  Pinned,
+  PipelinePolicy,
   SemanticCache,
   SemanticCompression,
-  SliderPolicy,
   StageConfig,
 } from "./policy.js";
 export {
   BREVITY_LEVELS,
   BrevityLevel,
-  brevityPresetForLevel,
-  MAX_SLIDER_LEVEL,
-  MIN_ACTIVE_COMPRESSION_LEVEL,
-  migrateSliderLevel,
-  resolveBrevity,
-  resolveCompressionLevel,
-  SliderLevel,
-  sliderPolicyForLevel,
+  COMPRESSION_LEVELS,
+  CompressionLevel,
+  coerceCompressionLevel,
+  compressionName,
+  compressionRank,
+  policyFor,
+  stagesForCompression,
 } from "./policy.js";
 
 export type { BlobStore } from "./storage.js";

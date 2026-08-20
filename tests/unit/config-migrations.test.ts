@@ -56,8 +56,8 @@ describe("the migration table", () => {
   it("resolves a retired key to the live one and leaves other keys alone", () => {
     expect(liveKeyFor("proxy.active_account")).toBe("proxy.default_target");
     expect(liveKeyFor("proxy.active_account")).toBe("proxy.default_target");
-    expect(liveKeyFor("slider.level")).toBe("slider.level");
-    expect(migrationFrom("slider.level")).toBeUndefined();
+    expect(liveKeyFor("compression.level")).toBe("compression.level");
+    expect(migrationFrom("compression.level")).toBeUndefined();
   });
 });
 

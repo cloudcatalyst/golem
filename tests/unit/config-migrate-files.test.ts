@@ -245,3 +245,117 @@ describe("migrateOnVersionChange", () => {
     expect(await readVersionStamp(projectDir)).toBeNull();
   });
 });
+
+/**
+ * R11.1 / ADR-0004 — the retired slider is the one migration that TRANSFORMS
+ * rather than renames: one key becomes two or three, with values computed from
+ * it. That is why it is not a `SETTING_MIGRATIONS` row and why it needs its own
+ * cases.
+ *
+ * The promise these pin is the one the ADR made: **no project changes behaviour
+ * by upgrading.** Every case below is the same question — does the file now say
+ * explicitly what the slider was implicitly doing?
+ */
+describe("sweepSettingsFiles — the retired slider (R11.1)", () => {
+  it("resolves a slider level into the two dial values it was producing", async () => {
+    await writeJson(projectFile(), { slider: { level: 3 } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    // Level 3 drove compression 3 and the brevity preset `full`.
+    expect(await readJson(projectFile())).toEqual({
+      compression: { level: "3" },
+      brevity: { level: "full" },
+    });
+  });
+
+  it("lets a REAL pin win, exactly as the retired resolver did", async () => {
+    // A pinned dial always beat the preset, and must keep beating it — otherwise
+    // upgrading would silently raise this project's compression from 1 to 3.
+    await writeJson(projectFile(), { slider: { level: 3 }, compression: { level: "1" } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    const after = await readJson(projectFile());
+    expect(after.compression).toEqual({ level: "1" });
+    expect(after.brevity).toEqual({ level: "full" });
+  });
+
+  it('treats "auto" as NOT a pin — it meant "follow the slider"', async () => {
+    await writeJson(projectFile(), { slider: { level: 2 }, brevity: { level: "auto" } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    // `auto` is replaced by what it resolved to (level 2's preset), not preserved
+    // as a value — the enum no longer has it.
+    expect(await readJson(projectFile())).toEqual({
+      brevity: { level: "lite" },
+      compression: { level: "2" },
+    });
+  });
+
+  it("turns level 0 into proxy.bypass_all, with both dials off", async () => {
+    // Level 0 was a FULL bypass, redaction included. Migrating it to
+    // `compression: off` alone would silently turn redaction back ON for a
+    // project that had deliberately switched it off — a behaviour change in the
+    // safe direction, but a behaviour change, and a surprising one.
+    await writeJson(projectFile(), { slider: { level: 0 } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    expect(await readJson(projectFile())).toEqual({
+      proxy: { bypass_all: true },
+      compression: { level: "off" },
+      brevity: { level: "off" },
+    });
+  });
+
+  it("clamps a legacy 4/5 the way every read used to", async () => {
+    await writeJson(projectFile(), { slider: { level: 5 } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    expect(await readJson(projectFile())).toEqual({
+      compression: { level: "3" },
+      brevity: { level: "full" },
+    });
+  });
+
+  it("leaves a file that never had a slider completely alone", async () => {
+    const original = { compression: { level: "2" }, proxy: { port: 4000 } };
+    await writeJson(projectFile(), original);
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    expect(await readJson(projectFile())).toEqual(original);
+  });
+
+  it("is idempotent — a second sweep changes nothing", async () => {
+    await writeJson(projectFile(), { slider: { level: 2 } });
+
+    await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+    const once = await readJson(projectFile());
+    const second = await sweepSettingsFiles({ projectDir, userDir, write: true, version: VERSION });
+
+    expect(await readJson(projectFile())).toEqual(once);
+    // And it reports nothing the second time: a sweep over a clean project is
+    // silent, which is what makes it safe to run on every proxy start.
+    expect(second.results.filter((r) => (r.changes ?? []).length > 0)).toHaveLength(0);
+  });
+
+  it("reports the transform so the operator can see what happened", async () => {
+    await writeJson(projectFile(), { slider: { level: 2 } });
+
+    const results = await sweepSettingsFiles({
+      projectDir,
+      userDir,
+      write: true,
+      version: VERSION,
+    });
+
+    const changes = results.results.flatMap((r) => r.changes ?? []);
+    expect(changes.some((c) => c.to === "compression.level" && c.action === "resolved")).toBe(true);
+    expect(changes.some((c) => c.to === "brevity.level" && c.action === "resolved")).toBe(true);
+    expect(changes.some((c) => c.action === "dropped" && c.from === "slider.level")).toBe(true);
+  });
+});

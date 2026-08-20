@@ -50,17 +50,17 @@ describe("config engine", () => {
   describe("listConfig", () => {
     it("includes the default value when nothing is set", async () => {
       const report = await listConfig(opts());
-      const entry = report.entries.find((e) => e.key === "slider.level");
-      expect(entry).toEqual({ key: "slider.level", value: 1, layer: "default" });
+      const entry = report.entries.find((e) => e.key === "compression.level");
+      expect(entry).toEqual({ key: "compression.level", value: "1", layer: "default" });
     });
 
     it("reflects a project-layer override", async () => {
-      await writeSetting("project", "slider.level", 2, { projectDir });
+      await writeSetting("project", "compression.level", "2", { projectDir });
       const report = await listConfig(opts());
-      const entry = report.entries.find((e) => e.key === "slider.level");
+      const entry = report.entries.find((e) => e.key === "compression.level");
       expect(entry).toEqual({
-        key: "slider.level",
-        value: 2,
+        key: "compression.level",
+        value: "2",
         layer: "project",
         source: path.join(projectDir, ".golem", "settings.json"),
       });
@@ -215,22 +215,22 @@ describe("config engine", () => {
 
   describe("setConfig", () => {
     it("writes and reports the effective value", async () => {
-      const result = await setConfig("project", "slider.level", "2", opts());
-      expect(result.value).toBe(2);
+      const result = await setConfig("project", "compression.level", "2", opts());
+      expect(result.value).toBe("2");
       expect(result.scope).toBe("project");
-      expect(result.effective.value).toBe(2);
+      expect(result.effective.value).toBe("2");
       expect(result.effective.layer).toBe("project");
     });
 
     it("reports when a higher layer overrides the written value", async () => {
-      await writeSetting("local", "slider.level", 3, { projectDir });
-      const result = await setConfig("project", "slider.level", "2", opts());
+      await writeSetting("local", "compression.level", "3", { projectDir });
+      const result = await setConfig("project", "compression.level", "2", opts());
       expect(result.overriddenBy).toBeDefined();
-      expect(result.effective.value).toBe(3);
+      expect(result.effective.value).toBe("3");
     });
 
     it("rejects invalid values", async () => {
-      await expect(setConfig("project", "slider.level", "99", opts())).rejects.toBeInstanceOf(
+      await expect(setConfig("project", "compression.level", "99", opts())).rejects.toBeInstanceOf(
         ConfigError,
       );
     });
@@ -265,9 +265,9 @@ describe("config engine", () => {
 
   describe("unsetConfig", () => {
     it("removes the key and falls back to a lower layer", async () => {
-      await writeSetting("project", "slider.level", 2, { projectDir });
-      const result = await unsetConfig("project", "slider.level", opts());
-      expect(result.effective.value).toBe(1);
+      await writeSetting("project", "compression.level", "2", { projectDir });
+      const result = await unsetConfig("project", "compression.level", opts());
+      expect(result.effective.value).toBe("1");
       expect(result.effective.layer).toBe("default");
     });
   });
@@ -275,36 +275,36 @@ describe("config engine", () => {
   describe("renderers", () => {
     it("renderConfigList prints keys and layers", () => {
       const out = renderConfigList({
-        entries: [{ key: "slider.level", value: 2, layer: "project", source: "/x" }],
+        entries: [{ key: "compression.level", value: "2", layer: "project", source: "/x" }],
       });
-      expect(out).toContain("slider.level = 2 — project (/x)");
+      expect(out).toContain('compression.level = "2" — project (/x)');
     });
 
     it("renderConfigGet prints one key", () => {
-      const out = renderConfigGet({ key: "slider.level", value: 1, layer: "default" });
-      expect(out).toContain("slider.level = 1 — default");
+      const out = renderConfigGet({ key: "compression.level", value: "1", layer: "default" });
+      expect(out).toContain('compression.level = "1" — default');
     });
 
     it("renderConfigSet prints the file and effective value", () => {
       const out = renderConfigSet({
-        key: "slider.level",
-        value: 2,
+        key: "compression.level",
+        value: "2",
         scope: "project",
         file: "/project/.golem/settings.json",
-        effective: { key: "slider.level", value: 2, layer: "project" },
+        effective: { key: "compression.level", value: "2", layer: "project" },
       });
-      expect(out).toContain("slider.level set to 2 in /project/.golem/settings.json");
+      expect(out).toContain('compression.level set to "2" in /project/.golem/settings.json');
     });
 
     it("renderConfigUnset prints the fallback", () => {
       const out = renderConfigUnset({
-        key: "slider.level",
+        key: "compression.level",
         scope: "project",
         file: "/project/.golem/settings.json",
-        effective: { key: "slider.level", value: 1, layer: "default" },
+        effective: { key: "compression.level", value: "1", layer: "default" },
       });
-      expect(out).toContain("slider.level removed from project scope");
-      expect(out).toContain("effective value: 1 — default");
+      expect(out).toContain("compression.level removed from project scope");
+      expect(out).toContain('effective value: "1" — default');
     });
   });
 });

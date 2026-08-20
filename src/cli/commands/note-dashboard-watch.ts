@@ -9,7 +9,6 @@ import { InitError } from "../init.js";
 import { statsSourceForCli } from "../mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "../notes.js";
 import { collectSessionStateReport } from "../session-report.js";
-import { getSliderInfo } from "../slider.js";
 import { collectStats } from "../stats.js";
 import { runWatch } from "../watch.js";
 
@@ -102,13 +101,14 @@ export default function register(program: Command): void {
         const handle = await startDashboard({
           port,
           snapshot: async () => {
-            const [slider, stats] = await Promise.all([
-              getSliderInfo({ projectDir: opts.dir }),
+            const { getDialInfo } = await import("../dials.js");
+            const [dial, stats] = await Promise.all([
+              getDialInfo("compression", { projectDir: opts.dir }),
               collectStats(source),
             ]);
             return {
               project_dir: opts.dir,
-              slider: { level: slider.level, name: slider.name },
+              compression: { level: dial.setting, name: dial.label },
               stats,
               generated_at: new Date().toISOString(),
             };

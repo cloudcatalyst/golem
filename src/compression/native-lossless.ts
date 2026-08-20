@@ -30,7 +30,7 @@
  *
  * Determinism obligations for future edits: never let a compress() decision
  * depend on the CCR store, wall clock, config that varies per call (beyond
- * the SliderPolicy stages gate), or iteration order of anything not derived
+ * the PipelinePolicy stages gate), or iteration order of anything not derived
  * from the input.
  *
  * Fidelity: assistant messages (text, thinking, tool_use blocks) and any
@@ -52,7 +52,7 @@ import type {
   Original,
   TokenDelta,
 } from "../interfaces/compression.js";
-import type { SliderPolicy } from "../interfaces/policy.js";
+import type { PipelinePolicy } from "../interfaces/policy.js";
 import type { BlobStore } from "../interfaces/storage.js";
 import { isRecord } from "../shared/json.js";
 import { CcrStore } from "./ccr-store.js";
@@ -347,7 +347,7 @@ export class NativeLosslessCompression implements CompressionService {
 
   async compress(
     messages: readonly Message[],
-    policy: SliderPolicy,
+    policy: PipelinePolicy,
     projectId: string,
   ): Promise<CompressResult> {
     const tokensBefore = estimateTokens(JSON.stringify(messages));

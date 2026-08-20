@@ -28,7 +28,7 @@ import type {
   CompressResult,
   Message,
   Original,
-  SliderPolicy,
+  PipelinePolicy,
   TokenDelta,
 } from "../interfaces/index.js";
 import { UnknownRefError } from "../interfaces/index.js";
@@ -72,7 +72,7 @@ export class InMemoryCompressionService implements CompressionService {
 
   compress(
     messages: readonly Message[],
-    policy: SliderPolicy,
+    policy: PipelinePolicy,
     projectId: string,
   ): Promise<CompressResult> {
     const tokensBefore = estimateTokens(JSON.stringify(messages));

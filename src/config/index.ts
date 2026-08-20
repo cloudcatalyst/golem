@@ -9,18 +9,18 @@
  * Entry points:
  * - {@link loadConfig} — typed, deeply frozen settings + per-key provenance.
  * - {@link writeSetting} — safe read-modify-write of one key in one scope.
- * - {@link policyFromSettings} — SliderPolicy for the effective settings.
+ * - {@link policyFromSettings} — PipelinePolicy for the effective settings.
  *
  * Env mapping rules are documented in env.ts; merge/error semantics in
  * loader.ts; the key set and defaults in schema.ts.
  */
 
 import {
-  type BrevityDial,
-  type CompressionDial,
-  type SliderLevel,
-  type SliderPolicy,
-  sliderPolicyForLevel,
+  type BrevityLevel,
+  type CompressionLevel,
+  coerceCompressionLevel,
+  type PipelinePolicy,
+  policyFor,
 } from "../interfaces/policy.js";
 import type { GolemSettings } from "./schema.js";
 
@@ -79,7 +79,6 @@ export type {
   KnowledgeSettings,
   ProxySettings,
   SectionName,
-  SliderSettings,
   SnoozeSettings,
   TelemetrySettings,
   UiSettings,
@@ -102,30 +101,30 @@ export type { SettingsScope, WriteSettingOptions } from "./write-setting.js";
 export { writeSetting } from "./write-setting.js";
 
 /**
- * Decision 52 — the two dial pins, read out of settings in the shape
- * {@link sliderPolicyForLevel} wants.
+ * R11.1 — the two dials, read out of settings in the shape {@link policyFor}
+ * wants.
  *
- * `brevity.level` is already exactly `BrevityDial`. `compression.level` is a
+ * `brevity.level` is already exactly a `BrevityLevel`. `compression.level` is a
  * string enum in settings (so the panel renders a picker and env overrides are
- * plain strings) and is narrowed to a `SliderLevel` here. The enum excludes 0
- * deliberately — see the schema comment — so this cannot produce a
- * redaction-disabling pin.
+ * plain strings) and is narrowed here. No value of either can disable redaction
+ * (ADR-0004) — that is `proxy.bypass_all`, which the proxy applies before the
+ * pipeline is consulted at all.
  */
 export function dialsFromSettings(settings: GolemSettings): {
-  readonly brevity: BrevityDial;
-  readonly compression: CompressionDial;
+  readonly brevity: BrevityLevel;
+  readonly compression: CompressionLevel;
 } {
-  const compression = settings.compression.level;
   return {
     brevity: settings.brevity.level,
-    compression: compression === "auto" ? "auto" : (Number(compression) as SliderLevel),
+    compression: coerceCompressionLevel(settings.compression.level),
   };
 }
 
 /**
- * Typed accessor for the slider policy implied by the effective settings
+ * Typed accessor for the pipeline policy implied by the effective settings
  * (interfaces/policy.ts is the frozen contract; this just feeds it).
  */
-export function policyFromSettings(settings: GolemSettings): SliderPolicy {
-  return sliderPolicyForLevel(settings.slider.level, dialsFromSettings(settings));
+export function policyFromSettings(settings: GolemSettings): PipelinePolicy {
+  const dials = dialsFromSettings(settings);
+  return policyFor(dials.compression, { brevity: dials.brevity });
 }

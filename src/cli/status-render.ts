@@ -11,9 +11,12 @@
 
 import type { EffectiveCompression } from "../compression/effective-level.js";
 import { KNOWN_WORKERS } from "../inference/workers.js";
-import type { SliderLevel } from "../interfaces/policy.js";
+import {
+  type CompressionLevel,
+  coerceCompressionLevel,
+  compressionName,
+} from "../interfaces/policy.js";
 import type { DialInfo } from "./dials.js";
-import { SLIDER_LEVEL_NAMES, type SliderInfo } from "./slider.js";
 import type { DialStatus, StatusReport } from "./status.js";
 // Pure display helpers live in ./upstream-display.js so the `golem` control panel can
 // render an upstream label without loading this module (see that file).
@@ -47,18 +50,15 @@ function renderWebFetchGreen(report: StatusReport): string {
  * read "3" while the upstream gate makes it behave as 1, and showing the setting
  * alone is the misreport this exists to prevent.
  */
-function renderDial(
-  kind: string,
-  dial: DialStatus,
-  sliderLevel: number,
-  effectiveValue?: string,
-): string {
+function renderDial(kind: string, dial: DialStatus, effectiveValue?: string): string {
   const shown =
     effectiveValue !== undefined && effectiveValue !== dial.effective
       ? `${dial.effective}→${effectiveValue}`
       : dial.effective;
-  if (!dial.pinned) return `${kind} ${shown} (auto — follows slider ${sliderLevel})`;
-  return `${kind} ${shown} (${dial.layer === "default" ? "default" : "pinned"})`;
+  // R11.1: no preset above the dial, so no "(auto — follows slider N)" branch.
+  // What survives is the distinction that still carries information — a value
+  // someone chose, versus the one Golem ships.
+  return `${kind} ${shown} (${dial.layer === "default" ? "default" : `set by ${dial.layer}`})`;
 }
 
 /** One-line rendering of the usage-limit prediction + freshness. */
@@ -77,42 +77,33 @@ export function dialJson(dial: DialInfo): DialStatus {
   return {
     setting: dial.setting,
     effective: dial.effective,
-    pinned: dial.pinned,
     layer: dial.layer,
     ...(dial.source !== undefined && { source: dial.source }),
   };
 }
 
 /**
- * The compression dial's effective value as a {@link SliderLevel}. The dial is a
- * string (`"auto"` resolves to a numeral before it reaches here), so a
- * non-numeric or out-of-range value falls back to the slider's own level rather
- * than guessing — status must never invent a level.
+ * The compression dial's value as a {@link CompressionLevel}.
+ *
+ * R11.1: this took a `fallback` (the slider's own level) for a dial that could
+ * read `"auto"` or something out of range. There is no slider to fall back to,
+ * and `coerceCompressionLevel` is the one place that decides what an unexpected
+ * value means — status must never invent a second answer.
  */
-export function sliderLevelFromDial(dialEffective: string, fallback: SliderLevel): SliderLevel {
-  const n = Number(dialEffective);
-  return n === 0 || n === 1 || n === 2 || n === 3 ? n : fallback;
+export function compressionFromDial(dialEffective: string): CompressionLevel {
+  return coerceCompressionLevel(dialEffective);
 }
 
 export function effectiveCompressionJson(
   eff: EffectiveCompression,
 ): StatusReport["effective_compression"] {
   return {
-    nominal: eff.nominal,
-    nominal_name: SLIDER_LEVEL_NAMES[eff.nominal],
-    effective: eff.effective,
-    effective_name: SLIDER_LEVEL_NAMES[eff.effective],
+    nominal: String(eff.nominal),
+    nominal_name: compressionName(eff.nominal),
+    effective: String(eff.effective),
+    effective_name: compressionName(eff.effective),
     degraded: eff.degraded,
     ...(eff.reason !== undefined && { reason: eff.reason }),
-  };
-}
-
-export function sliderJson(slider: SliderInfo): StatusReport["slider"] {
-  return {
-    level: slider.level,
-    name: slider.name,
-    layer: slider.layer,
-    ...(slider.source !== undefined && { source: slider.source }),
   };
 }
 
@@ -194,26 +185,20 @@ export function renderStatus(report: StatusReport): string {
       lines.push(`  ${mark} ${t.id} (${t.provider}, trust=${t.trust}) ${model}${served}`);
     }
   }
-  const slider = report.slider;
   const ec = report.effective_compression;
+  const comp = report.dials.compression;
   // §103: the LABEL carries the truth. A warning line under a headline that still
   // reads "aggressive" leaves the headline wrong — which is exactly what the first
   // pass at this got wrong.
   const effSuffix = ec.degraded ? ` → effectively ${ec.effective} (${ec.effective_name})` : "";
   lines.push(
-    `Slider: level ${slider.level} (${slider.name})${effSuffix} — set by ${slider.layer}` +
-      (slider.source !== undefined ? ` (${slider.source})` : ""),
+    `Compression: ${ec.nominal} (${ec.nominal_name})${effSuffix} — ` +
+      `${comp.layer === "default" ? "default" : `set by ${comp.layer}`}` +
+      (comp.source !== undefined ? ` (${comp.source})` : ""),
   );
-  // Decision 52: the slider is a preset, so name both dials and whether the
-  // slider is driving them. A pinned dial must never look like a preset.
-  lines.push(
-    `Dials: ${renderDial("brevity", report.dials.brevity, slider.level)} · ${renderDial(
-      "compression",
-      report.dials.compression,
-      slider.level,
-      String(ec.effective),
-    )}`,
-  );
+  // R11.1: brevity gets its own line-part; compression is already the headline
+  // above, so it is not repeated here.
+  lines.push(`Dials: ${renderDial("brevity", report.dials.brevity)}`);
   // The headline already says the effective level; this line says WHY and what to
   // do about it, which does not fit in a label.
   if (ec.degraded) {

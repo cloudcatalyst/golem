@@ -80,7 +80,7 @@ building it rather than reasoning about context bloat from first principles.
 
 Also notable and not yet actionable: thinking blocks were 54,074 tokens (17.6%) in
 the §95 capture — a bucket nothing in Golem touches, and one that *cannot* be
-touched at levels ≤1, since [[Slider Levels]] requires thinking blocks to pass
+touched at levels ≤1, since [[Compression Levels]] requires thinking blocks to pass
 through byte-faithful. Anyone proposing to drop old thinking is proposing a
 fidelity-rule change, not a tuning knob.
 
@@ -93,4 +93,4 @@ is that a **ceiling is not a lever**, because most of the biggest block belonged
 somebody Golem may not rewrite.
 
 Related: [[Cache Observability]] · [[Compression]] · [[Tool Search]] ·
-[[Architecture]] · [[Slider Levels]] · [[Managed Tools]]
+[[Architecture]] · [[Compression Levels]] · [[Managed Tools]]

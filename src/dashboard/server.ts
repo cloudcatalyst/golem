@@ -23,7 +23,8 @@ import type { StatsReport } from "../cli/stats.js";
 /** Everything the page shows, snake_case (it is also the JSON API shape). */
 export interface DashboardSnapshot {
   readonly project_dir: string;
-  readonly slider: { readonly level: number; readonly name: string };
+  /** R11.1: the compression dial (`off|1|2|3`) — the slider is retired (ADR-0004). */
+  readonly compression: { readonly level: string; readonly name: string };
   readonly stats: StatsReport;
   /** ISO timestamp the snapshot was taken. */
   readonly generated_at: string;
@@ -204,9 +205,9 @@ export function renderPage(snapshot: DashboardSnapshot): string {
         <small>&rarr;</small> <span id="tokens-after">${s.tokens_after}</span></div></div>
     <div class="tile"><div class="label">Requests</div>
       <div class="value" id="requests">${s.requests}</div></div>
-    <div class="tile"><div class="label">Slider</div>
-      <div class="value"><span id="slider-level">${snapshot.slider.level}</span>
-        <small id="slider-name">${escapeHtml(snapshot.slider.name)}</small></div></div>
+    <div class="tile"><div class="label">Compression</div>
+      <div class="value"><span id="compression-level">${escapeHtml(snapshot.compression.level)}</span>
+        <small id="compression-name">${escapeHtml(snapshot.compression.name)}</small></div></div>
     <div class="tile"><div class="label">CCR refs stored / retrieved</div>
       <div class="value"><span id="ccr-stored">${s.ccr_refs_stored}</span>
         <small>/</small> <span id="ccr-retrieved">${s.ccr_refs_retrieved}</span></div></div>

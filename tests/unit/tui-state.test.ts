@@ -37,7 +37,6 @@ function control(over: Partial<Control> & Pick<Control, "id">): Control {
 const HEADER = {
   version: "0.0.0-test",
   project_dir: "/tmp/p",
-  slider: { level: 1, name: "lossless", layer: "default" },
   warnings: [],
 } as unknown as StatusReport;
 

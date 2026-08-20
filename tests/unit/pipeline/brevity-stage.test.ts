@@ -11,21 +11,21 @@ import { describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../../src/compression/index.js";
 import { LocalDirBlobStore } from "../../../src/compression/local-blob-store.js";
 import {
-  type BrevityDial,
-  type SliderLevel,
-  sliderPolicyForLevel,
+  type BrevityLevel,
+  type CompressionLevel,
+  policyFor,
 } from "../../../src/interfaces/policy.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
 
 function makePipeline(
-  level: SliderLevel,
-  brevity: BrevityDial,
+  level: CompressionLevel,
+  brevity: BrevityLevel,
   onEvent?: (e: PipelineEvent) => void,
 ) {
   return createGolemPipeline({
     compression: new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr")),
-    policy: () => sliderPolicyForLevel(level, { brevity }),
+    policy: () => policyFor(level, { brevity }),
     projectId: "proj",
     ...(onEvent !== undefined ? { onEvent } : {}),
   });
@@ -51,8 +51,8 @@ const SAMPLE = {
 };
 
 describe("pipeline brevity stage (Decision 52)", () => {
-  it("does nothing at slider 1 with the dial on auto — brevity is never implied at <=1", async () => {
-    const out = await makePipeline(1, "auto").process(request(SAMPLE));
+  it("does nothing when the brevity dial is off, whatever compression is set to", async () => {
+    const out = await makePipeline(1, "off").process(request(SAMPLE));
     expect(JSON.stringify(bodyOf(out).system)).not.toContain("golem-brevity");
   });
 
@@ -63,14 +63,17 @@ describe("pipeline brevity stage (Decision 52)", () => {
     expect(out).toBe(req);
   });
 
-  it("is a full bypass at slider 0 even with brevity pinned to ultra", async () => {
-    const req = request(SAMPLE);
-    const out = await makePipeline(0, "ultra").process(req);
-    expect(out).toBe(req);
+  // R11.1: `compression: off` is NOT a bypass — it runs redaction, and brevity is
+  // an independent dial, so a brevity value still applies. The full bypass moved
+  // to `proxy.bypass_all`, which the proxy applies before the pipeline runs at all
+  // (see tests/integration/proxy-bypass-shim.test.ts for that path).
+  it("still injects brevity at compression `off` — the dials are independent", async () => {
+    const out = await makePipeline("off", "ultra").process(request(SAMPLE));
+    expect(JSON.stringify(bodyOf(out).system)).toContain("golem-brevity");
   });
 
-  it("injects at slider 2 when the dial is on auto (preset: lite)", async () => {
-    const out = await makePipeline(2, "auto").process(request(SAMPLE));
+  it("injects the value the dial is set to", async () => {
+    const out = await makePipeline(2, "lite").process(request(SAMPLE));
     const system = bodyOf(out).system as string;
     expect(system).toContain('level="lite"');
     expect(system.startsWith("You are a helpful assistant.")).toBe(true);
