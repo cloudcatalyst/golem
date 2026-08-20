@@ -31,7 +31,7 @@ import type {
 import {
   CapabilityUnavailableError,
   HardwareTier,
-  sliderPolicyForLevel,
+  policyFor,
 } from "../../src/interfaces/index.js";
 import { NotImplementedYetError } from "../../src/knowledge/index.js";
 import { MAX_EDIT_LINES } from "../../src/mcp/coder-edit.js";
@@ -97,7 +97,7 @@ async function seedCcrRef(deps: Deps): Promise<{ refId: string; original: string
         content: [{ type: "tool_result", tool_use_id: "toolu_01", content: original }],
       },
     ],
-    sliderPolicyForLevel(2),
+    policyFor(2),
     "mcp-test-project",
   );
   const ref = result.refs[0];

@@ -7,6 +7,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { compressionName } from "../interfaces/index.js";
 import type { ToolUsageStats } from "../telemetry/index.js";
 import { registerCodeTool } from "./code-tool.js";
 import { registerCoderTool } from "./coder-tools.js";
@@ -14,14 +15,10 @@ import { registerDevicesTool, registerSnoozeTool } from "./devices-snooze.js";
 import { registerPrompts } from "./prompts.js";
 import { registerKnowledgeTools } from "./search.js";
 import {
-  asSliderLevel,
   errorResult,
   GOLEM_MCP_SERVER_NAME,
   GOLEM_MCP_SERVER_VERSION,
   instrumented,
-  LEVEL_NAMES,
-  LEVEL_ZERO_IS_CLI_ONLY,
-  sliderLevelInput,
   type ToolTelemetry,
   textResult,
 } from "./shared.js";
@@ -154,7 +151,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       description:
         "Report Golem's cumulative token-savings statistics (tokens before/after " +
         "compression, per-stage attribution, CCR store activity) plus the current " +
-        "slider level. Optionally scoped to one project.",
+        "compression level. Optionally scoped to one project.",
       inputSchema: {
         project_id: z
           .string()
@@ -164,8 +161,10 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       },
       outputSchema: {
         project_id: z.string().nullable(),
-        slider_level: z.number().int().min(0).max(3),
-        slider_level_name: z.string(),
+        // R11.1: was `slider_level` (0–3). The slider is retired (ADR-0004) and
+        // the dial that remains is `off|1|2|3`, so the value is a string.
+        compression_level: z.string(),
+        compression_level_name: z.string(),
         requests: z.number().int().nonnegative(),
         tokens_before: z.number().int().nonnegative(),
         tokens_after: z.number().int().nonnegative(),
@@ -194,15 +193,15 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
       const startMs = Date.now();
       const [stats, level, toolUsage] = await Promise.all([
         project_id === undefined ? deps.compression.stats() : deps.compression.stats(project_id),
-        deps.sliderStore.get(),
+        deps.compressionLevel(),
         deps.telemetry?.aggregateToolUsage(project_id),
       ]);
       const tokensSaved = stats.tokensBefore - stats.tokensAfter;
       const toolUsageStructured = toolUsageToStructured(toolUsage);
       const structuredContent = {
         project_id: stats.projectId,
-        slider_level: level,
-        slider_level_name: LEVEL_NAMES[level],
+        compression_level: String(level),
+        compression_level_name: compressionName(level),
         requests: stats.requests,
         tokens_before: stats.tokensBefore,
         tokens_after: stats.tokensAfter,
@@ -226,7 +225,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
           {
             type: "text" as const,
             text:
-              `Golem stats (${scope}): slider level ${level} (${LEVEL_NAMES[level]}), ` +
+              `Golem stats (${scope}): compression ${level} (${compressionName(level)}), ` +
               `${stats.requests} requests, ${tokensSaved} tokens saved ` +
               `(${stats.tokensBefore} before → ${stats.tokensAfter} after), ` +
               `${stats.ccrRefsStored} CCR refs stored / ${stats.ccrRefsRetrieved} retrieved.` +
@@ -234,66 +233,6 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
           },
         ],
         structuredContent,
-      });
-    },
-  );
-
-  server.registerTool(
-    "level",
-    {
-      title: "Set the Golem savings slider",
-      description:
-        "Set Golem's global quality/savings slider (1–3). 1 = lossless (redaction " +
-        "+ byte-faithful compression), 2 = balanced (adds lossy semantic stages), " +
-        "3 = aggressive (adds max semantic compression). Level 0 (passthrough — FULL " +
-        "BYPASS, NO redaction) cannot be set from here; it is a deliberate CLI act " +
-        "(`golem slider 0`). Never engages the local model (that is `coder` only). " +
-        "Persists across sessions. The level is a preset over two pinnable dials, " +
-        "compression and brevity, both set via the CLI, not here.",
-      inputSchema: { level: sliderLevelInput },
-      outputSchema: {
-        slider_level: z.number().int().min(0).max(3),
-        slider_level_name: z.string(),
-      },
-    },
-    async ({ level }) => {
-      const startMs = Date.now();
-      const sliderLevel = asSliderLevel(level);
-      // Second gate behind the schema's `min(1)`. The write is the security
-      // boundary (R8.33), so refuse BEFORE it lands rather than persisting and
-      // warning afterwards — a warning in a tool result the user never reads is
-      // not a control.
-      if (sliderLevel === 0) {
-        // Recorded too: a refused level-0 attempt is exactly the kind of call the
-        // demotion question needs to see, since `/golem/slider` exists to route
-        // around it.
-        return instrumented(tel, "level", startMs, errorResult(LEVEL_ZERO_IS_CLI_ONLY));
-      }
-      await deps.sliderStore.set(sliderLevel);
-      const gate = deps.compressionGate?.(sliderLevel);
-      const inert =
-        gate?.degraded === true
-          ? ` ⚠ On this upstream that behaves as level ${gate.effective} ` +
-            `(${LEVEL_NAMES[gate.effective]}), not ${sliderLevel}: ${gate.reason ?? ""}`
-          : "";
-      return instrumented(tel, "level", startMs, {
-        content: [
-          {
-            type: "text" as const,
-            text: `Golem slider set to level ${sliderLevel} (${LEVEL_NAMES[sliderLevel]}).${inert}`,
-          },
-        ],
-        structuredContent: {
-          slider_level: sliderLevel,
-          slider_level_name: LEVEL_NAMES[sliderLevel],
-          ...(gate !== undefined
-            ? {
-                effective_level: gate.effective,
-                effective_level_name: LEVEL_NAMES[gate.effective],
-                degraded: gate.degraded,
-              }
-            : {}),
-        },
       });
     },
   );

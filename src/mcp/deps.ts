@@ -8,31 +8,39 @@
 import type { EffectiveCompression } from "../compression/effective-level.js";
 import type { TargetDispatcher } from "../inference/target-dispatcher.js";
 import type {
+  CompressionLevel,
   CompressionService,
   InferenceService,
   KnowledgeBase,
-  SliderLevel,
   WikiReader,
   WikiStore,
 } from "../interfaces/index.js";
 import type { LspBridge } from "../pkg/index.js";
 import type { TelemetryStore } from "../telemetry/index.js";
 import { InMemoryCompressionService } from "./in-memory-compression.js";
-import type { SliderStore } from "./slider-store.js";
-import { InMemorySliderStore } from "./slider-store.js";
 
 export interface GolemMcpServerDeps {
   readonly compression: CompressionService;
-  readonly sliderStore: SliderStore;
   /**
-   * §103 — predicts what a slider level will ACTUALLY do on the configured
-   * upstream, so `level` reports the running level instead of the requested one.
-   * Levels 2–3 collapse to 1 on a prompt-caching upstream (Decision 31), and a
-   * reply saying "aggressive" teaches the model a false belief about its own
-   * context budget. Injected (not computed here) because the server takes no
-   * config dependency; omitted → the tool reports the nominal level as before.
+   * R11.1 — the compression level to REPORT in `stats`, read from settings.
+   *
+   * It used to be a writable `SliderStore`, because the `level` MCP tool set the
+   * slider from here. That tool is gone with the slider (ADR-0004), so this is
+   * read-only: no MCP surface can change how much of the pipeline runs, which
+   * also retires R8.33's special case for level 0 — there is no longer a level
+   * that could disable redaction to guard against.
    */
-  readonly compressionGate?: (level: SliderLevel) => EffectiveCompression;
+  readonly compressionLevel: () => Promise<CompressionLevel> | CompressionLevel;
+  /**
+   * §103 — predicts what the configured compression level ACTUALLY does on this
+   * upstream, so `stats` reports the running level rather than the configured
+   * one. Levels 2–3 collapse to lossless on a prompt-caching upstream
+   * (Decision 31), and a reply saying "aggressive" teaches the model a false
+   * belief about its own context budget. Injected (not computed here) because
+   * the server takes no config dependency; omitted → the nominal level is
+   * reported unqualified.
+   */
+  readonly compressionGate?: (level: CompressionLevel) => EffectiveCompression;
   /**
    * WS-C knowledge base (task B3). When present, the P1 knowledge tools
    * (`search`, `fetch`, `ingest`) are registered.
@@ -158,6 +166,8 @@ export function createStandaloneDeps(): GolemMcpServerDeps & {
 } {
   return {
     compression: new InMemoryCompressionService(),
-    sliderStore: new InMemorySliderStore(),
+    // R11.1: read-only, and the standalone path has no settings to read — the
+    // shipped default is what a fresh install runs.
+    compressionLevel: () => 1,
   };
 }

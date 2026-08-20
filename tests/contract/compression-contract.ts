@@ -12,7 +12,7 @@
 import { describe, expect, it } from "vitest";
 import type { CompressionService, Message } from "../../src/interfaces/compression.js";
 import { UnknownRefError } from "../../src/interfaces/compression.js";
-import { sliderPolicyForLevel } from "../../src/interfaces/policy.js";
+import { policyFor } from "../../src/interfaces/policy.js";
 
 const MESSAGES: readonly Message[] = Object.freeze([
   { role: "user", content: "Summarize the build failure in ci.log" },
@@ -44,20 +44,20 @@ export function describeCompressionServiceContract(
   describe(`CompressionService contract: ${name}`, () => {
     it("level 0 is byte-faithful passthrough", async () => {
       const svc = await makeService();
-      const result = await svc.compress(MESSAGES, sliderPolicyForLevel(0), PROJECT);
+      const result = await svc.compress(MESSAGES, policyFor(0), PROJECT);
       expect(result.messagesOut).toStrictEqual(MESSAGES);
       expect(result.refs).toHaveLength(0);
     });
 
     it("level 1 preserves message structure (roles/order, tool blocks intact)", async () => {
       const svc = await makeService();
-      const result = await svc.compress(MESSAGES, sliderPolicyForLevel(1), PROJECT);
+      const result = await svc.compress(MESSAGES, policyFor(1), PROJECT);
       expect(result.messagesOut.map((m) => m.role)).toStrictEqual(MESSAGES.map((m) => m.role));
     });
 
     it("re-compression is deterministic (prompt-cache stability)", async () => {
       const svc = await makeService();
-      const policy = sliderPolicyForLevel(1);
+      const policy = policyFor(1);
       const first = await svc.compress(MESSAGES, policy, PROJECT);
       const second = await svc.compress(MESSAGES, policy, PROJECT);
       expect(JSON.stringify(second.messagesOut)).toBe(JSON.stringify(first.messagesOut));
@@ -65,7 +65,7 @@ export function describeCompressionServiceContract(
 
     it("every emitted CCR ref is retrievable", async () => {
       const svc = await makeService();
-      const result = await svc.compress(MESSAGES, sliderPolicyForLevel(2), PROJECT);
+      const result = await svc.compress(MESSAGES, policyFor(2), PROJECT);
       for (const ref of result.refs) {
         const original = await svc.retrieve(ref);
         expect(original.ref).toStrictEqual(ref);
@@ -82,7 +82,7 @@ export function describeCompressionServiceContract(
 
     it("stats are consistent and never negative", async () => {
       const svc = await makeService();
-      await svc.compress(MESSAGES, sliderPolicyForLevel(1), PROJECT);
+      await svc.compress(MESSAGES, policyFor(1), PROJECT);
       const stats = await svc.stats(PROJECT);
       expect(stats.requests).toBeGreaterThanOrEqual(1);
       expect(stats.tokensBefore).toBeGreaterThanOrEqual(stats.tokensAfter);

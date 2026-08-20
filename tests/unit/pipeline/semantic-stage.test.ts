@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CcrStore, NativeLosslessCompression } from "../../../src/compression/index.js";
 import { LocalDirBlobStore } from "../../../src/compression/local-blob-store.js";
 import type { SemanticCompressor, SemanticMode } from "../../../src/compression/semantic.js";
-import { type SliderLevel, sliderPolicyForLevel } from "../../../src/interfaces/policy.js";
+import { type SliderLevel, policyFor } from "../../../src/interfaces/policy.js";
 import type { BlobStore } from "../../../src/interfaces/storage.js";
 import { BlobNotFoundError } from "../../../src/interfaces/storage.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
@@ -69,7 +69,7 @@ function makePipeline(
   const compression = new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr"));
   return createGolemPipeline({
     compression,
-    policy: () => sliderPolicyForLevel(level),
+    policy: () => policyFor(level),
     projectId: "proj",
     // A non-caching upstream so the (lossy) semantic stage is allowed to run —
     // it is gated OFF on Anthropic-style caching upstreams (Decision 31).

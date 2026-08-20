@@ -5,7 +5,7 @@
  * The proxy invokes `process()` ONLY for non-bypassed requests, so bypass is
  * not handled here. Stage order is a CLAUDE.md hard rule: **redaction runs
  * first**, before any content is transformed, stored, or forwarded; then the
- * lossless compression stage (A2) runs per the resolved SliderPolicy.
+ * lossless compression stage (A2) runs per the resolved PipelinePolicy.
  *
  * Byte-faithfulness (CLAUDE.md): the pipeline only rewrites the body of
  * `POST /v1/messages` requests carrying a JSON body. Anything else — other
@@ -34,7 +34,7 @@ import {
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
-import type { BrevityLevel, SliderPolicy } from "../interfaces/policy.js";
+import { type BrevityLevel, compressionRank, type PipelinePolicy } from "../interfaces/policy.js";
 import {
   type CacheBustComponent,
   CachePrefixObserver,
@@ -151,7 +151,7 @@ export interface GolemPipelineOptions {
    * return a promise so callers can re-read a persisted slider level on
    * every request instead of freezing it at construction time.
    */
-  readonly policy: () => SliderPolicy | Promise<SliderPolicy>;
+  readonly policy: () => PipelinePolicy | Promise<PipelinePolicy>;
   /** Logical project id for compression stats/telemetry attribution. */
   readonly projectId: string;
   /** Optional sink for per-request telemetry; defaults to a no-op. */
@@ -415,7 +415,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
               const originalJson = JSON.stringify(parsed);
               emit({
                 projectId: options.projectId,
-                level: policy.level,
+                level: compressionRank(policy.compression),
                 requestTokens: { tokensBefore: estimateTokens(originalJson), tokensAfter: 0 },
                 // Redaction (stage 1) already ran and recorded its delta —
                 // keep it in the event rather than dropping it on this path.
@@ -600,7 +600,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
 
       emit({
         projectId: options.projectId,
-        level: policy.level,
+        level: compressionRank(policy.compression),
         requestTokens,
         stageSavings,
         ccrRefsStored,

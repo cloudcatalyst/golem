@@ -1,5 +1,5 @@
 /**
- * Contract tests for the frozen SliderPolicy level table (plan §2.4).
+ * Contract tests for the frozen PipelinePolicy level table (plan §2.4).
  *
  * These run today (policy.ts is pure data). If a change here is needed,
  * the interface is changing — flag all workstreams.
@@ -20,21 +20,21 @@ import {
   resolveBrevity,
   resolveCompressionLevel,
   SliderLevel,
-  sliderPolicyForLevel,
+  policyFor,
 } from "../../src/interfaces/policy.js";
 
 const ALL_LEVELS = [0, 1, 2, 3] as const;
 
-describe("SliderPolicy level table", () => {
+describe("PipelinePolicy level table", () => {
   it("redaction is on at every level EXCEPT 0 (passthrough), a full bypass (Decision 30)", () => {
-    expect(sliderPolicyForLevel(SliderLevel.Passthrough).stages.redaction).toBe(false);
+    expect(policyFor(SliderLevel.Passthrough).stages.redaction).toBe(false);
     for (const level of [1, 2, 3] as const) {
-      expect(sliderPolicyForLevel(level).stages.redaction).toBe(true);
+      expect(policyFor(level).stages.redaction).toBe(true);
     }
   });
 
   it("level 0 is passthrough — nothing runs, not even redaction", () => {
-    const stages = sliderPolicyForLevel(SliderLevel.Passthrough).stages;
+    const stages = policyFor(SliderLevel.Passthrough).stages;
     expect(stages.redaction).toBe(false);
     expect(stages.losslessCompression).toBe(false);
     expect(stages.toolResultCache).toBe(false);
@@ -43,21 +43,21 @@ describe("SliderPolicy level table", () => {
   });
 
   it("level 1 is lossless only (byte-faithful)", () => {
-    const stages = sliderPolicyForLevel(SliderLevel.Lossless).stages;
+    const stages = policyFor(SliderLevel.Lossless).stages;
     expect(stages.redaction).toBe(true);
     expect(stages.losslessCompression).toBe(true);
     expect(stages.semanticCompression).toBe("off");
   });
 
   it("level 2 (balanced) adds stale-turn semantic compression + strict semantic cache", () => {
-    const stages = sliderPolicyForLevel(SliderLevel.Balanced).stages;
+    const stages = policyFor(SliderLevel.Balanced).stages;
     expect(stages.losslessCompression).toBe(true);
     expect(stages.semanticCompression).toBe("stale_turns");
     expect(stages.semanticCache).toBe("strict");
   });
 
   it("level 3 (aggressive) enables max semantic compression (no local drafts — Decision 31)", () => {
-    const stages = sliderPolicyForLevel(SliderLevel.Aggressive).stages;
+    const stages = policyFor(SliderLevel.Aggressive).stages;
     expect(stages.semanticCompression).toBe("aggressive");
     expect(stages.semanticCache).toBe("loose");
     // The slider is a pure compression dial now — no local-model fields exist.
@@ -69,8 +69,8 @@ describe("SliderPolicy level table", () => {
     // Redaction is intentionally NON-monotonic (off at 0, on at 1+), so the
     // monotonicity invariant covers the savings stages and starts at level 1.
     for (const level of [2, 3] as const) {
-      const lower = sliderPolicyForLevel((level - 1) as SliderLevel).stages;
-      const higher = sliderPolicyForLevel(level).stages;
+      const lower = policyFor((level - 1) as SliderLevel).stages;
+      const higher = policyFor(level).stages;
       expect(Number(higher.losslessCompression)).toBeGreaterThanOrEqual(
         Number(lower.losslessCompression),
       );
@@ -97,7 +97,7 @@ describe("SliderPolicy level table", () => {
   });
 
   it("policies are frozen", () => {
-    const policy = sliderPolicyForLevel(SliderLevel.Lossless);
+    const policy = policyFor(SliderLevel.Lossless);
     expect(Object.isFrozen(policy)).toBe(true);
     expect(Object.isFrozen(policy.stages)).toBe(true);
     expect(Object.isFrozen(policy.overrides)).toBe(true);
@@ -109,7 +109,7 @@ describe("SliderPolicy level table", () => {
  * (`compression.level`, `brevity.level`). These are contract tests: the dial
  * semantics and, above all, the redaction safety clamp are load-bearing.
  */
-describe("SliderPolicy dials (Decision 52)", () => {
+describe("PipelinePolicy dials (Decision 52)", () => {
   it("brevity presets: off at 0 and 1, lite at 2, full at 3 — ultra is never a preset", () => {
     expect(ALL_LEVELS.map(brevityPresetForLevel)).toEqual(["off", "off", "lite", "full"]);
     // `ultra` must be reachable only by an explicit pin, never implied.
@@ -118,8 +118,8 @@ describe("SliderPolicy dials (Decision 52)", () => {
 
   it("brevity is never implied at slider <=1 — level 1 stays semantics-preserving", () => {
     // The default install must not start answering in fragments (USER DECISION).
-    expect(sliderPolicyForLevel(SliderLevel.Passthrough).brevity).toBe("off");
-    expect(sliderPolicyForLevel(SliderLevel.Lossless).brevity).toBe("off");
+    expect(policyFor(SliderLevel.Passthrough).brevity).toBe("off");
+    expect(policyFor(SliderLevel.Lossless).brevity).toBe("off");
   });
 
   it("BREVITY_LEVELS is weakest-first and frozen", () => {
@@ -129,11 +129,11 @@ describe("SliderPolicy dials (Decision 52)", () => {
 
   it("an explicit pin wins over the preset and does not move with the slider", () => {
     for (const level of [1, 2, 3] as const) {
-      expect(sliderPolicyForLevel(level, { brevity: "ultra" }).brevity).toBe("ultra");
-      expect(sliderPolicyForLevel(level, { brevity: "off" }).brevity).toBe("off");
+      expect(policyFor(level, { brevity: "ultra" }).brevity).toBe("ultra");
+      expect(policyFor(level, { brevity: "off" }).brevity).toBe("off");
     }
     // "auto" is what opts back into the preset table.
-    expect(sliderPolicyForLevel(SliderLevel.Balanced, { brevity: "auto" }).brevity).toBe("lite");
+    expect(policyFor(SliderLevel.Balanced, { brevity: "auto" }).brevity).toBe("lite");
   });
 
   it("SAFETY CLAMP: a pinned compression level of 0 must NOT disable redaction", () => {
@@ -141,7 +141,7 @@ describe("SliderPolicy dials (Decision 52)", () => {
     // honoured at slider >=1, a config file could silently switch redaction off
     // — a CLAUDE.md hard-rule violation. It must clamp to 1 instead.
     for (const level of [1, 2, 3] as const) {
-      const policy = sliderPolicyForLevel(level, { compression: 0 });
+      const policy = policyFor(level, { compression: 0 });
       expect(policy.compressionLevel).toBe(MIN_ACTIVE_COMPRESSION_LEVEL);
       expect(policy.stages.redaction).toBe(true);
     }
@@ -154,7 +154,7 @@ describe("SliderPolicy dials (Decision 52)", () => {
     for (const level of ALL_LEVELS) {
       for (const compression of ["auto", 0, 1, 2, 3] as const) {
         for (const brevity of ["auto", "off", "lite", "full", "ultra"] as const) {
-          const policy = sliderPolicyForLevel(level, { compression, brevity });
+          const policy = policyFor(level, { compression, brevity });
           expect(policy.stages.redaction).toBe(level !== SliderLevel.Passthrough);
         }
       }
@@ -162,7 +162,7 @@ describe("SliderPolicy dials (Decision 52)", () => {
   });
 
   it("passthrough is absolute — no pin can re-enable a stage or brevity at slider 0", () => {
-    const policy = sliderPolicyForLevel(SliderLevel.Passthrough, {
+    const policy = policyFor(SliderLevel.Passthrough, {
       compression: 3,
       brevity: "ultra",
     });
@@ -176,7 +176,7 @@ describe("SliderPolicy dials (Decision 52)", () => {
   });
 
   it("a pinned compression level selects that row's stages, not the slider's", () => {
-    const policy = sliderPolicyForLevel(SliderLevel.Aggressive, { compression: 1 });
+    const policy = policyFor(SliderLevel.Aggressive, { compression: 1 });
     expect(policy.level).toBe(3); // identity for telemetry/displays is still the slider
     expect(policy.compressionLevel).toBe(1); // but the stages come from the pin
     expect(policy.stages.semanticCompression).toBe("off");
@@ -185,9 +185,9 @@ describe("SliderPolicy dials (Decision 52)", () => {
 
   it("with no opts, compressionLevel tracks the slider and stages are unchanged", () => {
     for (const level of ALL_LEVELS) {
-      const policy = sliderPolicyForLevel(level);
+      const policy = policyFor(level);
       expect(policy.compressionLevel).toBe(level);
-      expect(policy.stages).toBe(sliderPolicyForLevel(level).stages);
+      expect(policy.stages).toBe(policyFor(level).stages);
     }
   });
 
@@ -196,8 +196,8 @@ describe("SliderPolicy dials (Decision 52)", () => {
     // just by omitting an argument, and Decision 52 ships the dial off until the
     // telemetry rollup proves it pays. "auto" is the explicit opt-in.
     for (const level of ALL_LEVELS) {
-      expect(sliderPolicyForLevel(level).brevity).toBe("off");
+      expect(policyFor(level).brevity).toBe("off");
     }
-    expect(sliderPolicyForLevel(SliderLevel.Aggressive, { brevity: "auto" }).brevity).toBe("full");
+    expect(policyFor(SliderLevel.Aggressive, { brevity: "auto" }).brevity).toBe("full");
   });
 });

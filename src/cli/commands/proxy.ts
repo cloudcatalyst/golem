@@ -13,12 +13,7 @@ import {
   reapOrphanedHeadroomWorkers,
   stopAllHeadroomWorkers,
 } from "../../compression/headroom-adapter.js";
-import {
-  findProjectDir,
-  loadConfig,
-  migrateOnVersionChange,
-  settingsFilePaths,
-} from "../../config/index.js";
+import { findProjectDir, loadConfig, migrateOnVersionChange } from "../../config/index.js";
 import { VERSION } from "../../index.js";
 import {
   createProbeRunner,
@@ -68,7 +63,7 @@ function _fail(err: unknown): never {
 async function resolvePort(
   dir: string,
   portOpt?: string,
-): Promise<{ port: number; upstream: string; sliderLevel: number }> {
+): Promise<{ port: number; upstream: string; compression: string }> {
   const { settings } = await loadConfig({ projectDir: dir });
   const port = portOpt === undefined ? settings.proxy.port : Number(portOpt);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -77,7 +72,7 @@ async function resolvePort(
   return {
     port,
     upstream: resolveUpstreamDisplay(settings.proxy).baseUrl,
-    sliderLevel: settings.slider.level,
+    compression: settings.compression.level,
   };
 }
 
@@ -216,8 +211,6 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   });
 
   const telemetry = openTelemetryStore(dir);
-  const { JsonFileSliderStore } = await import("../../mcp/index.js");
-  const sliderStore = new JsonFileSliderStore(settingsFilePaths({ projectDir: dir }).local);
   let inference: InferenceService | undefined;
   let facts: Awaited<ReturnType<typeof detectCapability>> | undefined;
   let ollamaClient: OllamaClient | undefined;
@@ -275,7 +268,6 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       ? undefined
       : modelAcceptsImages(modelCatalog, model, { preferProvider: provider });
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
-    sliderStore,
     visionOf,
     ...(shim ? { shim: true } : {}),
     ...(localAnswerInference !== undefined ? { inference: localAnswerInference } : {}),
@@ -307,7 +299,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   process.stdout.write(
     shim
       ? `golem proxy: BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)\n`
-      : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (slider level ${settings.slider.level})\n`,
+      : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (compression ${settings.compression.level}, brevity ${settings.brevity.level})\n`,
   );
 
   // Loopback serve for green WebFetch

@@ -26,7 +26,7 @@
  */
 
 import { z } from "zod";
-import { migrateSliderLevel } from "../interfaces/policy.js";
+
 import {
   PROXY_PROVIDERS,
   TARGET_TRUST_LEVELS,
@@ -46,16 +46,30 @@ const hexColorSchema = z
  * for which keys exist and how their values validate/coerce.
  */
 export const SETTINGS_LEAVES = {
-  slider: {
-    /**
-     * Global quality/savings level 0–3 (interfaces/policy.ts, Decision 30):
-     * off / lossless / balanced / aggressive. Legacy 0–5 values on disk are
-     * accepted and remapped onto 0–3 via {@link migrateSliderLevel} so old
-     * settings files keep loading (5→3, 4→3, 2→1, …).
-     */
-    level: z.number().int().min(0).max(5).transform(migrateSliderLevel),
-  },
+  // R11.1 / ADR-0004: `slider.level` is GONE. It was a preset over the two dials
+  // below, so two controls described one thing; and on a caching upstream its
+  // top half was inert, so the headline number needed a paragraph of
+  // explanation. `compression.level` and `brevity.level` are now set directly.
+  // A file still carrying `slider.level` is migrated once, by resolving it
+  // through the real resolvers, in src/config/migrations.ts.
   proxy: {
+    /**
+     * R11.1 / ADR-0004 — forward EVERY request byte-faithfully: no redaction, no
+     * compression, no brevity. The single deliberate exception to the redaction
+     * hard rule (CLAUDE.md), inherited from what slider level 0 used to mean.
+     *
+     * It is a setting of its own, rather than a value of `compression.level`,
+     * because compression and redaction are different guarantees: folding them
+     * into one word is how a user turns off *redaction* while believing they
+     * turned off *compression*. And it is persisted, rather than reusing the
+     * in-process `golem on`/`golem off` toggle, because that toggle forgets at
+     * every proxy restart — and the proxy restarts on project open.
+     *
+     * Never the default. Surfaced loudly wherever it is on, and settable only
+     * from the CLI — a tool call must not be able to switch redaction off
+     * (R8.33).
+     */
+    bypass_all: z.boolean(),
     /** Local port the Anthropic-compatible proxy listens on. */
     port: portSchema,
     /** Upstream Anthropic-compatible API base URL. */
@@ -287,19 +301,20 @@ export const SETTINGS_LEAVES = {
      */
     force_semantic_on_caching: z.boolean(),
     /**
-     * Decision 52: the INPUT-side dial, decoupled from the slider. `"auto"`
-     * (default) means "follow the slider level", which is the pre-Decision-52
-     * behaviour; a numeric value PINS the compression level, and the slider
-     * stops driving it until it is set back to `"auto"`.
+     * R11.1 / ADR-0004: the INPUT-side dial, now set DIRECTLY. `"auto"` is gone
+     * along with the slider it followed.
      *
-     * **0 is deliberately not offerable.** Level 0 is the Decision-30
-     * passthrough — the one row where redaction is off — and that bypass belongs
-     * to the slider, where it is surfaced loudly. Allowing it here would make
-     * redaction-off reachable from a config key that says nothing about
-     * redaction. `resolveCompressionLevel` also clamps a 0 defensively, so both
-     * layers refuse it.
+     * - `off` — redaction only; nothing else touches the request. Nameable for
+     *   the first time in R11.1.
+     * - `1` — + lossless (byte-faithful) compression. The default.
+     * - `2` / `3` — + the lossy semantic stages, which Decision 31 gates OFF on
+     *   a prompt-caching upstream, so what RAN can still differ from what was
+     *   SET (`resolveEffectiveCompression`, §103). Every surface says which.
+     *
+     * **No value here can disable redaction** — see `proxy.bypass_all`. That is
+     * now a property of the type rather than of a clamp.
      */
-    level: z.enum(["auto", "1", "2", "3"]),
+    level: z.enum(["off", "1", "2", "3"]),
     /**
      * Decision 53: **opaque passthrough** to Headroom's `CompressConfig`.
      *
@@ -330,14 +345,13 @@ export const SETTINGS_LEAVES = {
      * tersely — it saves *output* tokens (never cached, ~5× input) and costs a
      * small number of *input* tokens that land inside the cached prefix.
      *
-     * `"auto"` follows the slider preset (off at 0–1, lite at 2, full at 3);
-     * `off|lite|full|ultra` pins it. **Ships as a pinned `"off"`**, not `"auto"`:
-     * Decision 52 requires a real telemetry rollup (`golem stats --brevity`)
-     * before the dial is trusted, because the technique can go net-negative on
-     * already-terse workloads (verification-notes §87). `ultra` is never a
-     * preset — it is reachable only by pinning it here.
+     * R11.1 / ADR-0004 removed `"auto"` (which followed the slider preset).
+     * Ships `off`: Decision 52 requires a real telemetry rollup
+     * (`golem stats --brevity`) before the dial is trusted, because the
+     * technique can go net-negative on already-terse workloads
+     * (verification-notes §87).
      */
-    level: z.enum(["auto", "off", "lite", "full", "ultra"]),
+    level: z.enum(["off", "lite", "full", "ultra"]),
   },
   knowledge: {
     /** Master toggle for the vector knowledge base. */
@@ -646,16 +660,13 @@ export type GolemSettings = DeepReadonly<{
   }>;
 }>;
 
-/** Decision 30 — the global quality/savings level (0–3 after migration). */
-export type SliderSettings = GolemSettings["slider"];
-
 /** Proxy listener, upstream selection (R6.1), and the gateway/target registries (R9.1). */
 export type ProxySettings = GolemSettings["proxy"];
 
 /** Local inference endpoint, per-worker target routing (R9.4), provider table (R8.15). */
 export type InferenceSettings = GolemSettings["inference"];
 
-/** The input-side dial (Decision 52) plus the Headroom sidecar opt-in (Decision 23/53). */
+/** The input-side dial (R11.1/ADR-0004) plus the Headroom sidecar opt-in (Decision 23/53). */
 export type CompressionSettings = GolemSettings["compression"];
 
 /** Decision 52 — the output-side brevity dial. */
@@ -683,14 +694,13 @@ export type ClaudeSettings = GolemSettings["claude"];
  * Built-in defaults (the lowest layer). Where the spec is silent the choice is
  * recorded in docs/plan/verification-notes.md §17:
  * - proxy.port 4653 / telemetry.dashboard_port 4654 ("GOLE" on a phone keypad).
- * - slider.level 1 (lossless-only: byte-faithful with real savings, spec P0 DoD).
+ * - compression.level 1 (lossless-only: byte-faithful with real savings, spec P0 DoD).
  * - upstream https://api.anthropic.com; Ollama http://localhost:11434.
  */
 export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
-  slider: {
-    level: 1,
-  },
   proxy: {
+    // ADR-0004: never the default. The one setting that can switch redaction off.
+    bypass_all: false,
     port: 4653,
     upstream_base_url: "https://api.anthropic.com",
     upstream_provider: "anthropic",
@@ -709,13 +719,15 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   compression: {
     headroom_sidecar: false,
     force_semantic_on_caching: false,
-    level: "auto",
+    // R11.1: was "auto" (follow the slider). Set directly now; 1 is what "auto"
+    // resolved to on a default install, so the default install is unchanged.
+    level: "1",
     // Empty by default: Golem's mode presets are the whole behaviour until a
     // user deliberately reaches past them (Decision 53).
     headroom_config: {},
   },
-  // Decision 52: ships OFF, not "auto" — the preset table is opt-in until the
-  // brevity rollup shows a real net saving on this project's own traffic.
+  // Decision 52: ships OFF — brevity is opt-in until the rollup shows a real net
+  // saving on this project's own traffic.
   brevity: {
     level: "off",
   },

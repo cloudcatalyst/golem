@@ -13,7 +13,7 @@ import type {
   LocalAnswerResult,
   LocalAnswerService,
 } from "../../src/interfaces/local-answer.js";
-import { sliderPolicyForLevel } from "../../src/interfaces/policy.js";
+import { policyFor } from "../../src/interfaces/policy.js";
 import { createGolemPipeline } from "../../src/pipeline/index.js";
 import { rawRequest, startProxy, startUpstream } from "./helpers/test-servers.js";
 
@@ -33,7 +33,7 @@ function alwaysAnswers(text: string): LocalAnswerService {
 function pipelineWithLocalAnswer(service: LocalAnswerService) {
   return createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir("/nonexistent-ccr"),
-    policy: () => sliderPolicyForLevel(1),
+    policy: () => policyFor(1),
     projectId: "proj",
     localAnswer: { service },
   });

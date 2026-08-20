@@ -28,7 +28,7 @@ import { portInUse, startDetached, stopProxy, waitForPortFree } from "../proxy-d
 export async function resolvePort(
   dir: string,
   portOpt?: string,
-): Promise<{ port: number; upstream: string; sliderLevel: number }> {
+): Promise<{ port: number; upstream: string; compression: string }> {
   const { settings } = await loadConfig({ projectDir: dir });
   const port = portOpt === undefined ? settings.proxy.port : Number(portOpt);
   if (!Number.isInteger(port) || port < 0 || port > 65535)
@@ -36,7 +36,7 @@ export async function resolvePort(
   return {
     port,
     upstream: resolveUpstreamDisplay(settings.proxy).baseUrl,
-    sliderLevel: settings.slider.level,
+    compression: settings.compression.level,
   };
 }
 
