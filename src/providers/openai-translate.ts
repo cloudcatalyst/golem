@@ -537,6 +537,22 @@ const openAIResponse = z
               content: z.string().nullable().optional(),
               // b4-kimi: reasoning models return the thinking trace here.
               reasoning_content: z.string().nullable().optional(),
+              // R10.23: OpenRouter returns the trace as `reasoning` (plus a
+              // structured `reasoning_details`) and documents `reasoning_content`
+              // as a REQUEST-side alias only — so reading only the latter dropped
+              // every OpenRouter trace. Live-verified 2026-08-19.
+              reasoning: z.string().nullable().optional(),
+              reasoning_details: z
+                .array(
+                  z
+                    .object({
+                      type: z.string().optional(),
+                      text: z.string().nullable().optional(),
+                      summary: z.string().nullable().optional(),
+                    })
+                    .catchall(z.unknown()),
+                )
+                .optional(),
               tool_calls: z.array(openAIToolCall).optional(),
             })
             .catchall(z.unknown()),
@@ -581,6 +597,21 @@ export function mapStopReason(finish: string | null | undefined): string {
  */
 export const SYNTHESIZED_THINKING_LABEL =
   "[Golem: the upstream model's own reasoning trace, relayed verbatim — not an Anthropic thinking block]\n\n";
+
+/**
+ * R10.23 — the in-band notice for an upstream that emitted a reasoning trace and
+ * no answer. Golem-prefixed and attributed, matching the streaming translator's
+ * wording and the local-answer rail's precedent: the proxy must never appear to
+ * speak as the model (Decision 25).
+ */
+export function emptyAnswerNotice(model: string, finishReason: string | null): string {
+  const base =
+    `**Golem** The upstream model "${model}" returned only a reasoning trace, ` +
+    "and no answer — no text and no tool calls.";
+  return finishReason === "length"
+    ? `${base} It hit max_tokens while still reasoning; raise max_tokens or shorten the request.`
+    : `${base} This is the upstream's response, not a reply from the model.`;
+}
 
 /** An Anthropic content block we emit (thinking, text, or tool_use). */
 export type AnthropicOutBlock =
@@ -628,6 +659,54 @@ export class EmptyCompletionError extends Error {
 }
 
 /**
+ * R10.23 — the upstream answered HTTP 200 with an ERROR body: `{"error": {...}}`
+ * and no usable `choices`. OpenRouter documents the shape for pre-stream
+ * failures, and gateways in front of it are not consistent about the status
+ * code. This used to fail Zod's `choices.min(1)` and surface as "could not
+ * translate the upstream response (ZodError: …)", which points the reader at
+ * Golem's translator instead of at the upstream's own message.
+ */
+export class UpstreamErrorResponse extends Error {
+  readonly code: string | undefined;
+  constructor(model: string, code: string | undefined, message: string) {
+    super(
+      `the upstream refused the request for "${model}"` +
+        (code === undefined ? "" : ` (code ${code})`) +
+        `: ${message}. Reported by the upstream, relayed by Golem.`,
+    );
+    this.name = "UpstreamErrorResponse";
+    this.code = code;
+  }
+}
+
+/**
+ * The reasoning trace on a non-streaming message, from whichever field the
+ * upstream uses. `reasoning` (OpenRouter) and `reasoning_content` (DeepSeek
+ * direct, Moonshot) are plaintext; OpenRouter repeats the same text inside
+ * `reasoning_details`, so the structured form is a FALLBACK only — reading both
+ * would duplicate the whole trace.
+ */
+function messageReasoning(message: {
+  readonly reasoning?: string | null | undefined;
+  readonly reasoning_content?: string | null | undefined;
+  readonly reasoning_details?:
+    | ReadonlyArray<{
+        readonly text?: string | null | undefined;
+        readonly summary?: string | null | undefined;
+      }>
+    | undefined;
+}): string {
+  const plain = message.reasoning ?? message.reasoning_content;
+  if (typeof plain === "string" && plain.length > 0) return plain;
+  let out = "";
+  for (const detail of message.reasoning_details ?? []) {
+    if (typeof detail.text === "string") out += detail.text;
+    else if (typeof detail.summary === "string") out += detail.summary;
+  }
+  return out;
+}
+
+/**
  * Translate a non-streaming OpenAI Chat Completions response body (raw bytes)
  * into an Anthropic Messages response object. The `model` reported is the
  * upstream's REAL serving model (never a Claude name). `fallback` covers a
@@ -638,14 +717,32 @@ export function openAIChatToAnthropic(
   fallback: { readonly id: string; readonly model: string },
   opts: { readonly mapReasoning?: boolean } = {},
 ): AnthropicMessageResponse {
-  const parsed = openAIResponse.parse(JSON.parse(body.toString("utf8")));
+  const raw: unknown = JSON.parse(body.toString("utf8"));
+  // R10.23: an error-shaped body is the upstream's own answer, not a translation
+  // failure — relay ITS message rather than a Zod complaint about `choices`.
+  if (typeof raw === "object" && raw !== null && "error" in raw) {
+    const err = (raw as { error: unknown }).error;
+    if (typeof err === "object" && err !== null) {
+      const e = err as { code?: unknown; message?: unknown };
+      const code = e.code === undefined || e.code === null ? undefined : String(e.code);
+      const message =
+        typeof e.message === "string" && e.message.length > 0 ? e.message : "no message given";
+      const model = (raw as { model?: unknown }).model;
+      throw new UpstreamErrorResponse(
+        typeof model === "string" ? model : fallback.model,
+        code,
+        message,
+      );
+    }
+  }
+  const parsed = openAIResponse.parse(raw);
   const choice = parsed.choices[0];
   const text = choice?.message.content ?? "";
   const content: AnthropicOutBlock[] = [];
   // b4-kimi: a reasoning model's thinking trace → a leading Anthropic thinking
   // block (no signature — synthesized, non-Anthropic origin; display-only).
-  const reasoning = choice?.message.reasoning_content;
-  if (opts.mapReasoning !== false && typeof reasoning === "string" && reasoning.length > 0) {
+  const reasoning = choice === undefined ? "" : messageReasoning(choice.message);
+  if (opts.mapReasoning !== false && reasoning.length > 0) {
     content.push({ type: "thinking", thinking: SYNTHESIZED_THINKING_LABEL + reasoning });
   }
   if (typeof text === "string" && text.length > 0) content.push({ type: "text", text });
@@ -665,8 +762,26 @@ export function openAIChatToAnthropic(
   // a clean proxy error naming the model instead.
   //
   // Gate on content AND tool calls: a tool-only turn legitimately has no text.
-  if (content.length === 0) {
-    throw new EmptyCompletionError(parsed.model ?? fallback.model, choice?.finish_reason ?? null);
+  //
+  // R10.23: `content.length` is not the same question as "can the client act on
+  // this". Now that the reasoning trace is mapped (R10.23's other half), a
+  // reasoning-only answer puts a `thinking` block in `content` and passes a
+  // LENGTH check while still handing Claude Code a turn with no visible output —
+  // which is the loop R10.18 was written to end, one costume over.
+  //
+  // So: nothing at all stays R10.18's error, and a trace-without-an-answer keeps
+  // the trace and gains a visible, attributed notice next to it. The trace is
+  // real output and must not be thrown away (R10.20), but it cannot be the whole
+  // turn either.
+  const visible = content.some((block) => block.type !== "thinking");
+  if (!visible) {
+    if (content.length === 0) {
+      throw new EmptyCompletionError(parsed.model ?? fallback.model, choice?.finish_reason ?? null);
+    }
+    content.push({
+      type: "text",
+      text: emptyAnswerNotice(parsed.model ?? fallback.model, choice?.finish_reason ?? null),
+    });
   }
   return {
     id: parsed.id ?? fallback.id,
