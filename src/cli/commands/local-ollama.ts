@@ -191,6 +191,8 @@ export default function register(program: Command): void {
               );
               return;
             }
+            // No `maxAutoFiles` is passed here: `golem index` IS the explicit
+            // ask the capped session-start sync defers to, so it never defers.
             const line =
               result.action === "skipped"
                 ? `Index already up to date (${embedNote}) — nothing changed.\n`
