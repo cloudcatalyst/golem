@@ -7,7 +7,7 @@
  * (slider, upstream, cumulative savings from A4 telemetry) into one compact
  * line, e.g.:
  *
- *   ⬢ golem →foundry · L1 · saved 34% · ctx 8% · 5h 23% · $0.012
+ *   ⬢ Golem → ◆ foundry (gpt-5) · 🗜 lossless · ✂ full
  *
  * Hard rule for this command: it must NEVER throw or hang — a broken status
  * line would disrupt the editor. Everything is defensive; on any error it
@@ -273,13 +273,18 @@ function workerRows(golem: GolemState): readonly { worker: string; model?: strin
 }
 
 /**
- * The one-liner destination, naming the default gateway (model) plus each
+ * The one-liner destination, naming the CHAT gateway (model) first and then each
  * worker that diverges from it:
  *
- *   `⚙ openrouter (qwen3-14b) + ✎ anthropic (claude-sonnet-5)`
+ *   `◆ openrouter (deepseek/deepseek-v4-flash) · ✎ qwen2.5-coder:7b`
  *
- * Model ids stay verbatim (Decision 49). A worker whose target does not
- * resolve is omitted: it fails closed on every dispatch.
+ * R10.24 — the chat destination leads. It used to trail the worker list, so on
+ * any machine with a local coder the arrow pointed at the DRAFTING model and the
+ * model the conversation actually runs on was pushed to the end. The arrow means
+ * "where this conversation goes"; whatever it touches first had better be that.
+ *
+ * Model ids stay verbatim (Decision 49). A worker whose target does not resolve
+ * is omitted: it fails closed on every dispatch.
  */
 export function destinationLabel(golem: GolemState): string {
   const chatModel = upstreamModelLabel(golem);
@@ -292,7 +297,7 @@ export function destinationLabel(golem: GolemState): string {
       const model = w.model as string;
       return `${workerMark(w.worker)} ${g !== undefined ? `${g} ` : ""}${model}`;
     });
-  return diverging.length === 0 ? chatSeg : `${diverging.join(" + ")} · ${chatSeg}`;
+  return diverging.length === 0 ? chatSeg : `${chatSeg} · ${diverging.join(" · ")}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -309,7 +314,13 @@ export interface RenderOptions {
 /**
  * Pure renderer — the unit-tested core. The line is the compact one-liner:
  *
- *   ⬢ Golem · Balanced → local (qwen2.5-coder:7b) + anthropic (claude-opus-5[1m])
+ *   ⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b · 🗜 lossless · ✂ full
+ *
+ * R10.24 — ONE canonical segment order, shared with the VS Code status bar:
+ * brand, then the arrow and where traffic goes, then the dials. The two surfaces
+ * used to disagree (the extension put the compression level BEFORE the arrow),
+ * and `tests/unit/cli/statusline-parity.test.ts` now pins that they cannot drift
+ * apart again.
  *
  * `_session` (Claude Code's per-turn context %, 5h quota, cost) is parsed and
  * captured by {@link parseSessionInput} but deliberately NOT rendered here yet:
@@ -329,6 +340,20 @@ export function renderStatusLine(
   const yellow = ansi(33, color);
 
   const parts: string[] = [];
+  // R10.24 — the same four state words the VS Code status bar uses
+  // (`proxyStateWord` in vscode-extension/render.js). The glyph and colour
+  // already carried this, but only for a reader who can see colour: NO_COLOR, a
+  // monochrome terminal or a screenshot flattened "off", "unwired" and "bypass"
+  // into one hollow hexagon. Naming the state costs one word and removes the
+  // guess.
+  const stateWord =
+    golem.proxyRunning === false
+      ? "off"
+      : golem.proxyInPath === false
+        ? "unwired"
+        : golem.proxyBypass === true
+          ? "bypass"
+          : "";
   // Lead with the brand + level NAME, and an icon that signals whether Golem is
   // actually carrying traffic: filled green hexagon when the proxy is running
   // with pipeline enabled, hollow-but-green when running but pipeline is off
@@ -340,22 +365,38 @@ export function renderStatusLine(
   // from the pid file alone. Yellow, not dim: "off" is a resting state the user
   // chose, this is a misconfiguration they almost certainly did not.
   const unwired = golem.proxyInPath === false;
-  const brand = unwired ? yellow("⬡ Golem") : active ? green("⬢ Golem") : dim("⬡ Golem");
+  // R10.24: the bypass shim serves and redacts, but runs no pipeline — so it is
+  // HOLLOW, as the VS Code status bar has always drawn it. This line drew it
+  // filled and green, i.e. identical to a fully-running pipeline, which is the
+  // one thing Decision 56 exists to distinguish.
+  const brand =
+    unwired || golem.proxyBypass === true
+      ? yellow("⬡ Golem")
+      : active
+        ? green("⬢ Golem")
+        : dim("⬡ Golem");
   const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.sliderLevel;
 
-  // Brand · Level → destination
-  parts.push(brand);
-  parts.push(`${dim("→")} ${cyan(destinationLabel(golem))}`);
+  // Brand [state] → destination · dials
+  // R10.24: the arrow rides WITH the brand rather than after a separator, so the
+  // line reads "Golem -> destination" on both surfaces. The CLI used to emit
+  // `⬢ Golem · → dest` and the status bar `⬢ Golem → dest`.
+  const head = stateWord === "" ? brand : `${brand} ${yellow(stateWord)}`;
+  parts.push(`${head} ${dim("→")} ${cyan(destinationLabel(golem))}`);
 
-  // Compression level — always shown with icon
-  const compLabel = levelName(
-    inert ? (golem.effectiveLevel as number) : golem.sliderLevel,
-  ).toLowerCase();
-  parts.push(`${dim("🗜")} ${compLabel}`);
-
-  // Brevity level — always shown with icon (even "off")
-  const brevLabel = golem.brevity ?? "off";
-  parts.push(`${dim("✂")} ${brevLabel}`);
+  // R10.24: the dials describe transforms the pipeline is applying, so they are
+  // shown only when it is applying them. Off, unwired and bypass all run no
+  // compression and no brevity stage; printing the configured dials there
+  // advertises work that is not happening — the same misreport R8.32 and
+  // Decision 56 each turned on, and the reason the VS Code bar hid brevity in
+  // bypass. One rule now, both dials, both surfaces.
+  if (stateWord === "") {
+    const compLabel = levelName(
+      inert ? (golem.effectiveLevel as number) : golem.sliderLevel,
+    ).toLowerCase();
+    parts.push(`${dim("🗜")} ${compLabel}`);
+    parts.push(`${dim("✂")} ${golem.brevity ?? "off"}`);
+  }
   if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 

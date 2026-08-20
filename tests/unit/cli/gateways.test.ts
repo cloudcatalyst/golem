@@ -121,6 +121,45 @@ describe("useGateway", () => {
     });
   });
 
+  /**
+   * R10.24 — `inference.default_target` is a TARGET selector, and a gateway that
+   * fronts several models collapses to one target when selected by gateway id. A
+   * user with two OpenRouter models configured could therefore reach only the
+   * first, and the VS Code picker could only ever offer the gateway. Selecting a
+   * target by id is what makes "switch model" possible at all.
+   */
+  it("switches to a TARGET id, not just a gateway id (R10.24)", async () => {
+    await seedKey("work", "sk-x");
+    await useGateway(dir, "work:gpt-5.2", "2026-08-20T00:00:00.000Z", { store_backend: store });
+    const report = await collectGateways(dir, {}, { store_backend: store });
+    // `active` stays the backing GATEWAY id, so every pre-R10.24 consumer keeps
+    // its meaning; `active_target` is the field that names the selected MODEL.
+    expect(report.active).toBe("work");
+    expect(report.active_target).toBe("work:gpt-5.2");
+    expect(report.active_unknown).toBe(false);
+    const work = report.gateways.find((g) => g.id === "work");
+    expect(work?.active).toBe(true);
+    // The row names the model actually in force, not the gateway's first.
+    expect(work?.model).toBe("gpt-5.2");
+    expect(work?.models).toEqual(["gpt-5.2"]);
+  });
+
+  it("preflights the credential of the gateway BEHIND a target, not the target id", async () => {
+    // The key is stored for `work`; the target id is `work:gpt-5.2`. Resolving the
+    // target id would find nothing and refuse a switch that is perfectly valid.
+    await seedKey("work", "sk-x");
+    await expect(
+      useGateway(dir, "work:gpt-5.2", "2026-08-20T00:00:00.000Z", { store_backend: store }),
+    ).resolves.toEqual({ active: "work:gpt-5.2" });
+  });
+
+  it("still fails closed on an id that is neither a gateway nor a target", async () => {
+    await expect(
+      useGateway(dir, "work:no-such-model", "2026-08-20T00:00:00.000Z", { store_backend: store }),
+    ).rejects.toThrow(/unknown gateway or target/);
+    expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
+  });
+
   it("rejects an unknown account id (fail-closed, no silent creation)", async () => {
     await expect(
       useGateway(dir, "ghost", "2026-07-23T00:00:00.000Z", { store_backend: store }),
