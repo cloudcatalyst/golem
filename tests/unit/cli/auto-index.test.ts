@@ -4,12 +4,14 @@
  * KnowledgeBase so the policy is tested without a real store/embedder.
  */
 
-import { mkdir, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  type EnsureIndexedOptions,
   embedderSignature,
   ensureProjectIndexed,
+  INDEX_CHECKPOINT_FILES,
   resolveIndexPaths,
   resolvePersistedEmbedMode,
 } from "../../../src/cli/auto-index.js";
@@ -203,5 +205,140 @@ describe("ensureProjectIndexed", () => {
     // Incremental capability was available but unused — multiple roots forced the rebuild.
     expect(kb2.reindexed).toStrictEqual([]);
     expect(kb2.removedPaths).toStrictEqual([]);
+  });
+});
+
+/** Touch `count` files so the next run sees them as changed. */
+async function writeFiles(dir: string, count: number, body: string): Promise<void> {
+  for (let i = 0; i < count; i++) {
+    const p = path.join(dir, `f${String(i).padStart(3, "0")}.txt`);
+    await writeFile(p, `${body} ${i}`, "utf8");
+    // A distinct mtime per body, so a rewrite is always a detectable change.
+    await utimes(p, new Date(2000 + body.length), new Date(2000 + body.length));
+  }
+}
+
+describe("ensureProjectIndexed checkpoints its progress (R11.2)", () => {
+  /** An incremental KB that dies partway, like a session ending mid-sync. */
+  class DyingIncrementalKB extends IncrementalSpyKB {
+    batches = 0;
+    constructor(readonly dieOnBatch: number) {
+      super();
+    }
+    override async reindexFiles(
+      baseDir: string,
+      projectId: string,
+      absFiles: readonly string[],
+    ): Promise<number> {
+      this.batches += 1;
+      if (this.batches >= this.dieOnBatch) throw new Error("session ended mid-sync");
+      return super.reindexFiles(baseDir, projectId, absFiles);
+    }
+  }
+
+  const inc = (kb: KnowledgeBase, extra: Partial<EnsureIndexedOptions> = {}) => ({
+    ...base(kb, projectDir),
+    embedMode: "lexical" as const,
+    tier: 2 as const,
+    ...extra,
+  });
+
+  it("keeps the files an interrupted run finished, so the next run only does the rest", async () => {
+    const total = INDEX_CHECKPOINT_FILES + 5;
+    await writeFiles(projectDir, total, "one");
+    await ensureProjectIndexed(inc(new IncrementalSpyKB()));
+
+    await writeFiles(projectDir, total, "two changed");
+
+    // Dies at the START of the second batch: batch 1 is embedded and checkpointed.
+    const dying = new DyingIncrementalKB(2);
+    await expect(ensureProjectIndexed(inc(dying))).rejects.toThrow("session ended mid-sync");
+    expect(dying.reindexed).toHaveLength(INDEX_CHECKPOINT_FILES);
+
+    // The rerun re-embeds ONLY what the dead run never got to. Before
+    // checkpointing this was all `total` again, every session, forever.
+    const resumed = new IncrementalSpyKB();
+    const r = await ensureProjectIndexed(inc(resumed));
+    expect(r.action).toBe("synced");
+    expect(r.updated).toBe(5);
+    expect(resumed.reindexed).toHaveLength(5);
+
+    // And once it completes, nothing is left pending.
+    const after = new IncrementalSpyKB();
+    expect((await ensureProjectIndexed(inc(after))).action).toBe("skipped");
+    expect(after.reindexed).toStrictEqual([]);
+  });
+
+  it("checkpoints deletions before spending anything on embedding", async () => {
+    await writeFiles(projectDir, 3, "one");
+    await ensureProjectIndexed(inc(new IncrementalSpyKB()));
+    // One file deleted, the others edited — so the run has both kinds of work.
+    await rm(path.join(projectDir, "f000.txt"));
+    for (const name of ["f001.txt", "f002.txt"]) {
+      const p = path.join(projectDir, name);
+      await writeFile(p, "two changed", "utf8");
+      await utimes(p, new Date(3000), new Date(3000));
+    }
+
+    // Dies on the FIRST embed batch — only the removal can have been recorded.
+    const dying = new DyingIncrementalKB(1);
+    await expect(ensureProjectIndexed(inc(dying))).rejects.toThrow();
+    expect(dying.removedPaths).toStrictEqual(["f000.txt"]);
+
+    const resumed = new IncrementalSpyKB();
+    const r = await ensureProjectIndexed(inc(resumed));
+    expect(r.action).toBe("synced");
+    expect(resumed.removedPaths).toStrictEqual([]); // the delete is not redone
+  });
+});
+
+describe("ensureProjectIndexed defers past the auto-index cap (R11.2)", () => {
+  const inc = (kb: KnowledgeBase, extra: Partial<EnsureIndexedOptions> = {}) => ({
+    ...base(kb, projectDir),
+    embedMode: "lexical" as const,
+    tier: 2 as const,
+    ...extra,
+  });
+
+  it("embeds nothing and says how to sync when more files changed than the cap", async () => {
+    await writeFiles(projectDir, 3, "one");
+    await ensureProjectIndexed(inc(new IncrementalSpyKB()));
+    await writeFiles(projectDir, 3, "two changed");
+
+    const kb = new IncrementalSpyKB();
+    const logs: string[] = [];
+    const r = await ensureProjectIndexed(
+      inc(kb, { maxAutoFiles: 2, log: (m: string) => logs.push(m) }),
+    );
+
+    expect(r.action).toBe("deferred");
+    expect(r.updated).toBe(3);
+    expect(kb.reindexed).toStrictEqual([]);
+    expect(logs.join("\n")).toContain("golem index");
+
+    // Deferred, not lost: the explicit (uncapped) run still has all 3 to do.
+    const explicit = new IncrementalSpyKB();
+    const r2 = await ensureProjectIndexed(inc(explicit));
+    expect(r2.action).toBe("synced");
+    expect(explicit.reindexed).toHaveLength(3);
+  });
+
+  it("syncs normally at or below the cap", async () => {
+    await writeFiles(projectDir, 2, "one");
+    await ensureProjectIndexed(inc(new IncrementalSpyKB()));
+    await writeFiles(projectDir, 2, "two changed");
+
+    const kb = new IncrementalSpyKB();
+    const r = await ensureProjectIndexed(inc(kb, { maxAutoFiles: 2 }));
+    expect(r.action).toBe("synced");
+    expect(kb.reindexed).toHaveLength(2);
+  });
+
+  it("never blocks the first-run build — an unindexed project has no search at all", async () => {
+    await writeFiles(projectDir, 5, "one");
+    const kb = new SpyKB();
+    const r = await ensureProjectIndexed(inc(kb, { maxAutoFiles: 1 }));
+    expect(r.action).toBe("indexed");
+    expect(kb.ingested).toStrictEqual([projectDir]);
   });
 });

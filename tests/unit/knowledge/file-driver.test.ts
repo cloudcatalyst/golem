@@ -54,6 +54,34 @@ describe("canonicalProjectId", () => {
     expect(canonicalProjectId("proj")).toBe("proj");
     expect(canonicalProjectId("")).toBe("");
   });
+
+  it("folds forward slashes so `d:/repo` and `D:\\repo` are one collection", () => {
+    expect(canonicalProjectId("d:/Personar/repo")).toBe("D:\\Personar\\repo");
+    expect(collectionDir("/base", "d:/Personar/repo")).toBe(
+      collectionDir("/base", "D:\\Personar\\repo"),
+    );
+  });
+
+  it("drops a trailing separator so `D:\\repo\\` is the same collection as `D:\\repo`", () => {
+    expect(canonicalProjectId("D:\\Personar\\repo\\")).toBe("D:\\Personar\\repo");
+    expect(canonicalProjectId("d:/Personar/repo/")).toBe("D:\\Personar\\repo");
+    expect(collectionDir("/base", "D:\\Personar\\repo\\")).toBe(
+      collectionDir("/base", "D:\\Personar\\repo"),
+    );
+  });
+
+  it("never trims the root away (a drive root is not the drive-relative path)", () => {
+    expect(canonicalProjectId("d:\\")).toBe("D:\\");
+    expect(canonicalProjectId("d:\\\\")).toBe("D:\\");
+    expect(canonicalProjectId("d:/")).toBe("D:\\");
+    expect(canonicalProjectId("d:")).toBe("D:");
+    expect(canonicalProjectId("D:\\")).not.toBe(canonicalProjectId("D:"));
+  });
+
+  it("leaves backslashes in POSIX ids alone (a legal filename character there)", () => {
+    expect(canonicalProjectId("/home/user/we\\ird")).toBe("/home/user/we\\ird");
+    expect(canonicalProjectId("repo/")).toBe("repo/");
+  });
   it("only rewrites the drive letter, never the rest of the path's case", () => {
     expect(canonicalProjectId("d:\\Foo\\BarBaz")).toBe("D:\\Foo\\BarBaz");
   });
