@@ -43,8 +43,8 @@
         "title": "Golem: Refresh"
       },
       {
-        "command": "golem.setSlider",
-        "title": "Golem: Set Slider Level"
+        "command": "golem.setCompression",
+        "title": "Golem: Set Compression Level"
       },
       {
         "command": "golem.setAccount",

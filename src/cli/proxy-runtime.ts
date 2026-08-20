@@ -15,11 +15,11 @@
 
 import type { HeadroomSidecar } from "../compression/headroom-adapter.js";
 import { NativeLosslessCompression } from "../compression/index.js";
-import { dialsFromSettings, type GolemSettings, policyFromSettings } from "../config/index.js";
+import { type GolemSettings, loadConfig, policyFromSettings } from "../config/index.js";
 import type { InferenceService } from "../interfaces/inference.js";
-import { SliderLevel, sliderPolicyForLevel } from "../interfaces/policy.js";
+import { CompressionLevel, type PipelinePolicy, policyFor } from "../interfaces/policy.js";
 import { contentHashIndex } from "../knowledge/web-cache.js";
-import type { SliderStore } from "../mcp/slider-store.js";
+
 import { createGolemPipeline } from "../pipeline/index.js";
 import { listTargets, type UpstreamProvider } from "../providers/index.js";
 import { GolemProxy } from "../proxy/index.js";
@@ -34,14 +34,21 @@ import { buildUpstreamWiring, resolveProxyUpstream } from "./proxy-build/upstrea
 import { createRouteResolver, type VisionLookup } from "./route-resolver.js";
 
 /**
- * The bypass shim's fixed policy (Decision 56): slider level 1 — redaction ON,
- * lossless, brevity `off`. `sliderPolicyForLevel`'s defaults already mean exactly
+ * The bypass shim's fixed policy (Decision 56): compression 1 — redaction ON,
+ * lossless, brevity `off`. `policyFor`'s defaults already mean exactly
  * this (`brevity` defaults to `off`, `compression` tracks the level), so the shim
  * needs no new dial and no frozen-contract change; it is one pinned policy value.
  *
- * Frozen at module scope precisely so it cannot be reached by the live slider.
+ * Frozen at module scope precisely so no dial can reach it.
  */
-const SHIM_POLICY = sliderPolicyForLevel(SliderLevel.Lossless);
+const SHIM_POLICY = policyFor(CompressionLevel.Lossless);
+
+/**
+ * R11.1 — how long a resolved dial policy is reused before the settings are
+ * re-read. Short enough that `golem compression 2` feels immediate; long enough
+ * that a busy proxy does not load config once per request.
+ */
+const DIAL_RELOAD_TTL_MS = 1_000;
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
@@ -65,11 +72,26 @@ export interface ProxyBuild {
 
 export interface BuildProxyOptions {
   /**
+   * R11.1 — re-read the two dials from settings on every request (throttled by
+   * `DIAL_RELOAD_TTL_MS`), so `golem compression 2` applies without a proxy
+   * restart.
+   *
+   * Opt-in, and the daemon is the caller that opts in: it loaded its settings
+   * from disk, so re-reading them is the same question asked again. A caller that
+   * BUILT its settings — a test with `overrides`, an embedder with injected
+   * values — must keep the settings it passed, so the default is off.
+   *
+   * The retired slider had this liveness (via a JSON store the `level` MCP tool
+   * wrote) while a pinned dial did not; losing it with the slider would have made
+   * the replacement worse than the thing it replaced.
+   */
+  readonly reloadDials?: boolean;
+  /**
    * When present, the level is re-read from this store on EVERY request
    * instead of frozen at construction time — makes `level` /
    * `golem slider` double as the live per-task toggle (Decision 25/30).
    */
-  readonly sliderStore?: SliderStore;
+
   /**
    * R2.3 (spec Decision 24 sub-mode 2 / Decision 33): local inference
    * service, used ONLY to select the SEMANTIC embedder for the local-answer
@@ -138,23 +160,55 @@ export function buildProxyFromSettings(
     settings,
     build,
   );
-  const { sliderStore } = build;
-  // Shared with onResponseUsage below so a usage sample is tagged with the
-  // SAME level-resolution logic the pipeline used for this request's gross
-  // savings (R1.1). Re-read rather than threaded through per-request, so
-  // there is a (rare, documented) race if the level changes between a
-  // request and its response — acceptable for a batch/alternating A/B.
+  // Shared with onResponseUsage below so a usage sample is tagged with the SAME
+  // policy the pipeline used for this request's gross savings (R1.1).
+  //
+  // R11.1 — the dials are re-read LIVE, so `golem compression 2` takes effect on
+  // the next request rather than the next proxy start.
+  //
+  // The retired slider had this property and the dials did not: a `SliderStore`
+  // read settings.local.json on every request so the (now deleted) `level` MCP
+  // tool could change the level live, while a PINNED dial needed a restart. Losing
+  // it along with the slider would have made the replacement worse than the thing
+  // it replaced, so the reload now covers both dials — and does it through the
+  // config loader, which means env vars and every settings layer are honoured, not
+  // just the one file the old store happened to read.
+  //
+  // Cached for {@link DIAL_RELOAD_TTL_MS} because this runs on EVERY request:
+  // one config load per second at most, and in the common case a single clock
+  // comparison. Fail-safe — a read that throws keeps the policy built at startup
+  // rather than dropping to a default, because silently compressing less (or
+  // more) than the user asked for is exactly the class of misreport this project
+  // keeps closing.
+  let cachedPolicy: { readonly at: number; readonly policy: PipelinePolicy } | null = null;
   const resolvePolicy = async () => {
-    // Decision 56: pinned, and deliberately ignores the live slider store — a
-    // shim that tracked the slider could be moved to level 0 (redaction off)
-    // while presenting itself as "stopped".
+    // Decision 56: pinned. The shim runs redaction and nothing else, whatever
+    // the dials say.
     if (build.shim === true) return SHIM_POLICY;
-    if (sliderStore === undefined) return policyFromSettings(settings);
-    const level = await sliderStore.get();
-    // Decision 52: the runtime slider store owns the LEVEL only; the two dial
-    // pins still come from settings, so a pinned brevity/compression level
-    // survives a `golem slider` change (a pin wins and sticks).
-    return sliderPolicyForLevel(level, dialsFromSettings(settings));
+    // OPT-IN (see `reloadDials`): a caller that handed us `settings` gets exactly
+    // those settings honoured, because it may have built them with overrides or
+    // injected values that are not on disk at all. Re-reading unconditionally
+    // silently discarded them — caught by the R2.2 wiring test, which passes
+    // `overrides: { compression: { level: "2" } }` and would otherwise have been
+    // served the file's default.
+    if (build.reloadDials !== true) return policyFromSettings(settings);
+    const now = Date.now();
+    if (cachedPolicy !== null && now - cachedPolicy.at < DIAL_RELOAD_TTL_MS) {
+      return cachedPolicy.policy;
+    }
+    let policy: PipelinePolicy;
+    try {
+      const fresh = await loadConfig({ projectDir: dir });
+      policy = policyFromSettings(fresh.settings);
+    } catch {
+      // Fail-safe: keep the policy we were built with rather than dropping to a
+      // default. Compressing less (or more) than the user asked for because a
+      // config read blipped is exactly the class of misreport this project keeps
+      // closing.
+      policy = policyFromSettings(settings);
+    }
+    cachedPolicy = { at: now, policy };
+    return policy;
   };
   // R2.6 (verification-notes §58/§59): opt-in, static per-run — see the
   // option's doc comment on GolemPipelineOptions.forceSemanticOnCaching.
@@ -195,6 +249,14 @@ export function buildProxyFromSettings(
   });
   const proxy = new GolemProxy({
     upstreamBaseUrl: upstream.baseUrl,
+    // R11.1 / ADR-0004 — `proxy.bypass_all` is the explicit home for what slider
+    // level 0 used to mean: forward everything byte-faithfully, redaction
+    // included in what is skipped. It lands here, on the proxy's own pipeline
+    // switch, rather than as a dial value the policy table could select — which
+    // is what makes "no dial can disable redaction" true of the TYPE and not just
+    // of the settings schema. The shim never honours it: the shim's whole job is
+    // to keep redacting while the pipeline is off (Decision 56).
+    ...(settings.proxy.bypass_all && build.shim !== true ? { pipelineEnabled: false } : {}),
     connectTimeoutMs: settings.proxy.connect_timeout_ms,
     headersTimeoutMs: settings.proxy.request_timeout_ms,
     bodyTimeoutMs: settings.proxy.request_timeout_ms,

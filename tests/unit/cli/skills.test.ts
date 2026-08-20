@@ -123,7 +123,8 @@ describe("footgun-guard skills (upstream + park)", () => {
 describe("P0 skill registry", () => {
   it("registers every expected skill under a stable name", () => {
     for (const name of [
-      "slider",
+      // R11.1: was "slider" — retired with the control it named (ADR-0004).
+      "compression",
       "stats",
       "expand",
       "bypass",

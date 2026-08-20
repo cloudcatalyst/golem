@@ -105,7 +105,7 @@ describe("golem init", () => {
     const golemSettings = await readJson(".golem/settings.json");
     expect(golemSettings).toStrictEqual({});
     const golemLocal = await readJson(".golem/settings.local.json");
-    expect(golemLocal).toStrictEqual({ slider: { level: 1 }, proxy: { port } });
+    expect(golemLocal).toStrictEqual({ compression: { level: "1" }, proxy: { port } });
 
     // Status line (21c) + blocked-state event hooks (21b) are installed.
     const cs = await readJson(CLAUDE_TARGET);

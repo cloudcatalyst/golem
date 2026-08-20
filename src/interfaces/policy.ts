@@ -1,70 +1,96 @@
 /**
- * SliderPolicy — FROZEN CONTRACT (IMPLEMENTATION_PLAN §2.4).
+ * PipelinePolicy — FROZEN CONTRACT (IMPLEMENTATION_PLAN §2.4).
  *
- * Maps the global quality/savings slider (0–3) to per-stage configuration.
- * Changing anything here requires updating tests/contract/policy.contract.test.ts
- * and flagging every workstream in the PR description (CLAUDE.md hard rule).
+ * Maps the compression dial to per-stage configuration. Changing anything here
+ * requires updating tests/contract/policy.contract.test.ts and flagging every
+ * workstream in the PR description (CLAUDE.md hard rule).
+ *
+ * **R11.1 / ADR-0004 retired the slider.** There is no longer a global 0–3
+ * "quality/savings" level that presets these dials: `compression.level` and
+ * `brevity.level` are set directly, because a preset over two dials meant two
+ * controls described one thing and every surface had to render both or mislead.
+ * The `auto` state and the preset table went with it.
  */
 
 /**
- * Global quality/savings level (spec §4, simplified to four levels by
- * Decision 30, 2026-07-11):
+ * How much of the request pipeline runs.
  *
- * - 0 `passthrough` — Golem does NOTHING, not even redaction (Decision 30, USER
- *                 decision): a deliberate, byte-faithful full bypass. The ONLY
- *                 level where the redaction hard rule does not apply. Never the
- *                 default; surfaced loudly wherever it is active because secrets
- *                 reach the upstream raw.
- * - 1 `lossless`  — redaction + lossless dedup/compaction/cache-align. Byte-faithful.
- * - 2 `balanced`  — + lossy semantic compression (stale-turn drop) + semantic cache.
- * - 3 `aggressive`— + max semantic + local drafts + local-first answers (opt-in).
+ * - `off` — redaction ONLY. Nothing else touches the request.
+ * - `1` — + lossless dedup/compaction/cache-align. Byte-faithful.
+ * - `2` — + lossy semantic compression (stale-turn drop) + semantic cache.
+ * - `3` — + max semantic compression + loose semantic cache.
  *
- * New-table design vs the old 0–5 scale: the new table folds old 1+2 into
- * `lossless` (they were identical in the live path — `toolResultCache` was
- * never wired) and old 4+5 into `aggressive` (they differed only by
- * `localOnlyAnswers`, itself gated by `local_only_opt_in`).
+ * **There is deliberately no level that disables redaction** (ADR-0004). The old
+ * scale's level 0 was a full bypass, redaction included, so one integer in a
+ * settings file could switch redaction off — and `MIN_ACTIVE_COMPRESSION_LEVEL`
+ * existed only to stop a *pinned* dial doing the same thing by accident. That
+ * bypass now lives in `proxy.bypass_all`, an explicit CLI-only setting, which
+ * short-circuits before this table is ever consulted. Every row below therefore
+ * has `redaction: true`, which makes "a dial turned redaction off" not merely
+ * guarded against but unrepresentable.
  *
- * On-disk MIGRATION is necessarily clamp-based, not a lossless remap: old and
- * new scales share integers with different meanings (old 3 = balanced, new 3 =
- * aggressive), and {@link migrateSliderLevel} runs on every read, so it MUST be
- * idempotent. It therefore takes 0–3 at face value and only clamps the
- * unambiguously-legacy 4/5 down to 3. The two real configs migrate correctly
- * (default 1 → 1; a dogfooding 5 → 3); a stored old 2/3 adopts the new meaning
- * of that number (re-set the slider if that matters).
+ * Levels 2 and 3 are still gated OFF on a prompt-caching upstream (Decision 31),
+ * so the level that RAN can differ from the level that was SET — see
+ * `resolveEffectiveCompression` (§103). That discrepancy is real and stays
+ * visible; retiring the slider removed the needless one.
  */
-export type SliderLevel = 0 | 1 | 2 | 3;
+export type CompressionLevel = "off" | 1 | 2 | 3;
 
-export const SliderLevel = {
-  Passthrough: 0,
+export const CompressionLevel = {
+  Off: "off",
   Lossless: 1,
   Balanced: 2,
   Aggressive: 3,
-} as const satisfies Record<string, SliderLevel>;
+} as const satisfies Record<string, CompressionLevel>;
 
-/** Highest valid slider level. */
-export const MAX_SLIDER_LEVEL: SliderLevel = 3;
+/** Every compression level, weakest first — the display/CLI ordering. */
+export const COMPRESSION_LEVELS: readonly CompressionLevel[] = Object.freeze([
+  "off",
+  1,
+  2,
+  3,
+] as const);
 
-/**
- * Clamp any value onto the current 0–3 scale (Decision 30). Values 0–3 pass
- * through unchanged (so this is idempotent and safe on every read); legacy 4/5
- * — impossible on the new scale — clamp to 3 (aggressive); out-of-range/junk
- * clamps into range rather than throwing, so a stale settings number never
- * crashes the loader.
- */
-export function migrateSliderLevel(value: number): SliderLevel {
-  const n = Math.round(value);
-  if (n <= 0) return 0;
-  if (n >= 3) return 3; // 3 (aggressive) and legacy 4/5 all resolve to the top
-  return n as SliderLevel; // 1 or 2, unchanged
+/** The human name for a compression level, as every surface spells it. */
+const COMPRESSION_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  off: "off",
+  1: "lossless",
+  2: "balanced",
+  3: "aggressive",
+});
+
+export function compressionName(level: CompressionLevel): string {
+  return COMPRESSION_NAMES[String(level)] ?? String(level);
 }
 
 /**
- * Output-side brevity level (Decision 52). Distinct in kind from every other
- * field here: the compression stages transform the request payload, whereas
- * brevity appends a fixed directive to the `system` block and the MODEL complies
- * at generation time. It therefore saves **output** tokens and costs a small
- * number of input tokens — the inverse of Decision 23's economics, which is the
- * whole reason it exists (verification-notes §87).
+ * Coerce a stored/typed-in value onto the current scale. Runs on every read, so
+ * it MUST be idempotent.
+ *
+ * R11.1: `0` no longer means "bypass everything" — that moved to
+ * `proxy.bypass_all` — so a stored 0 resolves to `off` (redaction only), which
+ * is the safe half of what it used to mean. The migration in
+ * `src/config/migrations.ts` is what turns a genuine level-0 install into
+ * `bypass_all`, once, with the change surfaced; this function is the last-resort
+ * clamp for anything that reaches the loader unmigrated, and it fails toward
+ * MORE protection rather than less. Legacy 4/5 clamp to 3 as they always did.
+ */
+export function coerceCompressionLevel(value: unknown): CompressionLevel {
+  if (value === "off") return "off";
+  const n = typeof value === "number" ? Math.round(value) : Number.parseInt(String(value), 10);
+  if (!Number.isFinite(n)) return 1;
+  if (n <= 0) return "off";
+  if (n >= 3) return 3;
+  return n as CompressionLevel;
+}
+
+/**
+ * Output-side brevity level (Decision 52). Distinct in kind from compression:
+ * the compression stages transform the request payload, whereas brevity appends
+ * a fixed directive to the `system` block and the MODEL complies at generation
+ * time. It therefore saves **output** tokens and costs a small number of input
+ * tokens — the inverse of Decision 23's economics, which is the whole reason it
+ * exists (verification-notes §87).
  *
  * `wenyan` (Caveman's classical-Chinese level) is deliberately absent: it
  * changes the response language, which breaks readability and any downstream
@@ -87,86 +113,19 @@ export const BREVITY_LEVELS: readonly BrevityLevel[] = Object.freeze([
   "ultra",
 ] as const);
 
-/**
- * A dial that either follows the slider preset (`"auto"`) or is pinned to an
- * explicit value (Decision 52, USER DECISION: **a pin wins and sticks** — the
- * slider stops driving a dial once it is pinned, until it is set back to
- * `"auto"`). Surfaces must render which of the two is in force; a pinned dial
- * that silently looked like a preset would be worse than no pin at all.
- */
-export type Pinned<T> = "auto" | T;
-export type BrevityDial = Pinned<BrevityLevel>;
-export type CompressionDial = Pinned<SliderLevel>;
-
-/**
- * Slider level → default brevity, the "sensible defaults" half of Decision 52.
- *
- * Brevity is **off at levels 0 and 1**, and that is a USER DECISION with a
- * reason worth keeping: level 1 is sold as *semantics-preserving*. Compression
- * at level 1 changes bytes without changing meaning; a brevity directive changes
- * what the model *says*, which every user notices immediately. The default
- * install must never start answering in fragments. `ultra` is never a preset —
- * it is reachable only by an explicit pin.
- */
-const BREVITY_PRESET: Readonly<Record<SliderLevel, BrevityLevel>> = Object.freeze({
-  0: "off", // passthrough: nothing runs at all (Decision 30)
-  1: "off", // lossless: semantics-preserving, so output style is untouched
-  2: "lite",
-  3: "full",
-});
-
-export function brevityPresetForLevel(level: SliderLevel): BrevityLevel {
-  return BREVITY_PRESET[level];
-}
-
-/**
- * Lowest compression level the dial may select while the slider is active.
- *
- * This is a **safety clamp, not a preference**: `LEVEL_TABLE[0]` is the
- * Decision-30 passthrough, the one place where `redaction` is false. If a pinned
- * `compression.level` of 0 were honoured at slider ≥1 it would silently disable
- * redaction — a CLAUDE.md hard-rule violation reachable from a config file. So a
- * pinned 0 clamps to 1, and redaction-off remains reachable **only** by moving
- * the slider itself to 0, where it is surfaced loudly.
- */
-export const MIN_ACTIVE_COMPRESSION_LEVEL: SliderLevel = 1;
-
-/**
- * Effective compression level: which {@link StageConfig} row actually runs.
- *
- * Passthrough is absolute — at slider 0 no pin can re-enable a stage, because
- * level 0 means "Golem does nothing" (Decision 30) and a dial that could
- * partially undo that would make the bypass a lie.
- */
-export function resolveCompressionLevel(
-  sliderLevel: SliderLevel,
-  pin: CompressionDial = "auto",
-): SliderLevel {
-  if (sliderLevel === SliderLevel.Passthrough) return SliderLevel.Passthrough;
-  if (pin === "auto") return sliderLevel;
-  return pin < MIN_ACTIVE_COMPRESSION_LEVEL ? MIN_ACTIVE_COMPRESSION_LEVEL : pin;
-}
-
-/** Effective brevity level. Passthrough forces `off` for the same reason. */
-export function resolveBrevity(sliderLevel: SliderLevel, pin: BrevityDial = "auto"): BrevityLevel {
-  if (sliderLevel === SliderLevel.Passthrough) return BrevityLevel.Off;
-  return pin === "auto" ? brevityPresetForLevel(sliderLevel) : pin;
-}
-
-/** How aggressively local models summarize context (slider >= 3). */
+/** How aggressively local models summarize context (compression level 3). */
 export type SemanticCompression = "off" | "stale_turns" | "low_relevance" | "aggressive";
 
 /** Semantic query-cache threshold mode. Never applies to tool-use requests (spec §8). */
 export type SemanticCache = "off" | "strict" | "normal" | "loose";
 
 /**
- * Per-stage switches derived from a slider level.
+ * Per-stage switches derived from a compression level.
  *
- * `redaction` is true at every level EXCEPT level 0 ("passthrough"), and when
- * true it always runs first — before any content is transformed, stored, or
- * forwarded (CLAUDE.md hard rule). Level 0 is the one deliberate exception
- * (Decision 30, USER decision): a full bypass where nothing — including
- * redaction — runs.
+ * `redaction` is true in EVERY row, and when true it always runs first — before
+ * any content is transformed, stored, or forwarded (CLAUDE.md hard rule). The
+ * one deliberate exception to redaction is `proxy.bypass_all` (ADR-0004), which
+ * bypasses the pipeline entirely and never reaches this table.
  */
 export interface StageConfig {
   readonly redaction: boolean;
@@ -176,11 +135,12 @@ export interface StageConfig {
   readonly semanticCache: SemanticCache;
 }
 
-const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
-  // 0 "passthrough": deliberate byte-faithful full bypass — redaction included
-  // in what is bypassed (Decision 30).
-  0: Object.freeze({
-    redaction: false,
+const LEVEL_TABLE: Readonly<Record<string, StageConfig>> = Object.freeze({
+  // "off": redaction and nothing else. Nameable for the first time in R11.1 —
+  // before that it existed only as an accident of the Decision 56 bypass shim,
+  // reachable by stopping the proxy rather than by asking for it.
+  off: Object.freeze({
+    redaction: true,
     losslessCompression: false,
     toolResultCache: false,
     semanticCompression: "off",
@@ -204,7 +164,7 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
   } as const),
   // 3 "aggressive": + max semantic compression + loose semantic cache. Purely a
   // Headroom-aggressiveness dial (Decision 31) — the local model is invoked only
-  // via the explicit `coder` MCP tool, never auto-triggered by the slider.
+  // via the explicit `coder` MCP tool, never auto-triggered by a dial.
   3: Object.freeze({
     redaction: true,
     losslessCompression: true,
@@ -215,56 +175,64 @@ const LEVEL_TABLE: Readonly<Record<SliderLevel, StageConfig>> = Object.freeze({
 });
 
 /**
- * A resolved policy for one request: level + stages + brevity + per-capability
- * overrides.
+ * The numeric rank of a compression level, for telemetry bucketing and ordering.
  *
- * Since Decision 52 the slider is a **preset over two independent dials**, so
- * three level-ish fields coexist and mean different things:
+ * `off` ranks 0. That collides with a PRE-R11.1 telemetry row, where 0 meant the
+ * old level-0 full bypass (no redaction either) — deliberately, and only here:
+ * for the savings metric these rows carry, both mean "no compression ran", so the
+ * bucket's meaning is stable even though the configuration behind it changed. No
+ * stored row is rewritten or relabelled (ADR-0004); `golem stats` renders rank 0
+ * as "off".
+ */
+export function compressionRank(level: CompressionLevel): number {
+  return level === "off" ? 0 : level;
+}
+
+/** The stage row for a compression level. */
+export function stagesForCompression(level: CompressionLevel): StageConfig {
+  return LEVEL_TABLE[String(level)] as StageConfig;
+}
+
+/**
+ * A resolved policy for one request: the two dials plus the stage row they
+ * select, and per-capability overrides.
  *
- * - {@link level} — the *slider* level. The request's identity for telemetry
- *   bucketing and for every display, unchanged from before.
- * - {@link compressionLevel} — the *effective* compression level, which selects
- *   {@link stages}. Equals `level` unless `compression.level` is pinned.
- * - {@link brevity} — the effective output-side brevity level.
+ * R11.1 removed the third level-ish field. There used to be `level` (the slider)
+ * AND `compressionLevel` (what actually ran), which differed whenever a dial was
+ * pinned — two numbers on one object, one of which every display had to know not
+ * to trust. `compression` is now the only one.
  *
  * `overrides` carries per-capability overrides from settings (snake_case keys,
  * e.g. `{"semantic_cache": "off"}`); interpretation belongs to the consuming
- * stage, not this contract. The two dials are deliberately NOT overrides: they
- * are first-class, typed, and every stage/display must see them.
+ * stage, not this contract. The dials are deliberately NOT overrides: they are
+ * first-class, typed, and every stage/display must see them.
  */
-export interface SliderPolicy {
-  readonly level: SliderLevel;
-  readonly compressionLevel: SliderLevel;
+export interface PipelinePolicy {
+  readonly compression: CompressionLevel;
   readonly brevity: BrevityLevel;
   readonly stages: StageConfig;
   readonly overrides: Readonly<Record<string, unknown>>;
 }
 
 /**
- * Resolve a policy from the slider level plus optional per-dial pins.
+ * Resolve a policy from the two dials.
  *
- * **`brevity` defaults to `"off"`, NOT `"auto"`.** Two reasons, both deliberate:
- * a caller that predates Decision 52 must not silently acquire a new
- * output-mutating behaviour just by omitting an argument; and Decision 52 ships
- * the dial off until the telemetry rollup proves it pays. `"auto"` is the value
- * that opts into the preset table, and the settings layer passes it through
- * explicitly. `compression` defaults to `"auto"` because tracking the slider IS
- * its pre-Decision-52 behaviour.
+ * Both default to `off` — the least surprising thing a caller that omits an
+ * argument can get, and for brevity the same reasoning Decision 52 gave: a
+ * caller must not silently acquire an output-mutating behaviour by leaving an
+ * argument out.
  */
-export function sliderPolicyForLevel(
-  level: SliderLevel,
+export function policyFor(
+  compression: CompressionLevel = "off",
   opts: {
     readonly overrides?: Readonly<Record<string, unknown>>;
-    readonly brevity?: BrevityDial;
-    readonly compression?: CompressionDial;
+    readonly brevity?: BrevityLevel;
   } = {},
-): SliderPolicy {
-  const compressionLevel = resolveCompressionLevel(level, opts.compression ?? "auto");
+): PipelinePolicy {
   return Object.freeze({
-    level,
-    compressionLevel,
-    brevity: resolveBrevity(level, opts.brevity ?? BrevityLevel.Off),
-    stages: LEVEL_TABLE[compressionLevel],
+    compression,
+    brevity: opts.brevity ?? BrevityLevel.Off,
+    stages: stagesForCompression(compression),
     overrides: Object.freeze({ ...(opts.overrides ?? {}) }),
   });
 }

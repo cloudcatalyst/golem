@@ -10,14 +10,14 @@
 import { describe, expect, it } from "vitest";
 import { NativeLosslessCompression } from "../../../src/compression/index.js";
 import { LocalDirBlobStore } from "../../../src/compression/local-blob-store.js";
-import { type SliderLevel, sliderPolicyForLevel } from "../../../src/interfaces/policy.js";
+import { type CompressionLevel, policyFor } from "../../../src/interfaces/policy.js";
 import { createGolemPipeline, type PipelineEvent } from "../../../src/pipeline/index.js";
 import type { ProxyRequest } from "../../../src/proxy/types.js";
 
-function makePipeline(level: SliderLevel, onEvent?: (e: PipelineEvent) => void) {
+function makePipeline(level: CompressionLevel, onEvent?: (e: PipelineEvent) => void) {
   return createGolemPipeline({
     compression: new NativeLosslessCompression(new LocalDirBlobStore("/nonexistent-ccr")),
-    policy: () => sliderPolicyForLevel(level),
+    policy: () => policyFor(level),
     projectId: "proj",
     ...(onEvent !== undefined ? { onEvent } : {}),
   });
@@ -116,12 +116,20 @@ describe("pipeline cache-prefix classification (R8.1)", () => {
     expect(events.map((e) => e.cachePrefix)).toEqual(["first", "first", "append"]);
   });
 
-  it("emits no verdict at level 0, where nothing runs at all (Decision 30)", async () => {
+  it("emits no verdict at compression `off` when nothing changed", async () => {
     const events: PipelineEvent[] = [];
-    const pipeline = makePipeline(0, (e) => events.push(e));
-    await pipeline.process(request(convo(TURN_1)));
-    // Level 0 is a full bypass: no stages, no event, and so no verdict.
+    const pipeline = makePipeline("off", (e) => events.push(e));
+    const req = request(convo(TURN_1));
+    const out = await pipeline.process(req);
+    // R11.1: the REASON changed even though the assertion did not. This used to
+    // hold because level 0 was a full bypass where no stage ran at all. At `off`
+    // redaction DOES run (see the policy contract) — it just has nothing to redact
+    // in this fixture, so no stage changed anything and the pipeline takes its
+    // byte-identical path, which emits no event at any level. The full bypass now
+    // lives in `proxy.bypass_all`, where the proxy never calls process() at all
+    // (tests/integration/proxy-bypass-shim.test.ts covers that path).
     expect(events).toHaveLength(0);
+    expect(out).toBe(req);
   });
 
   it("emits no verdict for a byte-faithful request — the coverage limit, stated", async () => {

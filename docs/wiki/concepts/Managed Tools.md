@@ -91,7 +91,7 @@ Two deliberate properties:
 That last point is the reason the surface exists. In this repo
 `compression.headroom_sidecar = true` and `uv` is installed, yet the sidecar has
 **never started**: the lossy semantic stage is its only caller, and that stage is
-gated off on caching upstreams (Decision 31, see [[Slider Levels]]) unless
+gated off on caching upstreams (Decision 31, see [[Compression Levels]]) unless
 `compression.force_semantic_on_caching` is set. A surface that printed "enabled"
 and stopped would have been the dishonest kind.
 
@@ -157,7 +157,7 @@ cannot itself conflict; treat the combination as unverified.
 
 - [[LSP Bridge]] — the R8.6 tier-2 row: spawn the user's own language server, degrade to a no-op
 - [[Compression]] — the Headroom sidecar's only caller, and why it stays idle
-- [[Slider Levels]] — the gate that makes "enabled" not mean "running"
+- [[Compression Levels]] — the gate that makes "enabled" not mean "running"
 - [[Configuration Surfaces]] — where `enabledBy` settings are rendered and written
 - [[Dogfooding Golem]] — the local setup these rows describe
 - [[Architecture]] — where the adapters sit in the pipeline

@@ -30,7 +30,7 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { removeVersionStamp, writeSetting } from "../config/index.js";
-import type { SliderLevel } from "../interfaces/index.js";
+import type { CompressionLevel } from "../interfaces/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
@@ -115,12 +115,12 @@ export interface InitOptions {
   /** Proxy port the base URL should point at (from Golem config; default 4653). */
   readonly proxyPort?: number;
   /**
-   * Slider level to persist on first activation (when `.golem/settings.json`
+   * Compression level to persist on first activation (when `.golem/settings.json`
    * doesn't exist yet). Default 1 (lossless). Lets a level-setting entry point
-   * (e.g. `golem slider <n>`) activate the project at the chosen level instead
+   * (e.g. `golem compression <v>`) activate the project at the chosen level instead
    * of always defaulting to 1 and then immediately overwriting it.
    */
-  readonly initialLevel?: SliderLevel;
+  readonly initialLevel?: CompressionLevel;
   /**
    * Front an Azure AI Foundry resource: wires Claude Code's Foundry env
    * (`CLAUDE_CODE_USE_FOUNDRY` + `ANTHROPIC_FOUNDRY_BASE_URL=<proxy>/anthropic`)
@@ -366,10 +366,10 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   actions.push(...(await installSkills(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
-  // (gitignored). The slider level and per-project proxy port are personal /
+  // (gitignored). The compression level and per-project proxy port are personal /
   // machine-local and transient, so they live in the local file; settings.json
   // stays a stable, content-free "this project uses Golem" marker so the file's
-  // presence still signals init without churning on every slider/port change
+  // presence still signals init without churning on every dial/port change
   // (spec Decision 43).
   if (existingGolem === null) {
     if (!dryRun) await writeJsonObject(golemSettingsPath, {});
@@ -388,15 +388,15 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     actions.push({
       kind: "create",
       path: rel(projectDir, golemLocalPath),
-      detail: `slider.level=${initialLevel}, proxy.port=${port}`,
+      detail: `compression.level=${initialLevel}, proxy.port=${port}`,
     });
     if (!dryRun) {
-      await writeSetting("local", "slider.level", initialLevel, { projectDir });
+      await writeSetting("local", "compression.level", String(initialLevel), { projectDir });
       await writeSetting("local", "proxy.port", port, { projectDir });
     }
   } else if (portAssigned) {
     // Local file exists (e.g. --foundry just created it) but no explicit port yet
-    // — pin the per-project one, and the slider baseline if it's missing too.
+    // — pin the per-project one, and the compression baseline if it's missing too.
     actions.push({
       kind: "modify",
       path: rel(projectDir, golemLocalPath),
@@ -404,8 +404,10 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     });
     if (!dryRun) {
       await writeSetting("local", "proxy.port", port, { projectDir });
-      if ((localBeforeStep4.slider as JsonObject | undefined)?.level === undefined) {
-        await writeSetting("local", "slider.level", options.initialLevel ?? 1, { projectDir });
+      if ((localBeforeStep4.compression as JsonObject | undefined)?.level === undefined) {
+        await writeSetting("local", "compression.level", String(options.initialLevel ?? 1), {
+          projectDir,
+        });
       }
     }
   } else {

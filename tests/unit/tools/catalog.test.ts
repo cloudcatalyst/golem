@@ -16,7 +16,6 @@ const EXPECTED_TOOLS = [
   "expand",
   "fetch",
   "ingest",
-  "level",
   "search",
   "snooze",
   "stats",

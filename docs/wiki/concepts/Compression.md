@@ -15,7 +15,7 @@ upstream, not on the slider setting.
 
 - **Lossless compression + CCR** (dedup, compaction, cache-alignment, and
   content-reference swaps) runs from slider level 1 and is byte-faithful — the
-  model sees the same content, just packed. See [[Slider Levels]].
+  model sees the same content, just packed. See [[Compression Levels]].
 - **Lossy semantic compression** (stale-turn drop, low-relevance pruning) is added
   at levels 2–3. This is where real token savings come from — but **only on
   non-caching upstreams.**
@@ -76,5 +76,5 @@ sequenceDiagram
   end
 ```
 
-See also [[Slider Levels]], [[Redaction Stage]], [[Architecture]], and
+See also [[Compression Levels]], [[Redaction Stage]], [[Architecture]], and
 [[Wiki-First Knowledge]].

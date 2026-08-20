@@ -47,7 +47,7 @@ installed-check.
 **"Passthrough" for the off state**, on both the terminal line and the VS Code
 status bar. It collapses the two "Golem isn't transforming your traffic" cases
 into one label: the proxy is stopped, **or** it's running at slider **level 0**
-(full bypass — see [[Slider Levels]], Decision 30). Both render
+(full bypass — see [[Compression Levels]], Decision 30). Both render
 `Passthrough → [local + ]<upstream>`. Changes from before:
 
 - Dropped the old `proxy off` text and the rule that *hid* the upstream when

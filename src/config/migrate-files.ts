@@ -44,8 +44,11 @@ export interface SettingChange {
    * `renamed` — the file held only the retired key, so it now holds the live one
    * with the same value. `dropped` — the file held both, so the retired one was
    * removed; the loader was already ignoring it (see its shadowed-key branch).
+   * `resolved` — R11.1: a retired key was TRANSFORMED into one or more live keys
+   * whose values were computed from it (the slider becoming its two dials), which
+   * a rename cannot express.
    */
-  readonly action: "renamed" | "dropped";
+  readonly action: "renamed" | "dropped" | "resolved";
 }
 
 /** What happened to one scope's settings file. */
@@ -138,6 +141,121 @@ async function parseFile(file: string): Promise<ParsedFile | null | string> {
   };
 }
 
+/**
+ * R11.1 — resolve a dial still set to the retired `"auto"` when no `slider.level`
+ * is stored. `auto` followed the slider; with none stored it followed the
+ * DEFAULT level (1), so compression becomes `1` and brevity its level-1 preset
+ * (`off`).
+ *
+ * Separate from {@link migrateRetiredSlider} because it is not a transform of a
+ * retired key — it is a retired VALUE of a live key, and unlike a retired key
+ * (which loads with a warning) a retired enum value makes the whole file fail to
+ * load.
+ */
+function migrateLoneAutoDials(next: Record<string, unknown>): readonly SettingChange[] {
+  const changes: SettingChange[] = [];
+  for (const [section, resolved] of [
+    ["compression", "1"],
+    ["brevity", "off"],
+  ] as const) {
+    const value = next[section];
+    if (!isPlainObject(value) || value.level !== "auto") continue;
+    next[section] = { ...value, level: resolved };
+    changes.push({
+      from: `${section}.level = "auto"`,
+      to: `${section}.level = "${resolved}"`,
+      since: "R11.1",
+      action: "resolved",
+    });
+  }
+  return changes;
+}
+
+/**
+ * R11.1 / ADR-0004 — resolve a retired `slider.level` into the two explicit dial
+ * values it was producing, and rewrite the file to say so.
+ *
+ * This is the one migration that TRANSFORMS rather than renames, which is why it
+ * is not a `SETTING_MIGRATIONS` row: one retired key becomes two or three live
+ * ones, with values computed from it. It reproduces the retired resolvers
+ * exactly:
+ *
+ * - `compression.level` — the slider level, unless the file already pins one, in
+ *   which case the pin wins (a pin always won, and must keep winning).
+ * - `brevity.level` — the slider's preset (off at 0–1, `lite` at 2, `full` at 3),
+ *   unless already pinned.
+ * - `slider.level: 0` was a FULL BYPASS including redaction, so it becomes
+ *   `proxy.bypass_all: true` with both dials off. Nothing about such an install
+ *   gets quieter: `bypass_all` is surfaced loudly wherever it is on.
+ *
+ * An `"auto"` dial value in the file means "follow the slider", so it is replaced
+ * by the resolved value rather than treated as a pin.
+ */
+function migrateRetiredSlider(next: Record<string, unknown>): readonly SettingChange[] {
+  const slider = next.slider;
+  if (!isPlainObject(slider) || !Object.hasOwn(slider, "level")) {
+    // No slider — but a dial may still say `"auto"`, which meant "follow the
+    // slider" and is no longer a legal value, so the file would hard-FAIL to load
+    // rather than merely warning. With no slider level stored, what `auto`
+    // followed was the default (1), which is what it resolves to here.
+    //
+    // Found the hard way: this repo's own settings.local.json said
+    // `compression.level: "auto"` with no slider level, and every `golem` command
+    // died on it until the sweep learned this case.
+    return migrateLoneAutoDials(next);
+  }
+  const raw = slider.level;
+  const level = typeof raw === "number" ? Math.round(raw) : Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(level)) return [];
+  // The retired scale clamped 4/5 down to 3 on every read; do the same here so a
+  // legacy file migrates to what it was actually running.
+  const clamped = level <= 0 ? 0 : level >= 3 ? 3 : level;
+
+  const changes: SettingChange[] = [];
+  const setLeaf = (
+    section: string,
+    leaf: string,
+    value: unknown,
+    note: SettingChange["action"],
+  ): void => {
+    const current = next[section];
+    const base = isPlainObject(current) ? current : {};
+    // A real pin (anything but the retired "auto") is the user's decision and wins.
+    const pinned = Object.hasOwn(base, leaf) && base[leaf] !== "auto";
+    if (pinned) return;
+    next[section] = { ...base, [leaf]: value };
+    changes.push({ from: "slider.level", to: `${section}.${leaf}`, since: "R11.1", action: note });
+  };
+
+  if (clamped === 0) {
+    // The full bypass. Both dials go off too, so no surface implies a transform
+    // that the bypass has already skipped.
+    setLeaf("proxy", "bypass_all", true, "resolved");
+    setLeaf("compression", "level", "off", "resolved");
+    setLeaf("brevity", "level", "off", "resolved");
+  } else {
+    setLeaf("compression", "level", String(clamped), "resolved");
+    // The retired BREVITY_PRESET table, inlined: off at 1, lite at 2, full at 3.
+    setLeaf(
+      "brevity",
+      "level",
+      clamped === 1 ? "off" : clamped === 2 ? "lite" : "full",
+      "resolved",
+    );
+  }
+
+  // The retired key goes last, so a crash mid-write cannot lose the level.
+  next.slider = withoutKey(slider, "level");
+  if (Object.keys(next.slider as Record<string, unknown>).length === 0) delete next.slider;
+  changes.push({
+    from: "slider.level",
+    to: "compression.level + brevity.level",
+    since: "R11.1",
+    action: "dropped",
+  });
+  return changes;
+}
+
 /** Apply every migration to a parsed root, returning the new root and what changed. */
 function migrateRoot(root: Record<string, unknown>): {
   readonly root: Record<string, unknown>;
@@ -145,6 +263,10 @@ function migrateRoot(root: Record<string, unknown>): {
 } {
   const next: Record<string, unknown> = { ...root };
   const changes: SettingChange[] = [];
+
+  // R11.1 runs FIRST: it reads `slider.level` and writes the dials, so it must
+  // see the file before any rename touches those sections.
+  changes.push(...migrateRetiredSlider(next));
 
   for (const migration of SETTING_MIGRATIONS) {
     const [section, fromLeaf] = splitDotted(migration.from);

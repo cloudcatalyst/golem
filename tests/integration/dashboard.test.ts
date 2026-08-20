@@ -32,7 +32,7 @@ const STATS: StatsReport = {
 function snapshot(): Promise<DashboardSnapshot> {
   return Promise.resolve({
     project_dir: "/tmp/example-project",
-    slider: { level: 2, name: "balanced" },
+    compression: { level: "2", name: "balanced" },
     stats: STATS,
     generated_at: "2026-07-04T00:00:00.000Z",
   });
@@ -67,7 +67,7 @@ describe("dashboard server", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
     const json = (await res.json()) as DashboardSnapshot;
     expect(json.stats.tokens_saved).toBe(1800);
-    expect(json.slider.level).toBe(2);
+    expect(json.compression.level).toBe("2");
     expect(json.stats.per_stage.dedup?.tokens_saved).toBe(1600);
   });
 
@@ -82,7 +82,7 @@ describe("dashboard server", () => {
       project_dir: "/proj",
       generated_at: "2026-07-16T00:00:00.000Z",
       proxy: { running: true, upstream: "anthropic" },
-      slider: { level: 1, name: "lossless", redaction_off: false },
+      compression: { level: "1", name: "lossless", redaction_off: false },
       local_model: { reachable: null },
       autonomy: { level: "manual" },
       blocked: { waiting: false },
@@ -98,7 +98,7 @@ describe("dashboard server", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("application/json");
     const json = (await res.json()) as SessionStateReport;
-    expect(json.slider.name).toBe("lossless");
+    expect(json.compression.name).toBe("lossless");
     expect(json.storage.webcache_bytes).toBe(4);
   });
 

@@ -130,7 +130,7 @@ The proxy handles *implicit* savings (compression, dedup, caching). MCP handles 
 
 **The layering rule between tools and skills (R9.11, 2026-08-13): skills orchestrate, tools execute — a skill never reimplements a capability an MCP tool already provides.**
 
-Several names appear on both surfaces (`expand` the tool and `/golem/expand`; `stats` and `/golem/stats`; the `level` tool and `/golem/slider`), which invites the question of whether the tools would be better served as skills with packaged scripts. They would not, for four reasons a skill-plus-script structurally cannot answer:
+Several names appear on both surfaces (`expand` the tool and `/golem/expand`; `stats` and `/golem/stats`; and, until ADR-0004 retired both, the `level` tool and `/golem/slider`), which invites the question of whether the tools would be better served as skills with packaged scripts. They would not, for four reasons a skill-plus-script structurally cannot answer:
 
 1. **Portability.** §R6.1 extends the pipeline past Claude Code. MCP tools work in any MCP client; `SKILL.md` is one client's file format. Shelling out to `golem search` from a skill binds a core surface to Claude Code.
 2. **Hook enforcement keys on tool names.** The usage-limit park (Decision 45) denies every tool call outside `PARK_EXEMPT_TOOLS`; the local-coder PreToolUse gate distinguishes `coder` from a hand-written `Write`/`Edit`; the CCR PostToolUse hook emits refs `expand` consumes. A Bash-invoked script is a `Bash` call — every one of those gates would have to parse command lines instead.
@@ -199,23 +199,41 @@ Runtime — **DECIDED (v0.2): Ollama-first behind an OpenAI-compatible interface
 
 ---
 
-## 4. Quality/Savings Slider
+## 4. Compression & Brevity Dials
 
-Global setting **0–3** (simplified from 0–5 by **Decision 30**, 2026-07-11) with per-capability overrides. Every lossy operation declares its slider gate.
+> **Superseded (2026-08-20, [ADR-0004]).** This section described a global
+> **slider** (0–3) that preset two dials. The slider is retired: `compression.level`
+> and `brevity.level` are set directly, and the full bypass — the one setting that
+> disables redaction — is now `proxy.bypass_all`. Decisions 30 and 52 are
+> superseded in that respect; Decision 31's gating below is unchanged and still
+> load-bearing.
+
+`compression.level`, with per-capability overrides. Every lossy operation declares its gate.
 
 | Level | Behavior |
 |---|---|
-| 0 — Passthrough | **Full bypass — nothing runs, redaction INCLUDED** (Decision 30 exception; secrets reach the upstream raw). Not the default; warned loudly. |
-| 1 — Lossless | Redaction + dedup, structural compaction, cache alignment. **Zero quality risk, byte-faithful.** Default. |
-| 2 — Balanced | + tool-result caching + semantic compression of stale context + semantic cache (strict). First lossy tier. |
-| 3 — Aggressive | + max semantic compression, looser semantic cache. |
+| `off` | Redaction ONLY. Nothing else touches the request. Not a bypass. |
+| `1` — Lossless | Redaction + dedup, structural compaction, cache alignment. **Zero quality risk, byte-faithful.** Default. |
+| `2` — Balanced | + tool-result caching + semantic compression of stale context + semantic cache (strict). First lossy tier. |
+| `3` — Aggressive | + max semantic compression, looser semantic cache. |
 
-(Old 1+2 were identical in the live path and merged to 1; old 3 became 2; old 4+5 merged to 3. The slider is a **pure compression-aggressiveness dial** (Decision 31) — the local model is invoked only via the explicit `coder` MCP tool (renamed from `delegate`, Decision 35), never auto-triggered. Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams to preserve prompt-cache prefixes; they engage only on non-caching gateways. A reachable local model makes any level "local + upstream" in the status surfaces.)
+**No level disables redaction** — that is `proxy.bypass_all`, never the default,
+CLI-only (a tool call must not be able to switch redaction off), and surfaced
+loudly wherever it is on. The stage table has no redaction-free row at all, so a
+dial that turned redaction off is not something the code can express (ADR-0004).
+
+`brevity.level` (`off` · `lite` · `full` · `ultra`) is the independent output-side
+dial (Decision 52's other half, which survives): it appends a directive to
+`system` so the model answers more tersely, saving **output** tokens.
+
+(The dial is a **pure compression-aggressiveness dial** (Decision 31) — the local model is invoked only via the explicit `coder` MCP tool (renamed from `delegate`, Decision 35), never auto-triggered. Levels ≥2 are **lossy** and gated OFF on Anthropic-style caching upstreams to preserve prompt-cache prefixes; they engage only on non-caching gateways, so the level that RAN can differ from the level that was SET and every surface says which. A reachable local model makes any level "local + upstream" in the status surfaces.)
+
+[ADR-0004]: decisions/ADR-0004-retire-the-slider.md
 
 **Design rule:** everything lossy is *reversible* — originals retained locally; Claude can request expansion via MCP when it detects it's missing context.
 
 ### Quality guardrails
-- **Eval harness:** replay a recorded task suite at each slider level; score with an LLM judge (Claude, sampled) + task success metrics; publish tokens-saved vs. quality-delta curves.
+- **Eval harness:** replay a recorded task suite at each compression level; score with an LLM judge (Claude, sampled) + task success metrics; publish tokens-saved vs. quality-delta curves.
 - **Canary mode:** N% of requests sent both compressed and raw; responses compared to detect regressions.
 - **Per-request escape hatch:** header/flag `x-golem-bypass: true`.
 
@@ -223,19 +241,19 @@ Global setting **0–3** (simplified from 0–5 by **Decision 30**, 2026-07-11) 
 
 ## 5. Telemetry & UX
 - Dashboard (local web UI): tokens saved/spent, cache hit rates, cost estimate, per-stage savings attribution, per-device utilization, quality-delta from canary runs.
-- CLI: `golem status`, `golem devices`, `golem index <path>`, `golem slider 3`, `golem replay-eval`.
+- CLI: `golem status`, `golem devices`, `golem index <path>`, `golem compression 3`, `golem replay-eval`.
 
 ### 5.1 Claude-style slash commands & configuration (v0.6)
 `golem init` installs Golem commands into Claude Code following its native conventions, so control never requires leaving the session:
 
 | Command | Action |
 |---|---|
-| `/golem/slider <0-3>` | Set quality/savings level (session-scoped; 0–3 per Decision 30) |
+| `/golem/compression <off\|1\|2\|3>` | Set the compression level (ADR-0004; takes effect within a second, no restart) |
 | `/golem/index <path>` | Ingest a directory/file into the knowledge base |
 | `/golem/search <query>` | Explicit federated search (knowledge + memory) |
 | `/golem/stats` | Tokens saved, cache hits, per-stage attribution |
 | `/golem/expand <ref>` | Retrieve an original from the CCR store |
-| `/golem/bypass` | Disable all lossy stages for the next request(s) |
+| `/golem/bypass` | Disable all lossy stages for the next request(s); names `proxy.bypass_all` for a true full bypass |
 | `/golem/devices` | Show local + LAN worker capability/status |
 | `/golem/coder <task>` | Route a subtask to a local model explicitly (renamed from `delegate`, Decision 35) |
 

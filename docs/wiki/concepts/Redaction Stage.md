@@ -35,7 +35,7 @@ so re-redacting redacted text is a no-op.
 
 Redaction is **stage 1 of the pipeline and is never reordered after compression**.
 The single exception is slider level 0 (`passthrough`), a deliberate full bypass
-where nothing runs — see [[Slider Levels]] and [[Architecture]].
+where nothing runs — see [[Compression Levels]] and [[Architecture]].
 
 ```mermaid
 flowchart LR

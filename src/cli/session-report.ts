@@ -8,7 +8,7 @@
  * diverge, so this module is the single documented, zod-described payload every
  * renderer reads:
  *
- *   proxy reachability + upstream identity · slider level (+ redaction-off flag)
+ *   proxy reachability + upstream identity · compression level (+ bypass flag)
  *   · local-model reachability · blocked/waiting flag · cumulative savings +
  *   per-stage attribution · CCR + per-tool usage · on-disk storage sizes.
  *
@@ -21,9 +21,9 @@
 import { z } from "zod";
 import { AUTONOMY_LEVELS, type AutonomyLevel, readAutonomyLevel } from "../autonomy/index.js";
 import { readSessionState } from "../hooks/index.js";
+import { compressionName } from "../interfaces/policy.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
 import { statsSourceForCli } from "./mcp-compression.js";
-import { getSliderInfo } from "./slider.js";
 import { collectStats, type StatsReport } from "./stats.js";
 import { collectGolemState, type GolemState, isBlockedFresh, upstreamLabel } from "./statusline.js";
 import { type GolemStorageSizes, golemStorageSizes } from "./storage-size.js";
@@ -50,12 +50,13 @@ export interface SessionStateReport {
      */
     readonly bypass?: boolean;
   };
-  readonly slider: {
-    readonly level: number;
+  readonly compression: {
+    /** `off | 1 | 2 | 3` (R11.1 / ADR-0004 — the slider's 0–3 scale is retired). */
+    readonly level: string;
     readonly name: string;
     /**
-     * Level 0 is a FULL bypass — redaction is OFF (spec Decision 30). Surfaced
-     * loudly so every renderer can warn, per the CLAUDE.md hard rule.
+     * `proxy.bypass_all` — a FULL bypass, redaction included. Surfaced loudly so
+     * every renderer can warn, per the CLAUDE.md hard rule.
      */
     readonly redaction_off: boolean;
   };
@@ -114,8 +115,9 @@ export const sessionStateReportSchema = z.object({
     upstream: z.string(),
     bypass: z.boolean().optional(),
   }),
-  slider: z.object({
-    level: z.number(),
+  compression: z.object({
+    // R11.1: `off | 1 | 2 | 3` — a string, since the scale is no longer numeric.
+    level: z.string(),
     name: z.string(),
     redaction_off: z.boolean(),
   }),
@@ -156,17 +158,19 @@ export async function collectSessionStateReport(
 ): Promise<SessionStateReport> {
   const nowIso = opts.nowIso ?? new Date().toISOString();
   const collectState = opts.collectState ?? collectGolemState;
-  const [golem, slider, savings, storage, session, autonomyLevel] = await Promise.all([
+  const [golem, savings, storage, session, autonomyLevel] = await Promise.all([
     collectState(dir).catch(() => null),
-    getSliderInfo({ projectDir: dir }).catch(() => null),
     collectSavings(dir),
     golemStorageSizes(dir),
     readSessionState(dir).catch(() => null),
     readAutonomyLevel(dir).catch(() => "manual" as AutonomyLevel),
   ]);
 
-  const level = slider?.level ?? golem?.sliderLevel ?? 1;
-  const name = slider?.name ?? levelFallbackName(level);
+  // R11.1: `collectGolemState` (the status line's own reader) already resolves
+  // the dial, so this no longer loads config a second time to ask the same
+  // question.
+  const level = golem?.compression ?? 1;
+  const name = compressionName(level);
   const waiting = session?.blocked === true && isBlockedFresh(session.ts);
 
   return {
@@ -180,7 +184,11 @@ export async function collectSessionStateReport(
       // unreachable from this report. Assigning it is the whole fix here.
       ...(golem?.proxyBypass === true ? { bypass: true } : {}),
     },
-    slider: { level, name, redaction_off: level === 0 },
+    compression: {
+      level: String(level),
+      name,
+      redaction_off: golem?.proxyBypassAll === true,
+    },
     local_model: { reachable: golem?.localModelReachable ?? null },
     autonomy: { level: autonomyLevel },
     blocked: {
@@ -222,6 +230,6 @@ function emptyStats(): StatsReport {
   };
 }
 
-function levelFallbackName(level: number): string {
+function _levelFallbackName(level: number): string {
   return ["passthrough", "lossless", "balanced", "aggressive"][level] ?? `level ${level}`;
 }

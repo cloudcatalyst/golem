@@ -38,13 +38,13 @@ test("buildModel from real CLI json shapes", () => {
     per_stage: { dedup: { tokens_before: 400, tokens_after: 53, tokens_saved: 347 } },
   };
   const status = {
-    slider: { level: 2, name: "balanced" },
+    dials: { compression: { effective: "2" } },
     config: { "proxy.upstream_base_url": { value: "https://x.services.ai.azure.com" } },
     proxy: { reachable: true },
   };
   const m = buildModel(stats, status);
   assert.equal(m.savedPct, 91);
-  assert.equal(m.slider, 2);
+  assert.equal(m.compression, "2");
   assert.equal(m.upstreamLabel, "foundry");
   assert.equal(m.upstreamDisplay, "foundry");
   assert.equal(m.proxyReachable, true);
@@ -54,7 +54,7 @@ test("buildModel from real CLI json shapes", () => {
 test("buildModel is defensive against null/missing input", () => {
   const m = buildModel(null, null);
   assert.equal(m.savedPct, 0);
-  assert.equal(m.slider, 1);
+  assert.equal(m.compression, "1");
   assert.equal(m.upstreamLabel, "anthropic");
   assert.equal(m.upstreamDisplay, "anthropic");
   assert.equal(m.proxyReachable, false);
@@ -221,36 +221,42 @@ test("buildModel falls back to legacy config path when no upstream block (older 
 test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry", savedPct: 34 }),
-    "⬢ Golem → ◆ foundry · 🗜 L1",
+    statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "foundry", savedPct: 34 }),
+    "⬢ Golem → ◆ foundry · 🗜 1",
   );
   // Slider name, title-cased, is preferred over the bare "L<n>" form.
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 3,
-      sliderName: "aggressive",
+      compression: "3",
+      compressionName: "aggressive",
       upstreamDisplay: "anthropic",
     }),
     "⬢ Golem → ◆ anthropic · 🗜 aggressive",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
-    statusBarText({ proxyReachable: true, slider: 2, upstreamDisplay: "anthropic", savedPct: 91 }),
+    statusBarText({ proxyReachable: true, compression: "2", upstreamDisplay: "anthropic", savedPct: 91 }),
     /saved|%|91/,
   );
   // R10.24: proxy off = the state word "off" (hollow glyph) and NO dials — they
   // describe transforms nothing is applying. The configured destination is still
   // shown. "Passthrough" is reserved for a RUNNING pipeline at level 0.
   assert.equal(
-    statusBarText({ proxyReachable: false, slider: 1, upstreamDisplay: "foundry" }),
+    statusBarText({ proxyReachable: false, compression: "1", upstreamDisplay: "foundry" }),
     "⬡ Golem off → ◆ foundry",
   );
-  // Running at slider level 0 (full bypass) reads "Passthrough" (filled glyph) —
-  // a deliberate configuration, unlike a stopped proxy.
+  // R11.1: `off` is compression-off with redaction STILL ON, and it is a
+  // deliberate configuration — so it names itself rather than borrowing the word
+  // a stopped proxy uses. The full bypass is `proxy.bypass_all`, not a dial value.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 0, upstreamDisplay: "anthropic" }),
-    "⬢ Golem → ◆ anthropic · 🗜 Passthrough",
+    statusBarText({
+      proxyReachable: true,
+      compression: "off",
+      compressionName: "off",
+      upstreamDisplay: "anthropic",
+    }),
+    "⬢ Golem → ◆ anthropic · 🗜 off",
   );
 });
 
@@ -259,17 +265,17 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 1,
+      compression: "1",
       upstreamDisplay: "moonshotai (kimi-k3)",
     }),
-    "⬢ Golem → ◆ moonshotai (kimi-k3) · 🗜 L1",
+    "⬢ Golem → ◆ moonshotai (kimi-k3) · 🗜 1",
   );
   // Last-served wins over the configured default; the Claude id is verbatim.
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 3,
-      sliderName: "aggressive",
+      compression: "3",
+      compressionName: "aggressive",
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
@@ -277,16 +283,16 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "anthropic" }),
-    "⬢ Golem → ◆ anthropic · 🗜 L1",
+    statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "anthropic" }),
+    "⬢ Golem → ◆ anthropic · 🗜 1",
   );
 });
 
 test("statusBarText — local segment appears whenever the local model is active, at any level", () => {
   // No local model reachable: no local segment.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry" }),
-    "⬢ Golem → ◆ foundry · 🗜 L1",
+    statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "foundry" }),
+    "⬢ Golem → ◆ foundry · 🗜 1",
   );
   // Local model active at ANY level (Decision 30): the worker is folded into the
   // destination AFTER the chat model (R10.24 — the arrow points at the model the
@@ -294,17 +300,17 @@ test("statusBarText — local segment appears whenever the local model is active
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 1,
+      compression: "1",
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic · ✎ local · 🗜 L1",
+    "⬢ Golem → ◆ anthropic · ✎ local · 🗜 1",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
     statusBarText({
       proxyReachable: false,
-      slider: 3,
+      compression: "3",
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
@@ -316,12 +322,12 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 1,
+      compression: "1",
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b · 🗜 L1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b · 🗜 1",
   );
 });
 
@@ -332,22 +338,32 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
   assert.equal(
     statusBarText({
       proxyReachable: true,
-      slider: 1,
+      compression: "1",
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelReachable: true,
       coderEnabled: false,
       localModelActive: false,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · 🗜 L1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · 🗜 1",
   );
 });
 
-test("levelLabel is Passthrough when proxy is off or at level 0, else the title-cased name", () => {
-  assert.equal(levelLabel({ proxyReachable: true, slider: 2, sliderName: "balanced" }), "Balanced");
-  assert.equal(levelLabel({ proxyReachable: true, slider: 3 }), "L3");
-  assert.equal(levelLabel({ proxyReachable: false, slider: 2 }), "Passthrough");
-  assert.equal(levelLabel({ proxyReachable: true, slider: 0 }), "Passthrough");
+test("levelLabel is Passthrough only when the proxy is off, else the dial's name", () => {
+  assert.equal(
+    levelLabel({ proxyReachable: true, compression: "2", compressionName: "balanced" }),
+    "Balanced",
+  );
+  // No name from the CLI (an older daemon): fall back to the value itself rather
+  // than inventing an "L3" that no surface uses any more.
+  assert.equal(levelLabel({ proxyReachable: true, compression: "3" }), "3");
+  assert.equal(levelLabel({ proxyReachable: false, compression: "2" }), "Passthrough");
+  // R11.1: `off` is a running pipeline that redacts and nothing more — NOT the
+  // stopped-proxy state, and no longer the redaction-off bypass either.
+  assert.equal(
+    levelLabel({ proxyReachable: true, compression: "off", compressionName: "off" }),
+    "Off",
+  );
 });
 
 test("buildModel surfaces the savings window and local base URL for the hover summary", () => {
@@ -390,8 +406,8 @@ test("buildModel: no update info → not available", () => {
 
 test("statusBarText appends the update codicon only when an update is available", () => {
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬢ Golem → ◆ anthropic · 🗜 L1 $(arrow-up)",
+    statusBarText({ proxyReachable: true, compression: "1", upstreamLabel: "anthropic", updateAvailable: true }),
+    "⬢ Golem → ◆ anthropic · 🗜 1 $(arrow-up)",
   );
   // Shows even when the proxy is off (it's about the install, not the traffic).
   assert.equal(
@@ -400,7 +416,7 @@ test("statusBarText appends the update codicon only when an update is available"
   );
   // Absent when up to date.
   assert.doesNotMatch(
-    statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic" }),
+    statusBarText({ proxyReachable: true, compression: "1", upstreamLabel: "anthropic" }),
     /arrow-up/,
   );
 });
@@ -680,10 +696,9 @@ test("buildModel reads the dials block, defaulting to off on an older CLI", () =
   const withDials = buildModel(
     {},
     {
-      slider: { level: 2, name: "balanced" },
       dials: {
-        brevity: { setting: "ultra", effective: "ultra", pinned: true, layer: "local" },
-        compression: { setting: "auto", effective: "2", pinned: false, layer: "default" },
+        brevity: { setting: "ultra", effective: "ultra", layer: "local" },
+        compression: { setting: "2", effective: "2", layer: "default" },
       },
     },
     null,
@@ -691,35 +706,38 @@ test("buildModel reads the dials block, defaulting to off on an older CLI", () =
     null,
   );
   assert.equal(withDials.brevity, "ultra");
-  assert.equal(withDials.brevityPinned, true);
   assert.equal(withDials.compressionLevel, "2");
-  assert.equal(withDials.compressionPinned, false);
+  // R11.1: no `pinned` — it said whether the slider was driving the dial, and
+  // there is no slider (ADR-0004).
+  assert.equal(withDials.brevityPinned, undefined);
+  assert.equal(withDials.compressionPinned, undefined);
 
-  // A CLI that predates Decision 52 emits no `dials` block at all.
-  const legacy = buildModel({}, { slider: { level: 2, name: "balanced" } }, null, [], null);
+  // A CLI that emits no `dials` block at all.
+  const legacy = buildModel({}, {}, null, [], null);
   assert.equal(legacy.brevity, "off");
-  assert.equal(legacy.brevityPinned, false);
 });
 
 test("statusBarText shows brevity only while it is on", () => {
   const base = {
     proxyReachable: true,
-    slider: 2,
-    sliderName: "balanced",
+    compression: "2",
+    compressionName: "balanced",
     upstreamLabel: "anthropic",
   };
   assert.ok(!statusBarText({ ...base, brevity: "off" }).includes("✂"));
   assert.ok(statusBarText({ ...base, brevity: "full" }).includes("✂ full"));
 });
 
-test("dialsSummary always spells out pinned vs auto", () => {
+test("dialsSummary names both dials, with no pinned/auto suffix (R11.1)", () => {
   assert.equal(
-    dialsSummary({ brevity: "ultra", brevityPinned: true, compressionLevel: "1", compressionPinned: true }),
-    "brevity ultra (pinned) · compression 1 (pinned)",
+    dialsSummary({ brevity: "ultra", compressionLevel: "1" }),
+    "brevity ultra · compression 1",
   );
+  assert.equal(dialsSummary({ brevity: "off", compressionLevel: "3" }), "brevity off · compression 3");
+  // Decision 56 still wins over both: in bypass neither dial is in force.
   assert.equal(
-    dialsSummary({ brevity: "off", brevityPinned: false, compressionLevel: "3", compressionPinned: false }),
-    "brevity off (auto) · compression 3 (auto)",
+    dialsSummary({ brevity: "full", compressionLevel: "3", proxyBypass: true }),
+    "pipeline off (bypass) — redaction only",
   );
 });
 
@@ -727,10 +745,9 @@ test("renderHtml warns in the panel when brevity is active", () => {
   const model = buildModel(
     {},
     {
-      slider: { level: 3, name: "aggressive" },
       dials: {
-        brevity: { setting: "full", effective: "full", pinned: true, layer: "local" },
-        compression: { setting: "auto", effective: "3", pinned: false, layer: "default" },
+        brevity: { setting: "full", effective: "full", layer: "local" },
+        compression: { setting: "3", effective: "3", layer: "default" },
       },
     },
     null,
@@ -739,7 +756,7 @@ test("renderHtml warns in the panel when brevity is active", () => {
   );
   const html = renderHtml(model, "nonce");
   assert.ok(html.includes("Brevity active"));
-  assert.ok(html.includes("brevity full (pinned)"));
+  assert.ok(html.includes("brevity full"));
 });
 
 /**
@@ -750,8 +767,8 @@ test("renderHtml warns in the panel when brevity is active", () => {
  */
 test("statusBarText names the four proxy states in the CLI's vocabulary (R10.24)", () => {
   const base = {
-    slider: 1,
-    sliderName: "lossless",
+    compression: "1",
+    compressionName: "lossless",
     brevity: "full",
     upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
   };
@@ -777,7 +794,7 @@ test("statusBarText names the four proxy states in the CLI's vocabulary (R10.24)
 test("statusBarText treats unknown wiring as wired — an older CLI is not an alarm", () => {
   // No `proxyInPath` at all (a pre-R10.24 golem): the same fail-safe the CLI uses.
   assert.equal(
-    statusBarText({ proxyReachable: true, slider: 1, sliderName: "lossless", upstreamDisplay: "anthropic" }),
+    statusBarText({ proxyReachable: true, compression: "1", compressionName: "lossless", upstreamDisplay: "anthropic" }),
     "⬢ Golem → ◆ anthropic · 🗜 lossless",
   );
 });

@@ -131,7 +131,7 @@ because Claude Code **disables tool search by default behind a non-first-party
 `ANTHROPIC_BASE_URL`** and re-enables it only if the proxy relays
 `tool_reference` blocks correctly (verification-notes §12). So Golem opting you
 in carries the obligation to not corrupt the flow — see [[Architecture]] §2 for
-where in the pipeline this sits, and [[Slider Levels]] for what each level is
+where in the pipeline this sits, and [[Compression Levels]] for what each level is
 allowed to touch.
 
 Guarded by `tests/integration/proxy-tool-search.test.ts`: byte-faithful
@@ -140,6 +140,6 @@ forwarding at levels 0/1, and preservation of `defer_loading`, the search-tool
 already held when the tests were written — nothing was broken — but it is now an
 asserted invariant rather than an assumption.
 
-Related: [[Compression]] · [[Slider Levels]] · [[Architecture]] ·
+Related: [[Compression]] · [[Compression Levels]] · [[Architecture]] ·
 [[Context Ledger]] · [[Cache Observability]] · [[Web Cache]] (how the doc page
 behind this note was fetched and cached).

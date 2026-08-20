@@ -11,7 +11,7 @@ function report(overrides: Partial<SessionStateReport> = {}): SessionStateReport
     project_dir: "/proj",
     generated_at: "2026-07-16T00:00:00.000Z",
     proxy: { running: true, upstream: "anthropic" },
-    slider: { level: 1, name: "lossless", redaction_off: false },
+    compression: { level: "1", name: "lossless", redaction_off: false },
     local_model: { reachable: true },
     autonomy: { level: "manual" },
     blocked: { waiting: false },
@@ -59,7 +59,7 @@ describe("renderWatchFrame", () => {
     expect(frame).toContain("Golem watch");
     expect(frame).toContain("proxy running");
     expect(frame).toContain("→anthropic");
-    expect(frame).toContain("L1 lossless");
+    expect(frame).toContain("1 lossless");
     expect(frame).toContain("saved 40%");
     expect(frame).toContain("dedup");
     expect(frame).toContain("CCR refs: 3 stored / 1 retrieved");
@@ -67,9 +67,9 @@ describe("renderWatchFrame", () => {
     expect(frame).toContain("coder");
   });
 
-  it("warns LOUDLY when redaction is off (level 0)", () => {
+  it("warns LOUDLY when redaction is off (proxy.bypass_all)", () => {
     const frame = renderWatchFrame(
-      report({ slider: { level: 0, name: "passthrough", redaction_off: true } }),
+      report({ compression: { level: "off", name: "off", redaction_off: true } }),
       { color: false },
     );
     expect(frame).toContain("REDACTION OFF");

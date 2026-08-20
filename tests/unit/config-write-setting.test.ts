@@ -26,15 +26,15 @@ const dirs = () => ({ projectDir, userDir });
 
 describe("writeSetting", () => {
   it("creates directories and file on first write, per scope", async () => {
-    expect(await writeSetting("user", "slider.level", 3, dirs())).toBe(userFile());
+    expect(await writeSetting("user", "compression.level", "3", dirs())).toBe(userFile());
     expect(await writeSetting("project", "proxy.port", 5001, dirs())).toBe(projectFile());
     expect(await writeSetting("local", "telemetry.enabled", false, dirs())).toBe(localFile());
 
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(3);
+    expect(config.settings.compression.level).toBe("3");
     expect(config.settings.proxy.port).toBe(5001);
     expect(config.settings.telemetry.enabled).toBe(false);
-    expect(config.provenance["slider.level"]?.layer).toBe("user");
+    expect(config.provenance["compression.level"]?.layer).toBe("user");
     expect(config.provenance["proxy.port"]?.layer).toBe("project");
     expect(config.provenance["telemetry.enabled"]?.layer).toBe("local");
   });
@@ -42,28 +42,30 @@ describe("writeSetting", () => {
   it("round-trips preserving unknown keys, key order, indent, and trailing newline", async () => {
     const original = {
       x_custom: { note: "keep me" },
-      slider: { level: 2, future_flag: true },
+      compression: { future_flag: true },
       proxy: { port: 4000 },
     };
     await mkdir(path.dirname(localFile()), { recursive: true });
     await writeFile(localFile(), `${JSON.stringify(original, null, 4)}\n`, "utf8");
 
-    await writeSetting("local", "slider.level", 3, dirs());
+    await writeSetting("local", "compression.level", "3", dirs());
 
     const text = await readFile(localFile(), "utf8");
-    const parsed = JSON.parse(text) as typeof original;
+    const parsed = JSON.parse(text) as typeof original & {
+      compression: { future_flag: boolean; level: string };
+    };
     expect(parsed.x_custom).toEqual({ note: "keep me" });
-    expect(parsed.slider.future_flag).toBe(true);
-    expect(parsed.slider.level).toBe(3);
+    expect(parsed.compression.future_flag).toBe(true);
+    expect(parsed.compression.level).toBe("3");
     expect(parsed.proxy.port).toBe(4000);
     // Key order preserved (x_custom still first), 4-space indent, trailing \n.
     expect(Object.keys(parsed)[0]).toBe("x_custom");
-    expect(text).toContain('\n    "slider"');
+    expect(text).toContain('\n    "compression"');
     expect(text.endsWith("\n")).toBe(true);
 
     // The written file still loads (unknown keys warn, don't fail).
     const config = await loadConfig({ projectDir, userDir, env: {} });
-    expect(config.settings.slider.level).toBe(3);
+    expect(config.settings.compression.level).toBe("3");
     expect(config.warnings.length).toBeGreaterThan(0);
   });
 
@@ -71,9 +73,9 @@ describe("writeSetting", () => {
     await expect(writeSetting("user", "nope.key", 1, dirs())).rejects.toThrow(
       /unknown setting "nope\.key"/,
     );
-    await expect(writeSetting("user", "slider", 1, dirs())).rejects.toThrow(ConfigError);
-    await expect(writeSetting("user", "slider.level", 99, dirs())).rejects.toThrow(
-      /invalid value for "slider\.level"/,
+    await expect(writeSetting("user", "slider", "1", dirs())).rejects.toThrow(ConfigError);
+    await expect(writeSetting("user", "compression.level", 99, dirs())).rejects.toThrow(
+      /invalid value for "compression\.level"/,
     );
     await expect(
       writeSetting("user", "proxy.upstream_base_url", "not a url", dirs()),
@@ -99,7 +101,9 @@ describe("writeSetting", () => {
   it("refuses to overwrite a malformed settings file", async () => {
     await mkdir(path.dirname(userFile()), { recursive: true });
     await writeFile(userFile(), "{ broken", "utf8");
-    await expect(writeSetting("user", "slider.level", 2, dirs())).rejects.toThrow(/invalid JSON/);
+    await expect(writeSetting("user", "compression.level", "2", dirs())).rejects.toThrow(
+      /invalid JSON/,
+    );
     expect(await readFile(userFile(), "utf8")).toBe("{ broken"); // untouched
   });
 
@@ -117,27 +121,29 @@ describe("writeSetting", () => {
 
   it("refuses to overwrite a section that is not an object", async () => {
     await mkdir(path.dirname(userFile()), { recursive: true });
-    await writeFile(userFile(), JSON.stringify({ slider: "not-an-object" }), "utf8");
+    await writeFile(userFile(), JSON.stringify({ compression: "not-an-object" }), "utf8");
 
-    await expect(writeSetting("user", "slider.level", 3, dirs())).rejects.toThrow(
-      /section "slider" is not an object; refusing to overwrite it/,
+    await expect(writeSetting("user", "compression.level", "3", dirs())).rejects.toThrow(
+      /section "compression" is not an object; refusing to overwrite it/,
     );
     // File untouched.
     const text = await readFile(userFile(), "utf8");
-    expect(JSON.parse(text)).toEqual({ slider: "not-an-object" });
+    expect(JSON.parse(text)).toEqual({ compression: "not-an-object" });
   });
 
   it("strips a leading UTF-8 BOM before parsing an existing file", async () => {
     await mkdir(path.dirname(userFile()), { recursive: true });
-    const original = { slider: { level: 2 } };
+    const original = { compression: { level: "2" } };
     await writeFile(userFile(), `﻿${JSON.stringify(original, null, 2)}\n`, "utf8");
 
-    await writeSetting("user", "slider.level", 3, dirs());
+    await writeSetting("user", "compression.level", "3", dirs());
 
     const text = await readFile(userFile(), "utf8");
     // BOM is not preserved in the rewritten file; content parses and is correct.
     expect(text.charCodeAt(0)).not.toBe(0xfeff);
-    const parsed = JSON.parse(text) as typeof original;
-    expect(parsed.slider.level).toBe(3);
+    const parsed = JSON.parse(text) as typeof original & {
+      compression: { future_flag: boolean; level: string };
+    };
+    expect(parsed.compression.level).toBe("3");
   });
 });

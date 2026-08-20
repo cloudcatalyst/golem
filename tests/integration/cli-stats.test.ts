@@ -16,11 +16,11 @@ import {
 } from "../../src/cli/stats.js";
 import { NativeLosslessCompression, STAGE_DEDUP } from "../../src/compression/index.js";
 import type { Message } from "../../src/interfaces/compression.js";
-import { sliderPolicyForLevel } from "../../src/interfaces/index.js";
+import { policyFor } from "../../src/interfaces/index.js";
 import type { TelemetryEvent } from "../../src/telemetry/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 
-const LEVEL_1 = sliderPolicyForLevel(1);
+const LEVEL_1 = policyFor(1);
 const PROJECT = "stats-test-project";
 
 /** A large payload so it clears the dedup min-chars threshold. */
