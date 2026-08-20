@@ -11,6 +11,19 @@
  *   - nothing changed    → no-op.
  * Incremental needs a deletable driver + a single index root; otherwise a change
  * falls back to a full rebuild. Runs in the BACKGROUND — never blocks startup.
+ *
+ * R11.2 — two rules exist because that background run is GPU-expensive (measured:
+ * ~10 minutes to re-embed 114 changed files with bge-m3):
+ *   - the incremental sync CHECKPOINTS its manifest every
+ *     {@link INDEX_CHECKPOINT_FILES} files, so a run killed with the session
+ *     resumes where it stopped instead of re-embedding everything next time. The
+ *     old code wrote the manifest only at the very end, so any session shorter
+ *     than the sync recorded nothing and the next session repeated the identical
+ *     work — a spike on every session start with no file actually changing;
+ *   - an AUTOMATIC caller may cap the work with {@link EnsureIndexedOptions.maxAutoFiles};
+ *     past the cap the sync DEFERS to an explicit `golem index` rather than
+ *     silently starting a multi-minute embed at session start. A branch switch
+ *     rewrites mtimes wholesale, so a huge changed-set is routine, not rare.
  */
 
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
@@ -470,6 +483,17 @@ export interface EnsureIndexedOptions {
    */
   readonly embedModel?: string | null;
   readonly watchPaths: readonly string[];
+  /**
+   * R11.2 — the most changed/deleted files this run may sync before it defers
+   * (`0`/omitted = no cap). For AUTOMATIC callers only: `golem mcp serve` fires
+   * this on every session start, where an unbounded sync is minutes of GPU the
+   * user never asked for. Past the cap nothing is embedded and the manifest is
+   * left alone, so the deferred work is still waiting for `golem index`.
+   *
+   * Deliberately NOT applied to the first-run/embedder-change full build: a
+   * project with no index at all has no search, and that build is announced.
+   */
+  readonly maxAutoFiles?: number;
   /** Current time (ISO); injected so callers/tests control it. */
   readonly now: string;
   readonly log?: (msg: string) => void;
@@ -477,13 +501,22 @@ export interface EnsureIndexedOptions {
 
 /** Outcome of an {@link ensureProjectIndexed} run (handy for logs/tests). */
 export interface EnsureIndexedResult {
-  readonly action: "skipped" | "indexed" | "reindexed" | "synced";
+  readonly action: "skipped" | "indexed" | "reindexed" | "synced" | "deferred";
   readonly chunks: number;
   readonly files: number;
   /** Incremental only: files changed/added and removed. */
   readonly updated?: number;
   readonly removed?: number;
 }
+
+/**
+ * How many files an incremental sync embeds between manifest checkpoints.
+ *
+ * Small enough that an interrupted run loses seconds of work, large enough that
+ * the manifest write (one JSON of every tracked file's state) stays noise next
+ * to embedding a batch.
+ */
+export const INDEX_CHECKPOINT_FILES = 20;
 
 /** Full (re)index of every root, then persist the manifest with fresh file states. */
 async function fullIndex(
@@ -558,6 +591,25 @@ export async function ensureProjectIndexed(
     return { action: "skipped", chunks: 0, files: 0 };
   }
 
+  // R11.2: the cap is checked BEFORE the incremental/rebuild fork — the fallback
+  // path is a full rebuild, which is the most expensive outcome of all, and an
+  // automatic caller must never reach it by surprise.
+  const cap = opts.maxAutoFiles ?? 0;
+  if (cap > 0 && changed.length + deleted.length > cap) {
+    log(
+      `${changed.length} changed, ${deleted.length} removed — more than the auto-index cap ` +
+        `(${cap}), so nothing was embedded. Run \`golem index\` to sync now, or raise ` +
+        "`knowledge.auto_index_max_files`",
+    );
+    return {
+      action: "deferred",
+      chunks: 0,
+      files: current.size,
+      updated: changed.length,
+      removed: 0,
+    };
+  }
+
   // Incremental needs a deletable driver + a single (directory) root so source
   // paths line up; otherwise fall back to a full rebuild.
   const singleDirRoot =
@@ -572,8 +624,38 @@ export async function ensureProjectIndexed(
   }
 
   const baseDir = roots[0];
-  const chunks = await opts.knowledge.reindexFiles(baseDir, opts.projectId, changed);
+  // R11.2: progress is persisted as it is EARNED. The map starts from the states
+  // the last completed run recorded and advances one batch at a time, so the
+  // manifest never claims a file whose chunks aren't in the store yet — and an
+  // interrupted run (the session ends, the MCP server is replaced) leaves the
+  // batches it did finish permanently done.
+  const progress: Record<string, PersistedFileState> = { ...prev };
+  const checkpoint = (): Promise<void> =>
+    writeManifest(opts.projectDir, opts.projectId, signature, roots, opts.now, progress);
+  const sourcePathByAbs = new Map<string, string>();
+  for (const [sp, f] of current) sourcePathByAbs.set(f.abs, sp);
+
+  // Deletions first: they cost no embedding, so checkpointing them is free and
+  // they never have to be redone.
   const removed = await opts.knowledge.removeSourcePaths(opts.projectId, deleted);
+  for (const sp of deleted) delete progress[sp];
+  if (deleted.length > 0) await checkpoint();
+
+  let chunks = 0;
+  for (let i = 0; i < changed.length; i += INDEX_CHECKPOINT_FILES) {
+    const batch = changed.slice(i, i + INDEX_CHECKPOINT_FILES);
+    chunks += await opts.knowledge.reindexFiles(baseDir, opts.projectId, batch);
+    for (const abs of batch) {
+      const sp = sourcePathByAbs.get(abs);
+      const f = sp === undefined ? undefined : current.get(sp);
+      if (sp !== undefined && f !== undefined) progress[sp] = { m: f.mtimeMs, s: f.size };
+    }
+    await checkpoint();
+    if (changed.length > INDEX_CHECKPOINT_FILES) {
+      log(`synced ${i + batch.length}/${changed.length} changed file(s)`);
+    }
+  }
+
   await writeManifest(
     opts.projectDir,
     opts.projectId,

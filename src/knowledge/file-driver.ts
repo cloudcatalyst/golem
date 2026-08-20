@@ -41,15 +41,29 @@ import {
  * Canonicalize a project id before it is hashed into a collection identity.
  *
  * A project id is usually an absolute path, and on Windows the SAME project can
- * arrive with different drive-letter case — `d:\repo` from one launcher, `D:\repo`
- * from another (Windows treats drive letters case-insensitively). Those hash
- * differently, spawning DUPLICATE per-project collections that each re-embed the
- * tree independently. Uppercasing a leading drive letter (absolute `c:\x` or
- * drive-relative `c:x`) collapses them to one. No-op for POSIX paths, bare ids,
- * and the already-uppercase case (so it never rewrites an id needlessly).
+ * arrive spelled several ways — `d:\repo` from one launcher and `D:\repo` from
+ * another (Windows treats drive letters case-insensitively), `d:/repo` from
+ * anything that hands Node a POSIX-style path, `D:\repo\` from anything that
+ * appends a separator. Each spelling hashes differently, spawning DUPLICATE
+ * per-project collections that each re-embed the tree independently — this
+ * repo had three, 231 MB, two of them unreachable.
+ *
+ * So for a Windows path (the only shape where these are the same location) the
+ * drive letter is uppercased, `/` is folded to `\`, and trailing separators are
+ * dropped (never past the root, so `D:\` survives). POSIX paths and bare ids are
+ * left ALONE: `\` is a legal filename character there, and folding it would
+ * merge two genuinely different directories.
  */
 export function canonicalProjectId(projectId: string): string {
-  return projectId.replace(/^([a-z]):/, (_m, drive: string) => `${drive.toUpperCase()}:`);
+  if (!/^[A-Za-z]:/.test(projectId)) return projectId;
+  const drive = `${projectId[0]?.toUpperCase() ?? ""}${projectId.slice(1)}`;
+  const separators = drive.replace(/\//g, "\\");
+  // `D:\` (3) and drive-relative `D:` (2) are already minimal.
+  if (separators.length <= 3) return separators;
+  const trimmed = separators.replace(/\\+$/, "");
+  // Trailing separators are noise on a path, but the root's IS the path — never
+  // let `D:\\` collapse to the drive-relative `D:`, which means somewhere else.
+  return trimmed.length > 2 ? trimmed : `${trimmed}\\`;
 }
 
 /**

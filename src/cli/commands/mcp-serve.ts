@@ -166,6 +166,10 @@ export default function register(program: Command): void {
               embedModel: stack.embedModel,
               tier: stack.facts.tier,
               watchPaths: settings.knowledge.watch_paths,
+              // R11.2: this is THE automatic caller — it fires on every session
+              // start, so it is the one that must be capped. `golem index` (the
+              // explicit ask) passes no cap and syncs whatever is pending.
+              maxAutoFiles: settings.knowledge.auto_index_max_files,
               now: new Date().toISOString(),
               log: (m) => process.stderr.write(`golem kb: ${m}\n`),
             }).catch((e) =>

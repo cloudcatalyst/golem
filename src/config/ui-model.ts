@@ -381,6 +381,17 @@ export const SETTING_META = {
     label: "Watched paths",
     summary: "Directories auto-ingested and re-indexed on change",
   },
+  "knowledge.auto_index_max_files": {
+    label: "Auto-index file cap",
+    summary: "Changed files the session-start sync embeds before it defers to `golem index`",
+    detail:
+      "Re-embedding is minutes of GPU time (measured: ~10 minutes for 114 files with bge-m3), " +
+      "and a branch switch rewrites mtimes wholesale — so past this many changes the automatic " +
+      "sync stops rather than starting a long job nobody asked for, and says how to run it. " +
+      "0 removes the cap.",
+    advanced: true,
+    restart: "mcp",
+  },
   "knowledge.wiki_dir": {
     label: "Wiki directory",
     summary: "The durable, committed knowledge store (Decision 28)",
