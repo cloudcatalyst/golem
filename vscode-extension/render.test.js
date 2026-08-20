@@ -187,7 +187,7 @@ test("buildModel prefers the account-aware status.upstream block (R6.2)", () => 
   const m = buildModel({}, status);
   assert.equal(m.upstream, "https://api.moonshot.ai/v1");
   assert.equal(m.upstreamLabel, "kimi"); // account id, NOT "anthropic"
-  assert.equal(m.upstreamDisplay, "moonshotai (kimi-k3)");
+  assert.equal(m.upstreamDisplay, "kimi (moonshotai/kimi-k3)");
   assert.equal(m.provider, "openai");
   assert.equal(m.model, "moonshotai/kimi-k3");
   assert.equal(m.defaultModel, "moonshotai/kimi-k3");
@@ -222,7 +222,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry", savedPct: 34 }),
-    "⬢ Golem · L1 → ◆ foundry",
+    "⬢ Golem → ◆ foundry · 🗜 L1",
   );
   // Slider name, title-cased, is preferred over the bare "L<n>" form.
   assert.equal(
@@ -232,23 +232,25 @@ test("statusBarText — compact, provider-focused, no savings", () => {
       sliderName: "aggressive",
       upstreamDisplay: "anthropic",
     }),
-    "⬢ Golem · Aggressive → ◆ anthropic",
+    "⬢ Golem → ◆ anthropic · 🗜 aggressive",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
     statusBarText({ proxyReachable: true, slider: 2, upstreamDisplay: "anthropic", savedPct: 91 }),
     /saved|%|91/,
   );
-  // Proxy off = not transforming traffic → "Passthrough" (hollow glyph); the
-  // configured destination is still shown.
+  // R10.24: proxy off = the state word "off" (hollow glyph) and NO dials — they
+  // describe transforms nothing is applying. The configured destination is still
+  // shown. "Passthrough" is reserved for a RUNNING pipeline at level 0.
   assert.equal(
     statusBarText({ proxyReachable: false, slider: 1, upstreamDisplay: "foundry" }),
-    "⬡ Golem · Passthrough → ◆ foundry",
+    "⬡ Golem off → ◆ foundry",
   );
-  // Running at slider level 0 (full bypass) also reads "Passthrough" (filled glyph).
+  // Running at slider level 0 (full bypass) reads "Passthrough" (filled glyph) —
+  // a deliberate configuration, unlike a stopped proxy.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 0, upstreamDisplay: "anthropic" }),
-    "⬢ Golem · Passthrough → ◆ anthropic",
+    "⬢ Golem → ◆ anthropic · 🗜 Passthrough",
   );
 });
 
@@ -260,7 +262,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       slider: 1,
       upstreamDisplay: "moonshotai (kimi-k3)",
     }),
-    "⬢ Golem · L1 → ◆ moonshotai (kimi-k3)",
+    "⬢ Golem → ◆ moonshotai (kimi-k3) · 🗜 L1",
   );
   // Last-served wins over the configured default; the Claude id is verbatim.
   assert.equal(
@@ -271,12 +273,12 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem · Aggressive → ✎ local · ◆ anthropic (claude-opus-5[1m])",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ local · 🗜 aggressive",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "anthropic" }),
-    "⬢ Golem · L1 → ◆ anthropic",
+    "⬢ Golem → ◆ anthropic · 🗜 L1",
   );
 });
 
@@ -284,10 +286,11 @@ test("statusBarText — local segment appears whenever the local model is active
   // No local model reachable: no local segment.
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamDisplay: "foundry" }),
-    "⬢ Golem · L1 → ◆ foundry",
+    "⬢ Golem → ◆ foundry · 🗜 L1",
   );
-  // Local model active at ANY level (Decision 30): "local" is folded into the
-  // destination with "+", the arrow before the destination always present.
+  // Local model active at ANY level (Decision 30): the worker is folded into the
+  // destination AFTER the chat model (R10.24 — the arrow points at the model the
+  // conversation runs on, not at the drafting one).
   assert.equal(
     statusBarText({
       proxyReachable: true,
@@ -295,7 +298,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem · L1 → ✎ local · ◆ anthropic",
+    "⬢ Golem → ◆ anthropic · ✎ local · 🗜 L1",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
@@ -305,7 +308,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬡ Golem · Passthrough → ✎ local · ◆ anthropic",
+    "⬡ Golem off → ◆ anthropic · ✎ local",
   );
 });
 
@@ -318,7 +321,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       localModelActive: true,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → ✎ qwen2.5-coder:7b · ◆ anthropic (claude-opus-5[1m])",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b · 🗜 L1",
   );
 });
 
@@ -336,7 +339,7 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
       localModelActive: false,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem · L1 → ◆ anthropic (claude-opus-5[1m])",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · 🗜 L1",
   );
 });
 
@@ -388,12 +391,12 @@ test("buildModel: no update info → not available", () => {
 test("statusBarText appends the update codicon only when an update is available", () => {
   assert.equal(
     statusBarText({ proxyReachable: true, slider: 1, upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬢ Golem · L1 → ◆ anthropic $(arrow-up)",
+    "⬢ Golem → ◆ anthropic · 🗜 L1 $(arrow-up)",
   );
   // Shows even when the proxy is off (it's about the install, not the traffic).
   assert.equal(
     statusBarText({ proxyReachable: false, upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬡ Golem · Passthrough → ◆ anthropic $(arrow-up)",
+    "⬡ Golem off → ◆ anthropic $(arrow-up)",
   );
   // Absent when up to date.
   assert.doesNotMatch(
@@ -737,4 +740,88 @@ test("renderHtml warns in the panel when brevity is active", () => {
   const html = renderHtml(model, "nonce");
   assert.ok(html.includes("Brevity active"));
   assert.ok(html.includes("brevity full (pinned)"));
+});
+
+/**
+ * R10.24 — the status bar had no notion of `proxy.in_path`, so "the daemon is up
+ * and Claude Code is talking straight past it" — the one state that most looks
+ * like Golem working while it does nothing — rendered as a confident filled
+ * hexagon. The CLI status line has drawn that state since R8.32.
+ */
+test("statusBarText names the four proxy states in the CLI's vocabulary (R10.24)", () => {
+  const base = {
+    slider: 1,
+    sliderName: "lossless",
+    brevity: "full",
+    upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
+  };
+  assert.equal(
+    statusBarText({ ...base, proxyReachable: true, proxyInPath: true }),
+    "⬢ Golem → ◆ openrouter (deepseek/deepseek-v4-flash) · 🗜 lossless · ✂ full",
+  );
+  // Unwired: hollow, named, and NO dials — nothing is transforming anything.
+  assert.equal(
+    statusBarText({ ...base, proxyReachable: true, proxyInPath: false }),
+    "⬡ Golem unwired → ◆ openrouter (deepseek/deepseek-v4-flash)",
+  );
+  assert.equal(
+    statusBarText({ ...base, proxyReachable: false, proxyInPath: true }),
+    "⬡ Golem off → ◆ openrouter (deepseek/deepseek-v4-flash)",
+  );
+  assert.equal(
+    statusBarText({ ...base, proxyReachable: true, proxyInPath: true, proxyBypass: true }),
+    "⬡ Golem bypass → ◆ openrouter (deepseek/deepseek-v4-flash)",
+  );
+});
+
+test("statusBarText treats unknown wiring as wired — an older CLI is not an alarm", () => {
+  // No `proxyInPath` at all (a pre-R10.24 golem): the same fail-safe the CLI uses.
+  assert.equal(
+    statusBarText({ proxyReachable: true, slider: 1, sliderName: "lossless", upstreamDisplay: "anthropic" }),
+    "⬢ Golem → ◆ anthropic · 🗜 lossless",
+  );
+});
+
+test("buildModel labels the destination with the GATEWAY, not the model's vendor (R10.24)", () => {
+  const status = {
+    upstream: {
+      provider: "openrouter",
+      account: "openrouter",
+      base_url: "https://openrouter.ai/api/v1",
+      default_model: "qwen/qwen3.7-flash",
+      last_served_model: "deepseek/deepseek-v4-flash",
+    },
+  };
+  const m = buildModel({}, status);
+  // `deepseek (deepseek-v4-flash)` named a vendor Golem does not talk to and hid
+  // the gateway carrying the traffic. The LIVE model wins over the configured one.
+  assert.equal(m.upstreamDisplay, "openrouter (deepseek/deepseek-v4-flash)");
+});
+
+test("buildModel carries every target and the selected one, for the model picker (R10.24)", () => {
+  const status = {
+    targets: [
+      { id: "anthropic", provider: "anthropic", model: null, is_default: true },
+      { id: "openrouter:qwen/qwen3.7-flash", provider: "openrouter", model: "qwen/qwen3.7-flash" },
+      {
+        id: "openrouter:deepseek/deepseek-v4-flash",
+        provider: "openrouter",
+        model: "deepseek/deepseek-v4-flash",
+      },
+    ],
+  };
+  // `gateway list --json` carries the selection; the rows alone never did, which
+  // is why the picker could not show which MODEL was active.
+  const m = buildModel({}, status, null, {
+    gateways: [],
+    active_target: "openrouter:deepseek/deepseek-v4-flash",
+  });
+  assert.equal(m.targets.length, 3);
+  assert.equal(m.activeTarget, "openrouter:deepseek/deepseek-v4-flash");
+});
+
+test("buildModel tolerates a CLI that reports no targets at all", () => {
+  const m = buildModel({}, {});
+  assert.deepEqual(m.targets, []);
+  assert.equal(m.activeTarget, null);
 });

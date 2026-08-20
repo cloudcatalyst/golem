@@ -48,7 +48,7 @@
       },
       {
         "command": "golem.setAccount",
-        "title": "Golem: Switch Upstream Account"
+        "title": "Golem: Switch Upstream Model"
       },
       {
         "command": "golem.toggleProxy",

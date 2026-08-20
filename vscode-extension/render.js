@@ -47,6 +47,11 @@ const STATUS_FIELDS_READ = [
   // since R10.12 restored the shim and the third desired-state; optional
   // because it is present only while the shim is actually serving.
   { path: ["proxy", "bypass"], required: false },
+  // R10.24 — is Claude Code actually POINTED at the proxy? The status bar had no
+  // notion of this, so a running-but-unwired daemon (R8.32) rendered as a
+  // confident filled hexagon. Optional so an older CLI that omits it is treated
+  // as wired rather than raising a false alarm.
+  { path: ["proxy", "in_path"], required: false },
   { path: ["slider", "level"], required: true },
   { path: ["slider", "name"], required: true },
   { path: ["dials", "brevity", "effective"], required: true },
@@ -59,6 +64,15 @@ const STATUS_FIELDS_READ = [
   { path: ["upstream", "default_model"], required: true },
   // Only after the proxy has actually served a request.
   { path: ["upstream", "last_served_model"], stateful: "a request has been served" },
+  // R10.24 — every target the model picker can offer (gateway AND model).
+  // `collectStatus` has emitted these since R9.1; the extension read only the
+  // gateway list, which is why a gateway fronting several models could offer
+  // exactly one of them.
+  // `status --json` emits these only when the registry holds MORE than the
+  // synthetic default — i.e. when the proxy is actually routing. The picker
+  // therefore falls back to `golem target list` (which always lists the default)
+  // before it falls back to the gateway picker.
+  { path: ["targets"], stateful: "more than the synthetic default target is configured" },
   { path: ["local_model", "reachable"], required: true },
   { path: ["local_model", "base_url"], required: true },
   // Only when the local runtime answered the probe.
@@ -110,10 +124,18 @@ function parseVendorModel(modelId, defaultVendor = "anthropic") {
   return { vendor: modelId.slice(0, slash), modelName: modelId.slice(slash + 1) };
 }
 
-/** Render a vendor/model-name id as the human-facing upstream label, e.g. `moonshotai/kimi-k3` → `moonshotai (kimi-k3)`. */
-function formatVendorModelStatus(modelId, defaultVendor = "anthropic") {
-  const { vendor, modelName } = parseVendorModel(modelId, defaultVendor);
-  return `${vendor} (${modelName})`;
+/**
+ * The destination label: `<gateway> (<model id>)`.
+ *
+ * R10.24 — outside the parentheses belongs the GATEWAY you switched to, which is
+ * what the CLI has always shown there. This used to print the vendor parsed out
+ * of the model id, so an OpenRouter target rendered `deepseek (deepseek-v4-flash)`
+ * — naming a vendor Golem does not talk to, and hiding the one gateway fact the
+ * reader needs (which of their configured gateways is carrying this traffic).
+ * Model ids stay verbatim inside the parentheses (Decision 49).
+ */
+function formatGatewayModel(gatewayLabel, modelId) {
+  return modelId ? `${gatewayLabel} (${modelId})` : gatewayLabel;
 }
 
 /**
@@ -127,6 +149,33 @@ function levelLabel(model) {
   if (model.proxyBypass) return "Bypass";
   if (!model.proxyReachable || model.slider === 0) return "Passthrough";
   return model.sliderName ? cap(model.sliderName) : `L${model.slider}`;
+}
+
+/**
+ * R10.24 — the ONE word for what Golem is doing with traffic right now, in the
+ * same vocabulary as the CLI status line: `running` (the resting case, which
+ * needs no word), `bypass`, `unwired`, `off`.
+ *
+ * These four used to be spelled differently on each surface, and "unwired" —
+ * daemon up, nothing pointed at it (R8.32) — did not exist in the status bar at
+ * all. Precedence matters: a proxy nothing is talking to is misconfigured
+ * whatever its dials say, so it outranks bypass.
+ */
+/**
+ * The compression dial as the status BAR spells it: the CLI's own lowercase level
+ * name (`lossless`), or the `L<n>` fallback left uppercase — lowercasing that one
+ * produced `l1`, which reads as a typo rather than a level.
+ */
+function dialLabel(model) {
+  const label = levelLabel(model);
+  return model.sliderName ? label.toLowerCase() : label;
+}
+
+function proxyStateWord(model) {
+  if (!model.proxyReachable) return "off";
+  if (model.proxyInPath === false) return "unwired";
+  if (model.proxyBypass) return "bypass";
+  return "";
 }
 
 /**
@@ -230,13 +279,13 @@ function buildModel(stats, status, update, accounts, surface) {
   // the CLI's providerUpstreamLabel; else the URL-derived host/provider name.
   // The panel pill uses this; the status-bar destination uses upstreamDisplay.
   const label = account || upstreamLabel(upstream);
-  // R6.2: mirror the CLI's vendor/model-name formatting in the status bar,
-  // e.g. `moonshotai/kimi-k3` with provider `openai` → `moonshotai (kimi-k3)`.
-  // When no model is known, fall back to the URL-derived/provider label.
-  const primaryModel = defaultModel || lastServedModel;
-  const upstreamDisplay = primaryModel
-    ? formatVendorModelStatus(primaryModel, provider || "anthropic")
-    : label;
+  // R10.24: `<gateway> (<model>)`, the same shape and the same precedence as the
+  // CLI's `destinationLabel` — the LIVE model (last served) first, the configured
+  // default second. This read them the other way round, so a session that had
+  // switched gateway kept naming the configured model until the new upstream
+  // served something. When no model is known at all (a plain Anthropic
+  // passthrough), the gateway label stands alone.
+  const upstreamDisplay = formatGatewayModel(label, model);
 
   return {
     // `golem config schema --json`: the control surface the Settings section
@@ -267,7 +316,26 @@ function buildModel(stats, status, update, accounts, surface) {
     model,
     defaultModel,
     lastServedModel,
+    // R10.24 — every target (gateway AND model) the picker can offer, straight
+    // from `golem status --json`, which has carried them since R9.1 while the
+    // extension read only the gateway list. That is why the model picker could
+    // not show models: a gateway fronting several collapsed to its first.
+    targets: Array.isArray(st.targets) ? st.targets : [],
+    // The selected TARGET id, when the CLI reports one (R10.24). Older CLIs have
+    // no such field, and null then means "the gateway's own default".
+    activeTarget:
+      accounts && typeof accounts === "object" && typeof accounts.active_target === "string"
+        ? accounts.active_target
+        : null,
     proxyReachable: !!(st.proxy && st.proxy.reachable),
+    // R10.24 — `proxy.in_path`: is Claude Code actually POINTED at the proxy?
+    // The CLI status line has rendered this since R8.32 (a yellow ⬡ for "the
+    // daemon is up and nothing is talking to it"), and the status bar had no
+    // notion of it at all — so the one state that most looks like Golem working
+    // while it does nothing rendered as a confident filled hexagon. Unknown
+    // (an older CLI) is treated as wired, so an unreadable answer never invents
+    // an alarm — the same fail-safe the CLI uses.
+    proxyInPath: !(st.proxy && st.proxy.in_path === false),
     // Decision 56: reachable, but the redaction-only shim is answering rather
     // than the pipeline. Absent on an older CLI → false, i.e. the pre-56 display.
     proxyBypass: !!(st.proxy && st.proxy.bypass),
@@ -341,9 +409,12 @@ function buildModel(stats, status, update, accounts, surface) {
 /**
  * The VS Code status-bar line. Intentionally distinct from `golem statusline`
  * (the terminal line): the status bar is a compact, at-a-glance presence
- * indicator — brand + slider level + which upstream the traffic fronts, in the
- * form `→ <provider>`. It deliberately OMITS cumulative savings, which live in
- * the hover tooltip (see extension.js) and the panel instead.
+ * indicator — brand, then which upstream the traffic fronts, then the dials:
+ *
+ *   `⬢ Golem → ◆ openrouter (deepseek/deepseek-v4-flash) · 🗜 lossless · ✂ full`
+ *
+ * It deliberately OMITS cumulative savings, which live in the hover tooltip (see
+ * extension.js) and the panel instead.
  *
  * When Golem isn't transforming traffic — the proxy is stopped, or it's running
  * at slider level 0 (full bypass, Decision 30) — the level reads "Passthrough".
@@ -365,7 +436,11 @@ function buildModel(stats, status, update, accounts, surface) {
 function statusBarText(model) {
   // Filled = pipeline carrying traffic; hollow = either bypass (serving, inert)
   // or down. The label beside it says which (Decision 56).
-  const glyph = model.proxyReachable && !model.proxyBypass ? "⬢" : "⬡";
+  // R10.24: filled ONLY when the pipeline is both running and actually in
+    // Claude Code's path. Hollow covers bypass, unwired and stopped; the label
+    // beside it says which.
+    const glyph =
+      model.proxyReachable && !model.proxyBypass && model.proxyInPath !== false ? "⬢" : "⬡";
   // The update nudge shows regardless of proxy state — it's about the install,
   // not the traffic. `$(arrow-up)` is a VS Code codicon; harmless as text too.
   const badge = model.updateAvailable ? " $(arrow-up)" : "";
@@ -375,11 +450,26 @@ function statusBarText(model) {
   // Decision 56: not while the bypass shim is serving — it runs no brevity
   // stage, so the configured dial would advertise a transform that is not
   // happening.
-  const brevity =
-    model.brevity && model.brevity !== "off" && !model.proxyBypass
-      ? ` · ✂ ${model.brevity}`
-      : "";
-  return `${glyph} Golem · ${levelLabel(model)} → ${destinationLabel(model)}${brevity}${badge}`;
+  const state = proxyStateWord(model);
+  // R10.24: the dials describe transforms the pipeline is applying. When it is
+  // not applying any — stopped, unwired, or the redaction-only bypass shim —
+  // printing them advertises work that is not happening, which is the misreport
+  // R8.32/Decision 56 both turned on. The existing bypass rule for brevity is
+  // now the rule for both dials and all three states.
+  const inForce = state === "";
+  const dials = inForce
+    ? ` · 🗜 ${dialLabel(model)}` +
+      (model.brevity && model.brevity !== "off" ? ` · ✂ ${model.brevity}` : "")
+    : "";
+  // R10.24: ONE canonical order, shared with `golem statusline` — brand (plus a
+    // state word when it is not simply running), then the arrow and where traffic
+    // goes, then the dials. This line used to read `⬢ Golem · Lossless → …`,
+    // putting a dial between the brand and the arrow, so the two surfaces a user
+    // reads in the same window disagreed about the shape of the same
+    // information. Pinned by tests/unit/cli/statusline-parity.test.ts.
+    return `${glyph} Golem${state === "" ? "" : ` ${state}`} → ${destinationLabel(
+      model,
+    )}${dials}${badge}`;
 }
 
 /**
@@ -427,7 +517,7 @@ function workerModels(model) {
  * The one-liner destination, naming the two models that actually matter now
  * that either end can be any target (R9.1–R9.4):
  *
- *   `✎ qwen2.5-coder:7b · ◆ claude-opus-5[1m]`
+ *   `◆ claude-opus-5[1m] · ✎ qwen2.5-coder:7b`
  *
  * **Flattened to one segment when both are the same model** — printing the same
  * id twice under two symbols tells the reader nothing and costs width the rest
@@ -447,7 +537,9 @@ function destinationLabel(model) {
   const diverging = workerModels(model)
     .filter((w) => w.model && w.model !== chatModel)
     .map((w) => `${ROLE_MARKS[w.worker] || ROLE_MARKS.worker} ${w.model}`);
-  return diverging.length === 0 ? chatSeg : `${diverging.join(" · ")} · ${chatSeg}`;
+  // R10.24: the chat destination LEADS, as it does in the CLI. It used to trail
+  // the workers, so the arrow pointed at the drafting model.
+  return diverging.length === 0 ? chatSeg : `${chatSeg} · ${diverging.join(" · ")}`;
 }
 
 function esc(s) {

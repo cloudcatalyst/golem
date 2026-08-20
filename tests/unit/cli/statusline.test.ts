@@ -118,8 +118,13 @@ describe("renderStatusLine — unwired proxy (R8.32)", () => {
   it("does not claim a compression level when Golem is not in the path", () => {
     const line = renderStatusLine({}, unwired);
     expect(line).toContain("⬡ Golem");
-    // The exact lie this task exists to kill.
-    expect(line).toContain("aggressive");
+    // R10.24 — this assertion used to be `toContain("aggressive")`, pinning that
+    // the configured level still printed on a line whose glyph said the pipeline
+    // was bypassed. That is the lie the test NAME describes: nothing is
+    // compressing, so no compression level may be advertised. The state word says
+    // what is wrong, and the dials are gone until they are back in force.
+    expect(line).not.toContain("aggressive");
+    expect(line).toContain("unwired");
     expect(line).not.toContain("⬢");
   });
 
@@ -129,7 +134,7 @@ describe("renderStatusLine — unwired proxy (R8.32)", () => {
 
   it("still renders normally when the proxy is running AND wired", () => {
     const line = renderStatusLine({}, { ...unwired, proxyInPath: true });
-    expect(line).toContain("⬢ Golem · →");
+    expect(line).toContain("⬢ Golem →");
     expect(line).toContain("⬢ Golem");
   });
 
@@ -163,7 +168,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · →");
+    expect(line).toContain("⬢ Golem →");
     expect(line).toContain("→ ◆ foundry");
     // Savings moved to the fuller summary; ctx/5h/$ are deferred off the line.
     expect(line).not.toContain("saved");
@@ -188,7 +193,7 @@ describe("renderStatusLine", () => {
     );
     // R9.4: named by ROLE, not by locality — after R9.3 the coder end can be
     // any target, so "local + upstream" described a constraint that is gone.
-    expect(line).toContain("⬢ Golem · → ✎ qwen2.5-coder:7b · ◆ anthropic (claude-opus-5[1m])");
+    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b");
   });
 
   it("flattens to ONE segment when both roles run the same model (R9.4)", () => {
@@ -205,7 +210,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem · → ◆ anthropic (claude-opus-5[1m])");
+    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m])");
     expect(line).not.toContain("✎");
   });
 
@@ -223,7 +228,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("✎ openai/gpt-oss-20b:free · ◆ anthropic (claude-opus-5[1m])");
+    expect(line).toContain("◆ anthropic (claude-opus-5[1m]) · ✎ openai/gpt-oss-20b:free");
   });
 
   it("shows NO coder segment when coder_target resolves to nothing (R9.4)", () => {
@@ -306,7 +311,7 @@ describe("renderStatusLine", () => {
     );
     // The chat segment carries the model id alone; the provider label is the
     // fallback for when no model is known, not a prefix.
-    expect(line).toContain("→ ✎ local · ◆ kimi (kimi-k3");
+    expect(line).toContain("→ ◆ kimi (kimi-k3");
   });
 
   it("omits the local prefix when the local coder is disabled, even if reachable", () => {
@@ -336,16 +341,19 @@ describe("renderStatusLine", () => {
     expect(line).not.toContain("(");
   });
 
-  it("renders a stopped proxy as hollow 'Passthrough' and still shows the destination", () => {
+  it("renders a stopped proxy as hollow 'off' and still shows the destination", () => {
     const line = renderStatusLine(
       {},
       { sliderLevel: 1, upstreamLabel: "foundry", proxyRunning: false },
     );
-    // Proxy off = not transforming traffic → "Passthrough" (not the level name).
-    expect(line).toContain("⬡ Golem · →");
-    expect(line).toContain("lossless");
-    expect(line).not.toContain("proxy off");
-    // The configured destination is still shown (passthrough goes straight there).
+    // R10.24: a stopped proxy is "off" — its own state, named in the same
+    // vocabulary the VS Code status bar uses — and it advertises no dials,
+    // because it is applying none. This used to print the configured level
+    // ("lossless") beside a hollow glyph, which reads as a running pipeline to
+    // anyone who does not know the two glyphs apart.
+    expect(line).toContain("⬡ Golem off");
+    expect(line).not.toContain("lossless");
+    // The configured destination is still shown (traffic goes straight there).
     expect(line).toContain("→ ◆ foundry");
   });
 
@@ -359,8 +367,8 @@ describe("renderStatusLine", () => {
         localModelReachable: true,
       },
     );
-    expect(line).toContain("⬢ Golem · →");
-    expect(line).toContain("→ ✎ local · ◆ anthropic");
+    expect(line).toContain("⬢ Golem →");
+    expect(line).toContain("→ ◆ anthropic · ✎ local");
   });
 
   it("appends the waiting/update badges after the destination", () => {
@@ -374,7 +382,7 @@ describe("renderStatusLine", () => {
         updateAvailable: true,
       },
     );
-    expect(line).toContain("⬢ Golem · → ◆ anthropic");
+    expect(line).toContain("⬢ Golem → ◆ anthropic");
     expect(line).toContain("⏸ waiting");
     expect(line).toContain("⇧ update");
   });

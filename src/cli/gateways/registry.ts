@@ -20,6 +20,7 @@ import {
   createCredentialStore,
   DEFAULT_GATEWAY_ID,
 } from "../../credentials/index.js";
+import { listTargets } from "../../providers/index.js";
 
 /**
  * A non-secret gateway descriptor: either a named `proxy.gateways` entry or the
@@ -53,6 +54,14 @@ export interface GatewayRow {
   readonly key_faults?: readonly CredentialFault[];
   readonly active: boolean;
   /**
+   * R10.24 — every model this gateway fronts, so a picker can offer them all.
+   * `model` above is ONE of these (the active one when this gateway is active,
+   * else the gateway's first), which is why it could not be the whole answer: a
+   * gateway with a qwen and a deepseek entry rendered only the first, on every
+   * surface, however the user had switched.
+   */
+  readonly models: readonly string[];
+  /**
    * True for the synthetic DEFAULT account — the top-level upstream config the
    * proxy falls back to when no named account is active. It is not a
    * `proxy.gateways` entry; selecting it just clears `inference.default_target`.
@@ -67,7 +76,18 @@ export interface GatewaysReport {
    * Never null — the default is always a real, selectable identity.
    */
   readonly active: string;
-  /** True when `inference.default_target` names an id absent from the registry (misconfig). */
+  /**
+   * R10.24 — the selection VERBATIM, which since R10.24 may be a target id
+   * (`openrouter:deepseek/deepseek-v4-flash`) and not just a gateway id. `active`
+   * stays the backing GATEWAY id so every existing consumer keeps its meaning;
+   * this is the field that says which MODEL is selected. Null when nothing is
+   * selected (the synthetic default) or the selection is unknown.
+   */
+  readonly active_target: string | null;
+  /**
+   * True when `inference.default_target` names an id that is neither a known
+   * gateway nor a known target (misconfig).
+   */
   readonly active_unknown: boolean;
   readonly gateways: readonly GatewayRow[];
 }
@@ -107,6 +127,11 @@ export async function collectGateways(
   const gateways = settings.proxy.gateways ?? [];
   const defaultId = defaultGatewayId(settings.proxy.upstream_provider);
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
+  // R10.24: the selection may name a TARGET (one model of a gateway) rather than
+  // the gateway itself. Resolve it once here — a target that resolves is not a
+  // misconfiguration, and the gateway behind it is the one to mark active.
+  const selectedTarget =
+    selected === null ? undefined : listTargets(settings.proxy).find((t) => t.id === selected);
 
   // The default is active whenever no named gateway is selected, or the
   // selection names the default id itself.
@@ -117,6 +142,9 @@ export async function collectGateways(
     provider: settings.proxy.upstream_provider,
     base_url: settings.proxy.upstream_base_url,
     model: settings.proxy.upstream_model ?? null,
+    // The synthetic default forwards the client's own model id, so it fronts no
+    // enumerable model list of its own.
+    models: [],
     key_set: defStatus.present,
     ...(defStatus.location !== undefined ? { key_location: defStatus.location.label } : {}),
     ...(defStatus.faults.length > 0 ? { key_faults: defStatus.faults } : {}),
@@ -131,22 +159,46 @@ export async function collectGateways(
         id: g.id,
         provider: g.provider,
         base_url: g.base_url,
-        model: (g.models ?? [])[0] ?? null,
+        // R10.24: when a target of THIS gateway is selected, name the model that
+        // is actually in force. This was always `models[0]`, so a gateway
+        // fronting several models reported the first one whatever was selected.
+        model:
+          selectedTarget?.accountId === g.id
+            ? (selectedTarget.model ?? null)
+            : ((g.models ?? [])[0] ?? null),
+        models: g.models ?? [],
         key_set: st.present,
         ...(st.location !== undefined ? { key_location: st.location.label } : {}),
         ...(st.faults.length > 0 ? { key_faults: st.faults } : {}),
-        active: g.id === selected,
+        // Active either by its own id, or because the selected target is one of
+        // its models.
+        active: g.id === selected || selectedTarget?.accountId === g.id,
       };
     }),
   );
 
-  // Unknown = a selection that is neither the default id nor a known named
-  // gateway (a genuine misconfig — the proxy falls back to the top-level config).
+  // Unknown = a selection that is neither the default id, a known named gateway,
+  // nor (R10.24) a known target — a genuine misconfig, and the proxy falls back
+  // to the top-level config.
   const activeUnknown =
-    selected !== null && selected !== defaultId && !gateways.some((g) => g.id === selected);
-  const active = defaultActive || activeUnknown ? defaultId : selected;
+    selected !== null &&
+    selected !== defaultId &&
+    !gateways.some((g) => g.id === selected) &&
+    selectedTarget === undefined;
+  // `active` stays a GATEWAY id: the gateway itself when one was selected, the
+  // gateway BEHIND a selected target, else the synthetic default.
+  const active =
+    defaultActive || activeUnknown
+      ? defaultId
+      : (selectedTarget?.accountId ?? selectedTarget?.id ?? selected);
+  const activeTarget = activeUnknown || selectedTarget === undefined ? null : selectedTarget.id;
 
-  return { active, active_unknown: activeUnknown, gateways: [defaultRow, ...namedRows] };
+  return {
+    active,
+    active_target: activeTarget,
+    active_unknown: activeUnknown,
+    gateways: [defaultRow, ...namedRows],
+  };
 }
 
 /** Append a non-secret event to the audit log (ADR-0003). Fire-and-forget safe. */
