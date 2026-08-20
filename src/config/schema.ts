@@ -361,6 +361,19 @@ export const SETTINGS_LEAVES = {
     /** Paths auto-ingested and watched for changes. */
     watch_paths: z.array(z.string()),
     /**
+     * R11.2 — how many changed files the AUTOMATIC session-start sync
+     * (`golem mcp serve`) may re-embed before it defers to an explicit
+     * `golem index`. `0` removes the cap.
+     *
+     * Embedding is the expensive part: ~10 minutes of continuous GPU for 114
+     * files with bge-m3 on a mid tier. That job used to start unannounced on
+     * every new session, and a branch switch rewrites mtimes wholesale, so an
+     * ordinary `git checkout` was enough to trigger it. 50 keeps the routine
+     * edit-a-few-files case automatic (the point of auto-index) while a churn
+     * of hundreds waits for the user to ask for it.
+     */
+    auto_index_max_files: z.number().int().min(0),
+    /**
      * Project wiki directory (spec Decision 28): the durable, committable
      * knowledge store. Relative values are project-rooted; absolute values are
      * used as-is. Auto-indexed like any other watched path.
@@ -734,6 +747,7 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   knowledge: {
     enabled: true,
     watch_paths: [],
+    auto_index_max_files: 50,
     wiki_dir: "docs/wiki",
     local_answer_enabled: true,
     local_answer_min_confidence: 0.6,
