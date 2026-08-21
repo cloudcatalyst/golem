@@ -260,6 +260,16 @@ export const ROLE_MARKS = {
   worker: "✦",
 } as const;
 
+/**
+ * What joins the model segments of the destination (R11.6).
+ *
+ * Named because the VS Code status bar has to produce the same string and shares
+ * no module with this file — `statusline-parity.test.ts` is what holds them
+ * together, and a bare literal in two languages is the drift R10.24 existed to
+ * end.
+ */
+export const MODEL_JOIN = " + ";
+
 /** The glyph for a worker, falling back to the generic worker mark. */
 function workerMark(worker: string): string {
   return (ROLE_MARKS as Record<string, string>)[worker] ?? ROLE_MARKS.worker;
@@ -283,12 +293,27 @@ function workerRows(golem: GolemState): readonly { worker: string; model?: strin
  * The one-liner destination, naming the CHAT gateway (model) first and then each
  * worker that diverges from it:
  *
- *   `◆ openrouter (deepseek/deepseek-v4-flash) · ✎ qwen2.5-coder:7b`
+ *   `◆ openrouter (deepseek/deepseek-v4-flash) + ✎ ollama (qwen2.5-coder:7b)`
  *
  * R10.24 — the chat destination leads. It used to trail the worker list, so on
  * any machine with a local coder the arrow pointed at the DRAFTING model and the
  * model the conversation actually runs on was pushed to the end. The arrow means
  * "where this conversation goes"; whatever it touches first had better be that.
+ *
+ * R11.6 — ONE format for every model segment, and `+` between them.
+ *
+ * The chat model read `<gateway> (<model>)` while a worker read `<gateway>
+ * <model>`, so two things of the same kind were spelled two ways on one line and
+ * the parentheses looked like they meant something. They now share the format,
+ * and a worker with no resolvable gateway falls back to the bare id rather than
+ * inventing one.
+ *
+ * `+` because these segments are of the same kind — models this conversation
+ * uses — where `·` separates DIFFERENT kinds (models · dials · brevity). Using
+ * one glyph for both made the model list and the dial list read as one flat run
+ * of fields. It also restores the reading R9.4's `local + upstream` had before
+ * either end could be any target; what changed then was which models get named,
+ * not that they are added together.
  *
  * Model ids stay verbatim (Decision 49). A worker whose target does not resolve
  * is omitted: it fails closed on every dispatch.
@@ -302,9 +327,9 @@ export function destinationLabel(golem: GolemState): string {
     .map((w) => {
       const g = (w as { gateway?: string }).gateway;
       const model = w.model as string;
-      return `${workerMark(w.worker)} ${g !== undefined ? `${g} ` : ""}${model}`;
+      return `${workerMark(w.worker)} ${g !== undefined && g !== "" ? `${g} (${model})` : model}`;
     });
-  return diverging.length === 0 ? chatSeg : `${chatSeg} · ${diverging.join(" · ")}`;
+  return [chatSeg, ...diverging].join(MODEL_JOIN);
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -461,7 +486,13 @@ export async function collectGolemState(
         return {
           worker,
           ...(hit?.model !== undefined ? { model: hit.model } : {}),
-          ...(hit?.accountId !== null ? { gateway: hit?.accountId } : {}),
+          // R11.6: the same label the chat segment gets, from the same function
+          // — this used to pass the raw `accountId`, so a target with no account
+          // rendered gateway-less while the chat side happily said "ollama" for
+          // the identical provider.
+          ...(hit !== undefined
+            ? { gateway: providerUpstreamLabel(hit.provider, hit.baseUrl, hit.accountId) }
+            : {}),
         };
       });
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
