@@ -193,7 +193,7 @@ describe("renderStatusLine", () => {
     );
     // R9.4: named by ROLE, not by locality — after R9.3 the coder end can be
     // any target, so "local + upstream" described a constraint that is gone.
-    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b");
+    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b");
   });
 
   it("flattens to ONE segment when both roles run the same model (R9.4)", () => {
@@ -228,7 +228,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("◆ anthropic (claude-opus-5[1m]) · ✎ openai/gpt-oss-20b:free");
+    expect(line).toContain("◆ anthropic (claude-opus-5[1m]) + ✎ openai/gpt-oss-20b:free");
   });
 
   it("shows NO coder segment when coder_target resolves to nothing (R9.4)", () => {
@@ -368,7 +368,7 @@ describe("renderStatusLine", () => {
       },
     );
     expect(line).toContain("⬢ Golem →");
-    expect(line).toContain("→ ◆ anthropic · ✎ local");
+    expect(line).toContain("→ ◆ anthropic + ✎ local");
   });
 
   it("appends the waiting/update badges after the destination", () => {

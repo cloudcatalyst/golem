@@ -279,7 +279,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ local · 🗜 aggressive",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ local · 🗜 aggressive",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
@@ -304,7 +304,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic · ✎ local · 🗜 1",
+    "⬢ Golem → ◆ anthropic + ✎ local · 🗜 1",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
@@ -314,7 +314,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬡ Golem off → ◆ anthropic · ✎ local",
+    "⬡ Golem off → ◆ anthropic + ✎ local",
   );
 });
 
@@ -327,7 +327,35 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       localModelActive: true,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · ✎ qwen2.5-coder:7b · 🗜 1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b · 🗜 1",
+  );
+});
+
+test("statusBarText gives a worker the same <gateway> (<model>) shape as the chat model (R11.6)", () => {
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      compression: "1",
+      upstreamDisplay: "anthropic (claude-opus-5[1m])",
+      workers: [
+        { worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash", gateway: "openrouter" },
+      ],
+    }),
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ openrouter (qwen/qwen3.7-flash) · 🗜 1",
+  );
+});
+
+test("statusBarText leaves a gateway-less worker as a bare id (older CLI)", () => {
+  // `gateway` arrives from `golem status --json`; a CLI that predates R11.6 does
+  // not send it, and inventing one would be worse than omitting it.
+  assert.equal(
+    statusBarText({
+      proxyReachable: true,
+      compression: "1",
+      upstreamDisplay: "anthropic (claude-opus-5[1m])",
+      workers: [{ worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash" }],
+    }),
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen/qwen3.7-flash · 🗜 1",
   );
 });
 
