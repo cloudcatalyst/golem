@@ -316,5 +316,28 @@ export async function checkWiki(wikiDir: string): Promise<WikiCheckReport> {
     }
   }
 
+  // R11.5 — a debrief nobody indexed is a debrief nobody finds.
+  //
+  // `WIKI.md`'s Index is the entry point the wiki-first rule tells every agent
+  // to skim, and the close-out checklist says to author a debrief — but nothing
+  // tied the two together, so the Index quietly fell 39 debriefs behind (every
+  // one from 2026-07-16 on). The vector index still found them; graph traversal
+  // from the Index did not, which is the half the wiki exists for.
+  //
+  // Scoped to `debriefs/` deliberately: those are append-only records that must
+  // stay reachable. Concept pages are linked from each other and from the zone
+  // sections, so requiring an Index line for every one of them would be noise.
+  const indexPage = pages.find((p) => p.type === "schema");
+  if (indexPage !== undefined) {
+    for (const page of pages) {
+      if (!page.relPath.startsWith("debriefs/")) continue;
+      if (indexPage.body.includes(page.relPath)) continue;
+      issues.push({
+        relPath: page.relPath,
+        message: "not listed in WIKI.md — add an Index line so graph traversal can reach it",
+      });
+    }
+  }
+
   return { pagesChecked: pages.length, issues };
 }
