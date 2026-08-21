@@ -17,6 +17,9 @@ import path from "node:path";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { unreachableHeadroomConfigKeys } from "../compression/headroom-adapter.js";
 import { loadConfig } from "../config/index.js";
+// Narrow specifiers, not the `../hooks/index.js` barrel (~446ms — it pulls every
+// hook handler) for two small file reads.
+import { readSessionState, resolveBlock } from "../hooks/session-state.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { selectTarget } from "../inference/target-dispatcher.js";
 import { KNOWN_WORKERS, unknownWorkerWarnings } from "../inference/workers.js";
@@ -34,6 +37,7 @@ import { loopbackCaPath } from "../proxy/loopback-cert.js";
 import { readLoopbackServeState } from "../proxy/loopback-serve.js";
 import { readServedModel, servedModelFor } from "../proxy/served-model.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
+import { blockedView } from "./blocked-view.js";
 import { getDialInfo } from "./dials.js";
 import { golemInitStatus } from "./init.js";
 import {
@@ -369,6 +373,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         }
       : {}),
     ...(limits !== undefined ? { limits } : {}),
+    // R12.2: the blocked read model, in the SAME shape the dashboard serves at
+    // `/api/state`. Always emitted — `status: "unknown"` (no readable state) is
+    // an answer, and it is not the same answer as `clear`.
+    blocked: blockedView(resolveBlock(await readSessionState(projectDir))),
     warnings: [
       ...(cachedUpdate?.latest != null && semverGt(cachedUpdate.latest, options.version)
         ? [...updateWarnings(cachedUpdate.latest), ...warnings]

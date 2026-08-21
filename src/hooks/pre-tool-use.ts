@@ -34,6 +34,7 @@ import {
 } from "./coder-first-nudge.js";
 import { guidanceEnabled } from "./guidance.js";
 import { type HookIo, readAll } from "./hook-io.js";
+import { writePendingToolCall } from "./session-state.js";
 import {
   decideSnoozeNudge,
   readSnoozeNudgeState,
@@ -42,6 +43,7 @@ import {
   snoozeStaleReason,
   writeSnoozeNudgeState,
 } from "./snooze-nudge.js";
+import { toolArgument } from "./tool-argument.js";
 
 /**
  * Whether the snooze document-and-hold park is ENFORCING (persistent deny) vs
@@ -213,17 +215,47 @@ export async function runPreToolUseHook(
       }
     }
 
+    // R12.2 — classified BEFORE the gate toggle below, because the pending-call
+    // record is written on both paths out of it and both need the class.
+    const action = classifyAction(toolName, payload.tool_input);
+
+    /**
+     * Stash the call the human is about to be asked about.
+     *
+     * Claude Code's `Notification` payload names no tool (see `session-hooks.ts`),
+     * so without this the blocked read model can only ever say "waiting" — which
+     * is not an approvable question. Written ONLY on the paths that end in a
+     * native permission prompt: a gate `allow`/`deny` is answered without the
+     * human, and recording those would leave the newest record describing a call
+     * nobody was ever asked about.
+     *
+     * The argument is redacted by `writePendingToolCall`, not here.
+     */
+    const recordPending = (): Promise<void> => {
+      const argument = toolArgument(toolName, payload.tool_input);
+      return writePendingToolCall(projectDir, {
+        name: toolName,
+        actionClass: action,
+        ts: options.nowIso ?? new Date().toISOString(),
+        ...(argument !== undefined ? { argument } : {}),
+        ...(payload.session_id !== undefined ? { sessionId: payload.session_id } : {}),
+      });
+    };
+
     // The autonomy gate (ADR-0002) is a SEPARATE toggle from the shared hook:
     // enabled by default, but `golem autonomy disable` turns it off without
     // losing the snooze/coder-first nudges above. Disabled → emit nothing, so
     // Claude Code's native permission flow (allow-list + prompts) governs.
     const gateEnabled = await (options.readGateEnabled ?? readAutonomyGateEnabled)(projectDir);
-    if (!gateEnabled) return 0;
+    if (!gateEnabled) {
+      // Every call can prompt when the gate is off, so every call is pending.
+      await recordPending();
+      return 0;
+    }
 
     const readLevel = options.readLevel ?? readAutonomyLevel;
     const level = await readLevel(projectDir);
 
-    const action = classifyAction(toolName, payload.tool_input);
     const decision = decideGate(level, action);
 
     // Audit every decision, including silent defers (best-effort).
@@ -235,6 +267,13 @@ export async function runPreToolUseHook(
       decision: decisionLabel(decision.emit),
       ...(payload.session_id !== undefined ? { sessionId: payload.session_id } : {}),
     });
+
+    // R12.2 — anything that is not `allow` ends with the human being asked:
+    // `null` defers to the native prompt, and `ask` explicitly forces one. Both
+    // are calls under judgement, and a forced `ask` on a destructive or outward
+    // step is the single most important one to be able to name. Only `allow` is
+    // answered without the human, and only `allow` is skipped.
+    if (decision.emit !== "allow") await recordPending();
 
     if (decision.emit === null) return 0; // defer to the human
 

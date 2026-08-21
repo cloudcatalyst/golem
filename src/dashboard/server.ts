@@ -17,6 +17,7 @@
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import type { BlockedView } from "../cli/blocked-view.js";
 import type { SessionStateReport } from "../cli/session-report.js";
 import type { StatsReport } from "../cli/stats.js";
 
@@ -28,6 +29,17 @@ export interface DashboardSnapshot {
   readonly stats: StatsReport;
   /** ISO timestamp the snapshot was taken. */
   readonly generated_at: string;
+  /**
+   * R12.2 — the blocked read model, so the PAGE renders it and not just
+   * `/api/state`. Same {@link BlockedView} the status line and the VS Code panel
+   * read: one model, many renderers. Optional so a caller that predates R12.2
+   * degrades to a page with no banner rather than failing to build a snapshot.
+   *
+   * Read-only. The banner shows the tool argument (already redacted before it was
+   * written, ADR-0006 §1) and offers no way to answer it — approving is R12.3,
+   * and this server gains no write route.
+   */
+  readonly blocked?: BlockedView;
 }
 
 export interface DashboardOptions {
@@ -148,6 +160,41 @@ function stageRows(snapshot: DashboardSnapshot): string {
     .join("\n          ");
 }
 
+/**
+ * R12.2 — the blocked banner, or "" when there is nothing waiting.
+ *
+ * Rendered for `abandoned` as well as `waiting`: a block nobody ever came back to
+ * is exactly what the page should say out loud, rather than showing the same
+ * nothing it shows for a session that is running fine.
+ *
+ * The argument is shown verbatim — it was redacted on the way INTO the state file
+ * (ADR-0006 §1), so what arrives here is already safe to display — and escaped,
+ * because a shell command is full of characters HTML cares about.
+ */
+export function blockedBanner(blocked: BlockedView | undefined): string {
+  if (blocked === undefined) return "";
+  if (blocked.status !== "waiting" && blocked.status !== "abandoned") return "";
+  const head =
+    blocked.status === "waiting"
+      ? `Waiting on you${blocked.kind === undefined ? "" : ` · ${blocked.kind}`}`
+      : "Was waiting on you — no answer recorded";
+  const project = blocked.project_name === undefined ? "" : ` · ${blocked.project_name}`;
+  const tool =
+    blocked.tool === undefined
+      ? ""
+      : ` · ${blocked.tool.name}${
+          blocked.tool.action_class === undefined ? "" : ` (${blocked.tool.action_class})`
+        }`;
+  const since = blocked.since === undefined ? "" : ` · since ${blocked.since}`;
+  const detail = blocked.tool?.argument ?? blocked.reason;
+  return `
+  <div class="blocked ${blocked.status}">
+    <div class="blocked-head">⏸ ${escapeHtml(head + project + tool + since)}</div>
+    ${detail === undefined ? "" : `<code>${escapeHtml(detail)}</code>`}
+  </div>
+`;
+}
+
 /** The whole page: inline CSS + a poller that re-renders from /api/stats. */
 export function renderPage(snapshot: DashboardSnapshot): string {
   const s = snapshot.stats;
@@ -189,6 +236,13 @@ export function renderPage(snapshot: DashboardSnapshot): string {
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   td.empty { color: var(--muted); }
   footer { margin-top: 1.5rem; color: var(--muted); font-size: 0.82rem; }
+  /* R12.2 — the blocked banner. */
+  .blocked { margin: 1rem 0; padding: 0.7rem 0.9rem; border-radius: 8px;
+    border: 1px solid #c9a227; border-left-width: 4px; background: var(--card); }
+  .blocked.abandoned { border-color: var(--line); color: var(--muted); }
+  .blocked-head { font-weight: 600; }
+  .blocked code { display: block; margin-top: 0.4rem; font-size: 0.85rem;
+    white-space: pre-wrap; word-break: break-all; }
 </style>
 </head>
 <body>
@@ -196,6 +250,7 @@ export function renderPage(snapshot: DashboardSnapshot): string {
     <h1>Golem savings</h1>
     <span class="dir" id="project-dir">${escapeHtml(snapshot.project_dir)}</span>
   </header>
+<div id="blocked-slot">${blockedBanner(snapshot.blocked)}</div>
 
   <div class="tiles">
     <div class="tile"><div class="label">Tokens saved</div>
@@ -236,6 +291,35 @@ export function renderPage(snapshot: DashboardSnapshot): string {
     var el = document.getElementById(id);
     if (el) el.textContent = String(value);
   }
+  // R12.2 — the blocked banner, rebuilt with DOM nodes rather than innerHTML.
+  // The argument is a redacted tool argument, but it is still attacker-adjacent
+  // text: textContent means it can never be markup here, whatever it contains.
+  function renderBlocked(b) {
+    var slot = document.getElementById("blocked-slot");
+    if (!slot) return;
+    slot.textContent = "";
+    if (!b || (b.status !== "waiting" && b.status !== "abandoned")) return;
+    var box = document.createElement("div");
+    box.className = "blocked " + b.status;
+    var head = document.createElement("div");
+    head.className = "blocked-head";
+    head.textContent =
+      "⏸ " +
+      (b.status === "waiting"
+        ? "Waiting on you" + (b.kind ? " · " + b.kind : "")
+        : "Was waiting on you — no answer recorded") +
+      (b.project_name ? " · " + b.project_name : "") +
+      (b.tool ? " · " + b.tool.name + (b.tool.action_class ? " (" + b.tool.action_class + ")" : "") : "") +
+      (b.since ? " · since " + b.since : "");
+    box.appendChild(head);
+    var detail = (b.tool && b.tool.argument) || b.reason;
+    if (detail) {
+      var code = document.createElement("code");
+      code.textContent = detail;
+      box.appendChild(code);
+    }
+    slot.appendChild(box);
+  }
   function render(snap) {
     var s = snap.stats;
     setText("project-dir", snap.project_dir);
@@ -243,8 +327,15 @@ export function renderPage(snapshot: DashboardSnapshot): string {
     setText("tokens-before", s.tokens_before);
     setText("tokens-after", s.tokens_after);
     setText("requests", s.requests);
-    setText("slider-level", snap.slider.level);
-    setText("slider-name", snap.slider.name);
+    // R11.1 retired the slider, and R12.2 found this still reading
+    // \`snap.slider.level\` — which throws on every poll, so the page never
+    // refreshed anything after the first server render. The dial block is what
+    // the snapshot carries now.
+    if (snap.compression) {
+      setText("compression-level", snap.compression.level);
+      setText("compression-name", snap.compression.name);
+    }
+    renderBlocked(snap.blocked);
     setText("ccr-stored", s.ccr_refs_stored);
     setText("ccr-retrieved", s.ccr_refs_retrieved);
     setText("note", s.note);
