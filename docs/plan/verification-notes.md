@@ -6816,3 +6816,102 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `https://code.claude.com/docs/en/cli-reference` (`claude remote-control`,
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
+
+## §137 — ccr-ref-scope: `expand` misses across a git worktree because the CCR store is rooted per-directory, and "expired" was never real (2026-08-22)
+
+Closes the defect §136 logged in passing: `expand` returned "Unknown or expired
+CCR ref" for WebFetch refs minutes after they were issued. Task doc:
+`docs/plan/tasks/ccr-ref-scope.md`.
+
+### "Expired" disproved before anything else
+
+Grepped `prune|evict|ttl|maxEntries|expiry|expire` across `src/compression/ccr-store.ts`
+and `src/compression/local-blob-store.ts`: no hits except a docstring saying "or
+was evicted" — aspirational, not implemented. Neither class prunes, ever. So
+"expired" was always a guess dressed as a diagnosis, and the fix could not be a
+retention policy (also explicitly out of scope per the task doc).
+
+### The two-roots hypothesis, verified before being fixed
+
+`tests/integration/ccr-worktree-scope.test.ts` (committed first, as `0f37604`,
+*failing*) built a real main checkout, ran a real `git worktree add`, ran the
+real `PostToolUseHook` with `cwd` = the worktree, then called
+`NativeLosslessCompression.forProjectDir(mainRoot).retrieve(...)` for the ref the
+hook had just issued. It failed exactly as predicted:
+
+```
+UnknownRefError: unknown CCR ref: 33346a47987f1e9200e4fbe85e8e2c161189b1e2b4ebd0417f89dcd20ca6f8ab
+    at src/compression/ccr-store.ts:76
+```
+
+Confirms the task doc's hypothesis exactly: the hook resolves its CCR root from
+`cwd` (the worktree), `expand` is served by whichever `NativeLosslessCompression`
+the MCP server was built with (rooted at the main checkout) — same refId, two
+different `.golem/ccr` directories.
+
+### The identity decision: a worktree IS the same project (agrees with `canonicalProjectId`)
+
+Per the task doc's default ("go there unless something in the redaction or
+storage contract argues otherwise"): a git linked worktree is the SAME project as
+its main checkout for CCR purposes. Resolved through git's own bookkeeping — a
+worktree's `.git` is a FILE holding `gitdir: <main>/.git/worktrees/<name>`, and
+that directory's `commondir` file holds the path back to the shared `.git` — read
+directly with `node:fs`, no `git` subprocess (keeps `forProjectDir` synchronous,
+matching its 4 existing call sites: `src/cli/mcp-compression.ts`,
+`src/cli/proxy-runtime.ts`, `src/cli/stats.ts`, plus test/contract call sites).
+
+New shared function: `src/shared/git-worktree.ts#resolveWorktreeRoot`. Both
+identity decisions route through it — `NativeLosslessCompression.forProjectDir`
+and `src/hooks/post-tool-use.ts`'s write side for CCR, `canonicalProjectId`
+(`src/knowledge/file-driver.ts`) for the vector index — so the two answers cannot
+independently drift, the exact requirement the task doc raised by pointing at
+R11.2's precedent. Wiki page: `docs/wiki/concepts/CCR Ref Scope.md`.
+
+### `UnknownRefError` now distinguishes its causes
+
+`src/interfaces/compression.ts`'s `UnknownRefError` gained `location` and
+`reason: "not-found" | "corrupt"` (backward compatible — `new
+UnknownRefError(refId)` alone still works, defaulting both). `CcrStore.getEnvelope`
+now throws with the store's own `#location` and the correct reason for each of
+the three real causes (never stored / stored under a different root — both
+"not-found", since a store cannot tell them apart from the outside; invalid JSON;
+schema validation failure — both "corrupt", with `detail`). `src/mcp/server.ts`'s
+`expand` tool and `src/mcp/in-memory-compression.ts`'s stub now surface
+`error.message` directly instead of a fixed "Unknown or expired" string.
+
+### End-to-end confirmation, before and after, against the real built artifacts
+
+Rebuilt (`npm run build`) and ran a standalone script against `dist/` (not
+source-via-vitest) reproducing the exact scenario: real `git worktree add`, the
+built `dist/hooks/index.js` PostToolUse handler with `cwd` = worktree, then the
+built `dist/compression/index.js` `NativeLosslessCompression.forProjectDir(mainRoot)`
+— `expand`'s real code path. Result:
+
+```
+ref issued from worktree hook: 33346a47987f1e9200e4fbe85e8e2c161189b1e2b4ebd0417f89dcd20ca6f8ab
+RESULT: expand from main retrieved 40000 bytes; byte-identical: true
+RESULT: unsatisfiable-ref error message:
+  no envelope for CCR ref "000...000" at <main>\.golem\ccr — either it was never stored, or it was stored under a different project root.
+  reason: not-found location: <main>\.golem\ccr
+```
+
+Proxy rebuilt and restarted (`golem proxy restart`) against the new `dist/`.
+
+### Verification run (2026-08-22, CI still billing-blocked per the suspended gate)
+
+- `npx tsc --noEmit` — exit 0
+- `npm run lint` (biome check) — exit 0 (after fixing import order/quote-style in
+  the two new test files and a line-wrap in `ccr-store.ts` that biome's formatter
+  wanted)
+- `npm run format:check` — exit 0
+- `npx vitest run` — **233 files passed, 1 skipped (234); 2998 tests passed, 2
+  skipped (3000)** — exit 0
+- `golem wiki check` — 171 pages + 1 doc, no issues — exit 0
+
+New/extended tests: `tests/integration/ccr-worktree-scope.test.ts` (the
+reproduction, at the seam that broke), `tests/unit/shared/git-worktree.test.ts`
+(9 cases for `resolveWorktreeRoot`, including malformed-layout fallbacks),
+`tests/unit/compression/ccr-store.test.ts` (7 cases for the split
+`UnknownRefError`), plus a worktree case added to
+`tests/unit/knowledge/file-driver.test.ts`'s `canonicalProjectId` suite proving
+it agrees with the CCR store's answer.
