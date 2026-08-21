@@ -106,3 +106,58 @@ per directory.
 families verified end-to-end through an actual tool call, and a dated
 verification-notes section recording the measurement in the manner of §49 — what
 was excluded, on what reasoning, and what was deliberately left redacted.
+
+## Third sighting, 2026-08-22: heredocs "often fail" — reproduced, and it is the readback
+
+Reported by the user as a separate symptom ("heredoc calls often fail, I assume
+redaction"). It is this bug, seen from the other end. Reproduction, run from the
+main session:
+
+1. Write a file with a quoted heredoc (`<<'EOF'`) whose body holds three lines:
+   a Windows-separator scratchpad path, the POSIX-separator form of the same
+   path, and a `.claude/worktrees/agent-<uuid>` path.
+2. `cat` the file back.
+3. Then measure the file instead of reading it: `grep -c REDACTED` and
+   `awk '{print NR": "length($0)}'`.
+
+Result:
+
+- **On disk: 0 occurrences of `REDACTED`.** All three lines are the real bytes,
+  full length (127 / 125 / 57). The heredoc wrote exactly what was asked and the
+  shell ate nothing.
+- **In the `cat` output as it reached the model: lines 2 and 3 came back as
+  `[REDACTED:high-entropy:1]` and `.[REDACTED:high-entropy:2]`.** Line 1 —
+  the same path with `\` separators — survived untouched.
+
+So the write is faithful and the *view* is corrupt. Two consequences, both of
+which look like "the heredoc failed":
+
+- **Verification lies.** The normal next step after writing a script is to read
+  it back. The readback shows placeholders, so the author concludes the write
+  mangled the file, and rewrites or abandons a file that was correct.
+- **Copy-forward is poisoned.** Any path lifted out of earlier tool output into
+  the next heredoc is a placeholder by the time it is retyped, so the *second*
+  command really does fail — and the failure is attributed to the heredoc, one
+  step removed from the cause.
+
+`\` versus `/` is the discriminator, and it follows from the mechanism above:
+`ENTROPY_CANDIDATE_RE` includes `/` but not `\`, so a Windows path is broken into
+short runs that never reach the 32-character floor, while the POSIX spelling of
+the identical path is one ~125-character candidate. That also explains why the
+symptom reads as intermittent on this platform — it tracks separator style, not
+the tool.
+
+Two things this adds to the work:
+
+- **Test both spellings of the same path in one case**, and assert they agree.
+  A fix that only clears the POSIX form leaves the confusing half of the bug
+  (one spelling works, the other does not) in place.
+- **The wiki page owes heredoc authors an explicit line**: if a file you just
+  wrote reads back with `[REDACTED:…]` in it, measure it (`grep -c`, `wc -c`,
+  `md5sum`) before believing the write failed — and never re-paste a path out of
+  tool output. See also the `\`-versus-`/` note; spelling a path with backslashes
+  on Windows is a workaround available today.
+
+Unrelated and out of scope, recorded so it is not conflated: an *unquoted*
+heredoc (`<<EOF`) still gets `$` and `\` expanded by the shell, which is a real
+and separate way a heredoc mangles a Windows path. Quote the delimiter.
