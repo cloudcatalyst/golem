@@ -56,4 +56,6 @@ Run `/golem/ship` after the last task in a batch. Checklist:
 - [ ] `golem task done <id> --note "shipped"`
 - [ ] `golem task index --write` → regenerate ROADMAP.md
 - [ ] Retire batch brief, commit + PR
-- [ ] **Before merging: `gh pr checks <n>` must show `CI gate` green.** CI runs on every PR, but *enforcement* needs GitHub Pro on a private repo, so nothing server-side blocks a red merge — this step is the gate. Skipping it is how CI stayed red for four consecutive merges.
+- [ ] ~~**Before merging: `gh pr checks <n>` must show `CI gate` green.**~~ **SUSPENDED 2026-08-22 (USER DECISION) — GitHub Actions is billing-blocked.** Jobs fail in 1–3s with *"The job was not started because recent account payments have failed or your spending limit needs to be increased"*, which is **not** a code failure: read three fast red jobs as a billing block, not a regression. **The gate does not disappear, it moves local.** Until Actions runs again, before merging you must run and report in the PR:
+  `npx tsc --noEmit` · `npm run lint` · `npm run format:check` · `npx vitest run` · `golem wiki check`
+  — check **exit codes**, not tailed output, and paste the suite totals. That is the same work CI does; merging on a green local run is allowed, merging on an unrun one is not. Reinstate the moment billing clears: task `ci-billing-and-gate`. The original warning still stands and is why this is written down rather than just done — skipping the gate is how CI stayed red for four consecutive merges.
