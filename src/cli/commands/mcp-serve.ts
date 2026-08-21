@@ -23,6 +23,7 @@ import {
   type InferenceService,
   type KnowledgeBase,
 } from "../../interfaces/index.js";
+import { initPlugins } from "../../plugins/index.js";
 import {
   perGatewayEnvVar,
   resolveUpstreamDisplay,
@@ -31,6 +32,7 @@ import {
 } from "../../providers/index.js";
 import { readServedModel } from "../../proxy/served-model.js";
 import { openTelemetryStore } from "../../telemetry/index.js";
+import { VERSION } from "../../version.js";
 import { FederatedWikiReader, FileWikiStore } from "../../wiki/index.js";
 import { ensureProjectIndexed } from "../auto-index.js";
 import { buildKnowledgeStack } from "../build-knowledge.js";
@@ -222,8 +224,25 @@ export default function register(program: Command): void {
                 return bridge;
               })()
             : undefined;
+        // R8.11 / ADR-0005: plugins load before the server is built, so a plugin
+        // MCP tool is registered in the same pass as the built-ins (and so its
+        // name collision with one of them is caught before a model ever sees it).
+        // `initPlugins` also installs plugin redaction rules — this process
+        // redacts too, via the tools that store and return content.
+        const plugins = await initPlugins({
+          specifiers: settings.plugins.load,
+          enabled: settings.plugins.enabled,
+          projectDir: opts.dir,
+          golemVersion: VERSION,
+          // stdio is the MCP transport: anything on stdout corrupts the protocol
+          // stream, so plugin announcements go to stderr.
+          log: (message) =>
+            process.stderr.write(`golem: ${message}
+`),
+        });
         await serveStdio({
           compression: mcpCompressionService(opts.dir, telemetry),
+          ...(plugins.mcpTools.length > 0 ? { pluginTools: plugins.mcpTools } : {}),
           telemetry,
           // R11.1: read-only. The `level` tool is gone with the slider
           // (ADR-0004), so nothing on the MCP surface can change how much of the
