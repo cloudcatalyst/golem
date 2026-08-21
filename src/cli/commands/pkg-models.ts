@@ -18,7 +18,7 @@ import {
 } from "../../telemetry/model-catalog.js";
 import { InitError } from "../init.js";
 import { renderModelCatalog, renderRefreshResult } from "../models.js";
-import { collectPkg, pkgInstall, renderPkg } from "../pkg.js";
+import { collectPkg, renderPkg, runPkgWrite } from "../pkg.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -51,19 +51,40 @@ export default function register(program: Command): void {
       }
     });
 
-  pkgCmd
-    .command("install")
-    .description("Install a package (delegates to the tool's own installer)")
-    .argument("<id>", "package id from `golem pkg list`")
-    .option("--dir <path>", "project directory", _DEFAULT_DIR)
-    .action(async (id: string, opts: { dir: string }) => {
-      try {
-        const output = await pkgInstall(id, opts.dir);
-        process.stdout.write(`${output}\n`);
-      } catch (err) {
-        _fail(err);
-      }
-    });
+  // The write half (R8.14). Every verb takes the same shape on purpose: show the
+  // plan, take an explicit yes, then invoke the UPSTREAM's installer. Consent is
+  // never implied by `list`, and `--yes` is the only non-interactive route.
+  for (const [verb, blurb] of [
+    ["install", "Install a package by invoking the upstream's own installer at the recorded pin"],
+    ["remove", "Remove a package via the upstream's own uninstaller"],
+    [
+      "upgrade",
+      "Re-run the upstream's installer — a registry pin is converged on, never moved past",
+    ],
+  ] as const) {
+    pkgCmd
+      .command(verb)
+      .description(blurb)
+      .argument("<id>", "package id from `golem pkg list`")
+      .option("--dir <path>", "project directory", _DEFAULT_DIR)
+      .option("--yes", "consent without the prompt (required when stdin is not a TTY)", false)
+      .option("--dry-run", "show exactly what would run, then exit", false)
+      .action(async (id: string, opts: { dir: string; yes: boolean; dryRun: boolean }) => {
+        try {
+          const { outcome, text } = await runPkgWrite(id, verb, {
+            projectDir: opts.dir,
+            yes: opts.yes,
+            dryRun: opts.dryRun,
+          });
+          process.stdout.write(text);
+          if (outcome.status === "refused" || outcome.status === "failed") process.exit(1);
+          // Distinct exit code: the plan is sound, a human just has not said yes.
+          if (outcome.status === "needs-consent") process.exit(3);
+        } catch (err) {
+          _fail(err);
+        }
+      });
+  }
 
   const modelsCmd = program
     .command("models")

@@ -1,10 +1,10 @@
 ---
 title: Managed Tools
 type: concept
-tags: [dependencies, policy, ext, headroom, caveman, rtk, ollama]
-sources: [src/ext/manifest.ts, src/ext/detect.ts, src/ext/status.ts, src/cli/ext.ts, docs/golem-spec.md, docs/plan/verification-notes.md]
+tags: [dependencies, policy, pkg, ext, headroom, caveman, rtk, ollama]
+sources: [src/pkg/manifest.ts, src/pkg/detect.ts, src/pkg/status.ts, src/pkg/install.ts, src/cli/pkg.ts, docs/golem-spec.md, docs/plan/verification-notes.md]
 created: 2026-07-30
-updated: 2026-07-30
+updated: 2026-08-21
 ---
 
 # Managed tools — spawned or detected, never shipped
@@ -12,7 +12,8 @@ updated: 2026-07-30
 Golem integrates external tools without redistributing them. Spec **Decision 53**
 writes down the policy three integrations had already converged on
 ([[Compression]]'s Headroom sidecar, the Ollama local tier, and Decision 52's
-Caveman interop), and `golem ext` makes it inspectable.
+Caveman interop), and `golem pkg` makes it inspectable — and, since R8.14,
+actionable without ever carrying a byte of it.
 
 ## The invariant is not "no binaries"
 
@@ -69,12 +70,18 @@ for every client, with zero dependencies, is strictly better. Golem detects it
 only so the two never stack. Its two adjacent components (`/caveman-compress`,
 `caveman-shrink`) *do* qualify and are tracked as follow-ups.
 
-## `golem ext`
+## `golem pkg`
+
+The surface was named `golem ext` when Decision 53 landed; R10.1 renamed the module
+to `src/pkg/` and the command to `golem pkg`, keeping `ext` as an alias.
 
 ```
-golem ext                # list every row: tier, installed?, on?, what breaks without it
-golem ext --verbose      # + purpose, install steps, upstream, licence, adapter
-golem ext --json         # machine-readable
+golem pkg                       # list every row: tier, installed?, on?, what breaks without it
+golem pkg --verbose             # + purpose, install steps, upstream, licence, adapter
+golem pkg --json                # machine-readable
+golem pkg install <id> [--yes]  # invoke the UPSTREAM's installer, with consent (R8.14)
+golem pkg remove  <id> [--yes]
+golem pkg upgrade <id> [--yes]  # converge on the pin; never move past it
 ```
 
 Two deliberate properties:
@@ -153,6 +160,61 @@ Still open: what Claude Code does when a rewriting hook and a denying hook fire 
 the same call is **undocumented** (§91). Golem never emits `updatedInput`, so it
 cannot itself conflict; treat the combination as unverified.
 
+## The write half is mostly refusals (R8.14)
+
+`install` / `remove` / `upgrade` shipped a year of caution and about three
+recipes. That ratio is the design, not an unfinished edge.
+
+**A recipe is an argument array naming an installer you already have.** No
+vendoring, no mirror, no auto-download on first use. `planPkgAction` is *pure* —
+it decides what would happen without spawning anything, which is what makes the
+whole refusal matrix unit-testable and lets `--dry-run` show you the exact argv
+before you agree to it. Only two rows have a recipe: `caveman` (via `claude
+plugin`) and `typescript-language-server` (via global `npm`). `uv`, `ollama` and
+`rtk` stay manual because their installers are shell scripts or OS packages, and
+a `module` row (`unpdf`, `web-tree-sitter`) is refused outright — those resolve
+inside *Golem's own* install, so a project-local `npm install` would not even be
+detected. **A row without a recipe has no automated path at all**, and the refusal
+quotes its documented human route.
+
+**Consent comes from the autonomy gate, not from a local `if`.** Installing
+classifies `outward`; `decideGate` answers `ask` for `outward` at *every* autonomy
+level, `outcome` included (ADR-0002). That answer is what makes consent
+mandatory, so there is no level, setting or flag combination in which `golem pkg
+list` installs something. The gate's own reason is quoted to you, both outcomes
+land in the autonomy log, and a non-TTY run without `--yes` refuses (exit 3)
+rather than hanging — the same shape as `golem ollama setup`.
+
+**`upgrade` cannot move a pin.** A `"manifest"`-pinned row declares `upgrade:
+"reinstall"`, so an upgrade's argv is *byte-identical* to install's and the most it
+can achieve is converging on the recorded pin. A `"playbook"`-pinned row — both
+Headroom rows — refuses `upgrade` outright and names the T-C4 playbook. Moving a
+pin stays a reviewed code change. Drift guards assert those are the only two legal
+shapes, so a new row cannot quietly invent a third.
+
+## A cache is not an inventory (§133)
+
+Building `remove` exposed a false positive in the *read* half. `pluginOnDisk`
+checked for `~/.claude/plugins/cache/<marketplace>/<name>/`, but `claude plugin
+uninstall` empties `installed_plugins.json` and leaves that cache — plus the
+marketplace clone — on disk. So this repo reported Caveman `[found]` for ten days
+while `claude plugin list` said "No plugins installed."
+
+`installed_plugins.json` is now the authority in **both** directions: listed →
+installed; file readable and not listed → not installed, cache notwithstanding.
+The cache survives only as a fallback for a Claude Code with no registry file.
+
+**The rule.** When detection must answer "is this installed", read the file the
+tool itself would have to update to answer that question — a directory that merely
+exists proves someone once installed it, which is a different claim. And a
+read-only surface that grows a `remove` verb must re-derive what its detector
+actually proves: the verb is what makes a stale positive load-bearing.
+
+Related: `claude plugin install` has **no version selector** at all (§133), which
+is why the Caveman row records `pinPolicy: "upstream-unpinned"` rather than
+inventing a pin. Saying "the upstream governs this and gives us no say" is honest;
+a fabricated pin would not be.
+
 ## Related
 
 - [[LSP Bridge]] — the R8.6 tier-2 row: spawn the user's own language server, degrade to a no-op
@@ -161,3 +223,4 @@ cannot itself conflict; treat the combination as unverified.
 - [[Configuration Surfaces]] — where `enabledBy` settings are rendered and written
 - [[Dogfooding Golem]] — the local setup these rows describe
 - [[Architecture]] — where the adapters sit in the pipeline
+- `docs/decisions/ADR-0002-autonomy-approval-gates.md` — the gate that makes `golem pkg install` require consent
