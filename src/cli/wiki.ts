@@ -427,7 +427,11 @@ export interface WikiCheckReport {
  * record via `decisionsLogStartLine` above, not by being left out of this
  * list.
  */
-const PROSE_FILES_OUTSIDE_WIKI = ["README.md", "docs/golem-spec.md", "vscode-extension/README.md"] as const;
+const PROSE_FILES_OUTSIDE_WIKI = [
+  "README.md",
+  "docs/golem-spec.md",
+  "vscode-extension/README.md",
+] as const;
 
 /**
  * Lint `PROSE_FILES_OUTSIDE_WIKI` for retired identifiers. A file that isn't
