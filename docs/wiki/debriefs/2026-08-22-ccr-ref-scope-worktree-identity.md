@@ -11,7 +11,7 @@ updated: 2026-08-22
 
 Task: `docs/plan/tasks/ccr-ref-scope.md`. Full evidence, the reproduction
 transcript, the before/after end-to-end run, and the five-command verification
-log live in `docs/plan/verification-notes.md` §137. This debrief is the
+log live in `docs/plan/verification-notes.md` §138. This debrief is the
 outcome and the lessons, not the record.
 
 ## Outcome
@@ -92,6 +92,6 @@ marker format (`hash=<64-hex>`) and redaction behaviour are unchanged.
 rebuilt `dist/` artifacts (not source-via-vitest): a worktree-issued ref
 retrieved byte-identical from the main checkout via `expand`'s real code
 path, and an unsatisfiable ref's message named the exact `.golem\ccr` path
-searched. Full transcript: verification-notes.md §137.
+searched. Full transcript: verification-notes.md §138.
 
 See also [[Compression]], [[Knowledge Base]], [[Change Ledger]].

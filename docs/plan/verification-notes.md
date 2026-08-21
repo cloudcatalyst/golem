@@ -6817,7 +6817,7 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
 
-## §137 — ccr-ref-scope: `expand` misses across a git worktree because the CCR store is rooted per-directory, and "expired" was never real (2026-08-22)
+## §138 — ccr-ref-scope: `expand` misses across a git worktree because the CCR store is rooted per-directory, and "expired" was never real (2026-08-22)
 
 Closes the defect §136 logged in passing: `expand` returned "Unknown or expired
 CCR ref" for WebFetch refs minutes after they were issued. Task doc:
