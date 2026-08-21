@@ -26,15 +26,12 @@ describe("classifyAction (tools)", () => {
   it("classifies wiki_upsert (external-ish) as outward", () => {
     expect(classifyAction("mcp__golem__wiki_upsert", {})).toBe("outward");
   });
-  it("classifies the level tool by the level it requests (writes the slider)", () => {
-    // Levels ≥ 1 are a persistent local settings write — auto-approvable at "outcome" only.
-    expect(classifyAction("mcp__golem__level", { level: 1 })).toBe("write");
-    expect(classifyAction("mcp__golem__level", { level: 3 })).toBe("write");
-    // Level 0 disables redaction (secrets would leave the machine raw) — always gated.
-    expect(classifyAction("mcp__golem__level", { level: 0 })).toBe("outward");
-    // Unparseable input fails closed.
-    expect(classifyAction("mcp__golem__level", {})).toBe("unknown");
-    expect(classifyAction("mcp__golem__level", { level: "0" })).toBe("unknown");
+  it("gates the retired `level` tool like any unrecognized tool (R11.1)", () => {
+    // The tool went with the slider. Nothing can reach redaction through a dial
+    // now (ADR-0004), so there is no level to classify — and the fall-through is
+    // `unknown` (gated), stricter than the `write` a level call used to earn.
+    expect(classifyAction("mcp__golem__level", { level: 1 })).toBe("unknown");
+    expect(classifyAction("mcp__golem__level", { level: 0 })).toBe("unknown");
   });
   it("treats an unrecognized tool as unknown (fail-closed)", () => {
     expect(classifyAction("SomeNewTool", {})).toBe("unknown");

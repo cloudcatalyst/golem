@@ -56,7 +56,7 @@ export default function register(program: Command): void {
 
   configCmd
     .command("get")
-    .description("Show the effective value of one setting (e.g. slider.level)")
+    .description("Show the effective value of one setting (e.g. compression.level)")
     .argument("<key>", "dotted section.key")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)

@@ -5,7 +5,7 @@
  *
  * Extracted verbatim from `proxy-runtime.ts` (R10.1). Everything here is STATIC
  * per run — each one is an opt-in gate resolved once at construction, never
- * something the live slider toggles (Decision 31: the slider stays a pure
+ * something the live dials toggle (Decision 31: compression stays a pure
  * compression dial).
  */
 
@@ -19,7 +19,7 @@ import { WebCache, webCacheDir } from "../../knowledge/web-cache.js";
 import type { BuildProxyOptions } from "../proxy-runtime.js";
 
 export interface ProxySidecars {
-  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, slider ≥2). */
+  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, compression.level ≥2). */
   readonly semantic: HeadroomSidecar | undefined;
   readonly ccrStore: CcrStore;
   /** The same store as `ccrStore`, but only when the Headroom sidecar is configured. */
@@ -34,7 +34,7 @@ export function buildProxySidecars(
   settings: GolemSettings,
   build: BuildProxyOptions,
 ): ProxySidecars {
-  // OPT-IN semantic sidecar (Headroom) for slider ≥3 — off unless configured.
+  // OPT-IN semantic sidecar (Headroom) for compression.level ≥2 — off unless configured.
   // Started lazily on first ≥3 request; fails open so the proxy never depends on it.
   // Decision 53: the opaque `headroom_config` bag rides through to the worker, so
   // Headroom options Golem has never heard of are reachable from settings alone.
@@ -68,7 +68,7 @@ export function buildProxySidecars(
   // the way build-knowledge.ts does — semantic when an inference service was
   // provided, else the zero-setup hashing fallback. Static per-run, like
   // `headroom_sidecar` above — this is an opt-in gate, not something the live
-  // slider ever toggles (Decision 31: the slider stays a pure compression dial).
+  // dial ever toggles (Decision 31: compression stays a pure compression dial).
   const localAnswer =
     settings.knowledge.local_answer_enabled &&
     build.suppressLocalAnswer !== true &&

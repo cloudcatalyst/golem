@@ -23,7 +23,7 @@ export default function register(program: Command): void {
   program
     .command("status")
     .description(
-      "Show Golem status: config + provenance, proxy reachability, project wiring, slider",
+      "Show Golem status: config + provenance, proxy reachability, project wiring, dials",
     )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)
