@@ -6,11 +6,11 @@
  * "not installed" for a tool that is plainly on PATH.
  */
 
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { commandOnPath, moduleOnDisk } from "../../../src/pkg/detect.js";
+import { commandOnPath, moduleOnDisk, pluginOnDisk } from "../../../src/pkg/detect.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
 describe("commandOnPath", () => {
@@ -107,5 +107,77 @@ describe("moduleOnDisk", () => {
 
   it("does not throw on a malformed specifier", () => {
     expect(moduleOnDisk("")).toBeNull();
+  });
+});
+
+/**
+ * R8.14 — `installed_plugins.json` is the authority for plugin presence, not the
+ * content cache. `claude plugin uninstall` empties the registry but leaves the
+ * cache behind (verification-notes §133), and the old cache-only check therefore
+ * reported an uninstalled plugin as present.
+ */
+describe("pluginOnDisk", () => {
+  let home = "";
+
+  beforeEach(async () => {
+    home = await mkdtemp(path.join(tmpdir(), "golem-plugins-"));
+  });
+
+  afterEach(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const env = (): Record<string, string | undefined> => ({ HOME: home });
+
+  async function writeRegistry(body: string): Promise<void> {
+    await mkdir(path.join(home, ".claude", "plugins"), { recursive: true });
+    await writeFile(path.join(home, ".claude", "plugins", "installed_plugins.json"), body, "utf8");
+  }
+
+  async function makeCache(marketplace: string, name: string): Promise<string> {
+    const dir = path.join(home, ".claude", "plugins", "cache", marketplace, name, "abc123");
+    await mkdir(dir, { recursive: true });
+    return path.dirname(dir);
+  }
+
+  it("reports absent when the registry says nothing is installed, cache or not", async () => {
+    await makeCache("caveman", "caveman");
+    await writeRegistry(JSON.stringify({ version: 2, plugins: {} }));
+    expect(pluginOnDisk("caveman", "caveman", env())).toBeNull();
+  });
+
+  it("reports present when the registry lists the plugin", async () => {
+    const cache = await makeCache("caveman", "caveman");
+    await writeRegistry(JSON.stringify({ version: 2, plugins: { "caveman@caveman": {} } }));
+    expect(pluginOnDisk("caveman", "caveman", env())).toBe(cache);
+  });
+
+  it("accepts a bare id with no marketplace suffix", async () => {
+    await writeRegistry(JSON.stringify({ version: 2, plugins: { caveman: {} } }));
+    // No cache directory: the record itself is the evidence.
+    expect(pluginOnDisk("caveman", "caveman", env())).toBe(
+      path.join(home, ".claude", "plugins", "installed_plugins.json"),
+    );
+  });
+
+  it("does not match a different marketplace's plugin of the same name", async () => {
+    await makeCache("caveman", "caveman");
+    await writeRegistry(JSON.stringify({ version: 2, plugins: { "caveman@somewhere-else": {} } }));
+    expect(pluginOnDisk("caveman", "caveman", env())).toBeNull();
+  });
+
+  it("falls back to the cache when there is no registry file at all", async () => {
+    const cache = await makeCache("caveman", "caveman");
+    expect(pluginOnDisk("caveman", "caveman", env())).toBe(cache);
+  });
+
+  it("falls back to the cache when the registry is unparseable", async () => {
+    const cache = await makeCache("caveman", "caveman");
+    await writeRegistry("{ not json");
+    expect(pluginOnDisk("caveman", "caveman", env())).toBe(cache);
+  });
+
+  it("reports absent when neither the registry nor a cache exists", async () => {
+    expect(pluginOnDisk("caveman", "caveman", env())).toBeNull();
   });
 });

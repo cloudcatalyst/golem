@@ -125,3 +125,116 @@ describe("PKG_MANIFESTS", () => {
     }
   });
 });
+
+/**
+ * R8.14 drift guards over the WRITE half. These are the invariants that make
+ * `golem pkg install|remove|upgrade` safe to expose, expressed against the data
+ * rather than the code path — so a new row cannot opt out of them by accident.
+ */
+describe("PKG_MANIFESTS installers", () => {
+  it("says who governs every pin, and records an absent pin as a policy too", () => {
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.pin !== undefined) {
+        expect(
+          manifest.pinPolicy,
+          `${manifest.id}: a pin needs a policy saying who may move it`,
+        ).toBeDefined();
+        expect(
+          manifest.pinPolicy,
+          `${manifest.id}: "upstream-unpinned" contradicts having a pin`,
+        ).not.toBe("upstream-unpinned");
+      } else if (manifest.pinPolicy !== undefined) {
+        // The only honest policy without a pin: the upstream installer exposes
+        // no version selector, and the registry says so rather than staying mute.
+        expect(manifest.pinPolicy, manifest.id).toBe("upstream-unpinned");
+      }
+    }
+  });
+
+  it("never lets a playbook-pinned row declare an upgrade path", () => {
+    // The pin guard, as data: the Headroom pin moves through T-C4 only, so there
+    // must be no `upgrade` recipe for a CLI verb to reach in the first place.
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.pinPolicy !== "playbook") continue;
+      expect(
+        manifest.installer?.upgrade,
+        `${manifest.id}: a playbook-pinned row must not carry upgrade steps`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("upgrades a manifest-pinned row only by re-running install", () => {
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.pinPolicy !== "manifest" || manifest.installer === undefined) continue;
+      const upgrade = manifest.installer.upgrade;
+      expect(
+        upgrade === undefined || upgrade === "reinstall",
+        `${manifest.id}: explicit upgrade steps could name a version past the pin`,
+      ).toBe(true);
+    }
+  });
+
+  it("spawns the manifest pin verbatim, never a re-typed version", () => {
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.installer === undefined || manifest.pinPolicy !== "manifest") continue;
+      const args = manifest.installer.install.flatMap((s) => s.args);
+      expect(args, `${manifest.id}: install argv must contain ${manifest.pin}`).toContain(
+        manifest.pin,
+      );
+    }
+  });
+
+  it("gives every installer step a bare command, a reason, and no shell syntax", () => {
+    for (const manifest of PKG_MANIFESTS) {
+      const installer = manifest.installer;
+      if (installer === undefined) continue;
+      expect(
+        installer.upstream.length,
+        `${manifest.id}: name whose installer it is`,
+      ).toBeGreaterThan(0);
+      const upgrade = installer.upgrade === "reinstall" ? [] : (installer.upgrade ?? []);
+      const steps = [...installer.install, ...(installer.remove ?? []), ...upgrade];
+      expect(installer.install.length, `${manifest.id}: install cannot be empty`).toBeGreaterThan(
+        0,
+      );
+      for (const step of steps) {
+        expect(step.command, manifest.id).toMatch(/^[a-z][a-z0-9-]*$/);
+        expect(step.args.length, `${manifest.id}: ${step.command} needs arguments`).toBeGreaterThan(
+          0,
+        );
+        expect(step.why.length, `${manifest.id}: ${step.command} needs a reason`).toBeGreaterThan(
+          0,
+        );
+        // Argument arrays only (CLAUDE.md): no step may smuggle in a shell.
+        for (const arg of step.args) expect(arg, `${manifest.id}: ${arg}`).not.toMatch(/[&|;><`$]/);
+      }
+    }
+  });
+
+  it("never offers an automated install for a row Golem would have to carry", async () => {
+    // Criterion 4 again, from the write side: an `installer` may only invoke a
+    // command, so a `module` row (something npm resolves inside Golem's own
+    // install) must not pretend a project-local install would be detected.
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.detect.kind !== "module") continue;
+      expect(
+        manifest.installer,
+        `${manifest.id}: a module row is an optional dependency of Golem itself`,
+      ).toBeUndefined();
+    }
+  });
+
+  it("keeps a module row's pin identical to package.json", async () => {
+    const pkg = (await import("../../../package.json", { with: { type: "json" } })).default as {
+      optionalDependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    for (const manifest of PKG_MANIFESTS) {
+      if (manifest.detect.kind !== "module" || manifest.pin === undefined) continue;
+      const declared =
+        pkg.optionalDependencies?.[manifest.detect.specifier] ??
+        pkg.devDependencies?.[manifest.detect.specifier];
+      expect(manifest.pin, `${manifest.id}: registry pin must match package.json`).toBe(declared);
+    }
+  });
+});
