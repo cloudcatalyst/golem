@@ -301,13 +301,62 @@ const INTEGRITY_HASH_RE = /^(sha1|sha224|sha256|sha384|sha512|md5)-/i;
  * purely alphabetic or purely numeric is a strong non-secret signal without
  * blanket-excluding `/` (standard-base64 secrets legitimately contain it).
  * Single-chunk tokens (no delimiter at all) are left to the entropy check.
+ *
+ * verification-notes §137 extends this for a path that embeds a UUID/SHA
+ * segment (a scratchpad dir like `…/f70383e6-a18c-…/scratchpad`, or
+ * `.claude/worktrees/agent-<uuid>`): such a segment (`f70383e6`, `9c3e`)
+ * mixes digits and hex letters, so it is neither purely alphabetic nor purely
+ * numeric and — before this fix — disqualified the WHOLE path from the
+ * exclusion above, even though the same UUID standing alone is already
+ * treated as non-secret (see the pure-hex exclusion in
+ * {@link isHighEntropyToken}). The fix: also accept a chunk that is purely
+ * hex (`^[0-9a-fA-F]+$`).
+ *
+ * Why this cannot let a hyphenated random secret slip through: a chunk that
+ * mixes digits and hex letters (a-f) — the only NEW case this admits, since a
+ * chunk that is purely alphabetic or purely numeric was already accepted —
+ * only reaches this function at all if some OTHER chunk of the same token is
+ * a genuine word containing a letter outside a-f. If every chunk were
+ * confined to the hex alphabet, the token's characters (delimiters aside)
+ * would be a subset of `0-9a-fA-F`, and {@link isHighEntropyToken} already
+ * excludes that case earlier (pure hex, dehyphenated) before this function
+ * runs — a bare UUID or SHA never reaches here. So a mixed-hex chunk here
+ * always sits alongside a real word chunk (`scratchpad`, `worktrees`,
+ * `agent`, `Users`), which is exactly the shape of a path, not a disguised
+ * secret. `MIN_CHUNKS_FOR_HEX_ALLOWANCE` is a second, independent guard on
+ * top of that argument (belt-and-braces, not load-bearing on its own): real
+ * paths carrying an embedded UUID/hash run to many segments, while a short
+ * two-chunk `word-hexvalue` pair is refused and left to the entropy check.
  */
+const PATH_CHUNK_ALPHA_RE = /^[A-Za-z]+$/;
+const PATH_CHUNK_NUMERIC_RE = /^[0-9]+$/;
+const PATH_CHUNK_HEX_RE = /^[0-9a-fA-F]+$/;
+
+/** See the `MIN_CHUNKS_FOR_HEX_ALLOWANCE` paragraph in {@link isPathLikeToken}'s doc comment. */
+const MIN_CHUNKS_FOR_HEX_ALLOWANCE = 3;
+
 function isPathLikeToken(token: string): boolean {
   const chunks = token.split(/[/_-]/).filter((c) => c.length > 0);
   if (chunks.length < 2) {
     return false;
   }
-  return chunks.every((c) => /^[A-Za-z]+$/.test(c) || /^[0-9]+$/.test(c));
+  let hasMixedHexChunk = false;
+  for (const chunk of chunks) {
+    if (PATH_CHUNK_ALPHA_RE.test(chunk) || PATH_CHUNK_NUMERIC_RE.test(chunk)) {
+      continue; // clean: a plain word or a plain number
+    }
+    if (PATH_CHUNK_HEX_RE.test(chunk)) {
+      // Reaches here only because it failed BOTH checks above, so it mixes at
+      // least one digit with at least one hex letter (e.g. `f70383e6`).
+      hasMixedHexChunk = true;
+      continue; // tentatively clean: gated below
+    }
+    return false; // any chunk outside alpha/numeric/hex disqualifies the token
+  }
+  if (hasMixedHexChunk && chunks.length < MIN_CHUNKS_FOR_HEX_ALLOWANCE) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -322,7 +371,10 @@ function isPathLikeToken(token: string): boolean {
  *   traffic and are not secrets. Hex-shaped provider secrets are covered by
  *   the pattern rules above.
  * - path-like candidates ({@link isPathLikeToken}): repo paths and versioned
- *   filenames/ADR names (§49).
+ *   filenames/ADR names (§49), and — as of §137 — a path whose chunks embed a
+ *   UUID/SHA segment (a scratchpad dir, `.claude/worktrees/agent-<uuid>`),
+ *   because this function's pure-hex check above already excludes that exact
+ *   material when it stands alone; the path case only makes the two agree.
  * - tokens with fewer than 2 of 3 character classes (lowercase, uppercase,
  *   digit): long identifiers, camelCase names, and shouted constants each
  *   lack at least one of the three while real random secrets at 32+ chars
