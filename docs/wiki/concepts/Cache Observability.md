@@ -4,7 +4,7 @@ type: concept
 tags: [cache, telemetry, observability, r8, prompt-caching]
 sources: [src/proxy/cache-prefix.ts, src/telemetry/cache-report.ts, src/pipeline/pipeline.ts, docs/plan/verification-notes.md]
 created: 2026-07-30
-updated: 2026-07-31
+updated: 2026-08-21
 ---
 
 # Cache observability — hit rate, and what broke the prefix
@@ -116,7 +116,7 @@ promoted the levers that shrink what sits in context: [[Compression]]'s dedup
 work, the planned repo map, and the context ledger.
 
 Do not generalise 98.4%. It measures this setup — one project, Claude Code as the
-client, slider 3 — and Claude Code is unusually disciplined about cache stability.
+client, compression 3 — and Claude Code is unusually disciplined about cache stability.
 The point of shipping the rollup is that anyone can now measure their own instead
 of assuming.
 
