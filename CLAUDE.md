@@ -50,7 +50,7 @@ Run `/golem/ship` after the last task in a batch. Checklist:
 
 - [ ] Verify green: `tsc --noEmit`, `biome check`, `npm run verify:deps`, `vitest run`
 - [ ] Rebuild + restart proxy/CLI
-- [ ] Add **SHIPPED.md** entry (releases table)
+- [ ] Add a **`docs/plan/SHIPPED.md`** row — that exact path is the ONLY shipped log; never create another
 - [ ] Write **wiki debrief** under `docs/wiki/debriefs/` (outcome, key lessons, sources, tags)
 - [ ] Commit close-out docs alongside the work
 - [ ] `golem task done <id> --note "shipped"`
