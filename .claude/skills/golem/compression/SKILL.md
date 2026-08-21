@@ -16,9 +16,9 @@ how much of the pipeline runs.
   takes effect within a second; no proxy restart is needed.
 - `off` means compression off — **redaction still runs**. Say so, because the
   word invites the opposite reading.
-- If the user is asking to disable redaction entirely, that is
-  `golem config set proxy.bypass_all true`, NOT a compression value. Warn that
-  secrets and PII then reach the upstream unredacted, and let them decide.
+- If the user is asking to disable redaction entirely, that is `golem off`
+  (which persists `proxy.bypass_all`), NOT a compression value. Warn that secrets
+  and PII then reach the upstream unredacted until `golem on`, and let them decide.
 - If no value was given, call `stats` and report the current compression level.
 - If the Golem MCP tools are unavailable, tell the user the Golem MCP server is
   not connected and suggest running `golem init` and restarting Claude Code.
