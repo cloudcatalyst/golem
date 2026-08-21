@@ -9,11 +9,19 @@ updated: 2026-08-21
 
 # ADR-0006 — Remote steering: a paired phone may unblock the agent, but never authorize the irreversible
 
-**Status: PROPOSED (2026-08-21).** Written as the R6.3 build gate: that task has
-been blocked since 2026-07-30 on "a threat-model ADR in the shape of ADR-0002,
-accepted, BEFORE any code". This is that threat model. R12.3–R12.7 do not start
-until it is accepted, and **"do not build this" is an outcome this document is
-willing to reach** — see Alternatives.
+**Status: ACCEPTED (2026-08-21, USER DECISION; spec Decision 59).** Written as the
+R6.3 build gate: that task had been blocked since 2026-07-30 on "a threat-model ADR
+in the shape of ADR-0002, accepted, BEFORE any code". This is that threat model,
+accepted with Revision 2 (the relay) and with the three constraints below
+explicitly ratified:
+
+- **enrolment is local-only, forever** — there is no relay-mediated pairing and no
+  message type for one (§3c-1);
+- **2FA is mandatory** on a relay account (§3c);
+- **self-hosting the relay is a standing obligation**, not a courtesy — it is the
+  condition on which Alternative 4 stays adopted (§3b).
+
+R12.3–R12.9 are unblocked by this acceptance.
 
 > **Revision 2 (2026-08-21, USER DECISION), before acceptance.** The first draft
 > was **LAN-only** and rejected a hosted relay outright, because R6.3's brief lists
