@@ -30,6 +30,7 @@ import {
 import {
   type ProxyConfig,
   type ProxyRequest,
+  type ProxyRequestOutcome,
   type ProxyServerOptions,
   resolveProxyConfig,
 } from "./types.js";
@@ -211,6 +212,62 @@ export class GolemProxy {
     // Low-latency streaming: disable Nagle on the client socket.
     res.socket?.setNoDelay(true);
 
+    // R11.7 — one outcome per request, reported after it ends.
+    //
+    // The proxy used to log the routing decision it took BEFORE forwarding and
+    // nothing after, so a request that died mid-stream left no trace: the
+    // investigation of a live "Connection lost mid-response" had to be run from
+    // the client's transcript and the process table. Every terminal path below
+    // now reports what became of the request. Metadata only — never bodies.
+    const startedAt = Date.now();
+    const method = req.method ?? "GET";
+    // Query stripped: a query string can carry identifiers, and the path is
+    // what tells you which endpoint this was.
+    const reqPath = (req.url ?? "/").split("?")[0] ?? "/";
+    let outcomeTargetId: string | undefined;
+    let reported = false;
+    const report = (
+      result: ProxyRequestOutcome["result"],
+      extra: {
+        status?: number;
+        bytes?: number;
+        streaming?: boolean;
+        lastEvent?: string | null;
+        events?: number;
+        detail?: string;
+      } = {},
+    ): void => {
+      // Exactly once. Several paths both respond and fall through to a return,
+      // and a second line for one request would make the log lie about volume.
+      if (reported) return;
+      reported = true;
+      const hook = this.config.onRequestOutcome;
+      if (hook === undefined) return;
+      try {
+        hook({
+          method,
+          path: reqPath,
+          ...(outcomeTargetId !== undefined ? { targetId: outcomeTargetId } : {}),
+          result,
+          durationMs: Date.now() - startedAt,
+          bytes: extra.bytes ?? 0,
+          streaming: extra.streaming ?? false,
+          ...(extra.status !== undefined ? { status: extra.status } : {}),
+          ...(extra.lastEvent != null ? { lastEvent: extra.lastEvent } : {}),
+          ...(extra.events !== undefined ? { events: extra.events } : {}),
+          ...(extra.detail !== undefined ? { detail: extra.detail } : {}),
+        });
+      } catch {
+        // Observe-only: a reporting error must never reach the client, and by
+        // here the response is already finished anyway.
+      }
+    };
+    /** Respond with a proxy error AND report it — the two always go together. */
+    const failProxy = (status: number, message?: string, body?: string): void => {
+      this.respondProxyError(res, status, message, body);
+      report("proxy_error", { status, ...(message !== undefined ? { detail: message } : {}) });
+    };
+
     const abort = new AbortController();
     res.on("close", () => {
       // Client went away before we finished — cancel the upstream request.
@@ -228,7 +285,7 @@ export class GolemProxy {
       };
     } catch (err) {
       // We could not even read the client request — nothing to forward.
-      this.respondProxyError(res, 400, `golem proxy: could not read request (${String(err)})`);
+      failProxy(400, `golem proxy: could not read request (${String(err)})`);
       return;
     }
 
@@ -244,10 +301,11 @@ export class GolemProxy {
     if (this.config.resolveRoute !== undefined) {
       const decision = this.config.resolveRoute(forward);
       if (!decision.ok) {
-        this.respondProxyError(res, decision.status, decision.message);
+        failProxy(decision.status, decision.message);
         return;
       }
       forward = { ...forward, route: decision.route };
+      outcomeTargetId = decision.route.targetId;
       // A virtual `golem/<id>` model selected the target; no provider has a
       // model by that name, so the body must carry the target's real one. This
       // is the ONLY case where the proxy rewrites the model field, and it only
@@ -255,8 +313,7 @@ export class GolemProxy {
       if (decision.route.rewriteModel !== undefined) {
         const rewritten = rewriteBodyModel(forward.body, decision.route.rewriteModel);
         if (rewritten === null) {
-          this.respondProxyError(
-            res,
+          failProxy(
             400,
             `golem proxy: request selected target "${decision.route.targetId}" with a virtual ` +
               "model id, but the body is not JSON with a model field, so there is nothing to " +
@@ -288,6 +345,10 @@ export class GolemProxy {
       const direct = forward.respondDirectly;
       res.writeHead(direct.status, direct.headers);
       res.end(direct.body);
+      report("answered_locally", {
+        status: direct.status,
+        bytes: Buffer.byteLength(direct.body),
+      });
       return;
     }
 
@@ -330,15 +391,12 @@ export class GolemProxy {
       try {
         counted = translate.countTokens(forward.body);
       } catch (err) {
-        this.respondProxyError(
-          res,
-          400,
-          `golem proxy: could not count tokens for this request (${String(err)})`,
-        );
+        failProxy(400, `golem proxy: could not count tokens for this request (${String(err)})`);
         return;
       }
       res.writeHead(200, { "content-type": "application/json" });
       res.end(counted);
+      report("ok", { status: 200, bytes: counted.length });
       return;
     }
     if (translate !== undefined) {
@@ -346,8 +404,7 @@ export class GolemProxy {
       try {
         translated = translate.translateRequest(forward.body);
       } catch (err) {
-        this.respondProxyError(
-          res,
+        failProxy(
           400,
           `golem proxy: could not translate request to the upstream schema (${String(err)})`,
         );
@@ -373,10 +430,15 @@ export class GolemProxy {
     } catch (err) {
       if (abort.signal.aborted) {
         res.destroy();
+        report("client_gone", { detail: "the client hung up before the upstream answered" });
         return;
       }
       const mapped = mapUpstreamError(err);
       this.respondProxyError(res, mapped.status, undefined, mapped.body);
+      report("upstream_error", {
+        status: mapped.status,
+        detail: "the upstream request failed before any response",
+      });
       return;
     }
 
@@ -406,6 +468,7 @@ export class GolemProxy {
         }
         res.writeHead(upstream.statusCode, forwardableResponseHeaders(upstream.headers));
         res.end(raw);
+        report("upstream_error", { status: upstream.statusCode, bytes: raw.length });
         return;
       }
 
@@ -420,9 +483,20 @@ export class GolemProxy {
         res.flushHeaders();
         try {
           await pipeline(upstream.body, translate.createStreamTranslator(), res);
+          report("ok", { status: 200, streaming: true });
         } catch {
           res.destroy();
           upstream.body.destroy();
+          // A translated stream that failed mid-flight. The translator relays an
+          // upstream `error` frame itself (R10.23); reaching here means the pipe
+          // broke, which the client sees as a lost connection.
+          report(abort.signal.aborted ? "client_gone" : "truncated", {
+            status: 200,
+            streaming: true,
+            detail: abort.signal.aborted
+              ? "the client hung up mid-stream"
+              : "the translated stream ended before it completed",
+          });
         }
         return;
       }
@@ -458,8 +532,7 @@ export class GolemProxy {
         const relayed =
           err instanceof Error &&
           (err.name === "EmptyCompletionError" || err.name === "UpstreamErrorResponse");
-        this.respondProxyError(
-          res,
+        failProxy(
           502,
           relayed
             ? `golem proxy: ${err.message}`
@@ -472,6 +545,7 @@ export class GolemProxy {
         "content-length": Buffer.byteLength(translated),
       });
       res.end(translated);
+      report("ok", { status: 200, bytes: Buffer.byteLength(translated) });
       return;
     }
 
@@ -495,10 +569,20 @@ export class GolemProxy {
     // R1.1: optional read-only usage sniffer (verification-notes §30-37) —
     // only constructed when a consumer is listening, so the byte pipe stays
     // the plain two-stream case by default.
+    //
+    // R11.7: the outcome hook is a second consumer of the same scan — it needs
+    // the byte count and, for an SSE body, whether the stream ended with
+    // `message_stop`. One sniffer answers both, so the pipe still has exactly
+    // one observation hop rather than two.
     const onResponseUsage = this.config.onResponseUsage;
+    const wantsOutcome = this.config.onRequestOutcome !== undefined;
+    const upstreamStatus = upstream.statusCode;
+    const isStream = (this.header(upstream.headers, "content-type") ?? "")
+      .toLowerCase()
+      .includes("event-stream");
 
     try {
-      if (onResponseUsage !== undefined) {
+      if (onResponseUsage !== undefined || wantsOutcome) {
         // Still a raw byte pipe end-to-end — the sniffer forwards every
         // chunk unmodified (see usage-sniffer.ts); it never parses/transforms
         // what reaches the client.
@@ -507,7 +591,28 @@ export class GolemProxy {
           this.header(upstream.headers, "content-encoding"),
         );
         await pipeline(upstream.body, sniffer, res);
-        onResponseUsage(sniffer.usage, forward);
+        onResponseUsage?.(sniffer.usage, forward);
+        const end = sniffer.termination;
+        // R11.7 — the one thing only the proxy can see. An Anthropic Messages
+        // stream ends with `message_stop`; ending without it, and without an
+        // `error` event to explain why, means the response was TRUNCATED. That
+        // is what the client reports as "Connection lost mid-response", and it
+        // used to leave no trace on this side at all.
+        const truncated = end.streaming && !end.sawMessageStop && !end.sawErrorEvent;
+        report(upstreamStatus >= 400 ? "upstream_error" : truncated ? "truncated" : "ok", {
+          status: upstreamStatus,
+          bytes: sniffer.bytes,
+          streaming: end.streaming,
+          lastEvent: end.lastEvent,
+          ...(end.streaming ? { events: end.events } : {}),
+          ...(truncated
+            ? {
+                detail:
+                  "the SSE stream ended with no message_stop and no error event — " +
+                  "the response reaching the client is incomplete",
+              }
+            : {}),
+        });
       } else {
         // Raw byte pipe — the streaming path is never parsed or transformed.
         await pipeline(upstream.body, res);
@@ -517,6 +622,15 @@ export class GolemProxy {
       // change the status any more, so surface truncation to the client.
       res.destroy();
       upstream.body.destroy();
+      // R11.7: and say so on this side. A client that hung up is not a failure;
+      // anything else is a stream that stopped before it finished.
+      report(abort.signal.aborted ? "client_gone" : "truncated", {
+        status: upstreamStatus,
+        streaming: isStream,
+        detail: abort.signal.aborted
+          ? "the client hung up mid-stream"
+          : "the response stream failed mid-flight",
+      });
     }
   }
 

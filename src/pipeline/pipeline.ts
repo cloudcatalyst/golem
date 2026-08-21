@@ -43,6 +43,7 @@ import {
 import { buildContextLedger, type ContextLedgerCore } from "../proxy/context-ledger.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
 import { isRecord } from "../shared/json.js";
+import { proxyLog } from "../shared/proxy-log.js";
 import { applyBrevity } from "./brevity.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
 import { redactRequestBody } from "./redaction.js";
@@ -309,9 +310,9 @@ function reportHeldRequest(
     .sort((a, b) => b[1] - a[1])
     .map(([stage, ms]) => `${stage}=${Math.round(ms)}ms`)
     .join(" ");
-  process.stderr.write(
-    `golem proxy: pipeline held this request ${Math.round(total)}ms before ` +
-      `forwarding (${outcome})${breakdown.length > 0 ? ` — ${breakdown}` : ""}\n`,
+  proxyLog(
+    `pipeline held this request ${Math.round(total)}ms before ` +
+      `forwarding (${outcome})${breakdown.length > 0 ? ` — ${breakdown}` : ""}`,
   );
 }
 
