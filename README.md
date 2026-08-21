@@ -34,15 +34,15 @@ flowchart LR
 ```
 
 Every `POST /v1/messages` runs a fixed pipeline — **redaction always first** (never
-reordered), then situational compression, then a byte-faithful forward at slider
-level ≤ 1:
+reordered), then situational compression, then a byte-faithful forward at
+compression level ≤ 1:
 
 ```mermaid
 flowchart LR
   R["Request"] --> RD["Redact"] --> LA["Local-answer?<br/>(opt-in short-circuit)"] --> CO["Compress<br/>(situational)"] --> FW["Forward<br/>byte-faithful at level <= 1"] --> UP["Upstream"]
 ```
 
-Full component diagrams — request lifecycle by slider level, web-fetch caching,
+Full component diagrams — request lifecycle by compression level, web-fetch caching,
 search/RAG/vector DB, local/LAN/upstream routing, observability, and the guardrail
 stack — are in the wiki: **[docs/wiki/concepts/Architecture.md](docs/wiki/concepts/Architecture.md)**.
 
@@ -70,7 +70,7 @@ as a toggle or picker — each showing which layer supplied its value, writable 
 **project**, **local**, or **user** scope.
 
 ```
- ■▜▛▜▆▛▜▙   Golem 0.1.1 · ~/code/my-project
+ ■▜▛▜▆▛▜▙   Golem <version> · ~/code/my-project
  ▝▜██▀███   Proxy ● http://localhost:4653   Level 1 lossless   Upstream anthropic
  ▚▟█▛▚█▛▘   Local ● qwen2.5-coder:7b   Limits 5h 20% used
 ────────────────────────────────────────────────────────────────────────────────
@@ -97,8 +97,8 @@ Code runs on every tool call, is ~126ms). See
 [Configuration Surfaces](docs/wiki/concepts/Configuration%20Surfaces.md).
 
 The same controls are available non-interactively (`golem config list|get|set|unset`,
-`golem guidance`, `golem slider`) and in the VS Code panel's Settings section —
-all three render from one surface, `golem config schema --json`.
+`golem guidance`, `golem compression`, `golem brevity`) and in the VS Code panel's
+Settings section — all three render from one surface, `golem config schema --json`.
 
 - **Spec:** [docs/golem-spec.md](docs/golem-spec.md) (source of truth)
 - **Plan:** [docs/plan/IMPLEMENTATION_PLAN.md](docs/plan/IMPLEMENTATION_PLAN.md) · [docs/plan/ROADMAP.md](docs/plan/ROADMAP.md)

@@ -4,7 +4,7 @@ type: concept
 tags: [security, pipeline, redaction, t-c3, r1-batch]
 sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/verification-notes.md, docs/plan/verification-notes.md#§55, docs/plan/verification-notes.md#§56]
 created: 2026-07-10
-updated: 2026-07-11
+updated: 2026-08-21
 ---
 
 # Redaction Stage
@@ -34,14 +34,17 @@ so re-redacting redacted text is a no-op.
 ## Where it runs
 
 Redaction is **stage 1 of the pipeline and is never reordered after compression**.
-The single exception is slider level 0 (`passthrough`), a deliberate full bypass
-where nothing runs — see [[Compression Levels]] and [[Architecture]].
+The single exception is `proxy.bypass_all`, a deliberate full bypass where nothing
+runs. It is **not** a dial value: ADR-0004 gave it its own persisted setting
+precisely so that no number could turn redaction off, and it is CLI-only, never
+the default, and surfaced loudly wherever it is active — see
+[[Compression Levels]] and [[Architecture]].
 
 ```mermaid
 flowchart LR
-  IN["Request body / content to store"] --> L0{"slider level"}
-  L0 -->|"0 — passthrough"| RAW["Forward RAW · redaction OFF (warned loudly)"]
-  L0 -->|"level >= 1"| P1["Pass 1 — rule table (table order)"]
+  IN["Request body / content to store"] --> L0{"proxy.bypass_all?"}
+  L0 -->|"true — full bypass (CLI-only, warned loudly)"| RAW["Forward RAW · redaction OFF"]
+  L0 -->|"false (default)"| P1["Pass 1 — rule table (table order)"]
   P1 --> P2["Pass 2 — high-entropy backstop"]
   P2 --> NEXT["then compression / storage / forward"]
 ```

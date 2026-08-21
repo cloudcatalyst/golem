@@ -4,7 +4,7 @@ type: concept
 tags: [config, settings, tui, vscode, control-surface, toggle, ui]
 sources: [src/config/ui-model.ts, src/config/control-surface.ts, src/config/schema.ts, src/tui/, vscode-extension/render.js]
 created: 2026-07-30
-updated: 2026-08-09
+updated: 2026-08-21
 ---
 
 # Configuration Surfaces
@@ -22,13 +22,13 @@ scopes and its own write path:
 |---|---|---|---|
 | **Settings** | `.golem/settings.json` (+ `GOLEM_*` env) | user · project · local · env | `writeSetting` ← [[Compression Levels]] etc. |
 | **Guidance** | `.claude/rules/golem-<name>.md` — the file's *presence* is the toggle | project (committed) · user (`.local.md`) | [[Guidance Rules]] |
-| **Runtime** | slider level, active account, proxy daemon up/down | each decides its own | `golem slider` / `account use` / `proxy` |
+| **Runtime** | active account, proxy daemon up/down | each decides its own | `account use` / `proxy` |
 
 Layering was never the gap: precedence, provenance, atomic scoped writes, and env
 overrides already worked (`src/config/loader.ts`). What was missing was
 **presentation** — `schema.ts` holds zod validators and rich doc comments, but
 comments are invisible at runtime, so any UI had to re-type every label. That is
-why the VS Code panel could only ever expose the slider and the account.
+why the VS Code panel could only ever expose the compression dial and the account.
 
 ## The two layers added
 
@@ -49,9 +49,11 @@ why the VS Code panel could only ever expose the slider and the account.
   colour is just a validated string.
 - **`SECTION_META`** — title, summary, and display order per section.
 
-`ownedBy` is the anti-duplication rule: `slider.level` and `proxy.active_account`
-are omitted from the settings groups because a runtime control edits the same key
-with a better affordance. Nothing is editable from two rows at once.
+`ownedBy` is the anti-duplication rule: `proxy.active_account` is omitted from the
+settings groups because a runtime control edits the same key with a better
+affordance. Nothing is editable from two rows at once. (`slider.level` was the
+other entry here until ADR-0004 retired it; both dials are now plain settings
+rows, which is the point — a dial IS its stored value.)
 
 ### 2. `src/config/control-surface.ts` — one list, three stores
 
@@ -59,8 +61,8 @@ with a better affordance. Nothing is editable from two rows at once.
 `id`, `kind`, `value`, `layer`/`source`, `writableScopes`, `locked`, `danger`,
 `restart`, `advanced` — grouped into tabs, with the `golem status` report as the
 header. `applyControl(id, value, scope)` routes writes back to the **existing**
-implementations (`setConfig`, `writeGuidanceRule`, `setSliderLevel`, `useAccount`,
-`startDetached`). It adds no persistence logic of its own, so a UI cannot bypass a
+implementations (`setConfig`, `writeGuidanceRule`, `useAccount`, `startDetached`).
+It adds no persistence logic of its own, so a UI cannot bypass a
 validation or a side effect the CLI performs.
 
 Two rules every front end inherits:
@@ -68,9 +70,9 @@ Two rules every front end inherits:
 - **Env-supplied controls are locked.** A value from the `env` layer is shown but
   refuses writes, with the reason — writing a file layer that env overrides would
   report success and change nothing.
-- **`danger` needs a confirm.** Only in the risky direction: slider level 0 is the
-  full bypass with redaction OFF (Decision 30), so *going to* 0 asks; coming back
-  never does.
+- **`danger` needs a confirm.** Only in the risky direction: `proxy.bypass_all` is
+  the full bypass with redaction OFF (ADR-0004), so *turning it on* asks; coming
+  back never does.
 
 Control ids (`setting:<section>.<key>`, `guidance:<name>`, `runtime:<name>`) are a
 stable contract — a webview round-trips them, so they must not change between
@@ -132,8 +134,10 @@ verification-notes §86). Three rules keep it honest:
   as strings. `screen.ts` then rewrites only the lines that changed.
 - **Nothing needed only for display is on the first-paint path.**
   `ControlSurface.header` is nullable and `collectHeader` imports `cli/status.js`
-  lazily; the slider's read half lives in `cli/slider-read.ts` so displaying a level
-  doesn't load the write path's `cli/init.js`; guidance is imported from
+  lazily; a compression level's *name* comes from `compressionName` in the frozen
+  policy contract, so displaying one loads neither the config loader nor the write
+  path's `cli/init.js` (R11.1 removed the duplicate read-side table that used to do
+  this job); guidance is imported from
   `hooks/guidance.js` rather than the hooks barrel. The header still arrives a beat
   after the first frame, into a same-height placeholder.
 
