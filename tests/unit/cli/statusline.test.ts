@@ -560,14 +560,14 @@ describe("collectGolemState", () => {
 
   describe("blocked", () => {
     it("is true for a fresh blocked session state", async () => {
-      await writeSessionState(dir, { blocked: true, ts: new Date().toISOString() });
+      await writeSessionState(dir, { v: 2, blocked: true, ts: new Date().toISOString() });
       const state = await collectGolemState(dir);
       expect(state.blocked).toBe(true);
     });
 
     it("is not set for a stale blocked session state", async () => {
       const staleTs = new Date(Date.now() - BLOCKED_STALE_MS - 60_000).toISOString();
-      await writeSessionState(dir, { blocked: true, ts: staleTs });
+      await writeSessionState(dir, { v: 2, blocked: true, ts: staleTs });
       const state = await collectGolemState(dir);
       expect(state.blocked).toBeFalsy();
     });

@@ -19,6 +19,7 @@
 // path). The narrow specifiers match the ones ./status-collect.ts imports for
 // value, where the barrel's `undici` cost is what rules it out.
 import type { LimitPrediction } from "../proxy/limit-prediction.js";
+import type { BlockedView } from "./blocked-view.js";
 import type { LocalModelInfo } from "./local-model.js";
 import type { VscodeExtensionReport } from "./vscode-extension.js";
 
@@ -291,6 +292,17 @@ export interface StatusReport {
    * source), so the JSON stays quiet on machines this cannot apply to.
    */
   readonly vscode?: VscodeExtensionReport;
+  /**
+   * R12.2 — the blocked read model: which session, blocked on what, since when.
+   * Same {@link BlockedView} shape the dashboard serves at `/api/state`, so the
+   * VS Code status bar and panel (which read `golem status --json`) and a remote
+   * renderer describe a block identically instead of each inventing a shape.
+   *
+   * Always present: `status: "unknown"` is a real answer, and distinguishing it
+   * from `clear` is half the point of the widening. Optional in the type only so
+   * a hand-built report in a test need not carry it.
+   */
+  readonly blocked?: BlockedView;
   readonly warnings: readonly string[];
 }
 

@@ -26,7 +26,7 @@ import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
-import { readSessionState } from "../hooks/session-state.js";
+import { type BlockKind, readSessionState, resolveBlock } from "../hooks/session-state.js";
 import { isKnownWorker, KNOWN_WORKERS } from "../inference/workers.js";
 import {
   type CompressionLevel,
@@ -101,6 +101,19 @@ export interface GolemState {
   readonly tokensAfter?: number;
   /** Session is waiting on the human (21b blocked-state), if known. */
   readonly blocked?: boolean;
+  /**
+   * R12.2 — what the block IS (`permission` / `question` / `idle`), when the
+   * read model knows. A bare "waiting" cannot be acted on; the kind at least
+   * says whether anyone is being asked anything.
+   */
+  readonly blockedKind?: BlockKind;
+  /**
+   * R12.2 — the tool under judgement, for a permission block. Only the NAME
+   * reaches a status line: the argument can be a whole shell command, and this
+   * is a one-line glance surface. The full text lives in the read model, which
+   * is what the panel, the dashboard and (ADR-0006) a paired device read.
+   */
+  readonly blockedTool?: string;
   /** Whether the Golem proxy is actually running (pid-file check), if known. */
   readonly proxyRunning?: boolean;
   /** Decision 56: the bypass shim is serving (pipeline off, redaction still on). */
@@ -145,15 +158,37 @@ export interface GolemState {
 }
 
 /**
- * A blocked flag older than this is treated as stale — the "waiting" indicator
- * clears itself rather than sticking on if the clearing hook never fired.
+ * The staleness rule moved to the read model in R12.2 (`src/hooks/session-state.ts`)
+ * — it is a property of the blocked state, not of one renderer, and the dashboard
+ * and this line had each been deriving it separately. Re-exported here because
+ * this module was its published home.
  */
-export const BLOCKED_STALE_MS = 10 * 60_000;
+export { BLOCKED_STALE_MS, isBlockedFresh } from "../hooks/session-state.js";
 
-/** Is a blocked-state timestamp recent enough to still show "waiting"? */
-export function isBlockedFresh(ts: string, nowMs: number = Date.now()): boolean {
-  const t = Date.parse(ts);
-  return Number.isFinite(t) && nowMs - t >= 0 && nowMs - t < BLOCKED_STALE_MS;
+/**
+ * R12.2 — the blocked segment, or "" when nothing is waiting.
+ *
+ * **This is the SECOND of two copies.** The VS Code status bar's `blockedLabel`
+ * (`vscode-extension/render.js`) is the other; the extension is plain CommonJS
+ * and shares no module with this file. Change both together — the two surfaces a
+ * user reads in the same window must say the same thing, which is what
+ * `tests/unit/cli/statusline-parity.test.ts` exists to pin. Before R12.2 the CLI
+ * printed `⏸ waiting` and the status bar printed nothing at all, and no fixture
+ * visited that state.
+ *
+ * Only the tool NAME appears here; the argument a human must judge is in the read
+ * model, for surfaces that have room for it.
+ */
+export function blockedLabel(state: {
+  readonly blocked?: boolean;
+  readonly blockedKind?: BlockKind;
+  readonly blockedTool?: string;
+}): string {
+  if (state.blocked !== true) return "";
+  if (state.blockedTool !== undefined && state.blockedTool !== "") {
+    return `⏸ waiting: ${state.blockedTool}`;
+  }
+  return state.blockedKind === undefined ? "⏸ waiting" : `⏸ waiting (${state.blockedKind})`;
 }
 
 /** Human-facing name for a slider level, Title-cased ("balanced" → "Balanced"). */
@@ -429,7 +464,8 @@ export function renderStatusLine(
     parts.push(`${dim("🗜")} ${compLabel}`);
     parts.push(`${dim("✂")} ${golem.brevity ?? "off"}`);
   }
-  if (golem.blocked === true) parts.push(yellow("⏸ waiting"));
+  const waiting = blockedLabel(golem);
+  if (waiting !== "") parts.push(yellow(waiting));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
   return parts.join(dim(" · "));
@@ -591,12 +627,20 @@ export async function collectGolemState(
     // pid file unreadable — leave proxyRunning unknown
   }
   try {
-    const session = await readSessionState(dir);
-    // Only show "waiting" if the blocked flag is RECENT. A stale flag (the
-    // UserPromptSubmit clear-hook didn't fire, or the session moved on / switched
-    // models) self-heals instead of sticking on forever.
-    if (session?.blocked === true && isBlockedFresh(session.ts)) {
-      state = { ...state, blocked: true };
+    // R12.2: resolved through the read model's own classifier rather than by
+    // re-deriving staleness here. Only `waiting` lights the indicator — an
+    // `abandoned` block (blocked, but nobody ever wrote again) self-heals off
+    // this glance surface instead of sticking on forever, exactly as before,
+    // while staying visible as a distinct status to readers with room for it.
+    const resolved = resolveBlock(await readSessionState(dir));
+    if (resolved.status === "waiting") {
+      const s = resolved.state;
+      state = {
+        ...state,
+        blocked: true,
+        ...(s?.kind !== undefined ? { blockedKind: s.kind } : {}),
+        ...(s?.tool !== undefined ? { blockedTool: s.tool.name } : {}),
+      };
     }
   } catch {
     // no session state
