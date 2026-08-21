@@ -53,6 +53,7 @@ import {
 } from "./proxy-wiring.js";
 import type { ConfigKeyStatus, StatusOptions, StatusReport } from "./status.js";
 import { compressionFromDial, dialJson, effectiveCompressionJson } from "./status-render.js";
+import { providerUpstreamLabel } from "./statusline.js";
 import { inspectVscodeExtension, staleExtensionWarning } from "./vscode-extension.js";
 
 /**
@@ -222,6 +223,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       target: id,
       route,
       ...(row?.model != null ? { model: row.model } : {}),
+      // R11.6: the gateway, labelled exactly as the chat destination is, so the
+      // VS Code status bar can render `<gateway> (<model>)` for a worker. It had
+      // no gateway field at all, so the extension could only ever print a bare
+      // model id while the CLI printed a gateway beside it.
+      ...(row !== undefined
+        ? { gateway: providerUpstreamLabel(row.provider, row.base_url, row.account) }
+        : {}),
       ...(row === undefined ? { target_unknown: true } : {}),
       // R9.10: say plainly whether this worker is actually running locally,
       // rather than leaving every surface to infer it from the trust level.
