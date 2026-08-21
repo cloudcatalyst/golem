@@ -209,8 +209,14 @@ describe("which project, which session", () => {
     await mkdir(project, { recursive: true });
     await markBlocked(project, "r", "2026-08-21T00:00:00Z", "s1");
     const state = await readSessionState(project);
+    // `name` is a low-entropy segment, so it survives the sweep and is the field
+    // a renderer can rely on. `dir` deliberately is NOT asserted on: the sweep
+    // matches the WHOLE path as one high-entropy token and replaces it wholesale,
+    // so on some platforms no substring of it survives at all. That is worth
+    // knowing rather than working around - a remote surface should show the name.
     expect(state?.project?.name).toBe("my-project");
-    expect(state?.project?.dir.endsWith("my-project")).toBe(true);
+    expect(typeof state?.project?.dir).toBe("string");
+    expect(state?.project?.dir.length).toBeGreaterThan(0);
     expect(state?.sessionId).toBe("s1");
   });
 
