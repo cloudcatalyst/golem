@@ -491,6 +491,12 @@ function statusBarText(model) {
  * extension is plain JS sharing no module with it. Change both together; a test
  * pins that they agree.
  */
+/**
+ * What joins the model segments (R11.6). The CLI's `MODEL_JOIN` is the other
+ * copy — change both together, as with the glyphs below.
+ */
+const MODEL_JOIN = " + ";
+
 const ROLE_MARKS = {
   /** The model the conversation itself runs on. */
   chat: "◆",
@@ -515,12 +521,15 @@ function workerModels(model) {
   return rows.map((w) => {
     // A configured target that resolves carries its own model; one that does not
     // carries none, and the worker is then omitted rather than advertised.
-    if (w.target) return { worker: w.worker, model: w.model || null };
+    // R11.6: `gateway` rides along so a worker can be spelled the way the chat
+    // model is — `<gateway> (<model>)`. An older CLI sends no gateway, and the
+    // segment then falls back to the bare id rather than inventing one.
+    if (w.target) return { worker: w.worker, model: w.model || null, gateway: w.gateway || null };
     // No configured target → the local model, which has to actually be up.
     if (model.coderEnabled === false && w.worker === "coder") {
-      return { worker: w.worker, model: null };
+      return { worker: w.worker, model: null, gateway: null };
     }
-    return { worker: w.worker, model: localModel };
+    return { worker: w.worker, model: localModel, gateway: w.gateway || null };
   });
 }
 
@@ -528,7 +537,12 @@ function workerModels(model) {
  * The one-liner destination, naming the two models that actually matter now
  * that either end can be any target (R9.1–R9.4):
  *
- *   `◆ claude-opus-5[1m] · ✎ qwen2.5-coder:7b`
+ *   `◆ openrouter (deepseek/deepseek-v4-flash) + ✎ ollama (qwen2.5-coder:7b)`
+ *
+ * R11.6 — every model segment wears `<gateway> (<model>)`, and `+` joins them:
+ * they are the same kind of thing, where `·` separates different kinds (models ·
+ * dials · brevity). `MODEL_JOIN` in `src/cli/statusline.ts` is the other half of
+ * this string; `statusline-parity.test.ts` demands they match.
  *
  * **Flattened to one segment when both are the same model** — printing the same
  * id twice under two symbols tells the reader nothing and costs width the rest
@@ -547,10 +561,13 @@ function destinationLabel(model) {
   const chatModel = model.lastServedModel || model.model || model.defaultModel;
   const diverging = workerModels(model)
     .filter((w) => w.model && w.model !== chatModel)
-    .map((w) => `${ROLE_MARKS[w.worker] || ROLE_MARKS.worker} ${w.model}`);
+    .map((w) => {
+      const mark = ROLE_MARKS[w.worker] || ROLE_MARKS.worker;
+      return `${mark} ${w.gateway ? `${w.gateway} (${w.model})` : w.model}`;
+    });
   // R10.24: the chat destination LEADS, as it does in the CLI. It used to trail
   // the workers, so the arrow pointed at the drafting model.
-  return diverging.length === 0 ? chatSeg : `${chatSeg} · ${diverging.join(" · ")}`;
+  return [chatSeg, ...diverging].join(MODEL_JOIN);
 }
 
 function esc(s) {
