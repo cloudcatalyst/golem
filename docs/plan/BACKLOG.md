@@ -31,7 +31,7 @@ raw ──▶ discussed ──▶ promoted (a task document exists)
 
 | Date | Idea | Source | Status |
 |---|---|---|---|
-| — | _(empty — every captured idea is currently promoted or dropped)_ | — | — |
+| 2026-08-21 | Companion mobile app — start mapping it out | conversation (2026-08-21) | **PROMOTED** → [R12.1](tasks/R12.1.md)–[R12.7](tasks/R12.7.md), under the R6.3 umbrella. ADR-0006 first; R12.2 is the only build-now row. |
 
 ## Resolved
 
