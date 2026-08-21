@@ -102,14 +102,20 @@ export default function register(program: Command): void {
           port,
           snapshot: async () => {
             const { getDialInfo } = await import("../dials.js");
-            const [dial, stats] = await Promise.all([
+            const { blockedView } = await import("../blocked-view.js");
+            const { readSessionState, resolveBlock } = await import("../../hooks/session-state.js");
+            const [dial, stats, session] = await Promise.all([
               getDialInfo("compression", { projectDir: opts.dir }),
               collectStats(source),
+              readSessionState(opts.dir),
             ]);
             return {
               project_dir: opts.dir,
               compression: { level: dial.setting, name: dial.label },
               stats,
+              // R12.2: the same blocked read model `/api/state` serves, so the
+              // page itself renders it instead of only the JSON endpoint.
+              blocked: blockedView(resolveBlock(session)),
               generated_at: new Date().toISOString(),
             };
           },

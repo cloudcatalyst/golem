@@ -80,6 +80,18 @@ const STATUS_FIELDS_READ = [
   // therefore falls back to `golem target list` (which always lists the default)
   // before it falls back to the gateway picker.
   { path: ["targets"], stateful: "more than the synthetic default target is configured" },
+  // R12.2 — the blocked read model. `status` is always emitted (an unreadable
+  // state answers "unknown", which is not the same as "clear"); the detail fields
+  // exist only while something is actually blocked.
+  { path: ["blocked", "status"], required: true },
+  { path: ["blocked", "waiting"], required: true },
+  { path: ["blocked", "kind"], stateful: "the session is blocked" },
+  { path: ["blocked", "since"], stateful: "the session is blocked" },
+  { path: ["blocked", "tool", "name"], stateful: "the session is blocked on a permission prompt" },
+  {
+    path: ["blocked", "tool", "argument"],
+    stateful: "the session is blocked on a permission prompt",
+  },
   { path: ["local_model", "reachable"], required: true },
   { path: ["local_model", "base_url"], required: true },
   // Only when the local runtime answered the probe.
@@ -411,10 +423,95 @@ function buildModel(stats, status, update, accounts, surface) {
           : null,
     source: typeof s.source === "string" ? s.source : "live",
     accounts: accountList,
+    // R12.2 — the blocked read model, straight from `status --json`. Before
+    // R12.2 the extension had no notion of it at all: `golem statusline` printed
+    // `⏸ waiting` in the terminal while the status bar an inch away said
+    // nothing, and no parity fixture visited that state. Absent on an older CLI
+    // → status "unknown", i.e. no indicator, which is the pre-R12.2 display.
+    ...blockedModel(st.blocked),
     updateAvailable,
     latestVersion,
     currentVersion,
   };
+}
+
+/**
+ * R12.2 — the blocked fields of the view model, from `status --json`'s `blocked`
+ * block. See `src/cli/blocked-view.ts` for the shape and
+ * `docs/wiki/concepts/Blocked State Read Model.md` for what each field means.
+ *
+ * Only the status bar gates on `waiting`; the panel also shows `abandoned`,
+ * because a block nobody ever came back to is worth seeing where there is room
+ * to explain it.
+ */
+function blockedModel(blocked) {
+  const b = blocked && typeof blocked === "object" ? blocked : {};
+  const tool = b.tool && typeof b.tool === "object" ? b.tool : {};
+  return {
+    blockedStatus: typeof b.status === "string" ? b.status : "unknown",
+    blocked: b.waiting === true,
+    blockedKind: typeof b.kind === "string" ? b.kind : null,
+    blockedSince: typeof b.since === "string" ? b.since : null,
+    blockedTool: typeof tool.name === "string" ? tool.name : null,
+    blockedArgument: typeof tool.argument === "string" ? tool.argument : null,
+    blockedActionClass: typeof tool.action_class === "string" ? tool.action_class : null,
+    blockedReason: typeof b.reason === "string" ? b.reason : null,
+  };
+}
+
+/**
+ * R12.2 — the blocked segment, or "" when nothing is waiting.
+ *
+ * **This is the SECOND of two copies.** The CLI's `blockedLabel`
+ * (`src/cli/statusline.ts`) is the other, and the extension shares no module
+ * with it. Change both together; `tests/unit/cli/statusline-parity.test.ts` pins
+ * that they agree, and it now has fixtures at the blocked states — which is what
+ * was missing when the CLI grew this indicator and the status bar did not.
+ *
+ * Only the tool NAME appears here. The argument the human must judge is in the
+ * panel, which has room for it.
+ */
+function blockedLabel(model) {
+  if (model.blocked !== true) return "";
+  if (model.blockedTool) return `⏸ waiting: ${model.blockedTool}`;
+  return model.blockedKind ? `⏸ waiting (${model.blockedKind})` : "⏸ waiting";
+}
+
+/**
+ * R12.2 — the panel's blocked banner, or "" when there is nothing to say.
+ *
+ * The panel is where the *argument* belongs: unlike the one-line status bar it
+ * has room to show the command or path verbatim, which is what someone deciding
+ * whether to approve actually needs. It is already redacted — it was redacted
+ * before it was written to the state file (ADR-0006 §1), not on the way here.
+ *
+ * Shows `abandoned` as well as `waiting`, and says so plainly: a block nobody
+ * ever came back to used to be indistinguishable from nothing happening.
+ *
+ * Read-only, deliberately. There is no approve button and no post-back: writing
+ * a decision is R12.3, behind the autonomy gate, and this task adds no path for
+ * one.
+ */
+function blockedHtml(model) {
+  const waiting = model.blockedStatus === "waiting";
+  if (!waiting && model.blockedStatus !== "abandoned") return "";
+  const head = waiting
+    ? `Waiting on you${model.blockedKind ? ` · ${esc(model.blockedKind)}` : ""}`
+    : "Was waiting on you — no answer recorded";
+  const tool = model.blockedTool
+    ? ` · <span class="pill">${esc(model.blockedTool)}${
+        model.blockedActionClass ? ` · ${esc(model.blockedActionClass)}` : ""
+      }</span>`
+    : "";
+  const since = model.blockedSince
+    ? `<span class="age"> · since ${esc(model.blockedSince)}</span>`
+    : "";
+  const arg = model.blockedArgument
+    ? `<code class="arg">${esc(model.blockedArgument)}</code>`
+    : model.blockedReason
+      ? `<span class="arg">${esc(model.blockedReason)}</span>`
+      : "";
+  return `  <div class="blk"><span class="warn">⏸ ${head}</span>${tool}${since}${arg}</div>\n`;
 }
 
 /**
@@ -477,6 +574,12 @@ function statusBarText(model) {
   // states where NO stage runs (off / unwired / bypass) — see `inForce` — which is
   // a different question from a single dial sitting at zero.
   const dials = inForce ? ` · 🗜 ${dialLabel(model)} · ✂ ${model.brevity || "off"}` : "";
+  // R12.2: the blocked indicator, in the CLI's position — after the dials, before
+  // the update nudge. Unlike the dials it is NOT gated on `inForce`: whether the
+  // session is waiting on the human has nothing to do with whether the pipeline
+  // is transforming traffic.
+  const waiting = blockedLabel(model);
+  const blocked = waiting === "" ? "" : ` · ${waiting}`;
   // R10.24: ONE canonical order, shared with `golem statusline` — brand (plus a
     // state word when it is not simply running), then the arrow and where traffic
     // goes, then the dials. This line used to read `⬢ Golem · Lossless → …`,
@@ -485,7 +588,7 @@ function statusBarText(model) {
     // information. Pinned by tests/unit/cli/statusline-parity.test.ts.
     return `${glyph} Golem${state === "" ? "" : ` ${state}`} → ${destinationLabel(
       model,
-    )}${dials}${badge}`;
+    )}${dials}${blocked}${badge}`;
 }
 
 /**
@@ -745,12 +848,18 @@ function renderHtml(model, nonce) {
        font:11px var(--vscode-font-family);padding:1px 3px}
   .scope{opacity:.75}
   .hideadv .adv{display:none}
+  /* R12.2 — the blocked banner. */
+  .blk{margin:9px 0;padding:6px 8px;border-left:3px solid var(--vscode-charts-yellow,#d7ba7d);
+       background:var(--vscode-textBlockQuote-background,rgba(127,127,127,.12))}
+  .blk .arg{display:block;margin-top:4px;white-space:pre-wrap;word-break:break-all;
+       font:11px var(--vscode-editor-font-family,monospace);opacity:.9}
+  .blk .age{opacity:.6}
 </style></head><body>
   <div class="big">${model.savedPct}%</div>
   <div class="sub">saved · ${fmtTokens(model.before)} → ${fmtTokens(model.after)} tokens · ${
     model.requests
   } req${model.savingsWindow ? ` · ${esc(model.savingsWindow)}` : ""}</div>
-
+${blockedHtml(model)}
   <h2>Status</h2>
   <div class="row"><span>Proxy</span><span>
     <span class="${model.proxyBypass ? "warn" : model.proxyReachable ? "ok" : "warn"}">${
@@ -864,6 +973,9 @@ module.exports = {
   destinationLabel,
   buildModel,
   statusBarText,
+  blockedModel,
+  blockedLabel,
+  blockedHtml,
   renderHtml,
   settingsHtml,
   controlRowHtml,
