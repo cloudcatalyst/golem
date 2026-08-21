@@ -23,7 +23,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CCR_MARKER_RE, NativeLosslessCompression } from "../../src/compression/index.js";
-import { runPostToolUseHook, type HookIo } from "../../src/hooks/index.js";
+import { type HookIo, runPostToolUseHook } from "../../src/hooks/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 
 const newTempDir = useTempDirs("golem-ccr-worktree-");

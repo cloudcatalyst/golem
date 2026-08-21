@@ -10,7 +10,12 @@
  *
  * Envelopes read back from disk are an external surface, so they are
  * zod-validated (CLAUDE.md conventions); a missing OR corrupt envelope maps
- * to UnknownRefError ("does not exist or was evicted").
+ * to UnknownRefError. Neither this class nor {@link LocalDirBlobStore}
+ * implements eviction/pruning/a TTL (task ccr-ref-scope, 2026-08-22 —
+ * confirmed by grep, not assumed), so "missing" here means "never stored, or
+ * stored under a different {@link #location}" — never "expired". The thrown
+ * error carries `location` and a `reason` distinguishing the two from a
+ * corrupt envelope, rather than one "unknown or expired" for all three.
  */
 
 import { z } from "zod";
@@ -31,9 +36,12 @@ export class CcrStore {
   readonly #blobs: BlobStore;
   /** In-flight putIfAbsent promises, keyed by refId — serializes concurrent writes (R8.22). */
   readonly #putLocks = new Map<string, Promise<boolean>>();
+  /** Where this store is rooted, for {@link UnknownRefError}'s message. */
+  readonly #location: string;
 
-  constructor(blobs: BlobStore) {
+  constructor(blobs: BlobStore, location = "an unspecified CCR store") {
     this.#blobs = blobs;
+    this.#location = location;
   }
 
   /**
@@ -73,19 +81,32 @@ export class CcrStore {
       bytes = await this.#blobs.get(refId);
     } catch (err) {
       if (err instanceof BlobNotFoundError) {
-        throw new UnknownRefError(refId);
+        throw new UnknownRefError(refId, { location: this.#location, reason: "not-found" });
       }
       throw err;
     }
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(new TextDecoder().decode(bytes));
-    } catch {
-      throw new UnknownRefError(refId);
+    } catch (err) {
+      throw new UnknownRefError(refId, {
+        location: this.#location,
+        reason: "corrupt",
+        detail: `invalid JSON (${err instanceof Error ? err.message : String(err)})`,
+      });
     }
     const parsed = envelopeSchema.safeParse(parsedJson);
     if (!parsed.success) {
-      throw new UnknownRefError(refId);
+      const issues = parsed.error.issues
+        .map(
+          (issue) => `${issue.path.length > 0 ? issue.path.join(".") : "<root>"}: ${issue.message}`,
+        )
+        .join("; ");
+      throw new UnknownRefError(refId, {
+        location: this.#location,
+        reason: "corrupt",
+        detail: `envelope failed schema validation (${issues})`,
+      });
     }
     return parsed.data;
   }
