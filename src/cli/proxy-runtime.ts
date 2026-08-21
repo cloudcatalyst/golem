@@ -21,6 +21,7 @@ import { CompressionLevel, type PipelinePolicy, policyFor } from "../interfaces/
 import { contentHashIndex } from "../knowledge/web-cache.js";
 
 import { createGolemPipeline } from "../pipeline/index.js";
+import type { LoadedPlugins } from "../plugins/index.js";
 import { listTargets, type UpstreamProvider } from "../providers/index.js";
 import { GolemProxy } from "../proxy/index.js";
 import { SessionTreeRecorder } from "../session/session-tree.js";
@@ -140,6 +141,18 @@ export interface BuildProxyOptions {
    * breach that hard rule while looking like a convenience. So the shim redacts.
    */
   readonly shim?: boolean;
+  /**
+   * R8.11 / ADR-0005 — plugins the CALLER already loaded.
+   *
+   * Loaded outside this builder for the same reason `visionOf` is: importing a
+   * plugin is async, and this assembler is synchronous. The caller does it once,
+   * where awaiting is cheap.
+   *
+   * Only `stages` is consumed here; the redaction rules are installed by
+   * `initPlugins` at load time, because the rule table is process-global and has
+   * to be fixed before anything is served.
+   */
+  readonly plugins?: LoadedPlugins;
 }
 
 /**
@@ -236,6 +249,13 @@ export function buildProxyFromSettings(
     ...(semantic !== undefined ? { semantic } : {}),
     ...(headroomCcrStore !== undefined ? { headroomCcrStore } : {}),
     ...(localAnswer !== undefined ? { localAnswer } : {}),
+    // Decision 56: the shim is "pipeline off", so no third-party STAGE runs on
+    // it. Plugin redaction RULES still apply there — the shim redacts, and
+    // dropping an org's own key-format rule the moment the proxy is "stopped"
+    // would weaken redaction exactly when the user thought they were safer.
+    ...(build.shim !== true && build.plugins !== undefined && build.plugins.stages.length > 0
+      ? { pluginStages: build.plugins.stages }
+      : {}),
   });
   const { upstreamProvider, upstreamModel, mapUpstreamHeaders, translateUpstream } =
     buildUpstreamWiring(settings, upstream, build.visionOf);
