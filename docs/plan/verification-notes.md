@@ -6816,3 +6816,107 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `https://code.claude.com/docs/en/cli-reference` (`claude remote-control`,
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
+
+## §139 — `docs-slider-drift-remainder`: the check reached the spec body, and the Decisions Log needed a heading-scoped exemption, not a weaker one (2026-08-22)
+
+§132 (2026-08-20) retired the slider in code; the `golem wiki check` retired-
+identifier scan (docs-slider-drift, 2026-08-21) covered the wiki and README.md.
+Two surfaces were still stale: `docs/golem-spec.md` §1-8 (~30 live mentions
+across §1-8, not counting §9) and `vscode-extension/README.md` (4 lines), plus
+two leftover code strings. All four are now clean and `golem wiki check`
+confirms it: 171 pages + 3 non-wiki docs, 0 issues.
+
+**1. Whether the existing `RECORD_CITATION` rule already covered the
+Decisions Log had to be verified, not assumed — it did not.** The brief
+allowed adding exemption machinery only if the existing per-unit rule
+genuinely failed there. Read all 44 slider-mentioning units in §9 individually:
+the large majority cite a decision number or `verification-notes` **by name**,
+not by the literal `.md`-suffixed path or `docs/decisions/`/`docs/plan/`
+prefix `RECORD_CITATION`'s regex requires, and several name no record at all —
+they're describing the slider's own retirement as history, which
+`RETIREMENT_CONTEXT` almost catches but not reliably per-unit across a
+44-unit section. Loosening either regex to pass §9 would have loosened them
+project-wide, which is exactly the "weaken the rule" the brief forbade. Added
+instead: `decisionsLogStartLine` (`src/cli/wiki.ts`), a heading-keyed,
+whole-section exemption — any unit whose `startLine` is at or after a
+`## ... Decisions Log` heading (case-insensitive, any level) is skipped before
+the existing per-unit checks run. Scoped to one section of one document by
+construction: a page with no such heading is unaffected, and this is not a
+directory-based `RECORD_ZONES` rule, since a single mixed-content file can't
+use one. Covered by three new cases in
+`tests/unit/cli/wiki-retired-identifiers.test.ts` (unexempted mention under
+the heading: not flagged; the same mention before the heading: still flagged;
+heading match is case-insensitive with any prefix/level). `PROSE_FILES_OUTSIDE_WIKI`
+widened from `["README.md"]` to add `docs/golem-spec.md` and
+`vscode-extension/README.md` — still an explicit allowlist by design, not a
+tree-walk.
+
+**2. The spec rewrite found two staleness bugs beyond renaming.** (a) Two
+spots (`slider ≥4`, `levels 3-4`) named a compression level that never existed
+even on the pre-ADR-0004 0-3 scale — Decision 30 had already collapsed it, so
+this wasn't ADR-0004 drift, it was uncaught leftover drift from an earlier
+decision. (b) One spot ("Claude refines (slider-gated)") described an
+auto-triggered local-draft feature that Decision 31 **removed outright**, not
+renamed — the coder tool is invoked explicitly now, never auto-triggered by a
+dial value — so that line needed a rewrite of its claim, not a substitution
+of its noun. §9 (Decisions Log) is untouched, per the exemption above; the
+ASCII architecture diagram's box width (a fenced code block, not stripped by
+the checker) was preserved exactly when its label changed.
+
+**3. The vscode README rewrite was grounded in the extension's actual current
+model, not the brief's description of the old one.** Read `render.js` /
+`extension.js` before touching prose: the panel already renders a
+`compression.level` picker (`off`/`1`/`2`/`3`, named Off/Lossless/Balanced/
+Aggressive), and the danger-confirmed control is `proxy.bypass_all`, rendered
+by the Settings section with its own `danger` string — there is no "slider
+level 0" anywhere in the running code, so the fix was letting the README catch
+up to code that had already moved. Line 26 was the one that mattered most:
+"slider level 0 disables redaction" is the exact claim ADR-0004 makes
+false — a number cannot disable redaction now, only `proxy.bypass_all` can,
+and it is never the default. While grounding the rewrite, found the
+pre-existing text also conflated two states `levelLabel()` (Decision 56) keeps
+separate: a **stopped** proxy reads `Passthrough`; a **running** proxy with
+`proxy.bypass_all` on reads `Bypass` (it's still serving and redacting, so
+grouping it with "stopped" would misdescribe it). Corrected in the same pass
+since it sits in the paragraph being rewritten anyway.
+
+**4. Two code strings, both drafted first via the local model (`coder` MCP
+tool, `qwen/qwen3.7-flash` target) per standing preference, then hand-
+finished.** `src/config/ui-model.ts`'s `brevity.level` summary offered
+`"auto (follow the slider)"` — not a valid value since ADR-0004 — now lists
+only the four real ones. Its `compression.level` detail string, found while
+in the area, had a garbled leftover fragment from an earlier edit
+("... until you set it back to auto. ... passthrough belongs to the slider,
+where turning redaction off is surfaced loudly") — ungrammatical and wrong
+twice over (no level offers passthrough now; bypass is a separate setting).
+Rewritten. `src/tui/header.ts:42`'s local `HeaderSegment` variable was still
+named `slider` though it renders the compression level (label `"Level"`) —
+rename-only, output unchanged, confirmed both by reading the render call site
+and by `golem status`'s live "Compression: 3 (aggressive) → effectively 1
+(lossless)" / "Dials: brevity full" lines, which are built from the same
+`StatusReport` `headerLines()` consumes.
+
+**Known, deliberate hole: `src/dashboard/server.ts:246-247`'s `slider-level`/
+`slider-name` DOM element ids are untouched.** Owned by workstream R12.6
+(remote push); not touched here per the task brief. This is a real remaining
+instance of the retired name, just not a user-visible string — the DOM ids
+are an implementation detail, not label text — and the wiki checker does not
+scan `.ts` source outside `PROSE_FILES_OUTSIDE_WIKI`, so it does not fire on
+it. Left for R12.6 to rename when it next touches that file.
+
+**Also observed, not fixed (out of the three defined surfaces): stale
+comments in `vscode-extension/render.js`** (around `levelLabel()`'s doc
+comment and the status-bar-item doc comment) still describe "slider level 0"
+in prose form, even though the code beside them already reflects
+`proxy.bypass_all`/`compression.level`. Code comments aren't the wiki
+checker's domain and weren't one of the three named surfaces, so left as a
+found-but-unfiled remainder — same defect class as this whole task, one layer
+further down.
+
+**Verification (exit codes, local gate per CLAUDE.md while CI stays
+billing-blocked):** `npx tsc --noEmit` → 0. `npm run lint` → 0 (one biome
+line-length wrap needed on `PROSE_FILES_OUTSIDE_WIKI` after widening it,
+fixed in a follow-up commit). `npm run format:check` → 0. `npx vitest run` →
+0, **230 files passed + 1 skipped (231), 2983 tests passed + 2 skipped
+(2985)**. `golem wiki check` (built CLI, `dist/cli/main.js`) → 0, `171 page(s)
++ 3 doc(s), no issues`.
