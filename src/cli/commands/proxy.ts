@@ -279,7 +279,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   });
   if (semantic !== undefined) {
     process.stdout.write(
-      "golem proxy: Headroom semantic sidecar enabled (slider ≥3, opt-in, fail-open)\n",
+      "golem proxy: Headroom semantic sidecar enabled (compression.level ≥2, opt-in, fail-open)\n",
     );
   }
   await sweep;

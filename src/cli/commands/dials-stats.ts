@@ -1,5 +1,6 @@
 /**
- * golem slider / brevity / compression / stats — extracted from program.ts (R8.27).
+ * golem brevity / compression / stats — extracted from program.ts (R8.27).
+ * `golem slider` went with the slider it presented (R11.1).
  */
 
 import type { Command } from "commander";

@@ -108,6 +108,25 @@ export async function rememberManaged(
   await writeRecord(projectDir, record);
 }
 
+/**
+ * Did Golem write exactly this content, and has nobody touched it since?
+ *
+ * `classifyManaged` answers "is the file current?", which needs the content
+ * Golem SHIPS. A retired managed file has none — it is gone from the table —
+ * so the only question left is whether the bytes on disk are still the ones
+ * Golem last wrote. `false` for an edited file and for one Golem has no record
+ * of, which is what keeps a prune from deleting the user's work.
+ */
+export async function isUnmodifiedManaged(
+  projectDir: string,
+  file: string,
+  onDisk: string,
+): Promise<boolean> {
+  const record = await readRecord(projectDir);
+  const lastWritten = record[managedKey(projectDir, file)];
+  return lastWritten !== undefined && lastWritten === hashManaged(onDisk);
+}
+
 /** Drop one file's record (it is being removed). */
 export async function forgetManaged(projectDir: string, file: string): Promise<void> {
   const record = await readRecord(projectDir);

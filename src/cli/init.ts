@@ -42,7 +42,7 @@ import {
 } from "./init-claude-settings.js";
 import { InitError } from "./init-error.js";
 import { unwireHooks, wireHooks } from "./init-hooks.js";
-import { installSkills, removeSkills } from "./init-skills.js";
+import { installSkills, pruneRetiredSkills, removeSkills } from "./init-skills.js";
 import {
   ensureVscodeWatcherExclude,
   installVscodeExtension,
@@ -364,6 +364,11 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
 
   // 3. Skills: .claude/skills/golem/<cmd>/SKILL.md -> /golem/<cmd>.
   actions.push(...(await installSkills(projectDir, dryRun)));
+  // 3b. And drop the ones Golem has RETIRED. Without this a skill dropped from
+  // the table lingers forever, naming a command that no longer exists
+  // (`/golem/slider` outlived R11.1 by a release). Provenance-guarded: an
+  // edited skill is reported, never deleted.
+  actions.push(...(await pruneRetiredSkills(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
   // (gitignored). The compression level and per-project proxy port are personal /
