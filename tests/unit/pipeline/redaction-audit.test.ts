@@ -155,6 +155,137 @@ describe("T-C3: path-like false-positive guard (§49)", () => {
   });
 });
 
+describe("T-C3: path-with-embedded-UUID false-positive guard (§137)", () => {
+  // All fixtures below are built at RUNTIME (crypto.randomUUID(), shuffled
+  // character pools) rather than typed as literals: a literal secret in this
+  // file is itself redacted out from under a later read of this same file
+  // (verified live while writing this task — see verification-notes §137),
+  // and a literal placeholder pasted back in its place would make the
+  // assertion pass vacuously without testing anything.
+
+  /** Fisher-Yates shuffle — used to build fixtures with a known, distinct
+   * character set so the entropy math is a deterministic guarantee rather
+   * than something that has to get lucky on every CI run. */
+  function shuffled<T>(items: readonly T[]): T[] {
+    const arr = items.slice();
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  /** `len` pairwise-distinct uppercase letters (a "word" chunk, pure alpha). */
+  function randomWordChunk(len: number): string {
+    return shuffled("ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("")).slice(0, len).join("");
+  }
+
+  /** `len` pairwise-distinct hex characters (0-9a-f) — a UUID/SHA-shaped chunk.
+   * len <= 16 guarantees no repeats, and len > 10 forces at least one letter
+   * (only 10 digits exist) while len > 6 forces at least one digit (only 6
+   * hex letters exist) — so at len=14 it is unconditionally a MIX of both,
+   * never accidentally pure-numeric or pure-alpha. */
+  function randomHexChunk(len: number): string {
+    return shuffled("0123456789abcdef".split("")).slice(0, len).join("");
+  }
+
+  it("scratchpad path with an embedded UUID survives in BOTH separator spellings, and they agree", () => {
+    // Reproduces the exact shape from the task brief: a session scratchpad
+    // path under AppData/Local/Temp/claude/<workspace>/<uuid>/scratchpad.
+    // heredoc addendum: `\` was never broken (backslash isn't in the entropy
+    // charset) — the bug is POSIX-only, so both spellings must be asserted,
+    // not just the one that happens to already work.
+    const uuid = crypto.randomUUID();
+    const posixPath = `/home/dev/AppData/Local/Temp/claude/golem-workspace/${uuid}/scratchpad`;
+    const windowsPath = `C:\\Users\\dev\\AppData\\Local\\Temp\\claude\\golem-workspace\\${uuid}\\scratchpad`;
+
+    const outPosix = redact(`Save the log at ${posixPath} before continuing.`);
+    const outWindows = redact(`Save the log at ${windowsPath} before continuing.`);
+
+    // Each spelling survives byte-for-byte.
+    expect(outPosix).toContain(posixPath);
+    expect(outWindows).toContain(windowsPath);
+    // They agree: neither spelling of the same path is redacted.
+    expect(outPosix).not.toContain("[REDACTED");
+    expect(outWindows).not.toContain("[REDACTED");
+  });
+
+  it("does not redact a .claude/worktrees/agent-<uuid> path", () => {
+    const uuid = crypto.randomUUID();
+    const path = `.claude/worktrees/agent-${uuid}`;
+    const out = redact(`cd ${path} && git status`);
+    expect(out).toContain(path);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
+
+  it("still does not redact a bare UUID or a bare hex SHA standing alone (no regression)", () => {
+    const uuid = crypto.randomUUID();
+    const sha = randomHexChunk(16).repeat(3).slice(0, 40);
+    expect(redact(`id ${uuid} seen`)).toContain(uuid);
+    expect(redact(`commit ${sha} pushed`)).toContain(sha);
+  });
+
+  it("still does not redact the §49 repo-path and versioned-filename cases", () => {
+    const path = "docs/decisions/ADR-0012-file-watcher";
+    const name = "notes-2026-07-10-W3-summary-review";
+    expect(redact(`write the memo as ${path} and get it reviewed`)).toContain(path);
+    expect(redact(`draft saved to ${name}`)).toContain(name);
+  });
+
+  it("adversarial: a short word-hex pair does NOT qualify as path-like (chunk-count guard)", () => {
+    // Only 2 chunks total — one plain word, one mixed hex-digit chunk. A real
+    // path carrying an embedded UUID/hash runs to many more segments than
+    // this; a short pair like this is exactly the shape a hyphenated secret
+    // could take, so the guard must still hand it to the entropy check.
+    const word = randomWordChunk(20);
+    const hex = randomHexChunk(14);
+    const secret = `${word}-${hex}`;
+    const out = redact(`id ${secret} seen`);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED:high-entropy");
+  });
+
+  it("adversarial: a hyphen-delimited secret with no clean chunk at all still redacts", () => {
+    // Every chunk mixes a digit with a letter drawn from OUTSIDE a-f (g-z /
+    // G-Z), so no chunk is purely alphabetic, purely numeric, or purely hex --
+    // the pre-existing "every chunk must be clean" rule already rejects this,
+    // unaffected by the hex-chunk addition. The letter pool is built from
+    // character codes, never a literal run of letters, so this source file
+    // does not itself contain a string the entropy sweep would flag on a
+    // later read (a mixed-case 32+ char run is exactly the shape that trips
+    // it -- reproduced live while drafting this test).
+    const nonHexLetters: string[] = [];
+    for (let code = "g".charCodeAt(0); code <= "z".charCodeAt(0); code += 1) {
+      nonHexLetters.push(String.fromCharCode(code), String.fromCharCode(code).toUpperCase());
+    }
+    const lettersPool = shuffled(nonHexLetters).slice(0, 20); // 5 per chunk
+    const digitsPool = shuffled("0123456789".split("")).slice(0, 16); // 4 per chunk
+    const chunks: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const letters = lettersPool.slice(i * 5, i * 5 + 5);
+      const nums = digitsPool.slice(i * 4, i * 4 + 4);
+      chunks.push(shuffled([...letters, ...nums]).join(""));
+    }
+    const secret = chunks.join("-");
+    const out = redact(`id ${secret} seen`);
+    expect(out).not.toContain(secret);
+    expect(out).toContain("[REDACTED:high-entropy");
+  });
+
+  it("a hex chunk at exactly the chunk-count floor (3) IS accepted as path-like", () => {
+    // Boundary check on MIN_CHUNKS_FOR_HEX_ALLOWANCE: three segments, one of
+    // them a mixed hex chunk, mirrors a short real path (e.g. a two-directory
+    // prefix plus a UUID/hash leaf) and must survive.
+    const a = randomWordChunk(6);
+    const b = randomWordChunk(6);
+    const hex = randomHexChunk(14);
+    const path = `${a}/${b}/${hex}`;
+    const out = redact(`resolved to ${path} on disk`);
+    expect(out).toContain(path);
+    expect(out).not.toContain("[REDACTED:high-entropy");
+  });
+});
+
 describe("T-C3: credit-card separator-format guard (§50)", () => {
   it("does not redact a space-separated ASCII byte dump that is Luhn-valid by chance", () => {
     // Decimal byte values (0-255) joined by a single space, as a raw byte/debug
