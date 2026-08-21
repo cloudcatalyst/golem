@@ -43,6 +43,16 @@ import {
   snoozeStaleReason,
   writeSnoozeNudgeState,
 } from "./snooze-nudge.js";
+import {
+  DEFAULT_SPAWN_COST_FRACTION,
+  decideSpawnGate,
+  isSpawnTool,
+  readSpawnGateState,
+  recordSpawn,
+  spawnBlindReason,
+  spawnRefusalReason,
+  writeSpawnGateState,
+} from "./spawn-gate.js";
 import { toolArgument } from "./tool-argument.js";
 
 /**
@@ -58,6 +68,31 @@ async function readSnoozeEnforced(projectDir: string): Promise<boolean> {
     return settings.snooze.enforce;
   } catch {
     return false;
+  }
+}
+
+/** Effective spawn-gate settings (task `subagent-park`). */
+export interface SpawnGateSettings {
+  readonly enabled: boolean;
+  readonly costFraction: number;
+}
+
+/**
+ * Read `snooze.spawn_gate` / `snooze.spawn_cost_fraction`. Unlike
+ * {@link readSnoozeEnforced} this fails to the DEFAULTS (gate on) rather than
+ * off: the spawn gate touches exactly one tool, so a config-read failure cannot
+ * deadlock a session the way a session-wide deny could — and "never silently
+ * allow" is the whole point of the gate.
+ */
+async function readSpawnGateSettings(projectDir: string): Promise<SpawnGateSettings> {
+  try {
+    const { settings } = await loadConfig({ projectDir });
+    return {
+      enabled: settings.snooze.spawn_gate,
+      costFraction: settings.snooze.spawn_cost_fraction,
+    };
+  } catch {
+    return { enabled: true, costFraction: DEFAULT_SPAWN_COST_FRACTION };
   }
 }
 
@@ -112,6 +147,8 @@ export interface PreToolUseGateOptions {
   readonly readGateEnabled?: (projectDir: string) => Promise<boolean>;
   /** Inject the snooze-enforce check (tests); default reads `snooze.enforce` config. */
   readonly isSnoozeEnforced?: (projectDir: string) => Promise<boolean>;
+  /** Inject the spawn-gate settings (tests); default reads the `snooze.spawn_*` config. */
+  readonly readSpawnGateSettings?: (projectDir: string) => Promise<SpawnGateSettings>;
 }
 
 function parsePayload(raw: string): PreToolUsePayload | null {
@@ -186,6 +223,59 @@ export async function runPreToolUseHook(
         });
         emitDeny(snoozeStaleReason(nudge.observedAtIso, nudge.utilization, nudge.ageMinutes));
         return 0;
+      }
+    }
+
+    // Spawn gate (task `subagent-park`): the park above is a tool-call gate and a
+    // subagent never reaches it — the limit kills a child on a MODEL request,
+    // before it can propose a call to be denied. The one thing the parent does see
+    // as a tool call is the spawn, so refuse to start a subagent the window cannot
+    // pay for, with the numbers in the message. Runs AFTER the park deliberately:
+    // at/above the park threshold a spawn is denied by the park like everything
+    // else, and being told to park is the more useful instruction.
+    if (isSpawnTool(toolName)) {
+      const spawnSettings = await (options.readSpawnGateSettings ?? readSpawnGateSettings)(
+        projectDir,
+      );
+      if (spawnSettings.enabled) {
+        const readPrediction = options.readPrediction ?? readLimitState;
+        const nowMs = options.now?.() ?? Date.now();
+        const nowIso = options.nowIso ?? new Date(nowMs).toISOString();
+        const prediction = await readPrediction(projectDir);
+        const state = await readSpawnGateState(projectDir);
+        const spawn = decideSpawnGate(prediction, state, nowMs, {
+          costFraction: spawnSettings.costFraction,
+        });
+        const emitSpawnDeny = (reason: string): void => {
+          io.stdout.write(
+            `${JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: "PreToolUse",
+                permissionDecision: "deny",
+                permissionDecisionReason: reason,
+              },
+            })}\n`,
+          );
+        };
+        if (spawn.kind === "refuse") {
+          // No marker written: the refusal must persist while the projection holds,
+          // exactly like the enforcing park. Utilization falling (or the window
+          // resetting) is what lifts it.
+          emitSpawnDeny(spawnRefusalReason(spawn));
+          return 0;
+        }
+        if (spawn.kind === "blind") {
+          // One-shot per reading — informs, never deadlocks. Re-issue to proceed.
+          await writeSpawnGateState(projectDir, {
+            ...state,
+            blindWarnedForReading: spawn.reading,
+          });
+          emitSpawnDeny(spawnBlindReason(spawn));
+          return 0;
+        }
+        // Allowed: record it, so a sibling dispatched in the same fan-out is charged
+        // for even though this reading predates its spend.
+        await writeSpawnGateState(projectDir, recordSpawn(state, nowMs, nowIso));
       }
     }
 

@@ -258,7 +258,12 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   const nowMs = options.now?.() ?? Date.now();
   const limitState = await (options.readLimit ?? readLimitState)(projectDir).catch(() => null);
   const baseLimits =
-    limitState === null ? undefined : buildLimits(limitState, nowMs, settings.snooze.enforce);
+    limitState === null
+      ? undefined
+      : buildLimits(limitState, nowMs, settings.snooze.enforce, {
+          gate: settings.snooze.spawn_gate,
+          costFraction: settings.snooze.spawn_cost_fraction,
+        });
   // R9.2: name the target this reading came from, and every target it says
   // nothing about. Without that, one target's utilization reads as coverage for
   // all of them — and the auto-park is blind for the rest without saying so.
@@ -408,6 +413,7 @@ function buildLimits(
   pred: LimitPrediction,
   nowMs: number,
   enforced: boolean,
+  spawn: { readonly gate: boolean; readonly costFraction: number },
 ): StatusReport["limits"] {
   const observedMs = Date.parse(pred.observedAtIso);
   const ageMs = Number.isFinite(observedMs)
@@ -421,6 +427,13 @@ function buildLimits(
     age_minutes: Number.isFinite(ageMs) ? Math.round(ageMs / 60_000) : -1,
     stale: ageMs > STALE_AFTER_MS,
     enforced,
+    spawn_gate: spawn.gate,
+    spawn_cost_fraction: spawn.costFraction,
+    // What the gate would decide for the NEXT spawn on this reading, so the line
+    // says "spawns gated" only when a spawn would actually be refused — a claim
+    // the user can check rather than a restatement of the setting.
+    spawn_blocked:
+      spawn.gate && ageMs <= STALE_AFTER_MS && pred.fiveHour.utilization + spawn.costFraction > 1,
   };
 }
 
