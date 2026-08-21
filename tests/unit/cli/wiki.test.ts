@@ -181,6 +181,45 @@ describe("checkWiki", () => {
     expect(report.issues).toEqual([]);
   });
 
+  it("flags a debrief that WIKI.md does not list (R11.5)", async () => {
+    const wikiDir = resolveWikiDir(projectDir, "docs/wiki");
+    await writePage(
+      wikiDir,
+      "WIKI.md",
+      { ...OK_FM, title: "WIKI", type: "schema" },
+      "- debriefs/2026-08-01-listed.md — the one that is indexed",
+    );
+    await writePage(
+      wikiDir,
+      "debriefs/2026-08-01-listed.md",
+      { ...OK_FM, title: "Listed" },
+      "See [[Prompt Caching]].",
+    );
+    await writePage(
+      wikiDir,
+      "debriefs/2026-08-02-forgotten.md",
+      { ...OK_FM, title: "Forgotten" },
+      "See [[Prompt Caching]].",
+    );
+    await writePage(wikiDir, "concepts/Prompt Caching.md", OK_FM, "See [[Listed]].");
+
+    const report = await checkWiki(wikiDir);
+
+    const unlisted = report.issues.filter((i) => i.message.includes("not listed in WIKI.md"));
+    expect(unlisted).toHaveLength(1);
+    expect(unlisted[0]?.relPath).toBe("debriefs/2026-08-02-forgotten.md");
+  });
+
+  it("does not require an Index line for a concept page (R11.5 — debriefs only)", async () => {
+    const wikiDir = resolveWikiDir(projectDir, "docs/wiki");
+    await writePage(wikiDir, "WIKI.md", { ...OK_FM, title: "WIKI", type: "schema" }, "no list");
+    await writePage(wikiDir, "concepts/Prompt Caching.md", OK_FM, "See [[WIKI]].");
+
+    const report = await checkWiki(wikiDir);
+
+    expect(report.issues).toEqual([]);
+  });
+
   it("flags a frontmatter parse error", async () => {
     const wikiDir = resolveWikiDir(projectDir, "docs/wiki");
     await mkdir(path.join(wikiDir, "concepts"), { recursive: true });

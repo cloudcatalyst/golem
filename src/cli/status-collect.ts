@@ -436,5 +436,5 @@ function updateWarnings(latest: string): string[] {
  */
 export const REDACTION_OFF_WARNING =
   "proxy.bypass_all is ON: every request is forwarded byte-faithfully, so redaction " +
-  "is OFF and secrets/PII reach the upstream unredacted. Turn it off with " +
-  "`golem config set proxy.bypass_all false`.";
+  "is OFF and secrets/PII reach the upstream unredacted. Turn it back on with " +
+  "`golem on` (R11.3 — which is also what set it, and it persists until you do).";
