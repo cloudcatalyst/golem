@@ -65,12 +65,27 @@ function renderDial(kind: string, dial: DialStatus, effectiveValue?: string): st
 export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
   const pct = Math.round(limits.five_hour_utilization * 100);
   const park = limits.enforced ? "enforced" : "advisory";
+  // Task `subagent-park`: say when spawns are gated, the way the line already says
+  // whether the park is advisory or enforced. `off` is worth printing too — the
+  // gate being disabled is exactly the state whose consequences are invisible.
+  const spawnCost =
+    limits.spawn_cost_fraction === undefined
+      ? ""
+      : ` ~${Math.round(limits.spawn_cost_fraction * 100)}%/agent`;
+  const spawns =
+    limits.spawn_gate === false
+      ? " · spawns ungated"
+      : limits.spawn_gate === undefined
+        ? ""
+        : ` · spawns ${limits.spawn_blocked === true ? "REFUSED" : "allowed"}${spawnCost}`;
   if (limits.stale) {
     const age = limits.age_minutes < 0 ? "unknown" : `${limits.age_minutes}m ago`;
-    return `Limits: STALE (last reading ${age}, 5h ${pct}%) — auto-park blind; active account may not emit rate-limit headers · park ${park}`;
+    // A stale reading cannot say "allowed": the gate warns once and then proceeds.
+    const staleSpawns = limits.spawn_gate === false ? " · spawns ungated" : " · spawns warn-once";
+    return `Limits: STALE (last reading ${age}, 5h ${pct}%) — auto-park blind; active account may not emit rate-limit headers · park ${park}${staleSpawns}`;
   }
   const reset = limits.reset_at !== null ? ` (resets ${limits.reset_at})` : "";
-  return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago · park ${park}`;
+  return `Limits: 5h window ${pct}% used${reset} · observed ${limits.age_minutes}m ago · park ${park}${spawns}`;
 }
 
 export function dialJson(dial: DialInfo): DialStatus {

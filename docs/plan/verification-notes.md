@@ -6816,3 +6816,79 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `https://code.claude.com/docs/en/cli-reference` (`claude remote-control`,
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
+
+
+## §137 — `subagent-park`: the park is a tool-call gate, so it can only ever be applied at the spawn (2026-08-22)
+
+**The gap, restated from the evidence rather than from the design.** Three
+subagents were dispatched on R12 work on 2026-08-22. Two terminated on
+`Agent terminated early due to an API error: You've hit your session limit`,
+their last recorded words "All green. Committing." and "Committing on a fresh
+branch off main." The parent session, at ~96% utilization, was protected
+correctly: its next tool call was denied with the enforcing park instruction.
+
+So the park works and does not reach a child. The reason is structural, not a
+bug: `PreToolUse` gates **tool calls**, and the limit is hit on a **model
+request**. The child's turn fails upstream before it proposes a call, so there
+is nothing to deny and no turn in which the child could write a note. Making the
+gate stricter inside the child cannot help — the child never gets a turn to be
+gated.
+
+**What is actually reachable.** The one part of a subagent's lifetime the parent
+issues as an ordinary tool call is the spawn. Gating there keeps every existing
+rule intact: the gate stays a tool-call gate, the decision stays local, nothing
+new touches the request path.
+
+**Pricing a spawn.** The threshold is not the park threshold, because a spawn is
+a span of burn rather than a call: a spawn at 60% that runs twenty minutes can
+still die at 100%, and one at 85% that takes a minute will not. Measured from
+this session, the three agents consumed **~171k, ~186k and ~186k subagent tokens
+over 85–94 tool calls each** — roughly 15–20% of a session window apiece. Shipped
+default `snooze.spawn_cost_fraction = 0.18`; a spawn is refused when
+`utilization + fraction x (in-flight + 1) > 1`.
+
+**The in-flight term is the part that would otherwise still lose agents.**
+Utilization already contains what running children have spent, so charging them
+again would double-count. What it does *not* contain is a sibling dispatched
+since the reading was taken — precisely the three-at-once fan-out above, where
+each spawn reads the same pre-batch number and each looks affordable alone.
+Allowed spawns are therefore recorded (`.golem/state/spawn-gate.json`) and any
+recorded after `observedAtIso` is charged at the estimate.
+
+**Fail-closed, without a deadlock.** No reading, or a cold header feed, means the
+gate cannot measure. Assuming headroom there is the failure mode the task named,
+so it warns instead — **once per reading**, after which a re-issued spawn
+proceeds. That keeps the honest half of ADR-0002 (never silently allow) without
+recreating the R9.23 deadlock, where a hard deny made the only permitted action
+unreachable.
+
+**Ordering against the park.** The spawn gate runs *after* the park block. At or
+above the park threshold a spawn is denied by the park like every other call, and
+"park now" is the more useful instruction than "that spawn is too expensive". In
+practice the spawn gate therefore bites in the band below the park threshold,
+which is exactly where the lost agents were dispatched from.
+
+**What could not be gated, and is guidance instead.** A long-running child can
+still outlive its budget after a legitimate spawn. Two mitigations need no
+reverse channel and are now in the seeded `subagent-headroom` rule: tell every
+dispatched agent to **commit working increments on its own branch** (the two
+survivors survived precisely because they had committed — note the tension with
+"one workstream per PR": commit early, not merge early), and when a child does
+die, **convert its task notification into a durable task** naming what it was
+doing. The record survives even though the process does not; that is the honest
+version of "resume", and it stays inside Decision 37's boundary — nothing injects
+a turn into a dying child and nothing synthesises a reply in the proxy.
+
+**Surfaces.** `snooze.spawn_gate` (default true) and `snooze.spawn_cost_fraction`
+(default 0.18); env `GOLEM_SNOOZE_SPAWN_GATE` / `GOLEM_SNOOZE_SPAWN_COST_FRACTION`
+via the generic mapping. `golem status`'s Limits line now ends
+`park advisory|enforced · spawns allowed|REFUSED|ungated|warn-once ~18%/agent` —
+`REFUSED` is computed against the live reading, so it claims the gate is *biting*,
+not merely enabled.
+
+**Demonstrated, not argued.** The refusal, the both-names match (`Task` and
+`Agent`), the unchanged with-headroom path, the three-at-once fan-out, the
+one-shot blind warning, the off switch, and the yields-to-the-park ordering are
+all driven through the real hook with an injected utilization —
+`tests/unit/hooks/pre-tool-use.test.ts`, plus the decision function in
+`tests/unit/hooks/spawn-gate.test.ts`.
