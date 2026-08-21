@@ -4,7 +4,7 @@ type: concept
 tags: [dogfooding, proxy, dev-workflow, headroom]
 sources: ["docs/DEVELOPMENT.md (relocated here by Decision 36, 2026-07-16)"]
 created: 2026-07-16
-updated: 2026-07-30
+updated: 2026-08-21
 ---
 
 # Developing Golem while using Golem
@@ -47,7 +47,7 @@ flowchart TB
   CC --> SP
   SP --> UP["Upstream (Anthropic / gateway)"]
   DP --> UP
-  SIDE["Headroom sidecar (opt-in, slider ≥3)<br/>uv run --with headroom-ai==pin · fails open"]
+  SIDE["Headroom sidecar (opt-in, compression ≥3)<br/>uv run --with headroom-ai==pin · fails open"]
   SP -.->|"compression.headroom_sidecar"| SIDE
   DP -.-> SIDE
 
@@ -142,9 +142,9 @@ npm install -g ./golem-run-*.tgz
 That is the *only* moment your live proxy changes — deliberately, not as a side
 effect of development.
 
-## Headroom semantic sidecar (opt-in, slider ≥3)
+## Headroom semantic sidecar (opt-in, compression ≥3)
 
-At slider level ≥3 Golem can route the losslessly-compressed request through the
+At compression level ≥3 Golem can route the losslessly-compressed request through the
 **Headroom** compression pipeline (spec Decision 23). It is **off by default** —
 it adds a Python dependency — and **fails open** (if it can't start, the request
 is forwarded with just the lossless stages).
@@ -156,8 +156,8 @@ Enable it and provide the runtime:
 #    pinned package with `uv run --with headroom-ai==<pin>` (no global install).
 # 2) Turn it on in <project>/.golem/settings.json:
 #    { "compression": { "headroom_sidecar": true } }   (or GOLEM_COMPRESSION_HEADROOM_SIDECAR=1)
-# 3) Set the slider to 3+ and restart the proxy:
-golem slider 3
+# 3) Set the compression dial to 3 and restart the proxy:
+golem compression 3
 golem proxy restart
 ```
 
@@ -191,6 +191,6 @@ Three of them, in increasing order of how far they take Golem out of the path
    is unwired or the proxy restarts, and the command warns when that is the case.
 
 Per-request: the proxy honors an `x-golem-bypass` header for pure passthrough —
-note that this, like slider level 0, is a **full** bypass with redaction OFF (the
+note that this, like `proxy.bypass_all`, is a **full** bypass with redaction OFF (the
 shim above keeps redaction on). The pipeline also fails open: an error forwards
 the original request unchanged rather than breaking the session.
