@@ -261,6 +261,32 @@ const RETIREMENT_CONTEXT = /ADR-\d{4}|\bR11\.\d+\b|retire|no longer|used to|form
 const RECORD_CITATION =
   /(?:^|[\s(`/[])(?:debriefs|syntheses|sources)\/|docs\/(?:decisions|plan)\/|verification-notes\.md/i;
 
+/**
+ * Heading that opens a whole-document dated-record zone: everything from here
+ * to end of file is a Decisions Log — each entry dated, superseded or amended
+ * in place, never rewritten to today's vocabulary — the same reasoning as
+ * `RECORD_ZONES` below, but keyed by heading text rather than by directory,
+ * because a single file (`docs/golem-spec.md`) carries living prose (§1–§8)
+ * and a dated log (§9) side by side.
+ *
+ * docs-slider-drift-remainder verified the per-unit `RECORD_CITATION` rule
+ * against the real spec file before adding this: most Decisions Log entries
+ * name no ADR, no `docs/decisions/` or `docs/plan/` path, and no
+ * `verification-notes.md` (some cite it as "verification-notes §64", without
+ * the `.md` `RECORD_CITATION` requires) — the per-unit rule genuinely doesn't
+ * reach them, so a section-level exemption is the fix, not a weaker pattern.
+ */
+const DECISIONS_LOG_HEADING = /^#{1,6}\s+.*\bDecisions Log\b/i;
+
+/** 1-based line of the first `DECISIONS_LOG_HEADING` match, or undefined if none. */
+function decisionsLogStartLine(md: string): number | undefined {
+  const lines = md.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    if (DECISIONS_LOG_HEADING.test((lines[i] as string).trim())) return i + 1;
+  }
+  return undefined;
+}
+
 /** Ordered list markers, unordered markers, and table rows all start their own unit. */
 const LIST_MARKER = /^(?:[-*+]\s|\d+[.)]\s|\|)/;
 const HEADING = /^#{1,6}\s/;
@@ -362,7 +388,9 @@ export function isProseScanned(relPath: string): boolean {
  */
 export function findRetiredIdentifiers(relPath: string, body: string): WikiCheckIssue[] {
   const issues: WikiCheckIssue[] = [];
+  const decisionsLogFrom = decisionsLogStartLine(body);
   for (const unit of splitProseUnits(body)) {
+    if (decisionsLogFrom !== undefined && unit.startLine >= decisionsLogFrom) continue;
     if (RETIREMENT_CONTEXT.test(unit.text) || RECORD_CITATION.test(unit.text)) continue;
     for (const retired of RETIRED_IDENTIFIERS) {
       if (!retired.pattern.test(unit.text)) continue;
@@ -391,14 +419,15 @@ export interface WikiCheckReport {
  * Prose files outside the wiki that the retired-identifier rule also covers.
  * Repo-relative, resolved against the project dir.
  *
- * Deliberately short. Two surfaces are known to still name the slider and are
- * NOT here yet, each with its own task rather than a silent hole:
- * `docs/golem-spec.md`'s body (its Decisions Log is a dated record, but §1–§8
- * describe the slider throughout — a spec rewrite, not a docs sweep) and
- * `vscode-extension/README.md` (owned by a live workstream while this landed).
- * Widening this list is the way to close them; disabling the rule is not.
+ * Deliberately short — adding a surface here is a deliberate act with a green
+ * suite behind it, not a tree walk that silently starts scanning something
+ * new. `docs/golem-spec.md` and `vscode-extension/README.md` (docs-slider-
+ * drift-remainder) joined `README.md` (docs-slider-drift) once each was swept
+ * clean. `docs/golem-spec.md`'s §9 Decisions Log stays exempt as a dated
+ * record via `decisionsLogStartLine` above, not by being left out of this
+ * list.
  */
-const PROSE_FILES_OUTSIDE_WIKI = ["README.md"] as const;
+const PROSE_FILES_OUTSIDE_WIKI = ["README.md", "docs/golem-spec.md", "vscode-extension/README.md"] as const;
 
 /**
  * Lint `PROSE_FILES_OUTSIDE_WIKI` for retired identifiers. A file that isn't
