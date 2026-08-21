@@ -6274,3 +6274,341 @@ is a property of the runtime". Two rows in that table are deliberately "No" with
 no mitigation at all (a plugin exfiltrating what it sees; a pathological regex
 hanging the proxy, since JS regex execution is synchronous and uninterruptible).
 Writing them down is the feature.
+
+## §135 — R12.6: Web Push is content-blind but metadata-loud, iOS has no Apple-free wake, and the relay must NOT originate the push (2026-08-21)
+
+Spike for **R12.6**, reopened the same day by **ADR-0006 Revision 2** (spec Decision
+59), which promoted "relay-originated push" to option 1. Every fact below was
+checked against live sources on **2026-08-21**; URLs and document dates are inline.
+None of it is from memory — the iOS story has moved three times (16.4, 18.4, 26.0)
+and the Push API spec changed editors in September 2025.
+
+**The question.** ADR-0006 ships a companion app that can unblock a waiting agent.
+A companion app whose owner has to remember to open it is not one. So: how does a
+phone learn a permission prompt is waiting, without adding a party that can read
+what is being asked?
+
+### 0. Option 1, answered first: the relay must NOT originate the push
+
+Verdict: **no — and it buys nothing.** Three findings, in the order that matters.
+
+**(a) Originating a push requires a signing key, and §3b says the relay holds
+none.** Both push services Golem would target enforce VAPID *subscription
+restriction* (RFC 8292 §4): the subscription is created carrying the application
+server's public key, and "the request for push message delivery MUST include a JWT
+signed by the private key that corresponds to the public key used when creating
+the subscription". Apple states the same operationally — "The public key you
+include must match the public key you provided to `PushManager.subscribe`." So a
+relay that originates pushes holds a private signing key, and §3b's first bullet
+("It holds no key and terminates no TLS") becomes false. That bullet is the whole
+basis of the blind-relay claim; it is not negotiable for a convenience.
+
+**(b) The weaker variant still hands the relay a wake credential.** The laptop
+could pre-encrypt the body and pre-sign the JWT, leaving the relay a dumb
+POST-forwarder holding no long-term key. Two live-source facts spoil it. RFC 8292
+§5: "This authentication scheme is vulnerable to replay attacks if an attacker can
+acquire a valid JWT" — and Apple's guidance is "Don't refresh your JWT more
+frequently than once per hour", so a forwarded token is replayable for a usefully
+long window. RFC 8030 §8.3 is explicit that the endpoint is a capability URL:
+"Knowledge of a push URI implies authorization to send push messages." Together
+the relay gains a durable address for that phone plus the ability to ring it. §3b
+already concedes DoS, and nuisance notifications are inside that — but **durable
+offline addressability is a new capability, not a metadata increment**: reaching a
+paired device when no session is open at all is precisely the thing today's relay
+provably cannot do. Note the Push API spec flags this exact hand-off as the
+application server's discretion, which is why declining it has to be written down:
+"The application server is able to share the details necessary to use a push
+subscription with a third party at its own discretion."
+
+**(c) It buys nothing, because the blocked machine is online by definition.** The
+event being announced is "Claude Code is waiting for a decision *on this laptop*".
+The laptop is therefore awake, running, and holding the prompt; it needs no help
+making one outbound HTTPS POST. The only thing relay-origination would buy is
+hiding the laptop's IP from Apple/Google — and in relayed mode the relay already
+sees both endpoints' addresses, so the trade is a new capability for a partial
+privacy gain against a different party. Declined.
+
+**For the ADR:** push, if it ships, is originated by the machine that is blocked.
+No subscription endpoint, no `p256dh`/`auth` pair, and no VAPID private key ever
+reaches the relay. §3b survives unamended.
+
+### 1. What Web Push leaks to the push service — the body is genuinely opaque; the metadata is not
+
+**The body is opaque, and the push service is the named adversary.** RFC 8291
+(Nov 2017) exists for this: "This document describes how messages sent using this
+protocol can be secured against inspection, modification, and forgery by a push
+service." Mechanism: ECDH on P-256 plus an authentication secret, where "A user
+agent generates an ECDH key pair and authentication secret that it associates with
+each subscription it creates" — the decryption keys are minted **on the phone** and
+shared only with the application server. RFC 8030 §8.1 states the bare protocol's
+weakness plainly ("The protection afforded by TLS does not protect content from
+the push service. Without additional safeguards, a push service can inspect and
+modify the message content") and then requires the safeguard, which the Push API
+mandates. So an encrypted "something is waiting" **is** genuinely unreadable by
+Google and Apple. That half of the brief's hypothesis is verified, not assumed.
+
+**The metadata is exposed by design, and padding is the only mitigation.** Push
+API, W3C Working Draft **01 December 2025**, §4: "The contents of a push message
+are encrypted [RFC8291]. However, the push service is still exposed to the
+metadata of messages sent by an application server to a user agent over a push
+subscription. This includes the timing, frequency, and size of messages. Other
+than changing push services, which user agents may disallow, the only known
+mitigation is to increase the apparent message size by padding." RFC 8291 §7 says
+the same from the protocol side: "The timing and length of communication cannot be
+hidden from the push service. … the push service will see which application server
+is talking to which user agent and the subscription that is used."
+
+**The application server's identity is a deliberate, stable pseudonym.** That is
+VAPID's stated purpose (RFC 8292 abstract): "The signature can be used by the push
+service to attribute requests that are made by the same application server to a
+single entity." With a restricted subscription the key is bound at subscribe time,
+so it cannot be rotated per message without discarding the subscription. Contact
+info is optional: RFC 8292 §2.1 — "If the application server wishes to provide
+contact details, it MAY include a `sub` (Subject) claim … either a `mailto:` …
+or an `https:` URI." SHOULD, not MUST, and a project URL satisfies it.
+
+**What an endpoint reveals is spec-constrained, with one carve-out that matters.**
+RFC 8030 §8.2 is unusually strong: push URIs "MUST NOT provide any basis to
+correlate communications for a given user agent", "It MUST NOT be possible to
+correlate any two push resource URIs based solely on their contents", and "User and
+device information MUST NOT be exposed through a push or push message URI" — while
+conceding "It is also possible that traffic analysis could be used to correlate
+subscriptions." Push API §4 adds the carve-out: "The push endpoint MUST NOT expose
+information about the user to be derived by actors **other than the push service**."
+So an endpoint is opaque to us and to a relay, and *not* to Apple/Google. One
+genuinely reassuring rule: "The push endpoint of a deactivated push subscription
+MUST NOT be reused for a new push subscription. This prevents the creation of a
+persistent identifier that the user cannot remove."
+
+**Cleartext headers leak more than people expect.** RFC 8030 §8.1: "The Topic
+header field exposes information that allows more granular correlation of push
+messages on the same subject. This might be used to aid traffic analysis of push
+messages by the push service." `TTL` and `Urgency` are likewise cleartext. Padding
+headroom: RFC 8291 §4 requires a single record with an `rs` covering "the
+plaintext, the padding delimiter (1 octet), any padding, and the authentication
+tag", within a 4096-octet body / "at most, 3993 octets of plaintext". Enough to pad
+a fixed-size doorbell to a constant.
+
+**Net residue after doing everything right:** a stable pseudonym for this laptop,
+this device's subscription, the timing and frequency of blocks, a padded constant
+size, and the laptop's IP. That is a work-pattern signal about one developer — the
+same *class* §3b already concedes to the relay, disclosed to a second party.
+
+### 2. iOS does deliver Web Push to an installed web app — under four conditions
+
+From Apple's live page "Sending web push notifications in web apps and browsers"
+(fetched 2026-08-21) and WebKit's own posts:
+
+- **Home Screen install, on iOS specifically.** "Add web push to Home Screen web
+  apps in **iOS 16.4 or later** and Webpages in Safari 16 for macOS 13 or later."
+  The asymmetry in that sentence is the condition: on iOS it is installed web apps,
+  not Safari tabs.
+- **No developer account.** "You don't need to join the Apple Developer Program to
+  send web push notifications." No Website Push ID. WebKit (2023-02-16) concurs and
+  names the transport: "Web Push on iOS and iPadOS uses the same Apple Push
+  Notification service that powers native push on all Apple devices."
+- **Permission from a gesture.** WebKit: a Home Screen web app "can request
+  permission to receive push notifications as long as that request is in response
+  to direct user interaction". Delivered notifications then behave like any app's —
+  "They show on the Lock Screen, in Notification Center, and on a paired Apple
+  Watch." Egress to allow: `https://*.push.apple.com`.
+- **Every push must ring — silent push is impossible.** Apple: "Safari doesn't
+  support invisible push notifications. Present push notifications to the user
+  immediately after your service worker receives them. If you don't, Safari
+  revokes the push notification permission for your site." WebKit gives the
+  mechanism: `userVisibleOnly: true` is required. **Consequence for Golem, and it
+  is a good one:** push cannot be used as a silent transport to wake a sync, so
+  push count equals notification count and no covert side channel exists — not even
+  one we could build by accident.
+
+**Current OS state, checked rather than assumed.** Safari 26.0 (2025-09-15) made
+installing *easier*: "By default, every website added to the Home Screen opens as
+a web app", and "Giving users a web app experience simply no longer requires a
+manifest file." Grepped the Safari 26.0 / 26.2 / 26.4 / 26.6 release notes for
+push changes: none. 26.0's only push mention is Web Inspector auto-inspecting and
+pausing service workers; 26.2's is `history.pushState`; 26.6 has none.
+
+**Declarative Web Push is the right shape for a rarely-opened app.** Shipped
+Safari 18.4 (iOS/iPadOS 18.4), macOS in 18.5, and is now standardised as §3.3 of
+the December 2025 Push API draft — so it is not an Apple-only bet. It displays a
+notification from a JSON body (`{"web_push": 8030, "notification": {…}}`) with no
+service worker involved, inside the same aes128gcm envelope, so opacity is
+unchanged. Why it matters here: WebKit says ITP "deletes all website data for
+websites you haven't visited in a while. This includes service worker
+registrations", and "ITP removing a service worker registration would render the
+push subscription useless" — whereas with `window.pushManager`, "the removal of
+that service worker registration will not affect the associated push subscription."
+A companion app is *by construction* opened rarely. Classic Web Push is the wrong
+shape for it; declarative is the right one.
+
+**And WebKit anticipated our exact case**, in a section titled "What if I can't
+send the notification description through the internet?": "maybe the app is for
+secure communication and decryption keys for the notification payload only exist
+within the app on the device." Their answer is the pattern to copy — the push
+carries a generic fallback that is always displayable, an installed service worker
+may *replace* it from local state, and "If the event handler fails to display a
+replacement notification in time, the fallback is used."
+
+### 3. The LAN-only alternatives, costed at the failure mode
+
+Every row is judged on the case the feature exists for: **phone locked, off
+Wi-Fi.** The happy paths are all fine and all irrelevant.
+
+| option | wakes a locked phone that is off Wi-Fi? | what it actually costs |
+|---|---|---|
+| foregrounded PWA holding the session (R12.5's poll) | **No** — nor a locked phone *on* Wi-Fi | nothing new; this is already what R12.5 does |
+| Background Sync / Periodic Background Sync to poll | **No — it does not exist on iOS** | MDN browser-compat-data `api.SyncManager` (fetched 2026-08-21): Safari `version_added: false` (open bug webkit.org/b/182565), `safari_ios` mirrors it, Firefox false, Chrome 49. MDN labels the API "Limited availability … not Baseline". A closed iOS web app cannot poll at all |
+| self-hosted **ntfy**, iOS app | **Not instantly** | ntfy's own docs concede it: a self-hosted server has to "forward so called `poll_request` messages to the main ntfy.sh server", and the chain is ntfy.sh → Firebase → APNs. Without `upstream-base-url`, "delivery can take hours, depending on the state of the phone"; on an active phone "it shouldn't take more than 20-30 minutes". Their stated reason: "iOS heavily restricts background processing", making instant push impossible "without a central server" |
+| self-hosted ntfy / **UnifiedPush**, Android app | **Yes** — the one genuinely Google-free wake | UnifiedPush's distributor list (fetched 2026-08-21) is **Android and Linux only; no iOS distributor exists**. Costs a second app the user installs and runs, plus a server that must be internet-reachable for the off-Wi-Fi case — i.e. the relay problem again, wearing a different hat |
+| Matrix / XMPP the user already runs | same split | iOS clients reach the device through a push gateway into APNs; Android clients can use UnifiedPush. Inherits the two rows above and adds a whole second protocol |
+| iOS **Local Push Connectivity** | **No, by design** | Apple: for when "access to the wider internet is unavailable". `NEAppPushManager` instances "indicate on which Wi-Fi networks the extension runs", and it runs "as long as the device joins the matching SSID". Needs a native app *and* an extension *and* `com.apple.developer.networking.networkextension` with the `app-push-provider` value, "Request this entitlement from the Entitlement Request Page". SSID-bound is the exact opposite of what we need; Apple's own advice is to fall back to APNs when there is no local connection |
+| local-network wake (WoL and friends) | **No** | wakes machines, not phone apps — and off Wi-Fi there is no LAN to wake from |
+
+**The honest summary: every LAN-only option fails in the same place, and it is the
+place that motivates the feature.** A locked phone off Wi-Fi is reachable only via
+the single persistent connection the OS itself maintains — APNs or FCM. On iOS
+there is no third answer, and the people who maintain the leading self-hosted push
+server say so in their own documentation. On Android there is one, and it costs a
+native app plus an internet-reachable server.
+
+**The Android/FCM half, for completeness.** Chrome/Android Web Push goes to
+`fcm.googleapis.com` with Google as push service; VAPID replaced the old GCM
+sender-id coupling, so **no Firebase project is needed to send** — web.dev's "The
+Web Push Protocol": the `applicationServerKey` "is passed to the push service and
+used to check that the application that subscribed the user is also the
+application that is triggering push messages". Delivery to a dozing device turns
+on one header: Firebase's priority docs say normal-priority delivery "may be
+delayed" until a Doze maintenance window or the user wakes the device, while high
+priority makes FCM attempt immediate delivery, "waking a sleeping device when
+necessary". Android 13+ downgrades apps that send high priority *without* showing
+a notification — which §2 forbids us from doing anyway, so the two platforms'
+constraints agree rather than conflict.
+
+### 4. What the user loses if the answer is "nothing reliable"
+
+They lose **remote unblocking on a phone they are not looking at** — and only that.
+They keep remote *observation* and remote *approval* whenever they open the app
+(R12.5), and they keep the laptop, where Claude Code already prompts and always
+will. ADR-0006 §5 makes this safe rather than merely tolerable: silence denies, so
+a missed prompt costs a denial and a re-ask, never a wrong action.
+
+What is actually lost is **latency**. For an agent that blocks a few times an hour,
+"the app must be open" collapses the feature to "a dashboard I remember to check" —
+worth having, and not what the phrase *companion app* promises. That is the trade,
+stated plainly, so nobody has to rediscover it.
+
+### The recommendation the ADR can absorb
+
+**Push ships as a doorbell, not a channel** — eight constraints, each traceable to
+a source above:
+
+1. **Originated by the blocked machine, never the relay** (§0 above). No endpoint,
+   key pair, or JWT leaves the laptop. ADR-0006 §3b needs no amendment.
+2. **Opt-in, off by default, per paired device, revocable locally** — matching §3a's
+   local-only enrolment and §6's revocation-works-while-the-phone-is-off rule.
+3. **The payload is a constant.** Never the project, the command, the tool name, the
+   argument, or the digest — the answer to "what may a push contain" is *"something
+   is waiting"* and literally nothing else. Declarative shape, fixed strings, e.g.
+   `{"web_push": 8030, "notification": {"title": "Golem", "body": "A decision is waiting."}}`,
+   **padded to a fixed length** so the size channel carries nothing (Push API §4
+   names padding as the only mitigation; RFC 8291 §4 gives the room).
+   **No `Topic` header ever** (RFC 8030 §8.1). VAPID `sub` is a project URL, never
+   the user's email (RFC 8292 §2.1 makes it optional).
+4. **`Urgency: high`, and `TTL` no longer than the gate deadline.** A doorbell that
+   rings after the decision expired is a lie: §4 binds a decision to a deadline and
+   §5 makes silence deny, so a stale push must expire in the push service rather
+   than arrive late.
+5. **The notification is not a control.** No actions, no inline reply, nothing
+   approvable from a lock-screen preview — R12.5 already requires this, and Apple's
+   no-silent-push rule means the notification is guaranteed to be *seen*, which
+   makes the discipline load-bearing rather than cosmetic.
+6. **Enrichment, if any, is local.** A service worker may replace the fallback using
+   the paired laptop over the existing mTLS session — WebKit's documented pattern
+   for exactly our case. If the phone cannot reach the laptop, the generic fallback
+   stands. Never enrich from the push body.
+7. **Third parties that remain in the path, named:** **Apple** (APNs,
+   `*.push.apple.com`) for iOS and Safari; **Google** (FCM, `fcm.googleapis.com`)
+   for Chrome and Android; **Mozilla** (autopush) for Firefox. Each learns a stable
+   VAPID pseudonym for this laptop, this device's subscription, the timing and
+   frequency of blocks, a padded constant size, and the laptop's IP. None can learn
+   what is being asked. **No Golem-operated push service** — R6.3's bar holds.
+8. **This is a new concession, not a re-reading of §3b.** §3b concedes what the
+   *relay* learns. This concedes a *second* observer that learns when this
+   developer's agent needed a decision. It deserves its own sentence in the ADR,
+   not a clause folded into an existing one.
+
+### The precondition nobody has tested, and the two observations that settle it
+
+Everything above is about the transport. There is a prior question the
+documentation does not answer, and it decides whether push is reachable at all:
+**a push subscription is bound to an origin, and the companion app's origin is the
+laptop.**
+
+Verified: the Push API abstract has push messages "delivered to a Service Worker
+that runs in the origin of the web application", and §4 ties deactivation to "the
+service worker registration associated with the push subscription". Change the
+origin, lose the subscription. Under ADR-0006 §3a the app is served by the laptop
+over mTLS with a Golem-issued certificate — so the origin is a LAN address, and two
+things are open:
+
+1. **Untested:** whether an iOS 26 Home Screen web app installed from an origin
+   whose certificate chains to a *user-installed* Golem CA can register a service
+   worker and obtain a push subscription. Nothing in Apple's or WebKit's docs
+   forbids it; nothing confirms it. Do not build on either assumption — this is
+   exactly the shape of §123, where a plausible TLS assumption turned out false on
+   contact with a real client.
+2. **Unresolved by design:** `https://192.168.1.20:41199` is not stable. A new DHCP
+   lease, a different network, or the relayed transport yields a *different origin*,
+   hence a different install and a different subscription. Web Push needs one
+   origin for the life of the pairing, while §3b deliberately gives the app two
+   transports. R12.5's "the UI must not know which transport it is on" therefore
+   hardens into a requirement on the **origin**, and it lands on R12.8, not here.
+
+**The reproducible test, in the manner of §100 and §108.** Pair one iPhone on iOS
+26 against a laptop serving the R12.5 dashboard at a stable name with a Golem-CA
+certificate. Add to Home Screen. Call `window.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey })`
+and record whether an endpoint comes back. Then send one padded declarative push
+from the laptop with the phone **locked and on cellular only**, and record whether
+it arrives and how late. Two observations settle the whole question. Neither is
+possible from this machine and neither is a code change, so it is a gate on
+R12.5/R12.8 rather than work this spike could have done.
+
+### Outcome
+
+**Outcome 1 of the three, conditionally: a self-hosted-enough path exists** —
+content-blind by construction, no Golem-operated service, the relay untouched and
+its §3b properties intact — with every remaining third party named in
+recommendation 7 and one device test outstanding.
+
+Two clean negatives are recorded alongside it, and they are the durable half:
+**there is no Apple-free way to wake a locked iPhone that is off Wi-Fi** (ntfy's
+maintainers concede it in their own docs, Local Push Connectivity is SSID-bound and
+entitlement-gated, Background Sync does not exist in Safari), and **no LAN-only
+mechanism addresses the case the feature exists for.**
+
+Until the device test passes, **R12.5 ships the degraded path**: it polls while
+open and claims nothing more. The sentence for the screen is
+**"Alerts are off — this screen only updates while it is open."**
+
+**Sources, all fetched 2026-08-21:** RFC 8030 §§8.1–8.3
+(`https://www.rfc-editor.org/rfc/rfc8030.txt`); RFC 8291 §§4, 7
+(`https://www.rfc-editor.org/rfc/rfc8291.txt`); RFC 8292 §§2.1, 4, 5
+(`https://www.rfc-editor.org/rfc/rfc8292.txt`); W3C Push API Working Draft
+01 December 2025 §§3.3, 4 (`https://www.w3.org/TR/push-api/`); Apple, "Sending web
+push notifications in web apps and browsers"
+(`https://developer.apple.com/documentation/usernotifications/sending-web-push-notifications-in-web-apps-and-browsers`);
+Apple, "Local push connectivity"
+(`https://developer.apple.com/documentation/networkextension/local-push-connectivity`);
+WebKit, "Web Push for Web Apps on iOS and iPadOS", 2023-02-16
+(`https://webkit.org/blog/13878/web-push-for-web-apps-on-ios-and-ipados/`); WebKit,
+"Meet Declarative Web Push", 2025-03-27
+(`https://webkit.org/blog/16535/meet-declarative-web-push/`); WebKit, "WebKit
+Features in Safari 26.0", 2025-09-15
+(`https://webkit.org/blog/17333/webkit-features-in-safari-26-0/`) plus the 26.2 /
+26.4 / 26.6 notes; ntfy configuration docs, iOS section
+(`https://docs.ntfy.sh/config/`); UnifiedPush distributors
+(`https://unifiedpush.org/users/distributors/`); web.dev, "The Web Push Protocol"
+(`https://web.dev/articles/push-notifications-web-push-protocol`); Firebase message
+priority docs (`https://firebase.google.com/docs/cloud-messaging/android-message-priority`);
+MDN browser-compat-data `api.SyncManager`
+(`https://raw.githubusercontent.com/mdn/browser-compat-data/main/api/SyncManager.json`).
