@@ -35,15 +35,17 @@ function printReport(report: InitReport): void {
 }
 
 function printWikiCheckReport(report: WikiCheckReport): void {
+  const scanned =
+    report.proseChecked !== undefined && report.proseChecked > 0
+      ? `${report.pagesChecked} page(s) + ${report.proseChecked} doc(s)`
+      : `${report.pagesChecked} page(s)`;
   if (report.issues.length === 0) {
-    process.stdout.write(`golem wiki check: ${report.pagesChecked} page(s), no issues.\n`);
+    process.stdout.write(`golem wiki check: ${scanned}, no issues.\n`);
     return;
   }
   for (const issue of report.issues)
     process.stdout.write(`  ${issue.relPath} — ${issue.message}\n`);
-  process.stdout.write(
-    `golem wiki check: ${report.pagesChecked} page(s), ${report.issues.length} issue(s).\n`,
-  );
+  process.stdout.write(`golem wiki check: ${scanned}, ${report.issues.length} issue(s).\n`);
 }
 
 export default function register(program: Command): void {
@@ -80,13 +82,15 @@ export default function register(program: Command): void {
 
   wiki
     .command("check")
-    .description("Lint wiki pages: frontmatter, dates, wikilinks, duplicate titles")
+    .description(
+      "Lint wiki pages + README prose: frontmatter, dates, wikilinks, duplicate titles, retired identifiers",
+    )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .action(async (opts: { dir: string }) => {
       try {
         const { settings } = await loadConfig({ projectDir: opts.dir });
         const wikiDir = resolveWikiDir(opts.dir, settings.knowledge.wiki_dir);
-        const report = await checkWiki(wikiDir);
+        const report = await checkWiki(wikiDir, { projectDir: opts.dir });
         printWikiCheckReport(report);
         if (report.issues.length > 0) process.exitCode = 1;
       } catch (err) {

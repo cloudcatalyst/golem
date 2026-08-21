@@ -210,6 +210,171 @@ function stripCode(md: string): string {
   return md.replace(/```[\s\S]*?```/g, (m) => m.replace(/[^\n]/g, " ")).replace(/`[^`\n]*`/g, "");
 }
 
+/**
+ * An identifier a shipped decision retired, which must not survive in prose that
+ * teaches the CURRENT system.
+ *
+ * Appended to, never rewritten: the next retirement adds a row instead of
+ * inventing its own one-off grep. `pattern` must stay non-global — `test()` is
+ * called once per prose unit and a `g` flag would carry `lastIndex` between
+ * calls.
+ */
+interface RetiredIdentifier {
+  readonly label: string;
+  readonly pattern: RegExp;
+  readonly hint: string;
+}
+
+const RETIRED_IDENTIFIERS: readonly RetiredIdentifier[] = [
+  {
+    label: "slider",
+    // Substring, not `\bslider\b`: the camelCase and CONSTANT_CASE spellings
+    // (`setSliderLevel`, `MAX_SLIDER_LEVEL`) are the same drift quoted in prose.
+    pattern: /slider/i,
+    hint: "ADR-0004 retired it — the dials are `compression.level` and `brevity.level`",
+  },
+];
+
+/**
+ * NOT in the table, deliberately: `level N`.
+ *
+ * `compression` is still a 0–3 dial, so "level 3 (aggressive)" and "level 1
+ * (lossless)" are legitimate CURRENT output of `golem status` and of every dial
+ * surface (`describeDial`). A rule that flagged them would fire on correct prose
+ * on its first run, which is how a check gets switched off instead of obeyed.
+ * The retired thing was the *slider* — the preset over the two dials — and that
+ * is the only word this rule knows.
+ */
+
+/**
+ * A prose unit is exempt when it names the retirement itself: prose is allowed
+ * to say a thing is gone, and the pages that explain a retirement are the ones
+ * that must name it most often.
+ */
+const RETIREMENT_CONTEXT = /ADR-\d{4}|\bR11\.\d+\b|retire|no longer|used to|former|was removed/i;
+
+/**
+ * A prose unit is exempt when it cites a dated record, because there the wording
+ * *is* the record: `WIKI.md`'s Index describes what each debrief said, and
+ * rewriting those lines would falsify the history they point at.
+ */
+const RECORD_CITATION =
+  /(?:^|[\s(`/[])(?:debriefs|syntheses|sources)\/|docs\/(?:decisions|plan)\/|verification-notes\.md/i;
+
+/** Ordered list markers, unordered markers, and table rows all start their own unit. */
+const LIST_MARKER = /^(?:[-*+]\s|\d+[.)]\s|\|)/;
+const HEADING = /^#{1,6}\s/;
+
+/**
+ * Split a markdown body into the units an exemption applies to.
+ *
+ * Granularity is the whole design. Too coarse and one honest "the slider was
+ * retired" line buys a free pass for real drift elsewhere on the page — which is
+ * exactly what a whole-section scope would do to `WIKI.md`, whose Index holds
+ * both record descriptions and the live page summaries. Too fine (per line) and
+ * a correctly written history section fails on its own heading.
+ *
+ * So: every list item and table row is its own unit, a paragraph is one unit,
+ * and a heading joins the paragraph beneath it (a heading like "What happened to
+ * the slider" carries no marker of its own — the paragraph under it does). A
+ * heading followed by a LIST keeps its own unit, so the list's items stay
+ * independently checked.
+ *
+ * Code fences are not stripped: `golem slider 3` in a copy-pasteable example is
+ * the worst drift on the page, not the most excusable.
+ */
+export function splitProseUnits(md: string): Array<{ startLine: number; text: string }> {
+  const lines = md.split("\n");
+  const units: Array<{ startLine: number; text: string }> = [];
+  const blank = (line: string | undefined): boolean => line === undefined || line.trim() === "";
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i] as string;
+    if (blank(line)) {
+      i++;
+      continue;
+    }
+    const startLine = i + 1;
+    const text: string[] = [line];
+    i++;
+
+    if (HEADING.test(line.trim())) {
+      // Absorb the paragraph under the heading, across the blank line that
+      // conventionally separates them — but never a list, whose items must stay
+      // separately checkable.
+      let look = i;
+      while (look < lines.length && blank(lines[look])) look++;
+      if (look < lines.length && !LIST_MARKER.test((lines[look] as string).trim())) {
+        i = look;
+        while (i < lines.length && !blank(lines[i])) {
+          text.push(lines[i] as string);
+          i++;
+        }
+      }
+    } else if (LIST_MARKER.test(line.trim())) {
+      // Indented continuation lines belong to the item they wrap out of.
+      while (
+        i < lines.length &&
+        !blank(lines[i]) &&
+        /^\s/.test(lines[i] as string) &&
+        !LIST_MARKER.test((lines[i] as string).trim())
+      ) {
+        text.push(lines[i] as string);
+        i++;
+      }
+    } else {
+      while (
+        i < lines.length &&
+        !blank(lines[i]) &&
+        !LIST_MARKER.test((lines[i] as string).trim()) &&
+        !HEADING.test((lines[i] as string).trim())
+      ) {
+        text.push(lines[i] as string);
+        i++;
+      }
+    }
+
+    units.push({ startLine, text: text.join("\n") });
+  }
+  return units;
+}
+
+/**
+ * Zones whose pages are dated records rather than teaching prose. A debrief,
+ * synthesis or distilled source note describes the system as it was on its own
+ * date; holding it to today's vocabulary would mean editing history.
+ */
+const RECORD_ZONES = ["debriefs/", "syntheses/", "sources/"] as const;
+
+/** Whether a wiki page (relPath, forward slashes) is prose the reader is taught from. */
+export function isProseScanned(relPath: string): boolean {
+  return !RECORD_ZONES.some((zone) => relPath.startsWith(zone));
+}
+
+/**
+ * R12/docs-slider-drift — the check that stops the sixth stale line.
+ *
+ * R11.1 retired the slider and R11.4 swept the strings out of the CLI, the
+ * settings help and the skills; nobody re-read the README, so the front page
+ * still taught the retired control to every first-time reader. Same shape as
+ * R11.5's Index rule: a checklist nobody could fail is a checklist that drifts.
+ */
+export function findRetiredIdentifiers(relPath: string, body: string): WikiCheckIssue[] {
+  const issues: WikiCheckIssue[] = [];
+  for (const unit of splitProseUnits(body)) {
+    if (RETIREMENT_CONTEXT.test(unit.text) || RECORD_CITATION.test(unit.text)) continue;
+    for (const retired of RETIRED_IDENTIFIERS) {
+      if (!retired.pattern.test(unit.text)) continue;
+      issues.push({
+        relPath,
+        message: `retired identifier "${retired.label}" in user-facing prose (line ${unit.startLine}): ${retired.hint}`,
+      });
+    }
+  }
+  return issues;
+}
+
 export interface WikiCheckIssue {
   readonly relPath: string;
   readonly message: string;
@@ -218,20 +383,69 @@ export interface WikiCheckIssue {
 export interface WikiCheckReport {
   readonly pagesChecked: number;
   readonly issues: readonly WikiCheckIssue[];
+  /** Non-wiki prose files scanned for retired identifiers (only when a projectDir was given). */
+  readonly proseChecked?: number;
+}
+
+/**
+ * Prose files outside the wiki that the retired-identifier rule also covers.
+ * Repo-relative, resolved against the project dir.
+ *
+ * Deliberately short. Two surfaces are known to still name the slider and are
+ * NOT here yet, each with its own task rather than a silent hole:
+ * `docs/golem-spec.md`'s body (its Decisions Log is a dated record, but §1–§8
+ * describe the slider throughout — a spec rewrite, not a docs sweep) and
+ * `vscode-extension/README.md` (owned by a live workstream while this landed).
+ * Widening this list is the way to close them; disabling the rule is not.
+ */
+const PROSE_FILES_OUTSIDE_WIKI = ["README.md"] as const;
+
+/**
+ * Lint `PROSE_FILES_OUTSIDE_WIKI` for retired identifiers. A file that isn't
+ * there is skipped silently — this runs in any project, and only this repo is
+ * guaranteed to have a README at the root.
+ */
+async function checkProseOutsideWiki(
+  projectDir: string | undefined,
+): Promise<{ issues: WikiCheckIssue[]; proseChecked?: number }> {
+  if (projectDir === undefined) return { issues: [] };
+  const issues: WikiCheckIssue[] = [];
+  let proseChecked = 0;
+  for (const relPath of PROSE_FILES_OUTSIDE_WIKI) {
+    let text: string;
+    try {
+      text = await readFile(path.join(projectDir, relPath), "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
+    proseChecked++;
+    issues.push(...findRetiredIdentifiers(relPath, text));
+  }
+  return { issues, proseChecked };
 }
 
 /**
  * `golem wiki check` (WS-W W2): frontmatter/date/link lint over every `.md`
  * page under `wikiDir`. Read-only — reports issues, never fixes them (the
  * wiki is plan-gated; a human or an approved agent write fixes what's found).
+ *
+ * Pass `projectDir` to also lint the prose files outside the wiki
+ * (`PROSE_FILES_OUTSIDE_WIKI`) for retired identifiers.
  */
-export async function checkWiki(wikiDir: string): Promise<WikiCheckReport> {
+export async function checkWiki(
+  wikiDir: string,
+  options?: { readonly projectDir?: string },
+): Promise<WikiCheckReport> {
   let entries: string[];
   try {
     entries = await readdir(wikiDir, { recursive: true });
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { pagesChecked: 0, issues: [] };
-    throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    // A wiki that hasn't been scaffolded yet is not an error — but the prose
+    // files outside it still exist and still drift.
+    const outside = await checkProseOutsideWiki(options?.projectDir);
+    return { pagesChecked: 0, ...outside };
   }
   const mdPaths = entries
     .filter((entry) => entry.endsWith(".md"))
@@ -284,6 +498,9 @@ export async function checkWiki(wikiDir: string): Promise<WikiCheckReport> {
         message: "no wikilinks in body (every page should link at least one other)",
       });
     }
+    // Frontmatter is excluded on purpose: a `sources:` entry citing
+    // ADR-0004-retire-the-slider.md is a citation, neither drift nor a licence.
+    if (isProseScanned(relPath)) issues.push(...findRetiredIdentifiers(relPath, body));
 
     pages.push({ relPath, title: frontmatter.title, type: frontmatter.type, body });
   }
@@ -339,5 +556,12 @@ export async function checkWiki(wikiDir: string): Promise<WikiCheckReport> {
     }
   }
 
-  return { pagesChecked: pages.length, issues };
+  const outside = await checkProseOutsideWiki(options?.projectDir);
+  issues.push(...outside.issues);
+
+  return {
+    pagesChecked: pages.length,
+    issues,
+    ...(outside.proseChecked !== undefined && { proseChecked: outside.proseChecked }),
+  };
 }

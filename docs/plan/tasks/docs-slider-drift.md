@@ -1,7 +1,7 @@
 ---
 task: docs-slider-drift
 title: The README still documents the slider R11.1 retired, and shows version 0.1.1
-state: queued
+state: done
 owner: agent
 size: S
 design: No design needed — each item is a fact about README.md against the post-R11.1 build. ADR-0004 retired the slider; R11.4 cleared the leftovers in code and skills but nobody re-read the README.
@@ -9,7 +9,7 @@ gate: No user-facing document describes a control that no longer exists, no vers
 depends_on: []
 touches: [README.md, docs/wiki/WIKI.md, src/cli/wiki.ts, tests/unit/cli]
 created: 2026-08-21
-updated: 2026-08-21
+updated: 2026-08-21T12:27:19.245Z
 ---
 
 ## Found while reviewing the roadmap, 2026-08-21
@@ -59,3 +59,7 @@ the README's job and this task must not turn into one.
 Rewriting the README's positioning or its measured claims (the ~0%-on-cached-
 traffic sentence is deliberate and stays). Auditing every wiki page — the wiki's
 historical pages are records. Any code change beyond the check itself.
+
+## Outcome
+
+shipped: README + 8 wiki pages cleaned of the retired slider (22 hits), and golem wiki check now FAILS on a retired identifier in teaching prose while staying legal in dated records; spec body + VS Code README + 3 stale code strings deferred to docs-slider-drift-remainder

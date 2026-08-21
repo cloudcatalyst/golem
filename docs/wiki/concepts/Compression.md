@@ -4,17 +4,17 @@ type: concept
 tags: [pipeline, compression, headroom, situational, decision-23]
 sources: [src/compression/native-lossless.ts, src/compression/headroom-adapter.ts, docs/golem-spec.md, docs/plan/verification-notes.md]
 created: 2026-07-17
-updated: 2026-07-17
+updated: 2026-08-21
 ---
 
 # Compression
 
 Compression is one of Golem's pipeline stages, and its honest value is
 **situational** (Decision 23): whether it saves tokens depends entirely on the
-upstream, not on the slider setting.
+upstream, not on the dial setting.
 
 - **Lossless compression + CCR** (dedup, compaction, cache-alignment, and
-  content-reference swaps) runs from slider level 1 and is byte-faithful — the
+  content-reference swaps) runs from compression level 1 and is byte-faithful — the
   model sees the same content, just packed. See [[Compression Levels]].
 - **Lossy semantic compression** (stale-turn drop, low-relevance pruning) is added
   at levels 2–3. This is where real token savings come from — but **only on
