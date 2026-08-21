@@ -142,7 +142,7 @@ export async function setDial(
         (kind === "compression" && value === "0"
           ? '\n("0" was the retired slider\'s full bypass, which also disabled REDACTION. ' +
             "Compression-off (redaction still on) is `golem compression off`; the full " +
-            "bypass is `golem config set proxy.bypass_all true`.)"
+            "bypass is `golem off`, which persists `proxy.bypass_all` and says so.)"
           : "") +
         (value === "auto"
           ? "\n(`auto` followed the slider preset, which R11.1 retired — set the value you want.)"
@@ -202,7 +202,7 @@ export function compressionEffectNote(value: string): string {
     case "off":
       return (
         "compression is OFF — redaction still runs on every request; nothing else does. " +
-        "(To forward requests untouched, redaction included, that is `proxy.bypass_all`.)"
+        "(To forward requests untouched, redaction included, that is `golem off` — which persists `proxy.bypass_all` until `golem on`.)"
       );
     case "1":
       return "lossless — byte-faithful dedup/compaction. Meaning is preserved exactly.";

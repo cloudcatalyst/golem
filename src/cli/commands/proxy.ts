@@ -2,12 +2,15 @@
  * golem on / off / proxy — simplified surface for the pipeline toggle.
  *
  * R9.23: the daemon is always running once `golem init` finishes. `golem on`
- * and `golem off` toggle the pipeline (redaction/compression/brevity) via an
- * in-process admin endpoint — no restart, no wire changes, no dead sockets.
- * `golem proxy` shows status; all other proxy subcommands are removed.
+ * and `golem off` set the master switch — no restart, no wire changes, no dead
+ * sockets. `golem proxy` shows status; all other proxy subcommands are removed.
+ *
+ * R11.3: WHAT the switch does lives in `pipeline-switch.ts`, because it is no
+ * longer one admin POST — it persists `proxy.bypass_all` and then applies the
+ * same state live, so "off" survives a restart and every status surface can see
+ * it. A silent redaction-off state was the bug.
  */
 
-import { request } from "node:http";
 import type { Command } from "commander";
 import {
   reapOrphanedHeadroomWorkers,
@@ -31,6 +34,7 @@ import { planQueryEmbedder, resolvePersistedEmbedder } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
 import { credentialEnvForProxy } from "../gateways.js";
 import { InitError } from "../init.js";
+import { renderPipelineSwitch, setPipelineState } from "../pipeline-switch.js";
 import {
   buildFingerprint,
   CREDENTIALS_INJECTED_ENV,
@@ -74,40 +78,6 @@ async function resolvePort(
     upstream: resolveUpstreamDisplay(settings.proxy).baseUrl,
     compression: settings.compression.level,
   };
-}
-
-/** POST to the proxy's admin endpoint — does NOT need a restart or reload. */
-async function togglePipeline(dir: string, enabled: boolean, portOpt?: string): Promise<void> {
-  const { port } = await resolvePort(dir, portOpt);
-  if (!(await portInUse(port))) {
-    throw new InitError(
-      `proxy is not running on port ${port}. Start it first with \`golem init\` or ` +
-        "via the SessionStart hook (reopen the project).",
-    );
-  }
-  return new Promise((resolve, reject) => {
-    const body = "";
-    const req = request(
-      {
-        host: "127.0.0.1",
-        port,
-        path: `/__golem/pipeline/${enabled}`,
-        method: "POST",
-        headers: { "content-length": Buffer.byteLength(body) },
-        timeout: 2000,
-      },
-      (res) => {
-        res.resume();
-        resolve();
-      },
-    );
-    req.on("error", (err) => reject(new InitError(`could not reach the proxy: ${err.message}`)));
-    req.on("timeout", () => {
-      req.destroy();
-      reject(new InitError("proxy did not respond in time — is it running?"));
-    });
-    req.end(body);
-  });
 }
 
 /**
@@ -343,34 +313,37 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
 }
 
 export default function register(program: Command): void {
-  // `golem on` — enable the pipeline on the running proxy
+  // `golem on` / `golem off` — the master switch. R11.3: both PERSIST
+  // `proxy.bypass_all` and then apply it live, so the state survives a restart
+  // and every status surface can see it (see pipeline-switch.ts).
   program
     .command("on")
-    .description("Enable the proxy pipeline (redaction, compression, brevity)")
+    .description("Enable the proxy pipeline (redaction, compression, brevity) — persists")
     .option("--dir <path>", "project directory", process.cwd())
     .action(async (opts: { dir: string }) => {
       try {
         const { port } = await resolvePort(opts.dir);
         await ensureProxyRunning(opts.dir, port);
-        await togglePipeline(opts.dir, true);
-        process.stdout.write(`golem on — pipeline enabled on http://localhost:${port}\n`);
+        process.stdout.write(
+          renderPipelineSwitch(await setPipelineState(opts.dir, port, true), port),
+        );
       } catch (err) {
         _fail(err);
       }
     });
 
-  // `golem off` — disable the pipeline (proxy still forwards, no processing)
   program
     .command("off")
-    .description("Disable the proxy pipeline (pass-through forwarding, no redaction/compression)")
+    .description(
+      "Disable the proxy pipeline — a FULL bypass (redaction included), persisted until `golem on`",
+    )
     .option("--dir <path>", "project directory", process.cwd())
     .action(async (opts: { dir: string }) => {
       try {
         const { port } = await resolvePort(opts.dir);
         await ensureProxyRunning(opts.dir, port);
-        await togglePipeline(opts.dir, false);
         process.stdout.write(
-          `golem off — pipeline disabled on http://localhost:${port}; proxy still forwards requests raw\n`,
+          renderPipelineSwitch(await setPipelineState(opts.dir, port, false), port),
         );
       } catch (err) {
         _fail(err);
