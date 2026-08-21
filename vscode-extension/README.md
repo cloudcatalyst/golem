@@ -3,8 +3,8 @@
 A live **token-savings panel** and **status-bar item** for [Golem](https://golem.run),
 rendered right inside VS Code (Decision 21c). It shows Golem's compression
 savings, per-stage breakdown, upstream (Anthropic / Foundry / …), proxy status,
-and a clickable slider — all by reading the local `golem` CLI, so no server or
-account is required.
+and compression-level controls — all by reading the local `golem` CLI, so no
+server or account is required.
 
 ## Requirements
 
@@ -14,8 +14,9 @@ account is required.
 ## What it shows
 
 - **Activity-bar panel** ("Golem" → *Savings*): big saved-% number, tokens
-  before→after, request count, upstream + proxy status, a 0–5 **slider** (click a
-  level to change it), and a per-stage savings table.
+  before→after, request count, upstream + proxy status, a **compression level**
+  picker (`off`/`1`/`2`/`3`, click a level to change it), and a per-stage
+  savings table.
 - **Settings** (same panel, below the savings table): every Golem setting and
   guidance rule as a checkbox / picker / text field, each showing which layer
   supplied its value, with a per-row **scope** selector (project · local · user).
@@ -23,14 +24,15 @@ account is required.
   truth, so new settings appear here without an extension update. Rows supplied by
   a `GOLEM_*` environment variable are read-only (🔒), because env overrides every
   file layer. Advanced rows are hidden behind a checkbox, and a dangerous change
-  (slider level 0 disables redaction) asks first. `Golem: Configure Settings`
-  focuses it.
+  — turning on **bypass everything** (`proxy.bypass_all`, the only way to turn
+  redaction off, ADR-0004) — asks first. `Golem: Configure Settings` focuses it.
 - **Status-bar item** (right side): a compact presence line,
-  `⬢ Golem · <level> → [local + ]<upstream>` — brand, slider level, and where
-  traffic is fronting (cumulative savings stay in the hover tooltip and panel,
-  not the bar). A filled hexagon (⬢) means the proxy is running; a hollow one (⬡)
-  means it's stopped. When Golem isn't transforming traffic — the proxy is
-  stopped, or running at level 0 (full bypass) — the level reads **Passthrough**.
+  `⬢ Golem · <level> → [local + ]<upstream>` — brand, compression level, and
+  where traffic is fronting (cumulative savings stay in the hover tooltip and
+  panel, not the bar). A filled hexagon (⬢) means the proxy is running; a hollow
+  one (⬡) means it's stopped. A stopped proxy reads **Passthrough**; a running
+  proxy with `proxy.bypass_all` on reads **Bypass** (Decision 56 — bypass is
+  still redacting and serving, so it isn't the same state as "stopped").
   The item is **hidden entirely in non-Golem projects** (those without a
   `.golem/`), since the extension installs globally. Click to focus the panel.
 
