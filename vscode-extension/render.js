@@ -468,10 +468,15 @@ function statusBarText(model) {
   // R8.32/Decision 56 both turned on. The existing bypass rule for brevity is
   // now the rule for both dials and all three states.
   const inForce = state === "";
-  const dials = inForce
-    ? ` · 🗜 ${dialLabel(model)}` +
-      (model.brevity && model.brevity !== "off" ? ` · ✂ ${model.brevity}` : "")
-    : "";
+  // R11.8: BOTH dials, whenever any stage runs. This printed the brevity segment
+  // only when brevity was on, while printing `🗜 off` for the compression dial at
+  // zero — two dials on one line under opposite rules — so a machine with brevity
+  // off rendered a whole segment shorter than the CLI line beside it. A dial's
+  // position is information: "no segment" is indistinguishable from "an older
+  // Golem that had no such dial". R10.24's suppression rule still applies to the
+  // states where NO stage runs (off / unwired / bypass) — see `inForce` — which is
+  // a different question from a single dial sitting at zero.
+  const dials = inForce ? ` · 🗜 ${dialLabel(model)} · ✂ ${model.brevity || "off"}` : "";
   // R10.24: ONE canonical order, shared with `golem statusline` — brand (plus a
     // state word when it is not simply running), then the arrow and where traffic
     // goes, then the dials. This line used to read `⬢ Golem · Lossless → …`,
