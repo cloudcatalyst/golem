@@ -222,7 +222,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
   // Running: brand + slider level + `→ <provider>`. No savings in the bar.
   assert.equal(
     statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "foundry", savedPct: 34 }),
-    "⬢ Golem → ◆ foundry · 🗜 1",
+    "⬢ Golem → ◆ foundry · 🗜 1 · ✂ off",
   );
   // Slider name, title-cased, is preferred over the bare "L<n>" form.
   assert.equal(
@@ -232,7 +232,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
       compressionName: "aggressive",
       upstreamDisplay: "anthropic",
     }),
-    "⬢ Golem → ◆ anthropic · 🗜 aggressive",
+    "⬢ Golem → ◆ anthropic · 🗜 aggressive · ✂ off",
   );
   // Savings never leak into the bar text (they live in the hover tooltip).
   assert.doesNotMatch(
@@ -256,7 +256,7 @@ test("statusBarText — compact, provider-focused, no savings", () => {
       compressionName: "off",
       upstreamDisplay: "anthropic",
     }),
-    "⬢ Golem → ◆ anthropic · 🗜 off",
+    "⬢ Golem → ◆ anthropic · 🗜 off · ✂ off",
   );
 });
 
@@ -268,7 +268,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       compression: "1",
       upstreamDisplay: "moonshotai (kimi-k3)",
     }),
-    "⬢ Golem → ◆ moonshotai (kimi-k3) · 🗜 1",
+    "⬢ Golem → ◆ moonshotai (kimi-k3) · 🗜 1 · ✂ off",
   );
   // Last-served wins over the configured default; the Claude id is verbatim.
   assert.equal(
@@ -279,12 +279,12 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ local · 🗜 aggressive",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ local · 🗜 aggressive · ✂ off",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
     statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "anthropic" }),
-    "⬢ Golem → ◆ anthropic · 🗜 1",
+    "⬢ Golem → ◆ anthropic · 🗜 1 · ✂ off",
   );
 });
 
@@ -292,7 +292,7 @@ test("statusBarText — local segment appears whenever the local model is active
   // No local model reachable: no local segment.
   assert.equal(
     statusBarText({ proxyReachable: true, compression: "1", upstreamDisplay: "foundry" }),
-    "⬢ Golem → ◆ foundry · 🗜 1",
+    "⬢ Golem → ◆ foundry · 🗜 1 · ✂ off",
   );
   // Local model active at ANY level (Decision 30): the worker is folded into the
   // destination AFTER the chat model (R10.24 — the arrow points at the model the
@@ -304,7 +304,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic + ✎ local · 🗜 1",
+    "⬢ Golem → ◆ anthropic + ✎ local · 🗜 1 · ✂ off",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
@@ -327,7 +327,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       localModelActive: true,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b · 🗜 1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b · 🗜 1 · ✂ off",
   );
 });
 
@@ -341,7 +341,7 @@ test("statusBarText gives a worker the same <gateway> (<model>) shape as the cha
         { worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash", gateway: "openrouter" },
       ],
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ openrouter (qwen/qwen3.7-flash) · 🗜 1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ openrouter (qwen/qwen3.7-flash) · 🗜 1 · ✂ off",
   );
 });
 
@@ -355,7 +355,7 @@ test("statusBarText leaves a gateway-less worker as a bare id (older CLI)", () =
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       workers: [{ worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash" }],
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen/qwen3.7-flash · 🗜 1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen/qwen3.7-flash · 🗜 1 · ✂ off",
   );
 });
 
@@ -373,7 +373,7 @@ test("statusBarText omits the local segment when the coder tool is disabled", ()
       localModelActive: false,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · 🗜 1",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) · 🗜 1 · ✂ off",
   );
 });
 
@@ -435,7 +435,7 @@ test("buildModel: no update info → not available", () => {
 test("statusBarText appends the update codicon only when an update is available", () => {
   assert.equal(
     statusBarText({ proxyReachable: true, compression: "1", upstreamLabel: "anthropic", updateAvailable: true }),
-    "⬢ Golem → ◆ anthropic · 🗜 1 $(arrow-up)",
+    "⬢ Golem → ◆ anthropic · 🗜 1 · ✂ off $(arrow-up)",
   );
   // Shows even when the proxy is off (it's about the install, not the traffic).
   assert.equal(
@@ -745,15 +745,24 @@ test("buildModel reads the dials block, defaulting to off on an older CLI", () =
   assert.equal(legacy.brevity, "off");
 });
 
-test("statusBarText shows brevity only while it is on", () => {
+test("statusBarText shows the brevity dial at its position, off included (R11.8)", () => {
+  // Was: "shows brevity only while it is on". That printed `🗜 off` for one dial
+  // at zero and nothing for the other, so a brevity-off machine rendered a
+  // segment shorter than the CLI line beside it. A dial's position is
+  // information; an absent segment reads as an absent dial.
   const base = {
     proxyReachable: true,
     compression: "2",
     compressionName: "balanced",
     upstreamLabel: "anthropic",
   };
-  assert.ok(!statusBarText({ ...base, brevity: "off" }).includes("✂"));
+  assert.ok(statusBarText({ ...base, brevity: "off" }).includes("✂ off"));
   assert.ok(statusBarText({ ...base, brevity: "full" }).includes("✂ full"));
+  // A CLI too old to report the dial at all still renders a position, not a gap.
+  assert.ok(statusBarText(base).includes("✂ off"));
+  // Unchanged: where NO stage runs, neither dial is advertised (R10.24).
+  assert.ok(!statusBarText({ ...base, proxyBypass: true }).includes("✂"));
+  assert.ok(!statusBarText({ ...base, proxyReachable: false }).includes("✂"));
 });
 
 test("dialsSummary names both dials, with no pinned/auto suffix (R11.1)", () => {
@@ -823,7 +832,7 @@ test("statusBarText treats unknown wiring as wired — an older CLI is not an al
   // No `proxyInPath` at all (a pre-R10.24 golem): the same fail-safe the CLI uses.
   assert.equal(
     statusBarText({ proxyReachable: true, compression: "1", compressionName: "lossless", upstreamDisplay: "anthropic" }),
-    "⬢ Golem → ◆ anthropic · 🗜 lossless",
+    "⬢ Golem → ◆ anthropic · 🗜 lossless · ✂ off",
   );
 });
 

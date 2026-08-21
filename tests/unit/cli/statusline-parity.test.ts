@@ -116,6 +116,51 @@ describe("status-line parity: CLI vs VS Code status bar (R10.24)", () => {
     }
   });
 
+  it("shows both dials, brevity OFF included, identically on both (R11.8)", () => {
+    // The state R10.24's fixtures never visited: every one of them used
+    // brevity "full", so the CLI printing `✂ off` while the bar omitted the
+    // segment entirely went unnoticed until R11.6 went looking. A parity test
+    // only pins the states its fixtures visit.
+    const cli: GolemState = {
+      compression: 1 as const,
+      upstreamLabel: "openrouter",
+      upstreamModel: "deepseek/deepseek-v4-flash",
+      brevity: "off",
+      proxyRunning: true,
+      proxyInPath: true,
+    };
+    const bar = render.statusBarText({
+      proxyReachable: true,
+      proxyInPath: true,
+      compression: "1",
+      compressionName: "lossless",
+      brevity: "off",
+      upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
+      lastServedModel: "deepseek/deepseek-v4-flash",
+      workers: [],
+    });
+    const line = renderStatusLine({}, cli);
+
+    expect(line).toContain("🗜 lossless · ✂ off");
+    expect(bar).toBe(line);
+  });
+
+  it("still suppresses BOTH dials where no stage runs (R10.24 holds)", () => {
+    // R11.8 changed a dial at zero, not the states where nothing is running.
+    for (const situation of [
+      { running: true, wired: false },
+      { running: false, wired: true },
+      { running: true, wired: true, bypass: true },
+    ]) {
+      const { cli, bar } = pair(situation);
+      for (const line of [cli, bar]) {
+        expect(line).not.toContain("🗜");
+        expect(line).not.toContain("✂");
+      }
+      expect(bar).toBe(cli);
+    }
+  });
+
   it("names an unwired proxy the same way on both surfaces, and drops the dials", () => {
     const { cli, bar } = pair({ running: true, wired: false });
     for (const line of [cli, bar]) {
