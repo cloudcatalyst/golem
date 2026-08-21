@@ -29,6 +29,7 @@ import type { InferenceService } from "../../interfaces/inference.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
+import { proxyLog } from "../../shared/proxy-log.js";
 import { loadModelCatalog, modelAcceptsImages, openTelemetryStore } from "../../telemetry/index.js";
 import { planQueryEmbedder, resolvePersistedEmbedder } from "../auto-index.js";
 import { ollamaHasModel } from "../build-knowledge.js";
@@ -147,7 +148,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   }
   const { settings, warnings } = await loadConfig({ projectDir: dir });
   for (const warning of warnings) {
-    process.stderr.write(`golem proxy: ${warning}\n`);
+    proxyLog(warning);
   }
   const { port } = await resolvePort(dir, portOpt);
 
@@ -177,7 +178,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   // stray one). Never throws: a failed sweep must not stop the proxy starting.
   const sweep = reapOrphanedHeadroomWorkers({
     projectDir: dir,
-    log: (m) => process.stderr.write(`golem proxy: ${m}\n`),
+    log: (m) => proxyLog(m),
   });
 
   const telemetry = openTelemetryStore(dir);
@@ -219,14 +220,15 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       localAnswerInference = new OllamaInferenceService(ollamaClient, facts, {
         embedModels: { text: plan.model, code: plan.model },
       });
-      process.stdout.write(
-        `golem proxy: local-answer querying with "${plan.model}" — the embedder this index was built with (the detected hardware tier would have used "${plan.currentModel}")\n`,
+      proxyLog(
+        `local-answer querying with "${plan.model}" — the embedder this index was ` +
+          `built with (the detected hardware tier would have used "${plan.currentModel}")`,
       );
     } else if (plan.action !== "lexical") {
       suppressLocalAnswer = true;
       const reason =
         plan.action === "disable" ? plan.reason : "the index's embedder could not be resolved";
-      process.stderr.write(`golem proxy: local-answer disabled — ${reason}\n`);
+      proxyLog(`local-answer disabled — ${reason}`);
     }
   }
   // R10.14: resolve image-input capability ONCE, here, where awaiting is cheap —
@@ -248,9 +250,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
     ...(suppressLocalAnswer ? { suppressLocalAnswer: true } : {}),
   });
   if (semantic !== undefined) {
-    process.stdout.write(
-      "golem proxy: Headroom semantic sidecar enabled (compression.level ≥2, opt-in, fail-open)\n",
-    );
+    proxyLog("Headroom semantic sidecar enabled (compression.level ≥2, opt-in, fail-open)");
   }
   await sweep;
   const addr = await proxy.listen(port);
@@ -270,10 +270,12 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   });
   const via = upstream.accountId === null ? "" : ` [account ${upstream.accountId}]`;
   const model = upstream.model === undefined ? "" : ` model ${upstream.model}`;
-  process.stdout.write(
+  // R11.7: through the timestamped sink like every other daemon line — this
+  // banner is what dates a daemon's start when reading .golem/proxy.log back.
+  proxyLog(
     shim
-      ? `golem proxy: BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)\n`
-      : `golem proxy listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (compression ${settings.compression.level}, brevity ${settings.brevity.level})\n`,
+      ? `BYPASS SHIM listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (pipeline off; redaction still on)`
+      : `listening on http://localhost:${addr.port} -> ${upstream.baseUrl}${via}${model} (compression ${settings.compression.level}, brevity ${settings.brevity.level})`,
   );
 
   // Loopback serve for green WebFetch
@@ -286,7 +288,7 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
       keyPem: cert.leafKeyPem,
       certPath: cert.caPath,
     });
-    process.stdout.write(`golem proxy: loopback serve on https://127.0.0.1:${loopback.port}\n`);
+    proxyLog(`loopback serve on https://127.0.0.1:${loopback.port}`);
   } catch (err) {
     process.stderr.write(
       `golem proxy: loopback serve unavailable (${

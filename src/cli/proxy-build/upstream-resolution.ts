@@ -35,6 +35,7 @@ import {
   withDefaultTarget,
 } from "../../providers/index.js";
 import type { UpstreamTranslator } from "../../proxy/index.js";
+import { proxyLog } from "../../shared/proxy-log.js";
 import { buildUpstreamTransport, type VisionLookup } from "../route-resolver.js";
 
 export interface ResolvedProxyUpstream {
@@ -76,13 +77,13 @@ export function resolveProxyUpstream(settings: GolemSettings): ResolvedProxyUpst
     },
     process.env,
   );
-  if (accountWarning !== undefined) process.stderr.write(`golem proxy: ${accountWarning}\n`);
+  if (accountWarning !== undefined) proxyLog(accountWarning);
   // R9.1: warn for EVERY misconfigured target, not just the one being served.
   // A broken target that is not yet routed to is still broken, and the point of
   // a registry is finding that out before a request depends on it. The registry
   // is inert here — this changes what is printed, never what is served.
   for (const w of targetWarnings(settings.proxy)) {
-    process.stderr.write(`golem proxy: target "${w.targetId}": ${w.message}\n`);
+    proxyLog(`target "${w.targetId}": ${w.message}`);
   }
   // A default_target naming an id in neither registry fails closed downstream
   // (R9.2); say so at startup rather than on the first request that needs it.

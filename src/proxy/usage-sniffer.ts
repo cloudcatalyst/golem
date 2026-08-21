@@ -31,6 +31,18 @@
  * Fail-open throughout: any parse/decompression error leaves `usage` at
  * whatever was captured so far (or null); it can never throw out of the
  * stream, and never delays or alters what reaches the client.
+ *
+ * R11.7 — it also records HOW an SSE stream ended, because it is already the
+ * one thing reading the event names. An Anthropic Messages stream that
+ * finishes properly ends with `message_stop`; one that stops without it was
+ * TRUNCATED, and the proxy — holding both sockets — is the only party that can
+ * say so. That is the signal behind Claude Code's "Connection lost
+ * mid-response", which until now left no trace anywhere in Golem.
+ *
+ * Observed here rather than in a second `Transform` on purpose: this is the
+ * only stream hop in the byte pipe, and adding another for one boolean would
+ * cost every streaming response a copy to answer a question this scan already
+ * has the answer to.
  */
 
 import { Transform, type TransformCallback } from "node:stream";
@@ -73,6 +85,23 @@ function parseUsageBlock(value: unknown): PartialUsage | null {
   return out;
 }
 
+/**
+ * How an SSE response ended (R11.7). `streaming` false means the body was not
+ * an event stream, so the other fields say nothing about it.
+ */
+export interface StreamTermination {
+  /** The body was `text/event-stream`. */
+  readonly streaming: boolean;
+  /** An Anthropic `message_stop` event was seen — the stream ended properly. */
+  readonly sawMessageStop: boolean;
+  /** An `error` event was seen (R10.23's case: the upstream said why). */
+  readonly sawErrorEvent: boolean;
+  /** The last `event:` name seen, for a truncation report that names where it stopped. */
+  readonly lastEvent: string | null;
+  /** How many events went past, so "truncated at 0 events" reads differently from "at 400". */
+  readonly events: number;
+}
+
 /** A `Transform` that passes bytes through untouched while sniffing `usage`. */
 export class UsageSniffer extends Transform {
   readonly #streaming: boolean;
@@ -90,6 +119,12 @@ export class UsageSniffer extends Transform {
   #jsonChunks: Buffer[] = [];
   #jsonBytes = 0;
   #jsonOverflowed = false;
+  // R11.7 — how the stream ended, and how much went through.
+  #bytes = 0;
+  #sawMessageStop = false;
+  #sawErrorEvent = false;
+  #lastEvent: string | null = null;
+  #events = 0;
 
   constructor(contentType: string | undefined, contentEncoding: string | undefined = undefined) {
     super();
@@ -111,6 +146,28 @@ export class UsageSniffer extends Transform {
     }
   }
 
+  /**
+   * R11.7 — how the stream ended, once the response finished.
+   *
+   * `streaming && !sawMessageStop && !sawErrorEvent` is a truncated Anthropic
+   * stream: the socket ended mid-response with neither a proper terminator nor
+   * an explanation.
+   */
+  get termination(): StreamTermination {
+    return {
+      streaming: this.#streaming,
+      sawMessageStop: this.#sawMessageStop,
+      sawErrorEvent: this.#sawErrorEvent,
+      lastEvent: this.#lastEvent,
+      events: this.#events,
+    };
+  }
+
+  /** Response bytes forwarded to the client (R11.7). Counted, never retained. */
+  get bytes(): number {
+    return this.#bytes;
+  }
+
   /** Usage captured once the response finished, or null if none was found. */
   get usage(): ResponseUsage | null {
     if (this.#usage === null) return null;
@@ -121,6 +178,7 @@ export class UsageSniffer extends Transform {
     // Forward first and unconditionally — sniffing must never add latency
     // or be able to affect what the client receives.
     this.push(chunk);
+    this.#bytes += chunk.length;
     try {
       if (this.#decompressor !== null) {
         if (!this.#decompressFailed) this.#decompressor.write(chunk);
@@ -174,6 +232,14 @@ export class UsageSniffer extends Transform {
       const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
       if (line.startsWith("event:")) {
         this.#pendingEvent = line.slice("event:".length).trim();
+        // R11.7: the terminal events, recorded as they pass. `message_stop` is
+        // the proper end of an Anthropic Messages stream; `error` is the
+        // upstream saying why it stopped (R10.23). Anything else and the stream
+        // simply ran out.
+        this.#lastEvent = this.#pendingEvent;
+        this.#events += 1;
+        if (this.#pendingEvent === "message_stop") this.#sawMessageStop = true;
+        else if (this.#pendingEvent === "error") this.#sawErrorEvent = true;
       } else if (line.startsWith("data:")) {
         this.#handleSseData(this.#pendingEvent, line.slice("data:".length).trim());
       } else if (line === "") {

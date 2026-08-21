@@ -217,6 +217,12 @@ export interface ProxyServerOptions {
     request: ProxyRequest,
   ) => void;
   /**
+   * R11.7 — called exactly once per request, after it ended, with what became
+   * of it. Observability only: it runs after the response is finished, must not
+   * rethrow, and can never affect what was forwarded. Default: none.
+   */
+  readonly onRequestOutcome?: (outcome: ProxyRequestOutcome) => void;
+  /**
    * R6.1 case (a): rewrite the headers sent upstream (e.g. strip the client's
    * Anthropic credential and inject a different provider's key under its
    * expected header — see src/providers). Applied to the forwarded headers
@@ -295,6 +301,57 @@ export interface UpstreamTranslator {
   createStreamTranslator(): Transform;
 }
 
+/**
+ * R11.7 — what became of one request, reported once, after it ended.
+ *
+ * Golem logged the routing decision it took BEFORE forwarding and nothing
+ * afterwards, so a request that died was indistinguishable from one that
+ * succeeded: diagnosing a live "Connection lost mid-response" had to be done
+ * from the client's transcript and the process table instead of from the proxy
+ * that handled it.
+ *
+ * Metadata only — never bodies. Redaction exists so prompt text is not lying
+ * around in files, and an outcome record must not undo that.
+ */
+export interface ProxyRequestOutcome {
+  readonly method: string;
+  /** Request path, query stripped — a query can carry identifiers. */
+  readonly path: string;
+  /** Target id when a route resolved one, else undefined (single-upstream). */
+  readonly targetId?: string;
+  /** HTTP status sent to the client, or undefined if none ever was. */
+  readonly status?: number;
+  /** Wall-clock ms from "request read" to "response finished". */
+  readonly durationMs: number;
+  /** Response bytes relayed to the client (streaming or buffered). */
+  readonly bytes: number;
+  /** True when the response was an SSE stream. */
+  readonly streaming: boolean;
+  /**
+   * How it ended:
+   * - `ok` — completed, and (for a stream) properly terminated;
+   * - `truncated` — an SSE stream ended with no `message_stop` and no `error`
+   *   event: the signal behind "Connection lost mid-response";
+   * - `upstream_error` — the upstream answered non-2xx, or said `error` in-band;
+   * - `proxy_error` — Golem itself refused or could not proceed;
+   * - `client_gone` — the client hung up first (not a failure);
+   * - `answered_locally` — served from the KB without an upstream call (Decision 33).
+   */
+  readonly result:
+    | "ok"
+    | "truncated"
+    | "upstream_error"
+    | "proxy_error"
+    | "client_gone"
+    | "answered_locally";
+  /** Last SSE event name seen — names where a truncated stream stopped. */
+  readonly lastEvent?: string;
+  /** SSE events relayed, so "truncated at 0" reads differently from "at 400". */
+  readonly events?: number;
+  /** Short reason for a non-`ok` result. Never a body, never prompt text. */
+  readonly detail?: string;
+}
+
 /** Fully-resolved proxy configuration. */
 export interface ProxyConfig {
   readonly upstreamBaseUrl: string;
@@ -308,6 +365,7 @@ export interface ProxyConfig {
     headers: Readonly<Record<string, string | string[] | undefined>>,
     request: ProxyRequest,
   ) => void;
+  readonly onRequestOutcome?: (outcome: ProxyRequestOutcome) => void;
   readonly mapUpstreamHeaders?: (
     headers: Record<string, string | string[]>,
   ) => Record<string, string | string[]>;
@@ -326,6 +384,9 @@ export function resolveProxyConfig(options: ProxyServerOptions = {}): ProxyConfi
     ...(options.onResponseUsage !== undefined ? { onResponseUsage: options.onResponseUsage } : {}),
     ...(options.onResponseHeaders !== undefined
       ? { onResponseHeaders: options.onResponseHeaders }
+      : {}),
+    ...(options.onRequestOutcome !== undefined
+      ? { onRequestOutcome: options.onRequestOutcome }
       : {}),
     ...(options.mapUpstreamHeaders !== undefined
       ? { mapUpstreamHeaders: options.mapUpstreamHeaders }

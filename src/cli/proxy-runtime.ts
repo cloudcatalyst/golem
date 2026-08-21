@@ -24,6 +24,7 @@ import { createGolemPipeline } from "../pipeline/index.js";
 import { listTargets, type UpstreamProvider } from "../providers/index.js";
 import { GolemProxy } from "../proxy/index.js";
 import { SessionTreeRecorder } from "../session/session-tree.js";
+import { proxyLog, renderRequestOutcome } from "../shared/proxy-log.js";
 import type { TelemetryStore } from "../telemetry/types.js";
 import { buildProxySidecars } from "./proxy-build/sidecars.js";
 import {
@@ -277,17 +278,24 @@ export function buildProxyFromSettings(
               // ADR-0003 invariant 5: every (request → target, why) selection is
               // attributable. Non-secret by construction.
               if (sticky) return; // Already logged when the binding was made.
-              process.stderr.write(`golem proxy: routed to "${targetId}" — ${reason}\n`);
+              proxyLog(`routed to "${targetId}" — ${reason}`);
             },
           }),
         }
       : {}),
     onPipelineError: (err) => {
-      process.stderr.write(
-        `golem proxy: pipeline error — forwarded request unchanged (passthrough): ${
+      proxyLog(
+        `pipeline error — forwarded request unchanged (passthrough): ${
           err instanceof Error ? err.message : String(err)
-        }\n`,
+        }`,
       );
+    },
+    // R11.7 — one line per request, after it ended, saying what became of
+    // it. Until this existed the log recorded the routing decision taken
+    // BEFORE forwarding and nothing else, so a request that died mid-stream
+    // was indistinguishable from one that succeeded.
+    onRequestOutcome: (outcome) => {
+      proxyLog(renderRequestOutcome(outcome));
     },
     onResponseUsage,
     onResponseHeaders,
