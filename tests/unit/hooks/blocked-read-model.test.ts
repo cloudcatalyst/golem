@@ -200,10 +200,17 @@ describe("the pending tool call", () => {
 
 describe("which project, which session", () => {
   it("names the working tree, because a session id does not", async () => {
-    await markBlocked(dir, "r", "2026-08-21T00:00:00Z", "s1");
-    const state = await readSessionState(dir);
-    expect(state?.project?.dir).toBe(dir);
-    expect(state?.project?.name).toBe(path.basename(dir));
+    // The redaction sweep covers the project path too (see `session-state.ts`),
+    // and a `mkdtemp` segment is high-entropy - so the raw temp path is NOT a
+    // stable expectation: it survives one platform's tmp shape and lands as a
+    // placeholder on another's (this failed on ubuntu CI, passed on Windows).
+    // Assert the property instead, under a benign nested name.
+    const project = path.join(dir, "my-project");
+    await mkdir(project, { recursive: true });
+    await markBlocked(project, "r", "2026-08-21T00:00:00Z", "s1");
+    const state = await readSessionState(project);
+    expect(state?.project?.name).toBe("my-project");
+    expect(state?.project?.dir.endsWith("my-project")).toBe(true);
     expect(state?.sessionId).toBe("s1");
   });
 
