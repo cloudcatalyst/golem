@@ -15,6 +15,23 @@ accepted, BEFORE any code". This is that threat model. R12.3–R12.7 do not star
 until it is accepted, and **"do not build this" is an outcome this document is
 willing to reach** — see Alternatives.
 
+> **Revision 2 (2026-08-21, USER DECISION), before acceptance.** The first draft
+> was **LAN-only** and rejected a hosted relay outright, because R6.3's brief lists
+> "self-hosted relay only — no Golem-operated service in the path" as a
+> non-negotiable. The user reversed that: *"this should be accessible over the
+> internet too, not lan only, but it will require an account to relay the companion
+> capabilities."* Recorded as a reversal rather than folded in silently. It is
+> consistent with spec Decision 20c, which left "relay architecture (self-hosted
+> vs. optional golem.run rendezvous)" explicitly **open**, and with Decision 21b's
+> "optional cloud account".
+>
+> This is not a small edit: it introduces a new adversary (anyone on the internet),
+> a new trust question (the relay operator, who is us), and a hosted service with
+> an availability and abuse obligation. §3b and §3c are the new material, and the
+> constraints there are what make the reversal safe rather than merely requested.
+> R6.3's non-negotiable is superseded **only** on the "self-hosted only" clause;
+> mTLS, default-deny on link loss, and the gate-stays-authority rule all stand.
+
 ## Context
 
 Spec Decision 21b: the job is *letting a remote human keep the agent unblocked* —
@@ -129,7 +146,14 @@ Consequences of drawing the line here, all deliberate:
   hook, edits settings, or writes config. ADR-0002's item 4 (level tampering)
   stands: the level is settable only by the explicit local CLI.
 
-### 3. Pairing is mTLS with certificates Golem issues; no bearer tokens anywhere
+**Revision 2 strengthens rather than weakens this line.** With the relay (§3b) the
+approval channel is reachable from the internet rather than from one building, so
+the population of possible attackers grows by several orders of magnitude while the
+blast radius of a successful one is unchanged. Every argument for keeping
+`destructive` and `outward` off the remote path is stronger under Revision 2, and
+the class table is identical.
+
+### 3a. Pairing is mTLS with certificates Golem issues; no bearer tokens anywhere
 
 - Golem acts as its own CA (`loopback-cert.ts`), issuing one client certificate
   per device. The server sets `requestCert: true`, `rejectUnauthorized: true`, and
@@ -142,9 +166,80 @@ Consequences of drawing the line here, all deliberate:
 - The listener binds `127.0.0.1` by default. Reaching it from a phone requires an
   explicit, persisted, loudly-surfaced exposure setting, in the manner of
   `proxy.bypass_all` (ADR-0004), reflected in `golem status`.
-- LAN only. No relay, no rendezvous, no NAT traversal, and **no Golem-operated
-  service in the path** — if a future capability cannot be delivered without a
-  third party, it is named (see R12.6 on push) rather than quietly admitted.
+
+**The certificate is the authorization credential, and it is the only one.** This
+sentence is what makes §3b and §3c safe: whatever carries the bytes — LAN or
+relay — the thing that decides whether a device may approve anything is a client
+certificate this machine issued. Nothing an account can do substitutes for it.
+
+### 3b. Two transports, one session: LAN direct, or relayed — and the relay is blind
+
+There are exactly two ways a paired device reaches a session, and they differ
+*only* in who carries the packets:
+
+| mode | reachable from | default |
+|---|---|---|
+| **direct** | the same LAN | **on**, when exposure is enabled |
+| **relayed** | anywhere on the internet | **off** — separate opt-in, plus an account |
+
+The mTLS session established in §3a terminates **at the two endpoints and nowhere
+else**. The relay is a rendezvous that matches two sockets by an opaque session id
+and copies bytes between them. It therefore:
+
+- **Cannot read the traffic.** It holds no key and terminates no TLS. Approval
+  requests, tool arguments and decisions pass as ciphertext. A relay compromise —
+  including by us — yields metadata, not content, and not authority.
+- **Cannot approve anything.** It has no certificate from any user's CA. There is
+  no relay-side code path that produces a decision.
+- **Cannot enrol a device.** See §3c; this is the single most important limit.
+- **Is optional and replaceable.** The protocol is documented and the endpoint is
+  a setting, so a user may point at their own relay or at none. "golem.run runs
+  one" must never become "golem.run is required" — that is the local-first
+  positioning (Decision 32), and it survives only if self-hosting the relay is a
+  real, tested path rather than a theoretical one.
+
+**What the relay unavoidably learns**, stated because a "blind relay" claim that
+omits this would be dishonest: that an account has a session open, when, between
+how many devices, and roughly how much traffic and how often. Timing plus volume
+is a work-pattern signal. It does not learn project names, commands, or decisions.
+
+**Relay unavailable = no remote approval**, which is already a safe state: §5's
+rule is that silence denies, and a relay outage is silence. It never degrades to a
+direct exposure, and it never queues a decision for later delivery.
+
+### 3c. The account authenticates the rendezvous. It never authorizes an approval.
+
+An account is required to use the relay (the user's decision, 2026-08-21). The
+whole of its power is: *open a rendezvous slot, and find the other end.* Three
+structural limits keep an account compromise from becoming code execution:
+
+1. **Enrolment is local-only, always.** A device is paired at the keyboard, over
+   the direct transport, with the fingerprint compared on both screens (§3a).
+   **A device can never be paired through the relay.** So an attacker who fully
+   owns the account — password, email, session cookie — still cannot introduce a
+   device that any laptop will accept. They get a pipe with nothing authorized at
+   the far end.
+2. **The account cannot revoke, downgrade, or re-issue a certificate.** Trust
+   lives in local state on the developer's machine; the account has no write path
+   to it. Compromising the account does not un-revoke a stolen phone.
+3. **The account is not a config surface.** Consistent with §8: no remote path
+   changes settings, autonomy level, hook wiring, or the approvable-class table.
+
+So the honest cost of an account takeover is **denial of service and metadata**,
+not RCE. That asymmetry is the design, and it is testable: the acceptance test for
+R12.8 is that a fully compromised account cannot cause a single tool call to run.
+
+Two further requirements:
+
+- **The account is for the relay only.** It is not a Golem login, not a licence
+  check, and not required for the proxy, the pipeline, the MCP tools, the LAN
+  transport, or anything else. A user who never wants remote access never makes
+  one. Decision 20c's differentiator narrows honestly: no *Anthropic* org account
+  and no org administrator — but a golem.run account, for this one capability.
+- **Second factor, and it is not optional for a relay account.** The account
+  fronts a channel to a developer's machine; a reused password must not be the
+  only thing between an attacker and the pipe. Even bounded by the three limits
+  above, DoS against someone's working day is a real harm.
 
 ### 4. A decision answers exactly one request, once
 
@@ -190,7 +285,9 @@ records answer "did Golem do this?" without inference.
 
 ### 8. What we deliberately do NOT do
 
-- No hosted relay, rendezvous, or account. No Golem-operated service.
+- No relay that can read traffic, approve anything, or enrol a device (§3b/§3c).
+- No account requirement for any capability other than the relay itself.
+- No relay-mediated pairing, at any time, for any reason.
 - No remote surface that changes settings, autonomy level, or hook wiring.
 - No "continue", no prompt injection, no `tmux send-keys`, no PTY wrapper
   (Decision 37).
@@ -212,6 +309,14 @@ careful."
 |---|---|---|
 | Someone on the LAN reads the session state | **Yes** | mTLS with a Golem-issued client cert; unpaired clients fail at the handshake. |
 | Someone on the LAN approves a tool call | **Yes** | Same. There is no token-bearing path to approval. |
+| **Anyone on the internet** reaches the approval channel via the relay | **Yes** | The relay carries bytes; the mTLS handshake still terminates on the developer's machine and still demands a certificate from its own CA. Reachability is not authorization. |
+| **Relay operator reads traffic** (including us, or whoever compromises us) | **Yes, structurally** | The relay terminates no TLS and holds no key. Ciphertext only. |
+| **Relay operator forges an approval** | **Yes, structurally** | It has no client certificate from any user's CA, and no code path emits a decision. |
+| **Relay operator learns metadata** | **No** | Account, timing, device count, traffic volume. Stated in §3b rather than mitigated. |
+| **Account takeover** (password, email, session) | **Yes, structurally** | Relay-mediated pairing does not exist (§3c-1), the account cannot touch local trust state (§3c-2), and it is not a config surface (§3c-3). An attacker gets a pipe with nothing authorized at the far end. |
+| Account takeover denies the user their own remote access | **No** | DoS is the accepted residual cost of §3c. Mitigated only by mandatory 2FA. |
+| Relay outage or relay-side attack removes approval | **Yes, by design** | Silence denies (§5). An outage cannot degrade into direct exposure or a queued decision. |
+| golem.run becomes load-bearing for the product | **Yes, if enforced** | Documented protocol, configurable endpoint, self-hosting a tested path. This is a *discipline* row: it holds only while someone keeps testing the self-hosted case. |
 | Thief with an **unlocked** paired phone runs a command | **No** | This is the feature. Bounded by §2 (never destructive/outward) and by revocation. |
 | …and pushes to git / publishes / deploys / deletes the tree | **Yes, structurally** | `destructive` and `outward` are not remotely approvable at any level. No setting changes this. |
 | …and changes the autonomy level to widen what is auto-allowed | **Yes** | No remote surface writes config or level; ADR-0002 item 4. |
@@ -223,7 +328,7 @@ careful."
 | Malicious app on the phone drives the browser | **No** | Same authority as the human holding it. Reduced by §2's class limits. |
 | Tool arguments leak secrets to the device | **Yes, mostly** | Redacted before being written, by the same stage as everything else. Residual: paths and project names are not secrets but are disclosure. |
 | A novel destructive command the classifier misses is remotely approved | **No** | It classifies as `unknown`. Stated in §2; the answer is full-text display, not a claim of coverage. |
-| Push notification puts a third party in the path | **Unresolved** | R12.6 answers it with dates. "No reliable self-hosted path" is an acceptable answer; the app then polls while open. |
+| Push notification puts a third party in the path | **Unresolved, and reopened** | Revision 2 changes this question: a relay that already holds a connection is the natural place to originate a push, so R12.6 must now evaluate relay-originated push as its first option. What a push *payload* may contain is the new sub-question — the answer is "that something is waiting", never the command. |
 | Remote human approves with worse context than local | **No** | Acknowledged above. §2 narrows what that judgment can reach. |
 
 ## Consequences
@@ -241,6 +346,20 @@ careful."
 - Two names collide: `golem devices` is the existing inference-target surface.
   R12.4 resolves the collision rather than inheriting it.
 
+Revision 2 adds four consequences, and they are not small:
+
+- **Golem acquires a hosted service**, with uptime, abuse, and incident-response
+  obligations it has never had — and the first one whose failure a user notices.
+  R12.9 owns standing it up and is `owner: user` for the same reason R7.6-infra is.
+- **A pricing question becomes live.** Decision 20e already names hosted scope as
+  the paid-tier candidate; a relay account is the first thing a user could be
+  billed for. This ADR does not decide it and must not be read as deciding it.
+- **The self-hosted relay is now a maintenance obligation, not a courtesy.** It is
+  the only thing keeping §3b's last bullet true, and the only thing keeping
+  Alternative 4 adopted rather than rejected.
+- **R12.6 reopens.** A held relay connection is the obvious push origin, so the
+  spike's first option changed. It stays gated and stays allowed to answer "no".
+
 ## Alternatives considered
 
 1. **Do not build it.** Genuinely on the table — the local prompt already works,
@@ -256,9 +375,18 @@ careful."
 3. **Bearer token over HTTPS instead of mTLS.** Rejected by R6.3 directly, and
    because a token is copyable and leaks through URLs, history and screenshots
    where a client certificate in a device keystore does not.
-4. **A hosted golem.run rendezvous** for NAT traversal. Rejected: it puts Golem in
-   the path of an RCE channel, which contradicts the local-first positioning
-   (Decision 32) and would make Golem's own compromise a compromise of every user.
+4. **A hosted golem.run rendezvous** for NAT traversal. **Rejected in draft 1,
+   ADOPTED in Revision 2 by user decision** (§3b/§3c). The draft's objection was
+   that it puts Golem in the path of an RCE channel and makes Golem's compromise
+   every user's compromise. That objection is answered structurally rather than
+   waived: the relay terminates no TLS, holds no certificate, and cannot enrol a
+   device — so compromising it yields metadata and downtime, not authority. The
+   local-first positioning (Decision 32) survives on the condition in §3b: the
+   endpoint stays configurable and self-hosting stays a tested path. **If that
+   condition ever stops being tested, this alternative is back to rejected**, and
+   that is the sentence to quote when it happens.
+   *Still rejected:* a relay that terminates TLS, inspects traffic, brokers
+   approvals, or is mandatory for any other Golem capability.
 5. **Approve via a push notification action.** Rejected: it is approval without
    reading, from a lock screen, and R6.3 already names push-as-trust-model as out
    of scope.
@@ -273,8 +401,16 @@ careful."
    This is the trade this ADR asks the user to make consciously.
 3. **The observe/authorize split** — that capability 1 may ship without
    capability 2, and that declining 2 cancels R12.3 and leaves the rest useful.
-4. **LAN-only, no relay, ever** — accepting that off-LAN use is simply not
-   supported rather than solved by a rendezvous.
+4. **The relay, on the terms in §3b/§3c** — settled in substance by the user's
+   2026-08-21 decision; what needs ratifying is the *constraints* added to make it
+   safe, and one of them is new:
+   - the relay is blind (no TLS termination, no key, ciphertext only);
+   - **enrolment is local-only, so an account takeover can never pair a device** —
+     this is the new constraint, and it is what keeps account compromise at "DoS
+     and metadata" instead of "code execution";
+   - the account buys rendezvous and nothing else, with mandatory 2FA;
+   - the endpoint stays configurable and self-hosting stays tested;
+   - accepting the metadata the relay unavoidably learns (§3b).
 5. **Web-first, no native app** until R12.6 proves a native shell buys something
    the web cannot.
 
