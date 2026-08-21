@@ -3,7 +3,7 @@ description: Send the next request(s) untouched — bypass Golem compression
 invocationMode: user
 ---
 
-<!-- golem:layering-exception config — a true full bypass turns REDACTION off, so
+<!-- golem:layering-exception off — a true full bypass turns REDACTION off, so
      by design no tool call can reach it (R11.1/ADR-0004 moved it to a CLI-only
      setting). Naming the command for the user to run in their OWN terminal is the
      point, not a shortcut around a tool. -->
@@ -16,11 +16,12 @@ Three different things, in increasing order of what they switch off:
    pure passthrough of that request. Nothing is configured; nothing persists.
 2. **Compression off, redaction still on** — `golem compression off`. This is
    the usual answer: byte-faithful forwarding with secrets still redacted.
-3. **A true full bypass, redaction included** —
-   `golem config set proxy.bypass_all true`. Tell the user plainly that secrets
-   and PII then reach the upstream unredacted, and that they must run it in their
-   own terminal: no tool call can turn redaction off.
+3. **A true full bypass, redaction included** — `golem off`, which persists
+   `proxy.bypass_all` and applies it live (R11.3 — it used to be in-process only,
+   so it silently reverted at the next restart). Tell the user plainly that secrets
+   and PII then reach the upstream unredacted until they run `golem on`, and that
+   they must run it in their own terminal: no tool call can turn redaction off.
 
 Then remind them to run `golem compression 1` (or their previous value) to
-re-enable savings when done, and `golem config set proxy.bypass_all false` if
-they used option 3.
+re-enable savings when done, and `golem on` if they used option 3 — every status
+surface shows the bypass while it is on, so it is not a state to leave behind.
