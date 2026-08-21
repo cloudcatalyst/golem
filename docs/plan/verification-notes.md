@@ -6612,3 +6612,207 @@ Features in Safari 26.0", 2025-09-15
 priority docs (`https://firebase.google.com/docs/cloud-messaging/android-message-priority`);
 MDN browser-compat-data `api.SyncManager`
 (`https://raw.githubusercontent.com/mdn/browser-compat-data/main/api/SyncManager.json`).
+
+## §136 — R12.7: the reverse channel Decision 37 said was impossible now EXISTS and is an MCP server — the "no continue button" outcome survives, its reason does not (2026-08-22)
+
+R12.7's brief asked for a re-verification rather than a restatement of Decision 37
+(2026-07-18) and of ADR-0006's capability-3 row ("Start work in an idle session —
+Structurally unavailable"). The re-verification **falsifies the reason**. Recorded
+in full, because a task written on the assumption that nothing had changed found
+the one thing that did.
+
+**Verified against Claude Code `2.1.235`** (`claude --version`, installed on this
+machine, 2026-08-22) and the live docs fetched 2026-08-22.
+
+### What Decision 37 claimed, and which half still holds
+
+Decision 37 gave two reasons, and they have diverged:
+
+1. **The architectural half — STILL TRUE, verbatim.** "The proxy sits *below*
+   Claude Code as a request relay with no reverse channel into the interactive
+   TUI, `/resume` is a client-side slash command the proxy never sees." Nothing in
+   the current client changes this. No request-path mechanism was added; the proxy
+   still sees `/v1/messages` and nothing else, and no amount of proxying creates a
+   user turn.
+2. **The product half — NO LONGER TRUE.** "There is no IPC into an already-running
+   interactive session (only into headless/SDK processes a caller launches
+   itself)", and "the only techniques that reach a live TUI are tmux `send-keys` /
+   OS keystroke injection". Both statements are now false. Anthropic shipped three
+   supported mechanisms, none of which is screen-scraping.
+
+### The three supported mechanisms that now exist
+
+**1. Channels — the one that matters, because it is an MCP server.**
+`https://code.claude.com/docs/en/channels` and
+`https://code.claude.com/docs/en/channels-reference`, both fetched 2026-08-22. The
+page title is literally *"Push events into a running session with channels"*, and
+the definition is quoted exactly:
+
+> "A channel is an MCP server that pushes events into your running Claude Code
+> session, so Claude can react to things that happen while you're not at the
+> terminal."
+
+The contract is small and entirely public:
+
+- declare `capabilities: { experimental: { 'claude/channel': {} } }` — "Required.
+  Always `{}`. Presence registers the notification listener."
+- emit `notifications/claude/channel` with `params.content` (string) and optional
+  `params.meta` (`Record<string,string>`);
+- connect over **stdio**: "A channel is an MCP server that runs on the same machine
+  as Claude Code. Claude Code spawns it as a subprocess and communicates over
+  stdio."
+- the event reaches the model as `<channel source="your-channel" …>content</channel>`.
+
+The documented walkthrough is a webhook receiver listening on `127.0.0.1:8788` that
+forwards every POST body into the session, and the fakechat quickstart's terminal
+notice says messages "**inject directly in this session**". **Golem is already an
+MCP server** (`src/mcp/`), so this seam is reachable in principle without a new
+dependency — the MCP SDK is the only hard requirement and "Node, Bun and Deno all
+work" (the pre-built plugins use Bun; a custom channel need not).
+
+**Also first-party now: remote approve/deny.** A channel may declare
+`capabilities.experimental['claude/channel/permission']`, and Claude Code then
+sends `notifications/claude/channel/permission_request` carrying `request_id`,
+`tool_name`, `description` and `input_preview`, holding the local dialog open in
+parallel — "you can answer in the terminal or on your phone, and Claude Code
+applies whichever answer arrives first and closes the other". That is ADR-0006
+capability 2, built by Anthropic, with a design close to R12.3's own (short id,
+local dialog stays authoritative, first answer wins). Flagged for the batch, not
+re-litigated here.
+
+**2. Remote Control.** `https://code.claude.com/docs/en/remote-control` (fetched
+2026-08-22) plus `claude remote-control` in the CLI reference: "Continue a local
+Claude Code session from your phone, tablet, or any browser… Claude keeps running
+locally the entire time." `claude --remote-control` / `--rc` enables it on an
+ordinary interactive session you can still type into locally. Steering, images from
+the phone, and Anthropic's own push notifications when Claude "needs a decision".
+A first-party product occupying most of ADR-0006's ground. It is not a Golem seam
+(Anthropic's app, Anthropic's API, an Anthropic account) and it is the honest thing
+to point a user at who wants what capability 3 promised.
+
+**3. Cross-session messaging.**
+`https://code.claude.com/docs/en/cross-session-messaging` (fetched 2026-08-22),
+"requires Claude Code v2.1.224 or later and runs on macOS and Linux". `ListAgents`
++ `SendMessage`, and the sentence that settles the idle question outright: "The
+receiving Claude reads the message between tool calls during an active turn… **When
+the receiving session is idle, Claude Code starts a new turn with the message.**"
+Model-driven (Claude calls the tools, not a third party), and **not available on
+Windows**, which is this developer's platform.
+
+### So why R12.5 still ships NO continue button
+
+The capability exists; the button still does not, and the reasons are now different
+— each one a quote rather than a preference:
+
+1. **It is opt-in at launch, per session, by flag.** "Being in `.mcp.json` isn't
+   enough: a server also has to be named in `--channels`." A session already
+   running without the flag cannot be reached, and the phone cannot know how the
+   laptop's session was started. A control that works on some sessions and silently
+   does nothing on the rest is worse than an absent control.
+2. **A custom channel is not on the allowlist.** "During the research preview,
+   every channel must be on the approved allowlist to register… the approved
+   allowlist is Anthropic-curated, so your channel stays on the development flag
+   while you build and test" — i.e. `--dangerously-load-development-channels`.
+   Golem does not ship a feature whose only path is a flag with `dangerously` in
+   its name.
+3. **There is no delivery acknowledgement.** "Claude Code doesn't acknowledge
+   notifications. The `await` on `mcp.notification()` resolves when the message is
+   written to the transport, not when Claude has processed it. If the session hasn't
+   loaded your server as a channel, or the organization policy blocks it, **Claude
+   Code drops the events silently and returns no error to your server**." A phone
+   button that cannot learn whether its message landed can only lie. It is the same
+   class of failure ADR-0006 §5 answers with "silence denies" — except silence on a
+   *send* has no safe interpretation, because nothing was being held open to deny.
+4. **The contract is explicitly unstable, and account-shaped.** "the `--channels`
+   flag syntax and protocol contract may change based on feedback"; channels
+   "require Anthropic authentication through claude.ai or a Console API key, and are
+   not available on Amazon Bedrock, Google Cloud's Agent Platform, or Microsoft
+   Foundry" — which collides with Golem's multi-account/gateway routing (ADR-0003,
+   R6.1) rather than composing with it.
+5. **Authoring a turn is a strictly larger authority than answering one, and
+   ADR-0006 was not accepted for it.** ADR-0002's class line constrains *tool calls
+   the model proposes*; injected free text can propose anything, so it routes around
+   the line rather than sitting behind it. The docs put the burden on the channel
+   author in exactly these words: "Anyone who can reply through the channel can
+   approve or deny tool use in your session, so only allowlist senders you trust
+   with that authority." Extending a paired phone from "answer the question the hook
+   is holding open" to "write a new instruction" is a **new user decision**, not a
+   UI affordance R12.5's author may add.
+
+### The honest substitute, and what it may never be called
+
+Unchanged and still correct: **enqueue, do not inject.** R5.1's durable queue
+(`golem task add|list|show|resume|cancel`, `notBefore`, `isResumable`, headless
+`claude --resume <id> -p …` — §65) is the only path where a phone changes what
+happens next without anyone pretending work has begun.
+
+Decided here, for R12.5: **do not surface it in R12.5.** A phone that can enqueue a
+prompt can enqueue *any* prompt, which the next headless resume then executes with
+the local session's permissions — capability 2's blast radius without capability 2's
+held-open hook. It needs its own opt-in and its own ADR paragraph (R12.10). If it is
+ever surfaced, three rules hold:
+
+- **never the word "continue"** (nor "resume", "send", "go"). The only honest label
+  is **"Add a task for later"**, with the sub-line **"Nothing runs until your laptop
+  picks it up."**
+- **never in the same visual group as Approve/Deny** — one answers a question that
+  already exists, the other creates work nothing has agreed to do.
+- **no progress, no spinner, no state that implies execution.** The success
+  confirmation is that a task was *written*, and nothing more.
+
+### The sentence R12.5 puts where the button isn't
+
+Matching §135's register ("Alerts are off — this screen only updates while it is
+open."):
+
+> **"There is no prompt box — this screen can answer what the agent is already
+> asking, but nothing here can start a turn."**
+
+Scoped to *here* on purpose. "No phone can steer a session" would now be false —
+Remote Control does exactly that — so the sentence claims only what is true of
+Golem's own surface, and gives a reason the reader can act on: the hook holds a
+question open, and that is the only thing there is to answer.
+
+### Consistency with §135 (R12.6), not a re-litigation
+
+No conflict. §135's push must be laptop-originated because the blocked laptop is
+awake by definition; the same fact is why an enqueued task has something local that
+*could* pick it up later. But awake is not willing-to-begin-a-turn, and nothing in
+the push path creates one. §135 stands as written.
+
+### What this obliges someone to change
+
+- **ADR-0006's capability-3 row** says "Structurally unavailable (Decision 37)". The
+  *outcome* stands; the *reason* is superseded. A dated re-verification block is
+  added to the ADR pointing here, rather than rewriting an accepted decision.
+- **Spec Decision 59(g)** ("Capability 3 does not exist… there is no reverse channel
+  into the interactive TUI") needs a **user** amendment: the accurate wording is
+  that Golem *declines to build* capability 3, not that it cannot. A dated pointer
+  is appended; the decision text is left to the user.
+- **R12.10** is filed for the question this opens: whether a Golem channel is worth
+  having once the research preview stabilises, plus the narrower
+  phone-enqueues-a-task half.
+
+### Observed in passing (two defects, not filed)
+
+- **CCR expand returned "Unknown or expired CCR ref" for three WebFetch refs**
+  minutes after they were issued (e.g.
+  `e6479a89ad4304c04c3d4168486b6833033256ee2eb5f74f627bc6cd9ec14576`), while the
+  swap marker promised "The full original is stored losslessly". The workaround was
+  `curl` + `sed` against the same URL. A marker naming a retrieval path that then
+  404s is worse than no marker.
+- **The session scratchpad path is redacted out of shell commands.** Its UUID
+  segment reads as high-entropy, so `curl -o <scratchpad>/f.md` became
+  `-o C:[REDACTED:high-entropy:1].md` and the next `grep` failed on a path that
+  does not exist. Redaction working as designed on a path that has to survive
+  verbatim.
+
+**Sources, all fetched 2026-08-22** (client `2.1.235`):
+`https://code.claude.com/docs/en/channels.md`;
+`https://code.claude.com/docs/en/channels-reference.md` (Overview; What you need;
+Test during the research preview; Server options; Notification format; Relay
+permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md`;
+`https://code.claude.com/docs/en/remote-control.md`;
+`https://code.claude.com/docs/en/cli-reference` (`claude remote-control`,
+`claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
+`https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.

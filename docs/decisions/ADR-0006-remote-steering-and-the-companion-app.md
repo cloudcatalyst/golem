@@ -4,7 +4,7 @@ type: adr
 tags: [r12, r6, companion-app, remote, autonomy, threat-model, mtls, security, adr-0002]
 sources: [docs/plan/tasks/R6.3.md, docs/decisions/ADR-0002-autonomy-approval-gates.md, docs/decisions/ADR-0003-credential-storage-and-account-routing.md, docs/decisions/ADR-0005-plugin-seams-and-the-redaction-path.md, docs/golem-spec.md, src/hooks/session-state.ts, src/proxy/loopback-cert.ts, src/autonomy/gate.ts, src/dashboard/server.ts]
 created: 2026-08-21
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 # ADR-0006 — Remote steering: a paired phone may unblock the agent, but never authorize the irreversible
@@ -71,7 +71,10 @@ Three facts about the existing tree bound this design, all verified 2026-08-21:
   the proxy never sees, and the only techniques that reach a live TUI are
   `tmux send-keys` and keystroke injection, which Golem rejected on purpose. A
   phone cannot type into a running session. It can only answer a question the hook
-  is *already holding open*.
+  is *already holding open*. **(Re-verified 2026-08-22, R12.7 — see the block
+  under the capability table. A supported reverse channel now exists in the
+  client; what remains true is that the *proxy* has none, and that Golem builds
+  none. Evidence: verification-notes §136.)**
 
 ## The feature, separated into three capabilities
 
@@ -82,10 +85,40 @@ switch. Most of the value is in the first, which carries almost none of the risk
 |---|---|---|---|
 | **1. Observe** | Read the blocked state, limits and telemetry from a paired device | Disclosure of tool arguments and project names | Moderate — and bounded by redaction |
 | **2. Authorize** | Answer a permission prompt the hook is holding open | Code execution on the developer's machine | **Severe** |
-| **3. Resume** | Start work in an idle session | — | Structurally unavailable (Decision 37) |
+| **3. Resume** | Start work in an idle session | — | ~~Structurally unavailable (Decision 37)~~ — **not built by choice; see the re-verification below** |
 
 Capability 3 is not a design choice. It does not exist, R12.7 re-verifies that
 against the current client, and no part of this ADR pretends otherwise.
+**[Superseded on the reason, 2026-08-22: R12.7 ran that re-verification and found
+the opposite — read this paragraph together with the block below.]**
+
+> **Re-verification (2026-08-22, R12.7) — the row above was right about the
+> outcome and wrong about the reason.** Measured against Claude Code `2.1.235`,
+> a supported reverse channel into a *running* session now exists and Decision
+> 37's "structurally impossible" no longer holds. **Channels** (research preview)
+> are the material finding: "a channel is an MCP server that pushes events into
+> your running Claude Code session", declared with
+> `capabilities.experimental['claude/channel']` and driven by
+> `notifications/claude/channel` over stdio — and Golem is already an MCP server.
+> **Remote Control** (`claude --rc`) and **cross-session messaging**
+> (`SendMessage`, which "starts a new turn" on an idle session) are the other two.
+> Anthropic also relays permission prompts to a channel
+> (`notifications/claude/channel/permission_request`), which is capability 2 built
+> first-party.
+>
+> **What does not change:** Golem still ships no "continue", and R12.5 still has
+> no prompt box. The channel path is opt-in by launch flag per session ("being in
+> `.mcp.json` isn't enough"), off the Anthropic-curated allowlist (so
+> `--dangerously-load-development-channels` today), unacknowledged by design
+> (events "dropped silently, returns no error"), explicitly unstable, and — the
+> load-bearing objection — *authoring a turn is a larger authority than answering
+> one*, so it sits outside what ADR-0002's class line can constrain and outside
+> what this ADR was accepted for. Extending remote authority that far is a new
+> USER decision, tracked as **R12.10**, not an amendment an agent may make here.
+>
+> Full evidence, quotes and URLs: `docs/plan/verification-notes.md` §136. Spec
+> Decision 59(g)'s wording ("Capability 3 does not exist") needs a user amendment
+> for the same reason.
 
 ## The honest part
 
