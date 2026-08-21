@@ -1,7 +1,7 @@
 ---
 task: redaction-path-uuid
 title: An absolute path containing a UUID is redacted as a secret, so scratchpad and worktree paths cannot be used as command arguments
-state: queued
+state: done
 owner: agent
 size: M
 design: No memo. The whole surface is the entropy heuristic in `src/pipeline/redaction-rules.ts` — `ENTROPY_CANDIDATE_RE`, `ENTROPY_THRESHOLD_BITS`, `isPathLikeToken`, and the exclusion list documented above `isEntropySecret`. Precedent for this exact class of narrowing: verification-notes §49 (repo paths and ADR filenames), and §31/§37 (over-redaction inflating "savings").
@@ -9,7 +9,7 @@ gate: A local filesystem path that happens to contain a UUID survives the pipeli
 depends_on: []
 touches: [src/pipeline/redaction-rules.ts, tests/unit/pipeline, docs/plan/verification-notes.md, docs/wiki]
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-21T22:46:22.279Z
 ---
 
 ## The symptom, seen twice independently
@@ -161,3 +161,7 @@ Two things this adds to the work:
 Unrelated and out of scope, recorded so it is not conflated: an *unquoted*
 heredoc (`<<EOF`) still gets `$` and `\` expanded by the shell, which is a real
 and separate way a heredoc mangles a Windows path. Quote the delimiter.
+
+## Outcome
+
+shipped
