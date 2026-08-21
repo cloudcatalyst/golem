@@ -4,7 +4,7 @@ type: concept
 tags: [architecture, pipeline, routing, observability, diagrams]
 sources: [docs/golem-spec.md#2, src/proxy, src/mcp/server.ts, src/pipeline/pipeline.ts, src/inference/service.ts, src/inference/catalog.ts, src/providers/index.ts, src/hooks/session-state.ts, src/autonomy/gate.ts]
 created: 2026-07-25
-updated: 2026-07-30
+updated: 2026-08-21
 ---
 
 # Architecture
@@ -41,10 +41,10 @@ flowchart TB
 
   subgraph Hub["Golem hub — one local process (proxy + MCP, shared engine)"]
     PX["Transparent proxy<br/>ANTHROPIC_BASE_URL to localhost"]
-    MCPS["MCP server<br/>search · fetch · expand · coder · ingest · stats · level"]
+    MCPS["MCP server<br/>search · fetch · expand · coder · ingest · stats"]
     subgraph Core["Core engine"]
       PIPE["Request pipeline"]
-      SLIDER["Slider policy"]
+      POLICY["Dial policy<br/>compression · brevity"]
       KB["Knowledge base + vector DB"]
       CACHE["Caches: webcache · CCR store"]
       INF["Inference router"]
@@ -67,7 +67,7 @@ flowchart TB
   MCPS --> KB
   MCPS --> INF
   MCPS --> CACHE
-  PIPE --> SLIDER
+  PIPE --> POLICY
   PIPE --> CACHE
   PIPE -->|"forward (byte-faithful at level <= 1)"| UP
   KB --> INF
@@ -97,10 +97,10 @@ Anthropic-style caching upstreams so the byte-identical cached prefix survives �
 flowchart TB
   A["POST /v1/messages"] --> B{"messages body?<br/>(JSON, matching path)"}
   B -->|"no"| FWD["Forward unchanged<br/>(byte-identical)"]
-  B -->|"yes"| L0{"slider level 0?"}
-  L0 -->|"yes — passthrough"| FWD2["Forward RAW<br/>redaction OFF (Decision 30)"]
-  L0 -->|"no (levels 1–3)"| R["Stage 1 — Redaction<br/>always first, never reordered"]
-  R --> LA{"Stage 1.5 — Local answer?<br/>(opt-in, single-turn, decoupled from slider)"}
+  B -->|"yes"| L0{"proxy.bypass_all?"}
+  L0 -->|"true — full bypass"| FWD2["Forward RAW<br/>redaction OFF (CLI-only, ADR-0004)"]
+  L0 -->|"false (default)"| R["Stage 1 — Redaction<br/>always first, never reordered"]
+  R --> LA{"Stage 1.5 — Local answer?<br/>(opt-in, single-turn, decoupled from the dials)"}
   LA -->|"confident KB hit"| RESP["Respond directly<br/>never forwarded upstream"]
   LA -->|"decline / not eligible"| C2["Stage 2 — Lossless compression<br/>dedup · compaction · cache-align (level >= 1)"]
   C2 --> G{"caching upstream?<br/>(Anthropic-style)"}
