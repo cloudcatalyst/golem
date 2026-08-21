@@ -57,7 +57,7 @@ async function initSummary(dir: string): Promise<string> {
   const hints: string[] = [];
   if (hasUv)
     hints.push(
-      "• `uv` detected — enable semantic compression: set compression.headroom_sidecar=true and slider ≥3.",
+      "• `uv` detected — enable semantic compression: set compression.headroom_sidecar=true and compression.level ≥2.",
     );
   if (hasEmbedModel)
     hints.push(

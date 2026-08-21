@@ -1,7 +1,7 @@
 /**
  * R5.4 (WS-F4 / spec 20d) — autonomy level policy + persistence.
  *
- * The level is project-scoped state (like the slider), stored at
+ * The level is project-scoped state (like the compression dial), stored at
  * `<project>/.golem/state/autonomy.json`, read by the PreToolUse gate hook and
  * surfaced loudly (session-state report, status line, `golem autonomy`). Threat
  * model + full rationale: docs/decisions/ADR-0002-autonomy-approval-gates.md.
@@ -27,7 +27,7 @@ export const DEFAULT_AUTONOMY_LEVEL: AutonomyLevel = "manual";
  * the PreToolUse hook is now shared with the snooze/coder-first nudges (spec
  * Decision 38/39) — wiring the hook must not force the gate on anyone who only
  * wanted snooze. `golem autonomy disable` sets this false (a loud, deliberate
- * opt-out, like slider level 0 — Decision 30); the nudges keep working.
+ * opt-out, like the retired slider’s level 0 — Decision 30); the nudges keep working.
  */
 export const DEFAULT_AUTONOMY_GATE_ENABLED = true;
 

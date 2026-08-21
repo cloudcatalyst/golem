@@ -15,11 +15,17 @@
  * creates no runtime cycle back to init.ts.
  */
 
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "./init.js";
 import { rel } from "./json-file.js";
-import { classifyManaged, ownedDetail, rememberManaged } from "./managed-files.js";
+import {
+  classifyManaged,
+  forgetManaged,
+  isUnmodifiedManaged,
+  ownedDetail,
+  rememberManaged,
+} from "./managed-files.js";
 import { P0_SKILLS } from "./skills.js";
 
 /** Init step 3: skills — .claude/skills/golem/<cmd>/SKILL.md -> /golem/<cmd>. */
@@ -61,6 +67,64 @@ export async function installSkills(projectDir: string, dryRun: boolean): Promis
       await mkdir(path.dirname(skillPath), { recursive: true });
       await writeFile(skillPath, content, "utf8");
       await rememberManaged(projectDir, skillPath, content);
+    }
+  }
+  return actions;
+}
+
+/**
+ * Init step 3b: remove a `/golem/<cmd>` skill that Golem no longer ships.
+ *
+ * A retired skill is worse than a missing one: `/golem/slider` survived R11.1
+ * still telling an agent to run a command that no longer exists. Install alone
+ * cannot fix that — it only ever writes the names in the table, so anything
+ * dropped from it lingers forever.
+ *
+ * Provenance decides, exactly as it does on the install side (R9.5): a file
+ * still byte-identical to what Golem last wrote is Golem's to delete; one the
+ * user has edited, or that Golem has no record of writing, is reported as a
+ * `conflict` and LEFT ALONE. The namespace is shared with the user's own
+ * skills — `uninit` may take the whole directory, but init may not.
+ */
+export async function pruneRetiredSkills(
+  projectDir: string,
+  dryRun: boolean,
+): Promise<InitAction[]> {
+  const actions: InitAction[] = [];
+  const nsDir = path.join(projectDir, ".claude", "skills", "golem");
+  let entries: string[];
+  try {
+    entries = (await readdir(nsDir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch {
+    return actions; // no namespace yet — nothing to prune
+  }
+  for (const name of entries.sort()) {
+    if (name in P0_SKILLS) continue;
+    const skillPath = path.join(nsDir, name, "SKILL.md");
+    let onDisk: string;
+    try {
+      onDisk = await readFile(skillPath, "utf8");
+    } catch {
+      continue; // a directory with no SKILL.md is not ours to interpret
+    }
+    if (!(await isUnmodifiedManaged(projectDir, skillPath, onDisk))) {
+      actions.push({
+        kind: "conflict",
+        path: rel(projectDir, skillPath),
+        detail: ownedDetail(`retired /golem/${name} skill`),
+      });
+      continue;
+    }
+    actions.push({
+      kind: "remove",
+      path: rel(projectDir, skillPath),
+      detail: `/golem/${name} skill — retired, and unmodified since Golem wrote it`,
+    });
+    if (!dryRun) {
+      await rm(path.join(nsDir, name), { recursive: true, force: true });
+      await forgetManaged(projectDir, skillPath);
     }
   }
   return actions;

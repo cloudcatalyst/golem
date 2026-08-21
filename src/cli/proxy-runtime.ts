@@ -52,7 +52,7 @@ const DIAL_RELOAD_TTL_MS = 1_000;
 
 export interface ProxyBuild {
   readonly proxy: GolemProxy;
-  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, slider ≥2). */
+  /** Present only when `settings.compression.headroom_sidecar` is set (opt-in, compression.level ≥2). */
   readonly semantic?: HeadroomSidecar;
   /**
    * The upstream this proxy actually forwards to — the resolved ACTIVE account,
@@ -128,7 +128,7 @@ export interface BuildProxyOptions {
    * `golem proxy stop` keeps the project port bound so Claude Code never dials a
    * dead socket (its `ANTHROPIC_BASE_URL` cannot be un-set without a window
    * reload — verification-notes §112b). This flag is what "pipeline off" means
-   * concretely: the live slider store is ignored and the policy is pinned to
+   * concretely: the live dial store is ignored and the policy is pinned to
    * **level 1**, local-answer is suppressed, and the Headroom sidecar is never
    * constructed.
    *

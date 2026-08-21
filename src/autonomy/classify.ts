@@ -20,8 +20,8 @@ const READ_TOOLS = new Set([
   "WebSearch",
   "WebFetch",
   "TodoWrite",
-  // Golem read-only MCP tools (short verb names, Decision 27). `level` is NOT
-  // here — it WRITES the persistent slider (see classifyAction's special case).
+  // Golem read-only MCP tools (short verb names, Decision 27). `level` was
+  // never here — it wrote the persistent slider, and R11.1 retired both.
   "mcp__golem__search",
   "mcp__golem__fetch",
   "mcp__golem__stats",
@@ -212,24 +212,14 @@ export function classifyBash(command: string): ActionClass {
   return "unknown";
 }
 
-/**
- * Classify the `level` MCP tool by the level it requests. Setting the slider
- * is a persistent local settings WRITE for levels ≥ 1 — but level 0
- * ("passthrough") disables redaction entirely, so every later request would
- * leave the machine with secrets/PII unredacted. That consequence is the
- * `outward` class's territory (leaves the machine / hard to reverse), so a
- * level-0 request is always gated to the human at every autonomy level
- * (ADR-0002's never-auto set). An unparseable input fails closed as `unknown`.
+/*
+ * R11.1 note: `classifyLevelTool` lived here, classifying the `level` MCP
+ * tool — level 0 as `outward` (it disabled redaction) and 1-3 as `write`.
+ * The tool went with the slider, and no dial can reach redaction now
+ * (ADR-0004: the stage table has no redaction-free row), so the branch was
+ * dead. An unrecognized tool already falls through to `unknown`, which is
+ * GATED — strictly safer than the `write` a level call used to earn.
  */
-function classifyLevelTool(input: unknown): ActionClass {
-  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
-    const level = (input as Record<string, unknown>).level;
-    if (typeof level === "number") {
-      return level <= 0 ? "outward" : "write";
-    }
-  }
-  return "unknown";
-}
 
 /** Classify a pending tool call into a risk class. Never throws. */
 export function classifyAction(toolName: string, toolInput: unknown): ActionClass {
@@ -238,7 +228,6 @@ export function classifyAction(toolName: string, toolInput: unknown): ActionClas
     const cmd = bashCommand(toolInput);
     return cmd === null ? "unknown" : classifyBash(cmd);
   }
-  if (toolName === "mcp__golem__level") return classifyLevelTool(toolInput);
   if (READ_TOOLS.has(toolName)) return "read";
   if (WRITE_TOOLS.has(toolName)) return "write";
   return "unknown";
