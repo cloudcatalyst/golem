@@ -564,6 +564,29 @@ export const SETTING_META = {
       "MOVES to the other file.",
     advanced: true,
   },
+
+  // --- plugins --------------------------------------------------------------
+  "plugins.enabled": {
+    label: "Load plugins",
+    summary: "Master switch for third-party in-process plugins (ADR-0005)",
+    detail:
+      "Off stops every plugin loading without editing the list — reach for it when a plugin is " +
+      "suspected. A plugin runs inside Golem's process, so inside the redaction path, and there " +
+      "is NO sandbox: loading one is as dangerous as importing a dependency you installed " +
+      "yourself. Read ADR-0005 first.",
+    advanced: true,
+  },
+  "plugins.load": {
+    label: "Plugins to load",
+    summary: "Specifiers to load, in order — a bare npm name from this project, or a local path",
+    detail:
+      "Nothing is discovered: Golem never scans node_modules, follows no naming convention, and " +
+      "downloads nothing. Empty by default, which is why a fresh install runs no third-party " +
+      "in-process code at all. A plugin may only ADD redaction rules, never remove or reorder " +
+      "one; a plugin pipeline stage sees already-redacted content and redaction re-runs over " +
+      "whatever it returns.",
+    advanced: true,
+  },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
 /** Metadata for one leaf; undefined for an unknown path. */
@@ -617,6 +640,11 @@ export const SECTION_META = {
     title: "Claude Code wiring",
     summary: "Which .claude settings file `golem init` writes",
     order: 75,
+  },
+  plugins: {
+    title: "Plugins",
+    summary: "Third-party in-process seams — no sandbox, nothing discovered (ADR-0005)",
+    order: 80,
   },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 

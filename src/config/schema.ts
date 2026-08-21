@@ -595,6 +595,30 @@ export const SETTINGS_LEAVES = {
      */
     settings_scope: z.enum(["local", "project"]),
   },
+  plugins: {
+    /**
+     * R8.11 / ADR-0005 — the master switch for third-party in-process plugins.
+     *
+     * "On" by default only because the default `load` list is EMPTY: with
+     * nothing named, nothing loads. This key exists so a suspected plugin can be
+     * stopped without editing the list — the thing you reach for when you want
+     * it gone now.
+     */
+    enabled: z.boolean(),
+    /**
+     * Plugin specifiers to load, in order. **Nothing is discovered**: Golem never
+     * scans `node_modules`, never follows a naming convention, and never
+     * downloads a plugin. A specifier is a bare npm name resolved from THIS
+     * project, or a local path.
+     *
+     * A plugin runs inside Golem's process, which means inside the redaction
+     * path, and there is **no sandbox** — loading one is exactly as dangerous as
+     * importing a dependency you installed yourself. Read
+     * `docs/decisions/ADR-0005-plugin-seams-and-the-redaction-path.md` before
+     * adding an entry.
+     */
+    load: z.array(z.string().min(1)),
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -787,6 +811,13 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   claude: {
     // Machine-local wiring belongs in the gitignored file (see the leaf comment).
     settings_scope: "local",
+  },
+  // ADR-0005: an EMPTY load list is the default, so a fresh install runs no
+  // third-party in-process code at all. `enabled` is the kill switch; naming a
+  // specifier is the opt-in.
+  plugins: {
+    enabled: true,
+    load: [],
   },
 });
 

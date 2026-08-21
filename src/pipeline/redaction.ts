@@ -28,10 +28,10 @@ import { estimateTokens } from "../compression/index.js";
 import type { TokenDelta } from "../interfaces/compression.js";
 import { isRecord } from "../shared/json.js";
 import {
+  activeRedactionRules,
   ENTROPY_CANDIDATE_RE,
   ENTROPY_RULE_ID,
   isHighEntropyToken,
-  REDACTION_RULES,
   type RedactionRule,
 } from "./redaction-rules.js";
 
@@ -138,11 +138,16 @@ function applyEntropy(text: string, table: PlaceholderTable): [string, number] {
  * Redact one string with a shared placeholder table. Rules run in table
  * order, then the high-entropy sweep runs last so provider-specific rules win
  * the placeholder kind for any string both would match.
+ *
+ * The table is `activeRedactionRules()`: every built-in, in their audited order,
+ * followed by any plugin-contributed rules (R8.11 / ADR-0005). Built-ins are
+ * always first and a plugin can only append, so an extension can redact *more*
+ * and never less.
  */
 export function redactText(text: string, table: PlaceholderTable): RedactionResult {
   let current = text;
   let total = 0;
-  for (const rule of REDACTION_RULES) {
+  for (const rule of activeRedactionRules()) {
     const [next, count] = applyRule(current, rule, table);
     current = next;
     total += count;

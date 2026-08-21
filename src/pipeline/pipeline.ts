@@ -35,6 +35,7 @@ import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
 import { type BrevityLevel, compressionRank, type PipelinePolicy } from "../interfaces/policy.js";
+import type { PluginPipelineStage } from "../plugins/types.js";
 import {
   type CacheBustComponent,
   CachePrefixObserver,
@@ -253,6 +254,16 @@ export interface GolemPipelineOptions {
   readonly localAnswer?: {
     readonly service: LocalAnswerService;
   };
+  /**
+   * R8.11 / ADR-0005 — third-party pipeline stages, in load order.
+   *
+   * They run after redaction and after the local-answer short-circuit, and
+   * redaction re-runs over whatever they return, so a stage can neither see nor
+   * introduce unredacted content. A stage that throws is skipped for that
+   * request. Absent or empty → not a single line of the plugin path executes,
+   * so an install with no plugins behaves exactly as it did before R8.11.
+   */
+  readonly pluginStages?: readonly PluginPipelineStage[];
 }
 
 // Match the Anthropic Messages endpoint as the tail of the path — NOT anchored
@@ -449,6 +460,54 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
             stageMs["local-answer"] = performance.now() - localAnswerAt;
           }
         }
+      }
+
+      // Stage 1.7 — plugin pipeline stages (R8.11 / ADR-0005).
+      //
+      // Placed HERE for two reasons, both load-bearing. It is after redaction, so
+      // a third-party stage never sees raw content. And it is after the
+      // local-answer short-circuit, so a request Golem answers itself does not
+      // run third-party code at all.
+      //
+      // Then redaction RE-RUNS over whatever a stage returned. Redaction is
+      // idempotent (placeholders are outside every rule's charset), so the second
+      // pass cannot renumber anything — what it buys is that a plugin stage
+      // cannot introduce unredacted content into the request, however it obtained
+      // it. That is a structural answer to "can a plugin weaken redaction",
+      // rather than a promise that we read the plugin.
+      if (options.pluginStages !== undefined && options.pluginStages.length > 0) {
+        const pluginsAt = performance.now();
+        let touched = false;
+        for (const stage of options.pluginStages) {
+          try {
+            const next = await stage.transform({ body, projectId: options.projectId });
+            if (next !== undefined && isRecord(next) && next !== body) {
+              body = next;
+              touched = true;
+            }
+          } catch (err) {
+            // A plugin never fails a user's request: skip the stage, keep the
+            // pre-stage body, say so once on stderr.
+            proxyLog(
+              `plugin stage ${stage.name} threw and was skipped (${
+                err instanceof Error ? err.message : String(err)
+              })`,
+            );
+          }
+        }
+        if (touched) {
+          changed = true;
+          if (stages.redaction) {
+            const reRedacted = redactRequestBody(body);
+            if (reRedacted.count > 0 && isRecord(reRedacted.value)) {
+              body = reRedacted.value;
+              // Attribute the extra pass separately — a plugin stage that keeps
+              // introducing secrets should be visible, not folded into stage 1.
+              stageSavings["redaction-after-plugins"] = reRedacted.delta;
+            }
+          }
+        }
+        stageMs.plugins = performance.now() - pluginsAt;
       }
 
       // Stage 2 — lossless compression (level >= 1).

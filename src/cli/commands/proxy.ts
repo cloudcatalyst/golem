@@ -26,6 +26,7 @@ import {
   OllamaInferenceService,
 } from "../../inference/index.js";
 import type { InferenceService } from "../../interfaces/inference.js";
+import { initPlugins } from "../../plugins/index.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
@@ -239,8 +240,20 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
     model === undefined
       ? undefined
       : modelAcceptsImages(modelCatalog, model, { preferProvider: provider });
+  // R8.11 / ADR-0005: load third-party plugins BEFORE the proxy is built, for
+  // the same reason `visionOf` is resolved here — importing a plugin is async and
+  // the builder is synchronous. `initPlugins` also installs their redaction rules,
+  // which must be in place before a single request is served (the table is fixed
+  // once serving begins, so prompt-cache prefixes stay stable).
+  const plugins = await initPlugins({
+    specifiers: settings.plugins.load,
+    enabled: settings.plugins.enabled,
+    projectDir: dir,
+    golemVersion: VERSION,
+  });
   const { proxy, semantic, upstream } = buildProxyFromSettings(dir, settings, telemetry, {
     visionOf,
+    ...(plugins.plugins.length > 0 ? { plugins } : {}),
     // R11.1: the daemon loaded its settings from disk, so re-reading the dials on
     // a live request is the same question asked again — and it is what makes
     // `golem compression 2` take effect without a restart.
