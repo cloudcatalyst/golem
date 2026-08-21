@@ -4,7 +4,7 @@ type: concept
 tags: [rag, vector, search, knowledge, embeddings]
 sources: [src/knowledge/knowledge-base.ts, src/knowledge/file-driver.ts, src/knowledge/chunker.ts, src/mcp/server.ts, docs/golem-spec.md#3.1]
 created: 2026-07-25
-updated: 2026-07-25
+updated: 2026-08-22
 ---
 
 # Knowledge Base
@@ -19,7 +19,10 @@ runs. Claude reaches it through the `search` / `fetch` / `ingest` MCP tools. Sou
 > `FileVectorDriver` (`src/knowledge/file-driver.ts`) — no server process, zero
 > install friction — behind the same `VectorDriver` seam a Qdrant driver can later
 > implement. **One collection per project** (no cross-project bleed). Without a
-> configured embedder, `ingest`/`search` degrade rather than crash.
+> configured embedder, `ingest`/`search` degrade rather than crash. `canonicalProjectId`
+> collapses a project id to one identity — Windows path-spelling variants, and (as
+> of 2026-08-22) a git worktree resolving to its main checkout — see
+> [[CCR Ref Scope]] for the sibling decision this agrees with.
 
 ## Ingest path (write)
 
