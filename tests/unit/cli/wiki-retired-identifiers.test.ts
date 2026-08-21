@@ -126,6 +126,21 @@ describe("findRetiredIdentifiers", () => {
       expected: 2,
     },
     { name: "clean prose reports nothing", body: "Redaction always runs first.", expected: 0 },
+    {
+      name: "does NOT flag an unexempted mention once it is under a Decisions Log heading",
+      body: "## 9. Decisions Log\n\n1. The slider was 0-3 with level 0 as full bypass.\n",
+      expected: 0,
+    },
+    {
+      name: "STILL flags an unexempted mention before the Decisions Log heading",
+      body: "The slider is the headline control.\n\n## 9. Decisions Log\n\n1. History.\n",
+      expected: 1,
+    },
+    {
+      name: "the Decisions Log heading match is case-insensitive and allows a heading level/prefix",
+      body: "#### decisions log\n\n1. slider notes here.\n",
+      expected: 0,
+    },
   ];
 
   for (const { name, body, expected } of CASES) {
