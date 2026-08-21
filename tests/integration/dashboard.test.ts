@@ -85,7 +85,7 @@ describe("dashboard server", () => {
       compression: { level: "1", name: "lossless", redaction_off: false },
       local_model: { reachable: null },
       autonomy: { level: "manual" },
-      blocked: { waiting: false },
+      blocked: { waiting: false, status: "clear" },
       savings: STATS,
       storage: { ccr_bytes: 1, knowledge_bytes: 2, telemetry_bytes: 3, webcache_bytes: 4 },
     };
