@@ -1,10 +1,12 @@
 /**
  * `golem pkg` — the managed-package surface (spec Decision 53).
  *
- * Read-only by design in this first cut: it answers "what can Golem use, is it
- * installed, is it on, and what happens without it" without installing,
- * upgrading, or spawning anything. Install remains a human act with the
- * upstream's own installer, because Golem redistributes no third-party bytes.
+ * The read half answers "what can Golem use, is it installed, is it on, and what
+ * happens without it" without spawning anything. The write half (R8.14 —
+ * `install` / `remove` / `upgrade`) is here too, and it stays a *human* act: it
+ * invokes the upstream's own installer at a recorded pin, only with explicit
+ * consent, because Golem redistributes no third-party bytes. The rules live in
+ * `src/pkg/install.ts`; this file only renders and takes the yes/no.
  *
  * Named `pkg` and not `ext` or `tools` deliberately: `golem bench tools` and
  * `src/tools/` are the tool-selection benchmark harness (§89), and `ext` was
@@ -12,7 +14,16 @@
  */
 
 import { loadConfig } from "../config/index.js";
-import { type PkgStatus, type PkgTier, pkgManifest, resolvePkgStatuses } from "../pkg/index.js";
+import {
+  type PkgAction,
+  type PkgPlan,
+  type PkgRunOutcome,
+  type PkgStatus,
+  type PkgTier,
+  planPkgAction,
+  resolvePkgStatuses,
+  runPkgAction,
+} from "../pkg/index.js";
 
 export interface PkgReport {
   readonly projectDir: string;
@@ -117,79 +128,130 @@ function renderVerboseExtras(row: PkgStatus): string[] {
 }
 
 /**
- * Install a managed external package (delegates to the tool's own installer —
- * Golem never ships third-party bytes).
- *
- * Currently supports:
- * - `caveman` — runs `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman`
- *
- * Returns stdout/stderr from the install process. Throws for unsupported ids.
+ * Ask a human, in a TTY, before an install runs. Non-TTY without `--yes` is a
+ * refusal, not a silent yes — the same discipline as `golem wiki promote`.
  */
-export async function pkgInstall(id: string, _projectDir: string): Promise<string> {
-  const manifest = pkgManifest(id);
-  if (manifest === undefined) {
-    throw new Error(`unknown package: ${id}. Run \`golem pkg list\` to see available packages.`);
+async function confirm(question: string): Promise<boolean> {
+  const readline = await import("node:readline/promises");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const answer = await rl.question(`${question} [y/N] `);
+    const normalized = answer.trim().toLowerCase();
+    return normalized === "y" || normalized === "yes";
+  } finally {
+    rl.close();
   }
-
-  if (id === "caveman") {
-    const { execSync } = await import("node:child_process");
-    const lines: string[] = [];
-    lines.push(`Installing ${manifest.title}...`);
-    lines.push("");
-
-    // Step 1: add the marketplace
-    lines.push("> claude plugin marketplace add JuliusBrussee/caveman");
-    try {
-      const addOut = execSync("claude plugin marketplace add JuliusBrussee/caveman", {
-        stdio: "pipe",
-        timeout: 30_000,
-        encoding: "utf8",
-      });
-      lines.push(addOut.trim());
-    } catch (err) {
-      if (isExecError(err) && err.stderr?.trim().includes("already exists")) {
-        lines.push("→ marketplace already registered");
-      } else {
-        throw new Error(
-          `failed to add Caveman marketplace: ${isExecError(err) ? err.stderr?.trim() || err.message : String(err)}`,
-        );
-      }
-    }
-
-    // Step 2: install the plugin
-    lines.push("");
-    lines.push("> claude plugin install caveman@caveman");
-    try {
-      const installOut = execSync("claude plugin install caveman@caveman", {
-        stdio: "pipe",
-        timeout: 60_000,
-        encoding: "utf8",
-      });
-      lines.push(installOut.trim());
-    } catch (err) {
-      throw new Error(
-        `failed to install Caveman plugin: ${isExecError(err) ? err.stderr?.trim() || err.message : String(err)}`,
-      );
-    }
-
-    lines.push("");
-    lines.push("Caveman installed. You may need to reload Claude Code for it to take effect.");
-    lines.push('Use `/caveman` or say "talk like caveman" to activate it.');
-    lines.push(
-      "Note: Golem's own brevity dial covers the same ground — having both active may " +
-        "stack (unexpectedly heavy compression). Golem's brevity will stand down when " +
-        "Caveman is detected (hasExistingBrevityDirective).",
-    );
-    return lines.join("\n");
-  }
-
-  throw new Error(
-    `${id} has no automated install path. See \`golem pkg list --verbose\` for manual instructions.`,
-  );
 }
 
-function isExecError(err: unknown): err is { stderr: string; message: string } {
-  return typeof err === "object" && err !== null && "stderr" in err;
+/** The consent preview: what would run, whose installer it is, and at what pin. */
+export function renderPkgPlan(plan: PkgPlan): string {
+  if (plan.kind === "refused") {
+    const body = wrap(plan.reason, 76).join("\n");
+    return `golem pkg ${plan.action} ${plan.id}: refused.\n\n${body}\n`;
+  }
+
+  const out: string[] = [
+    `${plan.action} ${plan.title} — via ${plan.upstream}, which you already have installed.`,
+    "",
+  ];
+  if (plan.pin !== null) {
+    const policy =
+      plan.pinPolicy === "manifest"
+        ? "pinned by Golem's registry; an upgrade re-converges on it and cannot move past it"
+        : plan.pinPolicy === "playbook"
+          ? "pinned by an upgrade playbook"
+          : "the upstream versions this itself";
+    out.push(`pin: ${plan.pin} (${policy})`);
+  } else if (plan.pinPolicy === "upstream-unpinned") {
+    out.push(
+      "pin: none — this upstream's installer has no version selector; it tracks its own ref.",
+    );
+  }
+  if (plan.reinstall) {
+    out.push("upgrade = re-run install at the pin above. That is the whole upgrade.");
+  }
+  out.push("");
+  out.push("Golem ships none of this package's bytes. It will run:");
+  for (const [i, step] of plan.steps.entries()) {
+    out.push(`  ${i + 1}. ${step.command} ${step.args.join(" ")}`);
+    out.push(...wrap(step.why, 72).map((l) => `     ${l}`));
+  }
+  if (plan.caveat !== null) {
+    out.push("");
+    out.push("note:");
+    out.push(...wrap(plan.caveat, 72).map((l) => `  ${l}`));
+  }
+  return `${out.join("\n")}\n`;
+}
+
+/** What actually happened, step by step. */
+export function renderPkgOutcome(outcome: PkgRunOutcome): string {
+  const out: string[] = [];
+  for (const step of outcome.steps) {
+    const mark =
+      step.state === "ok"
+        ? "ok"
+        : step.state === "tolerated"
+          ? "already done"
+          : step.state === "skipped"
+            ? "skipped"
+            : step.state === "not-found"
+              ? "not on PATH"
+              : "failed";
+    out.push(`  [${mark}] ${step.step.command} ${step.step.args.join(" ")}`);
+  }
+  if (out.length > 0) out.push("");
+  out.push(...wrap(outcome.message, 76));
+  return `${out.join("\n")}\n`;
+}
+
+/**
+ * Run one write verb end to end: plan, preview, take consent, execute.
+ *
+ * Consent is never inferred. `--yes` is one route; a TTY answer is the other;
+ * anything else prints the plan and stops with a non-zero-worthy status. The
+ * autonomy gate inside `runPkgAction` is what makes that mandatory, not this
+ * function — see `src/pkg/install.ts`.
+ */
+export async function runPkgWrite(
+  id: string,
+  action: PkgAction,
+  opts: { readonly projectDir: string; readonly yes: boolean; readonly dryRun: boolean },
+): Promise<{ readonly outcome: PkgRunOutcome; readonly text: string }> {
+  const plan = planPkgAction(id, action);
+  if (plan.kind === "refused") {
+    return {
+      outcome: { plan, status: "refused", steps: [], message: plan.reason },
+      text: renderPkgPlan(plan),
+    };
+  }
+
+  const preview = renderPkgPlan(plan);
+  if (opts.dryRun) {
+    const outcome = await runPkgAction(id, action, { projectDir: opts.projectDir, dryRun: true });
+    return { outcome, text: `${preview}\n${outcome.message}\n` };
+  }
+
+  let consent = opts.yes;
+  if (!consent && process.stdin.isTTY === true && process.stdout.isTTY === true) {
+    process.stdout.write(preview);
+    process.stdout.write("\n");
+    consent = await confirm(`Run ${plan.steps.length} step(s) now?`);
+    if (!consent) {
+      return {
+        outcome: { plan, status: "needs-consent", steps: [], message: "cancelled — nothing ran." },
+        text: "cancelled — nothing ran.\n",
+      };
+    }
+  }
+
+  const outcome = await runPkgAction(id, action, {
+    projectDir: opts.projectDir,
+    consent,
+    onOutput: (chunk) => process.stdout.write(chunk),
+  });
+  const head = opts.yes || outcome.status === "needs-consent" ? preview : "";
+  return { outcome, text: `${head}${renderPkgOutcome(outcome)}` };
 }
 
 export function renderPkg(report: PkgReport, verbose = false): string {
