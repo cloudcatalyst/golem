@@ -6149,6 +6149,64 @@ worklist. Deleted: `src/cli/slider.ts`, `src/cli/slider-read.ts`,
 `brevityPresetForLevel`, `MAX_SLIDER_LEVEL`, `MIN_ACTIVE_COMPRESSION_LEVEL`,
 `migrateSliderLevel`, and the `auto` state on both dials. Suite: 2,763 green.
 
+## §133 — `claude plugin` has a real remove/upgrade contract but no version pin, and `installed_plugins.json` (not the cache) is what "installed" means (2026-08-21)
+
+Checked against the `claude` CLI on this machine while building R8.14's write half.
+Both halves of this were assumptions in the old ad-hoc `pkgInstall`, and both were
+wrong in a way that mattered.
+
+**1. The subcommands exist, so `remove` and `upgrade` are real verbs.**
+`claude plugin --help` lists `install|i`, `uninstall|remove`, `update`, `enable`,
+`disable`, `list`, `marketplace`, `details`, `prune|autoremove`, `validate`,
+`tag`, `init|new`, `eval`. `uninstall` and `update` both take `<plugin>` (the
+`plugin@marketplace` form resolves a specific marketplace) and both take `-y,
+--yes`, documented as **required when stdin or stdout is not a TTY**. So Golem's
+own non-TTY refusal and the `--yes` it passes downstream line up with the
+upstream's own discipline rather than fighting it.
+
+**2. There is NO version selector on `claude plugin install`.** Its options are
+`--config <key=value>`, `-s, --scope <scope>`, `-y, --yes` — no `@version`, no
+`--version`. A plugin tracks whatever ref its marketplace points at. That is why
+the Caveman row records `pinPolicy: "upstream-unpinned"` instead of inventing a
+pin: the registry's job is to say *who governs the version*, and "the upstream
+does, and offers us no say" is an honest answer where a fabricated pin would not
+be. It is also why Caveman is the one row with explicit `upgrade` steps — there is
+no pin there for an upgrade to move past, so `claude plugin update` is the whole
+contract. Every *pinned* row instead declares `upgrade: "reinstall"`.
+
+**3. `~/.claude/plugins/installed_plugins.json` is the authority; the cache
+directory is a leftover.** Found by disagreement between two surfaces on this
+machine: `golem pkg list` said `[found] caveman`, `claude plugin list` said "No
+plugins installed." Both were reading real state:
+
+```
+~/.claude/plugins/installed_plugins.json   {"version":2,"plugins":{}}   <- authority
+~/.claude/plugins/cache/caveman/caveman/11ddc0c9813c/                    <- leftover payload
+~/.claude/plugins/marketplaces/caveman/                                  <- marketplace clone, also kept
+```
+
+`claude plugin uninstall` empties `plugins` in the registry and leaves the content
+cache **and** the marketplace clone on disk. `pluginOnDisk` had been checking for
+the cache directory, so it reported an uninstalled plugin as present — for ten
+days, in this repo, on the surface whose entire selling point is not claiming a
+state it is not in.
+
+`installed_plugins.json` is now read first and treated as **authoritative in both
+directions**: present in `plugins` → installed; file readable and absent from
+`plugins` → *not* installed, cache notwithstanding. The cache check survives only
+as a fallback for a Claude Code old enough to have no registry file, where a
+leftover cache is the only signal there is. Ids are matched as `<name>` or
+`<name>@<marketplace>` (the `plugins` map was empty here, so the exact key shape a
+populated file uses is inferred from the CLI's own `plugin@marketplace` argument
+form — the matcher accepts both and ignores a marketplace mismatch only when the
+caller named one).
+
+**The transferable rule.** A tool's *cache* is not its *inventory*. When detection
+has to answer "is this installed", find the file the tool would have to update to
+answer that question itself, and read that one — a directory that merely exists is
+evidence someone once installed it, which is a different claim. And when a read-only
+surface grows a `remove` verb, re-derive what its detector actually proves: the
+verb is what makes a stale positive load-bearing.
 ## §134 — Node offers no in-process sandbox, so the plugin seam states it instead of implying one (2026-08-21)
 
 Checked while writing ADR-0005 for R8.11, because the task brief said explicitly:

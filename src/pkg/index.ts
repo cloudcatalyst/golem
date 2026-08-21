@@ -8,6 +8,23 @@
 
 export { commandOnPath, moduleOnDisk, pluginOnDisk } from "./detect.js";
 export {
+  createPkgStepRunner,
+  DEFAULT_PKG_STEP_TIMEOUT_MS,
+  type PkgAction,
+  type PkgPlan,
+  type PkgRefusedPlan,
+  type PkgRunnablePlan,
+  type PkgRunOptions,
+  type PkgRunOutcome,
+  type PkgRunStatus,
+  type PkgSpawnResult,
+  type PkgStepOutcome,
+  type PkgStepRunner,
+  type PkgStepState,
+  planPkgAction,
+  runPkgAction,
+} from "./install.js";
+export {
   DEFAULT_LSP_DIAGNOSTICS_WAIT_MS,
   DEFAULT_LSP_IDLE_TIMEOUT_MS,
   DEFAULT_LSP_INITIALIZE_TIMEOUT_MS,
@@ -29,7 +46,10 @@ export {
 export {
   PKG_MANIFESTS,
   type PkgDetect,
+  type PkgInstaller,
+  type PkgInstallStep,
   type PkgManifest,
+  type PkgPinPolicy,
   type PkgShape,
   type PkgTier,
   pkgManifest,

@@ -62,6 +62,59 @@ export type PkgDetect =
   /** Golem's own bundled data — always present by construction (tier-3b). */
   | { readonly kind: "bundled" };
 
+/**
+ * One step of an upstream installer, as an argument ARRAY — never a shell string
+ * (CLAUDE.md). `command` is a bare name resolved through `commandOnPath`, so a
+ * Windows `.cmd` shim is found and invoked correctly.
+ */
+export interface PkgInstallStep {
+  readonly command: string;
+  readonly args: readonly string[];
+  /** Shown in the consent preview, so a human approves a REASON, not a command line. */
+  readonly why: string;
+  /**
+   * Output substrings that mean "already done" rather than "failed". An
+   * installer step has to be re-runnable, and "the marketplace already exists"
+   * is success on a second run.
+   */
+  readonly tolerate?: readonly string[];
+}
+
+/** Who governs the version a row installs (R8.14). */
+export type PkgPinPolicy =
+  /** The `pin` in this manifest is the whole truth; `upgrade` re-converges on it. */
+  | "manifest"
+  /** Governed by an upgrade playbook (Headroom / T-C4). `upgrade` is REFUSED here. */
+  | "playbook"
+  /** The upstream installer exposes no version selector; it tracks its own ref. */
+  | "upstream-unpinned";
+
+/**
+ * The write half of the registry (R8.14, Decision 53(e)): recipes that invoke
+ * **the upstream's own installer**. Golem ships none of the tool's bytes, so
+ * every step is a spawn of something the user already has (`claude`, `npm`).
+ *
+ * A row WITHOUT an `installer` has no automated path at all — its `install`
+ * string stays the documented human route, and `golem pkg install` refuses and
+ * quotes it. That is the default, not a gap.
+ */
+export interface PkgInstaller {
+  /** Whose installer this is, named in the consent preview ("claude plugin", "npm"). */
+  readonly upstream: string;
+  readonly install: readonly PkgInstallStep[];
+  readonly remove?: readonly PkgInstallStep[];
+  /**
+   * `"reinstall"` re-runs `install`, which converges on the manifest pin and
+   * therefore *cannot* move it — that is how a `"manifest"`-pinned row satisfies
+   * "upgrade must not move a pin outside its playbook". Explicit steps are for
+   * rows the upstream versions itself (`upstream-unpinned`). Absent → the
+   * upstream offers no upgrade contract and `upgrade` is refused.
+   */
+  readonly upgrade?: readonly PkgInstallStep[] | "reinstall";
+  /** Anything a human should know BEFORE consenting. Surfaced in the preview. */
+  readonly caveat?: string;
+}
+
 export interface PkgManifest {
   /** Stable id used by the CLI and the JSON output. */
   readonly id: string;
@@ -77,11 +130,21 @@ export interface PkgManifest {
   readonly licence: string;
   /** Exact version Golem targets, where it pins one. */
   readonly pin?: string;
+  /** Who governs `pin`. Required wherever a pin exists (R8.14 drift guard). */
+  readonly pinPolicy?: PkgPinPolicy;
   readonly detect: PkgDetect;
   /** Other registry ids that must also be present (e.g. Headroom needs uv). */
   readonly requires?: readonly string[];
-  /** How a human installs it. Golem does NOT run this (read-only surface). */
+  /**
+   * How a human installs it. Golem never *runs* this string; an automated path,
+   * where one exists, is `installer` — an argument array.
+   */
   readonly install: string;
+  /**
+   * Argument-array recipes behind `golem pkg install|remove|upgrade` (R8.14).
+   * Absent means "no automated path", never "install by some other route".
+   */
+  readonly installer?: PkgInstaller;
   /** `section.key` in settings that turns it on, when one exists. */
   readonly enabledBy?: string;
   /** Repo path of the single file that quarantines its imports/invocation. */
@@ -124,6 +187,7 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     upstream: "https://github.com/headroomlabs-ai/headroom",
     licence: "see upstream",
     pin: `headroom-ai==${HEADROOM_SIDECAR_PYPI_PIN}`,
+    pinPolicy: "playbook",
     detect: { kind: "command", command: "uv" },
     requires: ["uv"],
     install: "No install step — `uv run --with headroom-ai==<pin>` fetches it on first use.",
@@ -145,6 +209,7 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     upstream: "https://github.com/headroomlabs-ai/headroom",
     licence: "see upstream",
     pin: `headroom-ai[memory]==${HEADROOM_SIDECAR_PYPI_PIN}`,
+    pinPolicy: "playbook",
     detect: { kind: "command", command: "uv" },
     requires: ["uv"],
     install:
@@ -183,7 +248,8 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     shape: "in-process",
     upstream: "https://github.com/unjs/unpdf",
     licence: "MIT",
-    pin: "^1.6.2",
+    pin: "1.6.2",
+    pinPolicy: "manifest",
     detect: { kind: "module", specifier: "unpdf" },
     install:
       "npm install unpdf (also listed in Golem's optionalDependencies, so npm usually has it already)",
@@ -229,10 +295,42 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     shape: "callable",
     upstream: "https://github.com/typescript-language-server/typescript-language-server",
     licence: "Apache-2.0",
+    pin: "typescript-language-server@6.0.0",
+    pinPolicy: "manifest",
     detect: { kind: "command", command: "typescript-language-server" },
     install:
-      "npm i -g typescript-language-server typescript — Golem spawns it, never installs it. " +
+      "`golem pkg install typescript-language-server` — or by hand: " +
+      "`npm i -g typescript-language-server@6.0.0 typescript@5.9.3`. Golem spawns the server, " +
+      "and (R8.14) can ask npm to fetch it; it never carries its bytes. " +
       "Any other server (gopls, rust-analyzer, pyright) is a `knowledge.lsp_servers` row, not a release.",
+    installer: {
+      upstream: "npm (global prefix)",
+      install: [
+        {
+          command: "npm",
+          args: ["install", "--global", "typescript-language-server@6.0.0", "typescript@5.9.3"],
+          why:
+            "npm fetches the language server and the TypeScript it needs to answer, both at the " +
+            "exact versions recorded here.",
+        },
+      ],
+      remove: [
+        {
+          command: "npm",
+          args: ["uninstall", "--global", "typescript-language-server"],
+          why:
+            "Removes the server only. `typescript` stays: other tools on this machine use it, " +
+            "and uninstalling a shared toolchain package is not this command's business.",
+          tolerate: ["up to date", "removed 0 packages"],
+        },
+      ],
+      // Re-run install: it converges on the pin above and can never move past
+      // it. Moving the pin is an edit to this file plus review, not a CLI act.
+      upgrade: "reinstall",
+      caveat:
+        "A global npm install writes to a prefix other projects share, and needs whatever rights " +
+        "your npm prefix needs.",
+    },
     enabledBy: "knowledge.lsp_enabled",
     adapter: "src/pkg/lsp/",
     degrade:
@@ -267,9 +365,50 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     shape: "peer",
     upstream: "https://github.com/JuliusBrussee/caveman",
     licence: "MIT",
+    pinPolicy: "upstream-unpinned",
     detect: { kind: "plugin", name: "caveman", marketplace: "caveman" },
     install:
       "`golem pkg install caveman` — or manually: `claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman`.",
+    installer: {
+      upstream: "claude plugin",
+      install: [
+        {
+          command: "claude",
+          args: ["plugin", "marketplace", "add", "JuliusBrussee/caveman"],
+          why: "Registers the upstream's own marketplace with Claude Code. Nothing is copied into Golem.",
+          tolerate: ["already exists", "already added"],
+        },
+        {
+          command: "claude",
+          args: ["plugin", "install", "caveman@caveman", "--yes"],
+          why: "Claude Code's own plugin installer fetches the skill from that marketplace.",
+          tolerate: ["already installed"],
+        },
+      ],
+      remove: [
+        {
+          command: "claude",
+          args: ["plugin", "uninstall", "caveman@caveman", "--yes"],
+          why: "Claude Code's own uninstaller. The marketplace registration is left in place.",
+          tolerate: ["not installed", "not found"],
+        },
+      ],
+      // Explicit steps rather than "reinstall": `claude plugin install` has no
+      // version selector (verification-notes §133), so there is no pin here to
+      // protect — the upstream tracks its own ref and `update` is its contract.
+      upgrade: [
+        {
+          command: "claude",
+          args: ["plugin", "update", "caveman@caveman", "--yes"],
+          why: "Moves the plugin to whatever the marketplace ref now points at.",
+        },
+      ],
+      caveat:
+        "This row deliberately fails admission criterion 1 (see `gate`): Golem's own brevity dial " +
+        "already covers it, from the proxy, for every client. Installing it is supported because " +
+        "the two must not stack silently — not because Golem recommends it. Restart Claude Code " +
+        "afterwards for the skill to load.",
+    },
     degrade:
       "Golem's own brevity dial covers it, from the proxy, for every client, with zero dependencies.",
     gate:
