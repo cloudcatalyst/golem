@@ -16,6 +16,7 @@ import type {
   WikiStore,
 } from "../interfaces/index.js";
 import type { LspBridge } from "../pkg/index.js";
+import type { PluginMcpTool } from "../plugins/types.js";
 import type { TelemetryStore } from "../telemetry/index.js";
 import { InMemoryCompressionService } from "./in-memory-compression.js";
 
@@ -152,6 +153,15 @@ export interface GolemMcpServerDeps {
    * the `stats` tool surfaces a per-tool summary. Omitted for the P0 stubs.
    */
   readonly telemetry?: TelemetryStore;
+  /**
+   * R8.11 / ADR-0005 — MCP tools contributed by third-party plugins, already
+   * validated by the loader (name checked against {@link BUILTIN_MCP_TOOL_NAMES},
+   * so a plugin can add a tool and never shadow one of Golem's).
+   *
+   * Absent or empty on every default install. A handler that throws becomes an
+   * MCP error for that call only — it never takes the server down.
+   */
+  readonly pluginTools?: readonly PluginMcpTool[];
 }
 
 /**

@@ -6207,3 +6207,70 @@ answer that question itself, and read that one — a directory that merely exist
 evidence someone once installed it, which is a different claim. And when a read-only
 surface grows a `remove` verb, re-derive what its detector actually proves: the
 verb is what makes a stale positive load-bearing.
+## §134 — Node offers no in-process sandbox, so the plugin seam states it instead of implying one (2026-08-21)
+
+Checked while writing ADR-0005 for R8.11, because the task brief said explicitly:
+*"Sandboxing as a solved problem — if it needs a sandbox to be safe, say so in the
+ADR rather than shipping."* It does need one, there isn't one, and every option
+was examined before writing that down.
+
+**1. `node:vm` is not a security boundary — upstream says so.** The module's own
+documentation states it is not to be used as a security mechanism to run
+untrusted code. Anything reachable from the context (`process`, a host object, a
+`require` handed in) is an escape. It buys namespace separation, which is not the
+property wanted here.
+
+**2. `worker_threads` isolates STATE, not AUTHORITY.** A worker can
+`require("node:fs")`, open sockets, and read the same environment. It would buy
+crash isolation and cost the seam its purpose: a redaction rule has to run
+synchronously *inside* the pass to be part of the pass, and a per-rule IPC round
+trip on every string in every request body is not viable.
+
+**3. The permission model (`--permission`) is process-wide and set at launch.** It
+cannot be scoped to one loaded module, so it cannot express "this plugin may not
+read the filesystem" while Golem itself still can.
+
+**4. A separate OS process IS a real boundary — and Golem already has that
+surface.** It is `golem pkg`, the tier-2 spawn-target shape. The conclusion that
+matters for future work: **anything that can tolerate a process hop should be a
+`pkg`, not a `plugin`.** The plugin seam is only for what genuinely must run
+in-process.
+
+So the honest statement, which is now in the ADR verbatim: *loading a Golem plugin
+is exactly as dangerous as adding a dependency to your own `package.json` and
+importing it. It is not less dangerous.* Every control in the design narrows what
+a plugin is **asked** to do; none of them narrows what it **can** do.
+
+**What the risk is actually weighed against.** Not zero. Before R8.11, extending
+redaction meant editing Golem, and the realistic outcomes were: the org forks and
+their fork drifts out of date — including out of date with fixes to the redaction
+stage itself; or the org gives up and their private key format flows upstream
+unredacted; or they do not adopt Golem. None of those is safe. The question was
+never "is loading third-party code risky", it was "which risk, and is the user
+told the truth about it".
+
+**The design rule that fell out of it.** Since containment is unavailable, every
+mitigation had to be *structural* — a property of the seam that holds without
+anyone reading the plugin:
+
+- Built-ins always run first and plugin rules are a suffix, so a plugin can only
+  ever redact MORE. `REDACTION_RULES` is never handed out and there is no remove,
+  replace or reorder function to call.
+- A plugin pipeline stage runs after redaction **and redaction runs again over
+  whatever it returns.** Redaction is idempotent (placeholders contain `[`, `]`
+  and `:`, which no rule's charset matches), so the second pass cannot renumber
+  anything — what it buys is that a stage cannot introduce unredacted content
+  however it obtained it.
+- Rule kinds are namespaced `<plugin>/<rule>`, so a plugin cannot impersonate a
+  built-in placeholder kind in telemetry.
+- Rules are registered once, before serving, and a second registration is
+  REFUSED. This is a §14 prefix-stability requirement, not tidiness.
+
+**The transferable rule.** When you cannot contain something, do not build a
+control that looks like containment. State the residual risk in the words a user
+would use, then make every mitigation a structural property they can check —
+"every 'yes' in the threat-model table is a property of the seam, and every 'no'
+is a property of the runtime". Two rows in that table are deliberately "No" with
+no mitigation at all (a plugin exfiltrating what it sees; a pathological regex
+hanging the proxy, since JS regex execution is synchronous and uninterruptible).
+Writing them down is the feature.

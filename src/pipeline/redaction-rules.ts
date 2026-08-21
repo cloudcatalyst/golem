@@ -351,3 +351,99 @@ export function isHighEntropyToken(token: string): boolean {
   }
   return shannonEntropy(token) >= ENTROPY_THRESHOLD_BITS;
 }
+
+/**
+ * ---------------------------------------------------------------------------
+ * R8.11 / ADR-0005 — the append-only plugin extension point.
+ *
+ * Every organisation has private secret formats, and until now extending
+ * redaction meant *forking Golem*. A fork drifts out of date — including out of
+ * date with fixes to this very stage — so the seam below exists to make the
+ * safer choice also the easier one.
+ *
+ * It is append-only **by construction, not by convention**:
+ *
+ * - `REDACTION_RULES` above stays the single audited built-in table (T-C3) and
+ *   is never handed to a plugin.
+ * - Extra rules are appended AFTER every built-in, so they can only ever redact
+ *   *more*. A plugin rule that matches something a built-in already replaced
+ *   sees a placeholder, whose `[` / `]` / `:` characters no rule's charset
+ *   matches.
+ * - There is no remove, replace, or reorder function. They do not exist to be
+ *   called.
+ * - Registration is expected exactly once, at startup, before the process serves
+ *   anything. That is a determinism requirement, not tidiness: redaction must be
+ *   a pure function of its input for prompt-cache prefix stability
+ *   (verification-notes §14), so a table that changed mid-process would break
+ *   caching for every downstream request. A second registration is therefore
+ *   REFUSED rather than merged.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Plugin-contributed rules, appended after the built-in table. */
+let extraRules: readonly RedactionRule[] = [];
+let extraRulesSealed = false;
+
+/** Outcome of a registration attempt — never a throw on a live request path. */
+export interface ExtraRuleRegistration {
+  readonly accepted: number;
+  /** Non-null when nothing was accepted and why. */
+  readonly refused: string | null;
+}
+
+/**
+ * Append plugin redaction rules. Idempotent-by-refusal: the first call wins for
+ * the life of the process, and a later one is refused with a reason rather than
+ * silently changing the table underneath a cached prefix.
+ *
+ * Rules whose id is not namespaced (`<plugin>/<rule>`) are rejected — the
+ * namespace is what stops a plugin impersonating a built-in placeholder kind.
+ */
+export function registerExtraRedactionRules(
+  rules: readonly RedactionRule[],
+): ExtraRuleRegistration {
+  if (extraRulesSealed) {
+    return {
+      accepted: 0,
+      refused:
+        "redaction rules were already registered for this process; the table is fixed once " +
+        "serving begins so prompt-cache prefixes stay stable (verification-notes §14)",
+    };
+  }
+  const builtInIds = new Set(REDACTION_RULES.map((r) => r.id));
+  const accepted: RedactionRule[] = [];
+  for (const rule of rules) {
+    if (!rule.id.includes("/")) continue; // must be `<plugin>/<rule>`
+    if (builtInIds.has(rule.id)) continue; // cannot shadow a built-in kind
+    accepted.push(rule);
+  }
+  extraRules = accepted;
+  extraRulesSealed = true;
+  return { accepted: accepted.length, refused: null };
+}
+
+/** The plugin-contributed rules currently in force (possibly empty). */
+export function extraRedactionRules(): readonly RedactionRule[] {
+  return extraRules;
+}
+
+/**
+ * The full table in application order: **built-ins first, always**, then plugin
+ * rules. The entropy sweep still runs after both (see `redaction.ts`), so
+ * specific rules keep winning the placeholder kind over the generic detector.
+ */
+export function activeRedactionRules(): readonly RedactionRule[] {
+  return extraRules.length === 0 ? REDACTION_RULES : [...REDACTION_RULES, ...extraRules];
+}
+
+/**
+ * Test-only: drop plugin rules and unseal.
+ *
+ * This is the one function that removes a rule, and it is deliberately narrow —
+ * it can only ever clear the plugin suffix, never touch `REDACTION_RULES`, and
+ * a production code path calling it would still be unable to weaken a built-in.
+ */
+export function resetExtraRedactionRulesForTests(): void {
+  extraRules = [];
+  extraRulesSealed = false;
+}

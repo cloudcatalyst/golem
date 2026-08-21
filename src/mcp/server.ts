@@ -8,6 +8,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { compressionName } from "../interfaces/index.js";
+import { isRecord } from "../shared/json.js";
 import type { ToolUsageStats } from "../telemetry/index.js";
 import { registerCodeTool } from "./code-tool.js";
 import { registerCoderTool } from "./coder-tools.js";
@@ -277,5 +278,74 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
 
   if (deps.wiki !== undefined) {
     registerWikiTools(server, deps.wiki, tel);
+  }
+
+  // R8.11 / ADR-0005 — plugin tools go LAST, after every built-in is registered.
+  // Order is not cosmetic: the loader already rejected any name colliding with
+  // `BUILTIN_MCP_TOOL_NAMES`, and registering last means that even if that list
+  // ever drifted, the SDK would reject the duplicate rather than let a plugin
+  // silently take over `search`.
+  const pluginTools = deps.pluginTools ?? [];
+  if (pluginTools.length > 0) {
+    // The SDK infers a handler's argument type from the Zod raw shape it is
+    // given. A plugin's shape comes from the PLUGIN's copy of Zod, so that
+    // inference cannot apply here — the types are structurally identical and
+    // nominally foreign. Registering through a deliberately loose local view is
+    // the honest way to say so; the alternative is pretending we can type a
+    // schema we did not construct.
+    type LooseRegistrar = (
+      name: string,
+      config: Record<string, unknown>,
+      handler: (args: Record<string, unknown>) => Promise<unknown>,
+    ) => void;
+    const register = server.registerTool.bind(server) as unknown as LooseRegistrar;
+
+    for (const tool of pluginTools) {
+      register(
+        tool.name,
+        {
+          title: tool.title,
+          // Say whose tool this is in the text the model reads. A tool that can
+          // do anything the process can do should not be indistinguishable from
+          // one Golem wrote and tested.
+          description: `${tool.description} (contributed by a Golem plugin — not a built-in tool.)`,
+          ...(tool.inputSchema !== undefined ? { inputSchema: tool.inputSchema } : {}),
+        },
+        async (args: Record<string, unknown>) => {
+          try {
+            const result = await tool.handler(args ?? {});
+            // A plugin may return an MCP result verbatim, or any value to be
+            // rendered as text — the second form is what makes a five-line
+            // plugin possible.
+            if (isRecord(result) && Array.isArray(result.content)) return result;
+            return { content: [{ type: "text", text: renderPluginResult(result) }] };
+          } catch (err) {
+            // One call fails; the server does not.
+            return {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: `plugin tool ${tool.name} failed: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`,
+                },
+              ],
+            };
+          }
+        },
+      );
+    }
+  }
+}
+
+/** Whatever a plugin returned, as text. Strings pass through unquoted. */
+function renderPluginResult(result: unknown): string {
+  if (typeof result === "string") return result;
+  if (result === undefined || result === null) return "";
+  try {
+    return JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    return String(result);
   }
 }
