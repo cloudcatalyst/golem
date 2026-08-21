@@ -14,7 +14,7 @@ function report(overrides: Partial<SessionStateReport> = {}): SessionStateReport
     compression: { level: "1", name: "lossless", redaction_off: false },
     local_model: { reachable: true },
     autonomy: { level: "manual" },
-    blocked: { waiting: false },
+    blocked: { waiting: false, status: "clear" },
     savings: {
       source: "telemetry",
       project_id: null,
@@ -77,7 +77,7 @@ describe("renderWatchFrame", () => {
 
   it("shows a waiting line with the reason", () => {
     const frame = renderWatchFrame(
-      report({ blocked: { waiting: true, reason: "permission prompt" } }),
+      report({ blocked: { waiting: true, status: "waiting", reason: "permission prompt" } }),
       { color: false },
     );
     expect(frame).toContain("waiting on you: permission prompt");

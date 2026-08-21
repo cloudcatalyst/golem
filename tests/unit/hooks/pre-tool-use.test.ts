@@ -3,10 +3,12 @@
  * and NEVER auto-allows on error (ADR-0002 default-deny proofs).
  */
 
+import { readFile } from "node:fs/promises";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { AutonomyLevel } from "../../../src/autonomy/index.js";
 import { readActionLog } from "../../../src/autonomy/index.js";
 import { runPreToolUseHook } from "../../../src/hooks/pre-tool-use.js";
+import { pendingToolPath, readPendingToolCall } from "../../../src/hooks/session-state.js";
 import type { LimitPrediction } from "../../../src/proxy/limit-prediction.js";
 import { useTempDirs } from "../../helpers/tmp.js";
 
@@ -361,5 +363,71 @@ describe("runPreToolUseHook", () => {
     });
     // snooze runs before the gate → still denies near-limit even with the gate off.
     expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  /**
+   * R12.2 — the pending-tool record.
+   *
+   * Claude Code's Notification payload names no tool, so the only place the tool
+   * and its argument can be captured is here, before the prompt appears. Written
+   * only on the paths that actually end in a human being asked.
+   */
+  describe("pending-tool record (R12.2)", () => {
+    it("records a call the gate DEFERS (silence → native prompt)", async () => {
+      const h = io(payload("Write", { file_path: "/repo/x.ts" }, dir));
+      await runPreToolUseHook(h, { projectDir: dir, ...level("assisted") });
+      expect(h.stdout.text).toBe("");
+      expect((await readPendingToolCall(dir))?.name).toBe("Write");
+    });
+
+    it("records a FORCED ask too — that is the prompt that matters most", async () => {
+      // `ask` is not a refusal: Claude Code shows the prompt, so the human is
+      // being asked about exactly this command. A destructive step forced to
+      // `ask` is the highest-stakes question the model can carry, and skipping
+      // it here would leave the remote surface saying "waiting" with no subject.
+      const h = io(payload("Bash", { command: "rm -rf ./build" }, dir));
+      await runPreToolUseHook(h, { projectDir: dir, ...level("assisted") });
+      expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("ask");
+      const pending = await readPendingToolCall(dir);
+      expect(pending?.name).toBe("Bash");
+      expect(pending?.argument).toBe("rm -rf ./build");
+      expect(pending?.actionClass).toBe("destructive");
+      expect(pending?.sessionId).toBe("s1");
+    });
+
+    it("records it when the GATE IS OFF too — every call can prompt then", async () => {
+      const h = io(payload("Read", { file_path: "/repo/x.ts" }, dir));
+      await runPreToolUseHook(h, { projectDir: dir, ...level("manual"), ...gate(false) });
+      expect((await readPendingToolCall(dir))?.argument).toBe("/repo/x.ts");
+    });
+
+    it("does NOT record an auto-ALLOWED call — nobody is asked about it", async () => {
+      // The newest record must describe the call under judgement. Recording
+      // decisions the gate made alone would overwrite it with noise.
+      const h = io(payload("Read", { file_path: "/repo/x.ts" }, dir));
+      await runPreToolUseHook(h, { projectDir: dir, ...level("outcome") });
+      expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("allow");
+      expect(await readPendingToolCall(dir)).toBeNull();
+    });
+
+    it("does NOT record a snooze-park DENY — that is a refusal, not a question", async () => {
+      const h = io(payload("Read", {}, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("manual"),
+        ...withPrediction(nearLimit),
+      });
+      expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(await readPendingToolCall(dir)).toBeNull();
+    });
+
+    it("redacts the argument on the way to disk (ADR-0006 §1)", async () => {
+      const secret = `sk-ant-${"A1b2C3d4E5f6G7h8".repeat(2)}`;
+      const h = io(payload("Bash", { command: `curl -H "Authorization: Bearer ${secret}"` }, dir));
+      await runPreToolUseHook(h, { projectDir: dir, ...level("assisted") });
+      const raw = await readFile(pendingToolPath(dir), "utf8");
+      expect(raw).not.toContain(secret);
+      expect(raw).toContain("[REDACTED:anthropic-key:1]");
+    });
   });
 });

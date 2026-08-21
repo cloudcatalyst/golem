@@ -20,12 +20,13 @@
 
 import { z } from "zod";
 import { AUTONOMY_LEVELS, type AutonomyLevel, readAutonomyLevel } from "../autonomy/index.js";
-import { readSessionState } from "../hooks/index.js";
+import { readSessionState, resolveBlock } from "../hooks/index.js";
 import { compressionName } from "../interfaces/policy.js";
 import { openTelemetryStore, type ToolUsageStats } from "../telemetry/index.js";
+import { type BlockedView, blockedView, blockedViewSchema } from "./blocked-view.js";
 import { statsSourceForCli } from "./mcp-compression.js";
 import { collectStats, type StatsReport } from "./stats.js";
-import { collectGolemState, type GolemState, isBlockedFresh, upstreamLabel } from "./statusline.js";
+import { collectGolemState, type GolemState, upstreamLabel } from "./statusline.js";
 import { type GolemStorageSizes, golemStorageSizes } from "./storage-size.js";
 
 /**
@@ -68,11 +69,17 @@ export interface SessionStateReport {
   readonly autonomy: {
     readonly level: AutonomyLevel;
   };
-  readonly blocked: {
-    /** Session is waiting on the human (fresh 21b blocked flag). */
-    readonly waiting: boolean;
-    readonly reason?: string;
-  };
+  /**
+   * R12.2 — the blocked read model, widened from a flag into something a human
+   * who is not at the keyboard can act on. Shape and field documentation:
+   * {@link BlockedView} in `./blocked-view.ts`; the writer side and the whole
+   * model: `src/hooks/session-state.ts`; concept page:
+   * `docs/wiki/concepts/Blocked State Read Model.md`.
+   *
+   * Everything here was redacted before it was written (ADR-0006 §1), so this
+   * block is safe to serve as-is — the property R12.4 will depend on.
+   */
+  readonly blocked: BlockedView;
   /** Cumulative savings + per-stage/CCR/tool attribution (the `golem stats` shape). */
   readonly savings: StatsReport;
   readonly storage: GolemStorageSizes;
@@ -127,10 +134,7 @@ export const sessionStateReportSchema = z.object({
   autonomy: z.object({
     level: z.enum(AUTONOMY_LEVELS),
   }),
-  blocked: z.object({
-    waiting: z.boolean(),
-    reason: z.string().optional(),
-  }),
+  blocked: blockedViewSchema,
   savings: statsReportSchema,
   storage: z.object({
     ccr_bytes: z.number(),
@@ -171,7 +175,7 @@ export async function collectSessionStateReport(
   // question.
   const level = golem?.compression ?? 1;
   const name = compressionName(level);
-  const waiting = session?.blocked === true && isBlockedFresh(session.ts);
+  const blocked = blockedView(resolveBlock(session, Date.parse(nowIso) || Date.now()));
 
   return {
     project_dir: dir,
@@ -191,10 +195,7 @@ export async function collectSessionStateReport(
     },
     local_model: { reachable: golem?.localModelReachable ?? null },
     autonomy: { level: autonomyLevel },
-    blocked: {
-      waiting,
-      ...(waiting && session?.reason !== undefined ? { reason: session.reason } : {}),
-    },
+    blocked,
     savings,
     storage,
   };

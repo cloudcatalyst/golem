@@ -184,3 +184,92 @@ describe("status-line parity: CLI vs VS Code status bar (R10.24)", () => {
     expect(bar).toBe(cli);
   });
 });
+
+/**
+ * R12.2 — the blocked indicator, on BOTH surfaces.
+ *
+ * This is the state R11.8's lesson was about and its fixtures still never
+ * visited: `golem statusline` had printed `⏸ waiting` since Decision 21b, and the
+ * VS Code status bar an inch away printed nothing at all. No fixture existed at a
+ * blocked state, so the drift was invisible to the very test whose job is to
+ * catch it. These fixtures are the pin — and the reason the widened read model
+ * had to reach both renderers rather than only the one that already had a dot.
+ */
+describe("status-line parity: the blocked indicator (R12.2)", () => {
+  /** The same blocked situation, through both renderers. */
+  function blockedPair(block: {
+    readonly blocked?: boolean;
+    readonly blockedKind?: "permission" | "question" | "idle";
+    readonly blockedTool?: string;
+  }): { cli: string; bar: string } {
+    const cli: GolemState = {
+      compression: 1 as const,
+      upstreamLabel: "openrouter",
+      upstreamModel: "deepseek/deepseek-v4-flash",
+      brevity: "full",
+      proxyRunning: true,
+      proxyInPath: true,
+      ...block,
+    };
+    const bar = render.statusBarText({
+      proxyReachable: true,
+      proxyInPath: true,
+      compression: "1",
+      compressionName: "lossless",
+      brevity: "full",
+      upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
+      lastServedModel: "deepseek/deepseek-v4-flash",
+      workers: [],
+      // The extension reads these off `status --json`'s `blocked` block; see
+      // `blockedModel` in render.js.
+      blockedStatus: block.blocked === true ? "waiting" : "clear",
+      blocked: block.blocked === true,
+      blockedKind: block.blockedKind ?? null,
+      blockedTool: block.blockedTool ?? null,
+    });
+    return { cli: renderStatusLine({}, cli), bar };
+  }
+
+  it("names the TOOL under judgement identically on both", () => {
+    const { cli, bar } = blockedPair({
+      blocked: true,
+      blockedKind: "permission",
+      blockedTool: "Bash",
+    });
+    expect(cli).toContain("⏸ waiting: Bash");
+    expect(bar).toBe(cli);
+  });
+
+  it("names the KIND when there is no tool, identically on both", () => {
+    for (const kind of ["permission", "question", "idle"] as const) {
+      const { cli, bar } = blockedPair({ blocked: true, blockedKind: kind });
+      expect(cli).toContain(`⏸ waiting (${kind})`);
+      expect(bar).toBe(cli);
+    }
+  });
+
+  it("falls back to a bare 'waiting' when the read model knows no more", () => {
+    // A v1 state file, or an older Golem on the PATH: the indicator degrades to
+    // exactly what it said before R12.2 rather than disappearing.
+    const { cli, bar } = blockedPair({ blocked: true });
+    expect(cli).toContain("⏸ waiting");
+    expect(cli).not.toContain("waiting (");
+    expect(bar).toBe(cli);
+  });
+
+  it("shows nothing at all on either surface when nothing is waiting", () => {
+    const { cli, bar } = blockedPair({});
+    expect(cli).not.toContain("⏸");
+    expect(bar).not.toContain("⏸");
+    expect(bar).toBe(cli);
+  });
+
+  it("puts the indicator after the dials on both, and keeps the dials", () => {
+    const { cli, bar } = blockedPair({ blocked: true, blockedTool: "Bash" });
+    for (const line of [cli, bar]) {
+      expect(line.indexOf("🗜")).toBeLessThan(line.indexOf("⏸"));
+      expect(line.indexOf("✂")).toBeLessThan(line.indexOf("⏸"));
+    }
+    expect(bar).toBe(cli);
+  });
+});

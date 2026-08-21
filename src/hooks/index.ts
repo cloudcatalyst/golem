@@ -67,13 +67,35 @@ export {
   REDACTED_SK_ANT_PLACEHOLDER,
   stripKnownSecrets,
 } from "./redact.js";
-export { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
-export type { SessionState } from "./session-state.js";
 export {
+  classifyNotification,
+  runNotificationHook,
+  runUserPromptSubmitHook,
+} from "./session-hooks.js";
+export type {
+  BlockDetails,
+  BlockedProject,
+  BlockedTool,
+  BlockKind,
+  BlockStatus,
+  PendingToolCall,
+  ResolvedBlock,
+  SessionEvent,
+  SessionState,
+} from "./session-state.js";
+export {
+  BLOCKED_STALE_MS,
+  isBlockedFresh,
   markBlocked,
   markUnblocked,
+  PENDING_TOOL_MAX_AGE_MS,
+  pendingToolPath,
+  projectIdentity,
+  readPendingToolCall,
   readSessionState,
+  resolveBlock,
   sessionStatePath,
+  writePendingToolCall,
   writeSessionState,
 } from "./session-state.js";
 export {
@@ -105,6 +127,7 @@ export {
   WEB_FETCH_POST_COMMAND,
   WEB_FETCH_PRE_COMMAND,
 } from "./settings-writer.js";
+export { MAX_ARGUMENT_CHARS, toolArgument } from "./tool-argument.js";
 export type {
   RevalidateFn,
   RevalidateResponse,
