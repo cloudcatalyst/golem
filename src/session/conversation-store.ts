@@ -60,13 +60,18 @@ import { resolveWorktreeRoot } from "../shared/git-worktree.js";
 
 /** ── Zod schema for persistence ─────────────────────────────────────── */
 
-const turnSchema: z.ZodType<ConversationTurn> = z.object({
+// `z.unknown()` accepts `undefined`, which makes zod infer `content` as an
+// optional key even though `ConversationTurn.content` is required (its VALUE
+// type is `unknown`, not its presence) — a schema-inference quirk, not a
+// real optionality. `as ConversationRecord` below is the deliberate,
+// documented cast past that; the shapes otherwise match exactly.
+const turnSchema = z.object({
   role: z.string(),
   content: z.unknown(),
   timestamp: z.string(),
 });
 
-const recordSchema: z.ZodType<ConversationRecord> = z.object({
+const recordSchema = z.object({
   conversationId: z.string(),
   startedAt: z.string(),
   lastTurnAt: z.string(),
@@ -156,7 +161,7 @@ export class LocalConversationStore implements ConversationStore {
     }
     try {
       const parsed = recordSchema.safeParse(JSON.parse(raw));
-      return parsed.success ? parsed.data : null;
+      return parsed.success ? (parsed.data as ConversationRecord) : null;
     } catch {
       return null;
     }
