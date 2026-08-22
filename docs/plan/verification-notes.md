@@ -6816,3 +6816,267 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `https://code.claude.com/docs/en/cli-reference` (`claude remote-control`,
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
+
+## §141 — R12.11: Golem can plausibly hold its class line against the channel relay, but only by moving enforcement one hook-event earlier than it currently sits — unconfirmed live for the interactive case (2026-08-22)
+
+Task: `docs/plan/tasks/R12.11.md`. Evidence base going in: §136 (client `2.1.235`,
+docs fetched 2026-08-22). Client version for everything new below: **`2.1.235`**,
+same session. Every item is labelled **[DOCUMENTED]**, **[OBSERVED]**, or
+**[UNESTABLISHED]** — never upgraded past what was actually run.
+
+### The load-bearing discovery: Golem's real gate emits `ask`, never `deny`
+
+**[OBSERVED — read from source, not a live run]** `src/autonomy/gate.ts:14,27-34`:
+`GateEmission` is `"allow" | "ask" | null` — there is **no `deny` value in Golem's
+own type**. For `destructive` and `outward`, `decideGate` returns
+`{ emit: "ask", reason: gateReason(...) }` at **every** autonomy level. My own
+throwaway test hook (`deny-hook.mjs`, now deleted) was modeled on the wrong shape —
+its comment claimed to mirror "the same shape `src/hooks/pre-tool-use.ts` emits for
+ADR-0002 destructive/outward," which is false. Golem never emits `deny`. It forces
+a question (`ask`) and relies on `PreToolUse`'s `null`/`ask` both routing to
+Claude Code's native permission flow — i.e. **the human**, per
+`src/hooks/pre-tool-use.ts:273-276` ("anything that is not `allow` ends with the
+human being asked"). This matters because `ask` does not *resolve* the request; it
+only guarantees a question gets asked. Whoever answers that question is a separate
+matter to establish — which is the whole spike.
+
+### 1. Ordering — [DOCUMENTED, with one OBSERVED headless data point]
+
+**[DOCUMENTED]** The hooks reference (`code.claude.com/docs/en/hooks`, re-fetched
+fresh this session, content hash confirmed newer than the 2026-08-10 cache it
+replaced) names an event Golem does not currently use: **`PermissionRequest`** —
+"Runs when Claude Code is about to ask you for permission... if no hook returns a
+decision, it denies the tool call" (this fires even in non-interactive sessions
+that can't show a prompt). It is explicitly *distinct* from `PreToolUse`: "PreToolUse
+hooks run before every tool call, whether or not it needs permission.
+PermissionRequest hooks run only when Claude Code is about to [ask]." Its decision
+shape is also distinct — `hookSpecificOutput.decision.behavior: "allow"|"deny"`,
+not `permissionDecision`. Golem's hook wiring (`src/hooks/pre-tool-use.ts`)
+registers `PreToolUse` only; it has never used `PermissionRequest`.
+
+**[DOCUMENTED]** The same page, in the `Notification` event's `permission_prompt`
+section: *"If you or a PermissionRequest hook answer sooner, Claude Code doesn't
+run `permission_prompt`."* This is stated about one specific downstream notification
+(the desktop-alert one, not the channel one), but it establishes the general
+ordering claim precisely: a `PermissionRequest` hook decision resolves the request
+**before** whatever fires next reacts to it. The channels-reference page describes
+its own relay trigger the same way, independently: *"Claude Code calls it with the
+four request fields **when a permission dialog opens**"* — i.e. the channel relay's
+trigger condition is that a dialog exists at all. A `PermissionRequest` hook that
+returns a decision means no dialog is ever shown (docs: "if no hook returns a
+decision, it denies" — implying if one *does*, that decision stands in for the
+dialog). Put together, this is a documented, textually-supported (not merely
+API-shape-guessed) chain: `PreToolUse` (Golem, today: `ask`, i.e. defer) →
+`PermissionRequest` (nobody, today: unhandled) → **dialog opens** → channel relay
+fires. Golem's current `ask` sits at the first link and does not resolve anything;
+the second link is the one that, per docs, can pre-empt the dialog (and by
+construction, the relay) entirely — and Golem does not occupy it.
+
+**[OBSERVED, headless `-p` only]** Four live `claude -p --dangerously-load-development-channels
+server:testchan --verbose --output-format stream-json` runs against a throwaway
+project (`.mcp.json` → a hand-written test channel declaring
+`claude/channel` + `claude/channel/permission`; `.claude/settings.json` → a
+throwaway `PreToolUse` hook on `Bash`), real first-party billing
+(`apiKeySource:"none"`, `provider:"firstParty"`, ~$0.20/run):
+- No hook, `permissionMode:"auto"`: Bash ran with zero prompt.
+- `PreToolUse` hook forcing `permissionDecision:"deny"`: zero channel
+  notifications (nothing to relay — the call never reached a decision point where
+  a dialog could open).
+- `PreToolUse` hook forcing `permissionDecision:"ask"`: the tool call resolved
+  **synchronously to a denial** (`decision_reason_type:"hook"`,
+  `non_execution_kind:"user-rejected"`), with **no dialog and no channel
+  notification** logged in either case, despite the channel showing `"status":
+  "connected"` in the same run's `mcp_servers` init block.
+
+This headless result is now **explained, not just observed**: it is exactly the
+documented `PermissionRequest` fallback — "in sessions that can't show a prompt...
+if no hook returns a decision, it denies the tool call." `-p` mode can't show a
+prompt; no `PermissionRequest` hook was registered; so it auto-denied before any
+dialog (and therefore before any relay) existed. This is consistent with, and does
+not contradict, the `PermissionRequest`-pre-empts-the-dialog theory above — it's
+the same mechanism firing on its no-hook-registered branch instead of its
+hook-returned-a-decision branch.
+
+**[UNESTABLISHED]** Whether, in a genuine **interactive** session (not `-p`), a
+`PermissionRequest` hook returning `behavior:"deny"` for `destructive`/`outward`
+actually prevents the channel's `permission_request` notification from firing —
+i.e. whether the channel relay's trigger and the `PermissionRequest` hook's
+resolution point are the *same* event or merely adjacent ones. This is the one
+test that would turn "documented, textually consistent" into "observed." It was
+not run. Headless `-p` mode is structurally unable to open a dialog at all (see
+above), so it cannot exercise this path regardless of which hook is registered;
+running it needs a real interactive terminal session. This repo has no PTY-driving
+test harness (`grep -rl "node-pty\|pty.spawn" tests/ src/ package.json` — no
+hits; `grep -n "node-pty" package.json package-lock.json` — no hits), and building
+one is a new, non-trivial capability (plus a native dependency CLAUDE.md's hard
+rules already discourage for the default install) that this spike's budget does
+not extend to. Filed as a follow-up rather than improvised: see task
+`R12.12` below.
+
+### 2. Whether a `deny`-shaped decision survives a remote `allow` — [UNESTABLISHED for the case that matters; near-vacuous for the one Golem currently ships]
+
+The brief calls this "the whole spike in one test." Two different tests answer to
+that name, and only the less important one was run:
+
+- **Golem's shipped mechanism today (`ask` at `PreToolUse`) is not a decision at
+  all** — it's a forced question with no answer attached, so there is nothing for
+  a remote `allow` to race *against* until whatever answers the question (native
+  dialog, or headless auto-deny) resolves it. **[OBSERVED, headless]**: `ask` in
+  `-p` mode resolves to denial before any relay point exists — no race occurs
+  because nothing is ever open to race over.
+- **The test that actually matters** — a `PermissionRequest`-level `deny` (the
+  fix §1 identifies as the candidate closure) racing a remote channel `allow` on
+  a *genuinely open* interactive dialog — was not run, for the same
+  structural/tooling reason as §1's `[UNESTABLISHED]` item. **[UNESTABLISHED]**.
+
+One documented fact narrows this usefully: the channel's verdict schema
+(`notifications/claude/channel/permission`, fields `request_id` + `behavior:
+"allow"|"deny"`) only resolves a request Claude Code already has **open and
+tracked by that `request_id`** — "Claude Code applies it only if the ID matches
+an open request." If a `PermissionRequest` hook has already resolved the call
+(no dialog, no `request_id` issued), there is nothing for a channel verdict to
+attach to, full stop — not a race Golem wins, but a race that never starts. This
+is the same "no dialog → nothing to relay" logic as §1, restated at the verdict
+layer. **[DOCUMENTED]**.
+
+### 3. Preview constraints, costed honestly — [DOCUMENTED, re-confirmed]
+
+No change from §136's findings, re-confirmed against the fresh 2026-08-22 fetch:
+research preview; Team/Enterprise organizations default to **blocked** until an
+Owner explicitly enables `channelsEnabled` (Console-with-API-key defaults
+**permitted**; Pro/Max individual, no org, **skips the check entirely**);
+`--channels`/`--dangerously-load-development-channels` are launch-flag-only,
+absent from `claude --help` while in preview, and being listed in `.mcp.json` is
+not sufficient — a session without the flag never loads a channel regardless of
+config; **no delivery acknowledgement** for a reply-tool message (only the
+permission-relay verdict path has an explicit accept/reject shape); the whole
+contract is stated as unstable research preview with version-gated behavior
+changes already observed within it (the `v2.1.211`/`v2.1.233`/`v2.1.234` sanitization
+and redaction changes named in channels-reference). **What would have to change
+before a shipped Golem feature could depend on this:** (a) general availability
+or at minimum an Enterprise-manageable stable flag, not a launch-argument opt-in
+users must remember every session; (b) a documented commitment that the
+protocol/notification shapes won't change out from under a shipped integration;
+(c) ideally, a documented, class-aware way to mark a specific permission
+request non-relayable (see §1/§2 — none exists today; a `PermissionRequest` hook
+resolving the request first is a workaround, not that feature). **What a user
+sees meanwhile:** nothing — Golem does not build against a channel today, so
+there is no user-facing gap to explain; the gap is entirely between the paused
+tasks and the point where these constraints would need to have changed.
+
+### 4. What a channel route does NOT give — R12.5 disposition
+
+**[DOCUMENTED]** ADR-0006 capability 1 (observe: a read-only status surface) is
+architecturally untouched by any of this — channels are a notification/relay
+path, not a read API, and R12.5's own design note already says the local panel
+"deliberately does NOT surface permission prompts because Claude Code already
+does." Once capability 2 (remote *answering* of `read`/`write`/`unknown`) is
+something Anthropic's own channel does for free — for any user who enables it —
+the part of R12.5 that would have been genuinely novel (a phone-shaped
+approve/deny surface Golem built and operated) is subsumed by a first-party
+feature Golem doesn't need to compete with. What's left for R12.5 is exactly
+capability 1: a responsive, installable *view* of Golem's own dashboard
+(project state, stats, pending-call visibility) with no approve/deny affordance
+of its own — which is smaller than R12.5's current brief, not nothing.
+**Recommendation: reduce R12.5 to the observe-only shape and drop its
+approve/deny bullet; do not cancel it outright**, since a read-only phone
+dashboard has value independent of any transport question.
+
+### 5. The auth collision — [OBSERVED, and it complicates rather than resolves the question]
+
+Re-confirmed from the prior session's live runs: this dev machine's shell
+environment points `ANTHROPIC_BASE_URL` at Golem's own local proxy
+(`http://localhost:4930`) and sets `ANTHROPIC_FOUNDRY_API_KEY` — which reads, on
+its face, like exactly the gateway/custom-auth path the channels docs say is
+unsupported ("not available on Amazon Bedrock, Google Cloud's Agent Platform, or
+Microsoft Foundry"). **[OBSERVED]**: all four `claude -p` runs this session
+nonetheless reported `"apiKeySource":"none"`, `"provider":"firstParty"`, and real
+`total_cost_usd` charges — meaning these specific invocations authenticated via
+claude.ai/Console OAuth, not through Golem's proxy, regardless of the env vars
+present in the shell. **This is not evidence that Golem's account routing and
+channels coexist in general** — it only shows that *this particular CLI
+invocation shape*, in *this* environment, happened to bypass the proxy. Whether a
+session actually routed through Golem's proxy (the configuration ADR-0003 /
+Decision 47 describe) would satisfy or fail the channel's auth requirement
+remains **[UNESTABLISHED]** — the live evidence gathered answers a different,
+narrower question than the one asked. Filed as part of the same follow-up
+(`R12.12`) rather than guessed at.
+
+### Unexplained, flagged rather than resolved
+
+**[OBSERVED, no root cause found]** Across four otherwise-identical
+`--dangerously-load-development-channels server:testchan` runs, the test
+channel's reported connection status was inconsistent: `"connected"` twice
+(the `deny`-hook and `ask`-hook runs), `"failed"` twice (the no-hook runs), with
+no code or config difference that plausibly explains hook-presence correlating
+with channel-connection success. Ruled out: the channel script itself (a
+hand-crafted stdio MCP `initialize` handshake, run standalone, worked correctly
+every time); the specific documented `MCP_PROTOCOL_NEGOTIATION=auto` /
+`2026-07-28` rejection mode (the installed `@modelcontextprotocol/sdk@1.29.0`
+doesn't list that revision as supported *or* rejected — it's simply not in its
+version table). Not chased further — a Windows spawn-timing race and a
+leftover process from a prior run were both considered and neither confirmed.
+Recorded so a future live run isn't surprised by it.
+
+### Recommendation, and the one property that decided it
+
+**Channel wins — conditionally**, in the sense the task brief defines it:
+*Golem's remaining claim is not the transport, it is the class line* — and the
+evidence above says that claim is defensible without building R12.3/R12.4/
+R12.8/R12.9, **provided Golem finishes a piece of policy work it already half
+owns**, rather than because the class line is safe today as currently shipped.
+
+**The deciding property**: Golem's current enforcement of `destructive`/`outward`
+(`gate.ts`: `emit: "ask"` at `PreToolUse`) is a forced *question*, not a
+*decision* — it does not resolve the call, it only guarantees a dialog gets
+asked, and documentation is consistent (though not live-confirmed for this exact
+case) that a dialog, once opened, is exactly the event a connected
+permission-relay channel is notified of, with no field anywhere in the hooks or
+channels reference that lets a hook mark a specific call non-relayable after the
+fact. That is a real gap **as shipped**. But the same documentation identifies an
+event Golem does not yet use — `PermissionRequest` — whose decision resolves the
+call *before* a dialog exists, and therefore, by the "no dialog → nothing to
+relay" logic in §1/§2, plausibly before the channel relay has anything to act on.
+Moving Golem's `destructive`/`outward` enforcement from `PreToolUse`'s `ask` to a
+`PermissionRequest` hook returning a real `behavior:"deny"` is a small,
+self-contained change to a hook Golem already owns — not a new transport — and
+if it holds (still **[UNESTABLISHED]** for the live interactive case), it means
+Golem does not need to build its own remote-approval pairing/relay/account stack
+to keep the property ADR-0006 requires: Anthropic's relay can be left to do
+capability 2 for the classes that are legitimately remotely-approvable, while
+Golem's own hook — one event earlier — keeps the classes that are not off the
+table before a dialog, and therefore a relay, ever exists.
+
+**Disposition of the paused stack:**
+- **R12.3, R12.4, R12.8, R12.9 — recommend cancelling.** Their purpose was
+  carrying capability 2 end-to-end (pairing, relay, hosted account). Anthropic
+  ships that. Nothing here found a reason Golem needs its own.
+- **R12.5 — recommend reducing** to the observe-only (capability 1) shape per
+  item 4 above, not cancelling.
+- **A new small task, `R12.12`**, is filed for the actual closure: add a
+  `PermissionRequest` hook to Golem's autonomy gate that emits
+  `behavior:"deny"` for `destructive`/`outward` (replacing/supplementing the
+  current `PreToolUse` `ask`), and — separately, as an `owner: user` task since
+  it needs a real interactive terminal, a real enabled channel (Team/Enterprise
+  admin action or a personal Pro/Max account), and possibly a `node-pty`-based
+  harness that CLAUDE.md's "no heavyweight native deps in default install" rule
+  says does not belong in the shipped product — live-confirm that a
+  `PermissionRequest`-level `deny` actually pre-empts the channel relay before
+  treating the class line as protected in production. Until that confirmation
+  lands, ADR-0006's class-line guarantee should be treated as **at-risk, not
+  safe**, for any user who has both Golem's current build and a permission-relay
+  channel connected in the same interactive session — which is the honest
+  "what the user loses/risks in the meantime" the brief's third outcome shape
+  asks for, even though the overall recommendation here leans toward "channel
+  wins" rather than "neither yet."
+
+**Sources for §141, all fetched or re-confirmed 2026-08-22** (client `2.1.235`):
+`https://code.claude.com/docs/en/hooks` (fresh fetch this session, superseding the
+2026-08-10 cache — `PermissionRequest`, `PermissionRequest decision control`,
+`Notification`/`permission_prompt` sections); `https://code.claude.com/docs/en/channels-reference`
+(`How relay works`, `Permission request fields`, `Add relay to a chat bridge`);
+`src/autonomy/gate.ts`, `src/autonomy/classify.ts`, `src/autonomy/policy.ts`,
+`src/hooks/pre-tool-use.ts` (read from source); four live `claude -p
+--dangerously-load-development-channels` runs against a throwaway local project and
+throwaway local test channel (`.tmp-r12.11/`, deleted before commit), real
+first-party billing (~$0.80 total across the session).
