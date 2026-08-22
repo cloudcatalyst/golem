@@ -6817,6 +6817,81 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
 
+
+## §137 — `subagent-park`: the park is a tool-call gate, so it can only ever be applied at the spawn (2026-08-22)
+
+**The gap, restated from the evidence rather than from the design.** Three
+subagents were dispatched on R12 work on 2026-08-22. Two terminated on
+`Agent terminated early due to an API error: You've hit your session limit`,
+their last recorded words "All green. Committing." and "Committing on a fresh
+branch off main." The parent session, at ~96% utilization, was protected
+correctly: its next tool call was denied with the enforcing park instruction.
+
+So the park works and does not reach a child. The reason is structural, not a
+bug: `PreToolUse` gates **tool calls**, and the limit is hit on a **model
+request**. The child's turn fails upstream before it proposes a call, so there
+is nothing to deny and no turn in which the child could write a note. Making the
+gate stricter inside the child cannot help — the child never gets a turn to be
+gated.
+
+**What is actually reachable.** The one part of a subagent's lifetime the parent
+issues as an ordinary tool call is the spawn. Gating there keeps every existing
+rule intact: the gate stays a tool-call gate, the decision stays local, nothing
+new touches the request path.
+
+**Pricing a spawn.** The threshold is not the park threshold, because a spawn is
+a span of burn rather than a call: a spawn at 60% that runs twenty minutes can
+still die at 100%, and one at 85% that takes a minute will not. Measured from
+this session, the three agents consumed **~171k, ~186k and ~186k subagent tokens
+over 85–94 tool calls each** — roughly 15–20% of a session window apiece. Shipped
+default `snooze.spawn_cost_fraction = 0.18`; a spawn is refused when
+`utilization + fraction x (in-flight + 1) > 1`.
+
+**The in-flight term is the part that would otherwise still lose agents.**
+Utilization already contains what running children have spent, so charging them
+again would double-count. What it does *not* contain is a sibling dispatched
+since the reading was taken — precisely the three-at-once fan-out above, where
+each spawn reads the same pre-batch number and each looks affordable alone.
+Allowed spawns are therefore recorded (`.golem/state/spawn-gate.json`) and any
+recorded after `observedAtIso` is charged at the estimate.
+
+**Fail-closed, without a deadlock.** No reading, or a cold header feed, means the
+gate cannot measure. Assuming headroom there is the failure mode the task named,
+so it warns instead — **once per reading**, after which a re-issued spawn
+proceeds. That keeps the honest half of ADR-0002 (never silently allow) without
+recreating the R9.23 deadlock, where a hard deny made the only permitted action
+unreachable.
+
+**Ordering against the park.** The spawn gate runs *after* the park block. At or
+above the park threshold a spawn is denied by the park like every other call, and
+"park now" is the more useful instruction than "that spawn is too expensive". In
+practice the spawn gate therefore bites in the band below the park threshold,
+which is exactly where the lost agents were dispatched from.
+
+**What could not be gated, and is guidance instead.** A long-running child can
+still outlive its budget after a legitimate spawn. Two mitigations need no
+reverse channel and are now in the seeded `subagent-headroom` rule: tell every
+dispatched agent to **commit working increments on its own branch** (the two
+survivors survived precisely because they had committed — note the tension with
+"one workstream per PR": commit early, not merge early), and when a child does
+die, **convert its task notification into a durable task** naming what it was
+doing. The record survives even though the process does not; that is the honest
+version of "resume", and it stays inside Decision 37's boundary — nothing injects
+a turn into a dying child and nothing synthesises a reply in the proxy.
+
+**Surfaces.** `snooze.spawn_gate` (default true) and `snooze.spawn_cost_fraction`
+(default 0.18); env `GOLEM_SNOOZE_SPAWN_GATE` / `GOLEM_SNOOZE_SPAWN_COST_FRACTION`
+via the generic mapping. `golem status`'s Limits line now ends
+`park advisory|enforced · spawns allowed|REFUSED|ungated|warn-once ~18%/agent` —
+`REFUSED` is computed against the live reading, so it claims the gate is *biting*,
+not merely enabled.
+
+**Demonstrated, not argued.** The refusal, the both-names match (`Task` and
+`Agent`), the unchanged with-headroom path, the three-at-once fan-out, the
+one-shot blind warning, the off switch, and the yields-to-the-park ordering are
+all driven through the real hook with an injected utilization —
+`tests/unit/hooks/pre-tool-use.test.ts`, plus the decision function in
+`tests/unit/hooks/spawn-gate.test.ts`.
 ## §138 — ccr-ref-scope: `expand` misses across a git worktree because the CCR store is rooted per-directory, and "expired" was never real (2026-08-22)
 
 Closes the defect §136 logged in passing: `expand` returned "Unknown or expired
@@ -6915,3 +6990,112 @@ reproduction, at the seam that broke), `tests/unit/shared/git-worktree.test.ts`
 `UnknownRefError`), plus a worktree case added to
 `tests/unit/knowledge/file-driver.test.ts`'s `canonicalProjectId` suite proving
 it agrees with the CCR store's answer.
+## §140 — redaction-path-uuid: a hex chunk now counts as clean in `isPathLikeToken` (2026-08-22)
+
+Closes the false positive §136 hit incidentally (line above: `-o
+C:[REDACTED:high-entropy:1].md`) and the task brief's own two sightings — the
+session scratchpad path (`AppData/Local/Temp/claude/…/<uuid>/scratchpad`) and
+`.claude/worktrees/agent-<id>/` both redact whole, because a UUID segment mixes
+letters and digits and so is neither purely alphabetic nor purely numeric, the
+two clean-chunk classes `isPathLikeToken` recognised until now.
+
+**What changed, precisely.** `isPathLikeToken` (src/pipeline/redaction-rules.ts)
+now accepts a third clean-chunk class: a chunk that is pure hex (dehyphenated
+digits/`a-f`, either case). This is gated by `MIN_CHUNKS_FOR_HEX_ALLOWANCE = 3`
+— a token needs at least 3 `/`-`_`-`-`-delimited chunks before a hex chunk is
+allowed to count as clean, so a two-chunk `word-hexlike` pair (the shape a real
+hyphenated secret most resembles) still fails the path-like check and reaches
+the entropy sweep.
+
+**Why this does not weaken redaction — the call-order argument, not just the
+guard.** `isHighEntropyToken` already excludes a token that is *pure hex in its
+entirety* (dehyphenated) before it ever calls `isPathLikeToken` — bare UUIDs
+and git SHAs were non-secret before this task. So by the time a token reaches
+`isPathLikeToken`, if a whole-token pure-hex exclusion did not already dispose
+of it, at least one chunk is not hex-clean — either it is a genuine word, or it
+mixes a digit with a letter outside `a-f`. This is a call-order invariant, not
+an assumption: any token where a hex chunk allowance could accidentally admit a
+real random secret would already have been caught earlier by the existing
+whole-token check first, or the guard below.
+
+The chunk-count guard is deliberate defense-in-depth on top of that invariant,
+not the only thing carrying the argument: three-plus chunks matches every real
+case in scope (a directory prefix plus a UUID/hash leaf) while giving a
+hyphenated secret one fewer degree of freedom to hide in. Tests cover the floor
+exactly (`tests/unit/pipeline/redaction-audit.test.ts`, "a hex chunk at exactly
+the chunk-count floor (3) IS accepted as path-like") and one below it (the
+2-chunk adversarial case, which still redacts).
+
+**Left alone, on purpose (task's "Out of scope"):** the rule table, the
+reversible-redaction map (R9.3), `ENTROPY_THRESHOLD_BITS`, the candidate
+charset, and any allowlisting of scratchpad/worktree directories by path — an
+allowlist only helps the two families already noticed and goes stale.
+
+**The adversarial case that must still redact, verified in the suite:** a
+4-chunk hyphenated token where every chunk mixes a digit with a letter drawn
+from *outside* `a-f` (so no chunk is pure-alpha, pure-numeric, or pure-hex)
+still redacts — the pre-existing "every chunk must be clean" rule rejects it
+independent of the hex-chunk addition. Built at runtime from character codes
+(`"g".charCodeAt(0)` through `"z"`), never a literal secret or a literal
+`[REDACTED:…]` placeholder, per the standing fixture rule — see the live
+finding below for why that rule is not academic.
+
+**Live finding while drafting the tests, corroborating the bug from the other
+side.** This dev environment's own tool traffic is routed through Golem's
+proxy, so any Bash/Read output containing a 32–128-char run of the entropy
+candidate charset gets redacted before it reaches the model — including this
+agent's own diagnostic output, mid-task, more than once. Concretely: typing a
+genuinely random 40-character mixed-case letter string (generated
+programmatically, not a literal — via `charCodeAt` iteration, no copy-paste
+involved) into a `console.log` and reading it back through the Bash tool
+produced `[REDACTED:high-entropy:N]` instead of the string. This is not
+data corruption from this task's change — re-verified after the fix, end to
+end, below — it is the entropy sweep doing exactly what it is designed to do to
+a token shaped like a real secret. It is useful corroborating evidence that the
+mechanism described in the task brief is live and general, not a one-off.
+
+**Copy-forward poisoning, reproduced on myself.** Mid-task, retyping a
+scratchpad path that had appeared in earlier tool output (to reuse it in a new
+command) produced a mangled/placeholder path at the moment of composing the
+next tool call — the exact "Copy-forward is poisoned" mechanism the task
+brief's Third-sighting section describes, caught here from the authoring side
+rather than the reading side. Fix in the moment: stop reusing any path that has
+already appeared in tool output; generate a fresh one (`mktemp -d`, or a fresh
+`crypto.randomUUID()`) instead of retyping. See [[Redaction Path Placeholders]]
+for the durable version of this advice.
+
+**End-to-end verification, live, after `npm run build` + `golem proxy
+restart`** (not just unit tests — an actual Bash round-trip through the
+rebuilt pipeline): built fresh UUIDs at runtime (never copied from earlier
+output), wrote them to disk inside path strings for both real path families,
+measured ground truth on disk BEFORE looking at any tool-output view
+(`wc -l`/`wc -c`, `grep -c REDACTED`, `md5sum`), then compared against the
+`cat` view that comes back through the pipeline:
+
+- POSIX scratchpad-shaped path + `.claude/worktrees/agent-<uuid>` path: ground
+  truth 0 occurrences of `REDACTED` on disk (2 lines, 74/60 chars); the `cat`
+  view matched byte-for-byte, no placeholders.
+- The same UUID spelled both with `/` and with `\` in one file (per the Third
+  sighting's requirement to test both separators and assert they agree):
+  ground truth 2 lines, 74 chars each, checksum `631f41304fdef85be24e9c16f88e5236`
+  on disk; the `cat` view showed both spellings intact and identical apart from
+  the separator, confirming the fix (unlike before the fix, where only the `\`
+  spelling would have survived, since `ENTROPY_CANDIDATE_RE` does not include
+  `\`).
+- Negative control, run through the same rebuilt pipeline: a genuine random
+  40-character secret (built from `crypto.getRandomValues`, not a literal)
+  still came back as `[REDACTED:high-entropy:N]` — redaction is not weakened
+  for material that is not path-shaped.
+
+**Verification commands, exit codes and totals (2026-08-22):**
+`npx tsc --noEmit` → exit 0; `npm run lint` (`biome check .`) → exit 0, 561
+files, no fixes; `npm run format:check` (`biome format .`) → exit 0, 561
+files, no fixes; `npx vitest run` → exit 0, 230 test files passed / 1 skipped
+(231), 2987 tests passed / 2 skipped (2989); `golem wiki check` → exit 0, 171
+pages + 1 doc, no issues. `npx vitest run tests/unit/pipeline` alone → exit 0,
+9 files / 140 tests, including the 28 tests (7 new) in
+`redaction-audit.test.ts`.
+
+See wiki [[Redaction Path Placeholders]] and
+`docs/wiki/debriefs/2026-08-22-redaction-path-uuid-hex-chunk-allowance.md` for
+the full writeup, and task `redaction-path-uuid`.
