@@ -699,6 +699,71 @@ describe("renderLimits", () => {
     expect(line).toContain("park enforced");
   });
 
+  /**
+   * Task `subagent-park`: the line already says whether the park is advisory or
+   * enforced; it now says the same about spawns, because a gate whose state is
+   * invisible is one nobody can trust or notice is off.
+   */
+  it("says spawns are allowed when there is headroom for one", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.42,
+      reset_at: "2026-07-25T05:00:00.000Z",
+      observed_at: "2026-07-25T00:00:00.000Z",
+      age_minutes: 2,
+      stale: false,
+      enforced: true,
+      spawn_gate: true,
+      spawn_cost_fraction: 0.18,
+      spawn_blocked: false,
+    });
+    expect(line).toContain("spawns allowed ~18%/agent");
+  });
+
+  it("says spawns are REFUSED when the next one would not fit", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.86,
+      reset_at: "2026-07-25T05:00:00.000Z",
+      observed_at: "2026-07-25T00:00:00.000Z",
+      age_minutes: 2,
+      stale: false,
+      enforced: true,
+      spawn_gate: true,
+      spawn_cost_fraction: 0.18,
+      spawn_blocked: true,
+    });
+    expect(line).toContain("spawns REFUSED ~18%/agent");
+  });
+
+  it("says spawns are ungated when the gate is off", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.86,
+      reset_at: null,
+      observed_at: "2026-07-25T00:00:00.000Z",
+      age_minutes: 2,
+      stale: false,
+      enforced: true,
+      spawn_gate: false,
+      spawn_cost_fraction: 0.18,
+      spawn_blocked: false,
+    });
+    expect(line).toContain("spawns ungated");
+  });
+
+  it("says spawns only warn-once while the reading is stale", () => {
+    const line = renderLimits({
+      five_hour_utilization: 0.17,
+      reset_at: null,
+      observed_at: "2026-07-24T15:00:00.000Z",
+      age_minutes: 240,
+      stale: true,
+      enforced: true,
+      spawn_gate: true,
+      spawn_cost_fraction: 0.18,
+      spawn_blocked: false,
+    });
+    expect(line).toContain("spawns warn-once");
+  });
+
   it("renders a stale line naming the blind auto-park", () => {
     const line = renderLimits({
       five_hour_utilization: 0.17,
