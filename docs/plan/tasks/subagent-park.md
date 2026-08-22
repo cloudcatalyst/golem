@@ -1,7 +1,7 @@
 ---
 task: subagent-park
 title: A subagent cannot park — it dies at the usage limit while the parent session is protected
-state: queued
+state: done
 owner: agent
 size: M
 design: No memo. The park is `src/hooks/snooze-nudge.ts` (advisory vs enforcing) reached from `src/hooks/pre-tool-use.ts`, with `mcp__golem__snooze` as the one permitted call. Spec Decision 38 (snooze) and Decision 45 (enforcement). `.claude/rules/golem-snooze-hold.md` is the guidance it implements.
@@ -9,7 +9,7 @@ gate: Work in flight inside a subagent survives a usage limit, or the spawn that
 depends_on: []
 touches: [src/hooks/pre-tool-use.ts, src/hooks/snooze-nudge.ts, src/proxy/limit-prediction.ts, src/autonomy/classify.ts, docs/wiki]
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-21T20:26:23.136Z
 ---
 
 ## What happened, 2026-08-22
@@ -95,3 +95,7 @@ same shape) and show a spawn being refused with its numbers. Then show the
 unchanged path: with headroom, a spawn behaves exactly as today. `golem status`
 should say when spawns are being gated, the way it already says
 `park advisory|enforced`.
+
+## Outcome
+
+shipped: spawn headroom gate (src/hooks/spawn-gate.ts) + subagent-headroom guidance; notes §137
