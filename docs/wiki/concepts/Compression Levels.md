@@ -4,7 +4,7 @@ type: concept
 tags: [pipeline, compression, brevity, redaction, adr-0004, decision-31]
 sources: [src/interfaces/policy.ts, docs/decisions/ADR-0004-retire-the-slider.md, docs/plan/verification-notes.md]
 created: 2026-08-20
-updated: 2026-08-20
+updated: 2026-08-22
 ---
 
 # Compression Levels
@@ -84,6 +84,19 @@ Also retired with it: the `level` MCP tool, `golem slider`, the `auto` state on
 both dials, and R8.33's special case for refusing level 0 from a tool call —
 there is no longer a level that could disable redaction, so there is nothing to
 refuse.
+
+**docs-slider-drift-remainder (2026-08-22) closed the last known gap**: the
+`golem wiki check` retired-identifier scan reached every prose page and
+`README.md`, but not `docs/golem-spec.md` §1-8 or
+`vscode-extension/README.md`, which still taught the retired slider. Both are
+now in the scan's explicit allowlist and both are clean. The spec's own §9
+Decisions Log is a dated record like this page's own history section above —
+exempted by a heading-scoped rule (any prose at or after a `## … Decisions
+Log` heading), not by weakening what counts as drift elsewhere on the page.
+Deliberately still open: `src/dashboard/server.ts`'s `slider-level`/
+`slider-name` DOM element ids (owned by R12.6) — an implementation detail, not
+label text a reader sees, so the checker's job here is done even though the
+identifier itself has one more home to lose.
 
 Related: [[Compression]] · [[Redaction Stage]] · [[Configuration Surfaces]] ·
 [[Architecture]]
