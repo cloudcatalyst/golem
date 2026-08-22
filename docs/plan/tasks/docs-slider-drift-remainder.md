@@ -1,7 +1,7 @@
 ---
 task: docs-slider-drift-remainder
 title: Widen the retired-identifier check to the spec body, the VS Code README and the last stale strings
-state: queued
+state: done
 owner: agent
 size: M
 design: No design needed — the check exists (docs-slider-drift). This is the work of cleaning the surfaces it deliberately did not scan yet, then adding each to `PROSE_FILES_OUTSIDE_WIKI` so it stays clean.
@@ -9,7 +9,7 @@ gate: `golem wiki check` scans the spec body and the VS Code README with no issu
 depends_on: [docs-slider-drift]
 touches: [docs/golem-spec.md, vscode-extension/README.md, src/config/ui-model.ts, src/tui/header.ts, src/cli/wiki.ts]
 created: 2026-08-21
-updated: 2026-08-21
+updated: 2026-08-21T23:59:05.589Z
 ---
 
 ## Why this exists
@@ -68,3 +68,7 @@ The check is in `src/cli/wiki.ts` (`RETIRED_IDENTIFIERS`, `findRetiredIdentifier
 `PROSE_FILES_OUTSIDE_WIKI`; the reason it is a list rather than a tree walk is so
 that adding a surface is a deliberate act with a green suite behind it. Do not
 weaken the rule to make a file pass — clean the file.
+
+## Outcome
+
+shipped

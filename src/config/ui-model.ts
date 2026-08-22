@@ -332,9 +332,9 @@ export const SETTING_META = {
     label: "Compression level",
     summary: "off (redaction only) · 1 lossless · 2 balanced · 3 aggressive",
     detail:
-      "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). " +
-      "until you set it back to auto. 0 is not offerable — passthrough belongs to the " +
-      "slider, where turning redaction off is surfaced loudly.",
+      "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). No level " +
+      "disables redaction — full bypass is a separate setting, `proxy.bypass_all`, " +
+      "surfaced loudly and never the default.",
     restart: "proxy",
   },
   "compression.headroom_config": {
@@ -354,7 +354,7 @@ export const SETTING_META = {
   // --- brevity --------------------------------------------------------------
   "brevity.level": {
     label: "Brevity level",
-    summary: "auto (follow the slider) · off · lite · full · ultra",
+    summary: "off · lite · full · ultra",
     detail:
       "Decision 52: the output-side dial. Appends a fixed brevity directive to the system " +
       "prompt so the model answers more tersely — it shortens replies, it does not " +
