@@ -54,6 +54,7 @@ import type {
 } from "../interfaces/compression.js";
 import type { PipelinePolicy } from "../interfaces/policy.js";
 import type { BlobStore } from "../interfaces/storage.js";
+import { resolveWorktreeRoot } from "../shared/git-worktree.js";
 import { isRecord } from "../shared/json.js";
 import { CcrStore } from "./ccr-store.js";
 import { compactText } from "./compaction.js";
@@ -320,6 +321,14 @@ function transformMessage(message: Message, ctx: CompressContext): Message {
 export interface NativeLosslessOptions {
   /** Override DEFAULT_MIN_DEDUP_CHARS (affects emitted bytes — see its doc). */
   readonly minDedupChars?: number;
+  /**
+   * Where the CCR store is rooted, surfaced by `UnknownRefError`'s message
+   * when `retrieve()` can't resolve a ref. Set automatically by
+   * {@link NativeLosslessCompression.forProjectDir}; a caller constructing
+   * the class directly (tests, `createGolemPipeline`'s standalone paths) may
+   * omit it — `CcrStore` supplies its own generic default.
+   */
+  readonly ccrLocation?: string;
 }
 
 export class NativeLosslessCompression implements CompressionService {
@@ -330,19 +339,32 @@ export class NativeLosslessCompression implements CompressionService {
   #unattributedRetrieved = 0;
 
   constructor(blobs: BlobStore, options: NativeLosslessOptions = {}) {
-    this.#ccr = new CcrStore(blobs);
+    this.#ccr =
+      options.ccrLocation !== undefined
+        ? new CcrStore(blobs, options.ccrLocation)
+        : new CcrStore(blobs);
     this.#minDedupChars = options.minDedupChars ?? DEFAULT_MIN_DEDUP_CHARS;
   }
 
-  /** CCR originals under `<projectRoot>/.golem/ccr` (spec Decision 19 config dir). */
+  /**
+   * CCR originals under `<mainRoot>/.golem/ccr` (spec Decision 19 config
+   * dir). `projectRoot` is resolved through {@link resolveWorktreeRoot}
+   * FIRST (task ccr-ref-scope) — a git linked worktree is the SAME project
+   * as its main checkout for CCR purposes, so a ref stored by a hook running
+   * inside `.claude/worktrees/agent-<id>/` is rooted at the same directory
+   * this reads from, whichever of the two `projectRoot` happens to name.
+   * Non-repos and an already-main `projectRoot` pass through unchanged.
+   */
   static forProjectDir(
     projectRoot: string,
     options: NativeLosslessOptions = {},
   ): NativeLosslessCompression {
-    return new NativeLosslessCompression(
-      new LocalDirBlobStore(join(projectRoot, ".golem", "ccr")),
-      options,
-    );
+    const mainRoot = resolveWorktreeRoot(projectRoot);
+    const ccrDir = join(mainRoot, ".golem", "ccr");
+    return new NativeLosslessCompression(new LocalDirBlobStore(ccrDir), {
+      ...options,
+      ccrLocation: ccrDir,
+    });
   }
 
   async compress(
