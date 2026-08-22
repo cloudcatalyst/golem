@@ -6817,6 +6817,179 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
 
+
+## §137 — `subagent-park`: the park is a tool-call gate, so it can only ever be applied at the spawn (2026-08-22)
+
+**The gap, restated from the evidence rather than from the design.** Three
+subagents were dispatched on R12 work on 2026-08-22. Two terminated on
+`Agent terminated early due to an API error: You've hit your session limit`,
+their last recorded words "All green. Committing." and "Committing on a fresh
+branch off main." The parent session, at ~96% utilization, was protected
+correctly: its next tool call was denied with the enforcing park instruction.
+
+So the park works and does not reach a child. The reason is structural, not a
+bug: `PreToolUse` gates **tool calls**, and the limit is hit on a **model
+request**. The child's turn fails upstream before it proposes a call, so there
+is nothing to deny and no turn in which the child could write a note. Making the
+gate stricter inside the child cannot help — the child never gets a turn to be
+gated.
+
+**What is actually reachable.** The one part of a subagent's lifetime the parent
+issues as an ordinary tool call is the spawn. Gating there keeps every existing
+rule intact: the gate stays a tool-call gate, the decision stays local, nothing
+new touches the request path.
+
+**Pricing a spawn.** The threshold is not the park threshold, because a spawn is
+a span of burn rather than a call: a spawn at 60% that runs twenty minutes can
+still die at 100%, and one at 85% that takes a minute will not. Measured from
+this session, the three agents consumed **~171k, ~186k and ~186k subagent tokens
+over 85–94 tool calls each** — roughly 15–20% of a session window apiece. Shipped
+default `snooze.spawn_cost_fraction = 0.18`; a spawn is refused when
+`utilization + fraction x (in-flight + 1) > 1`.
+
+**The in-flight term is the part that would otherwise still lose agents.**
+Utilization already contains what running children have spent, so charging them
+again would double-count. What it does *not* contain is a sibling dispatched
+since the reading was taken — precisely the three-at-once fan-out above, where
+each spawn reads the same pre-batch number and each looks affordable alone.
+Allowed spawns are therefore recorded (`.golem/state/spawn-gate.json`) and any
+recorded after `observedAtIso` is charged at the estimate.
+
+**Fail-closed, without a deadlock.** No reading, or a cold header feed, means the
+gate cannot measure. Assuming headroom there is the failure mode the task named,
+so it warns instead — **once per reading**, after which a re-issued spawn
+proceeds. That keeps the honest half of ADR-0002 (never silently allow) without
+recreating the R9.23 deadlock, where a hard deny made the only permitted action
+unreachable.
+
+**Ordering against the park.** The spawn gate runs *after* the park block. At or
+above the park threshold a spawn is denied by the park like every other call, and
+"park now" is the more useful instruction than "that spawn is too expensive". In
+practice the spawn gate therefore bites in the band below the park threshold,
+which is exactly where the lost agents were dispatched from.
+
+**What could not be gated, and is guidance instead.** A long-running child can
+still outlive its budget after a legitimate spawn. Two mitigations need no
+reverse channel and are now in the seeded `subagent-headroom` rule: tell every
+dispatched agent to **commit working increments on its own branch** (the two
+survivors survived precisely because they had committed — note the tension with
+"one workstream per PR": commit early, not merge early), and when a child does
+die, **convert its task notification into a durable task** naming what it was
+doing. The record survives even though the process does not; that is the honest
+version of "resume", and it stays inside Decision 37's boundary — nothing injects
+a turn into a dying child and nothing synthesises a reply in the proxy.
+
+**Surfaces.** `snooze.spawn_gate` (default true) and `snooze.spawn_cost_fraction`
+(default 0.18); env `GOLEM_SNOOZE_SPAWN_GATE` / `GOLEM_SNOOZE_SPAWN_COST_FRACTION`
+via the generic mapping. `golem status`'s Limits line now ends
+`park advisory|enforced · spawns allowed|REFUSED|ungated|warn-once ~18%/agent` —
+`REFUSED` is computed against the live reading, so it claims the gate is *biting*,
+not merely enabled.
+
+**Demonstrated, not argued.** The refusal, the both-names match (`Task` and
+`Agent`), the unchanged with-headroom path, the three-at-once fan-out, the
+one-shot blind warning, the off switch, and the yields-to-the-park ordering are
+all driven through the real hook with an injected utilization —
+`tests/unit/hooks/pre-tool-use.test.ts`, plus the decision function in
+`tests/unit/hooks/spawn-gate.test.ts`.
+## §138 — ccr-ref-scope: `expand` misses across a git worktree because the CCR store is rooted per-directory, and "expired" was never real (2026-08-22)
+
+Closes the defect §136 logged in passing: `expand` returned "Unknown or expired
+CCR ref" for WebFetch refs minutes after they were issued. Task doc:
+`docs/plan/tasks/ccr-ref-scope.md`.
+
+### "Expired" disproved before anything else
+
+Grepped `prune|evict|ttl|maxEntries|expiry|expire` across `src/compression/ccr-store.ts`
+and `src/compression/local-blob-store.ts`: no hits except a docstring saying "or
+was evicted" — aspirational, not implemented. Neither class prunes, ever. So
+"expired" was always a guess dressed as a diagnosis, and the fix could not be a
+retention policy (also explicitly out of scope per the task doc).
+
+### The two-roots hypothesis, verified before being fixed
+
+`tests/integration/ccr-worktree-scope.test.ts` (committed first, as `0f37604`,
+*failing*) built a real main checkout, ran a real `git worktree add`, ran the
+real `PostToolUseHook` with `cwd` = the worktree, then called
+`NativeLosslessCompression.forProjectDir(mainRoot).retrieve(...)` for the ref the
+hook had just issued. It failed exactly as predicted:
+
+```
+UnknownRefError: unknown CCR ref: 33346a47987f1e9200e4fbe85e8e2c161189b1e2b4ebd0417f89dcd20ca6f8ab
+    at src/compression/ccr-store.ts:76
+```
+
+Confirms the task doc's hypothesis exactly: the hook resolves its CCR root from
+`cwd` (the worktree), `expand` is served by whichever `NativeLosslessCompression`
+the MCP server was built with (rooted at the main checkout) — same refId, two
+different `.golem/ccr` directories.
+
+### The identity decision: a worktree IS the same project (agrees with `canonicalProjectId`)
+
+Per the task doc's default ("go there unless something in the redaction or
+storage contract argues otherwise"): a git linked worktree is the SAME project as
+its main checkout for CCR purposes. Resolved through git's own bookkeeping — a
+worktree's `.git` is a FILE holding `gitdir: <main>/.git/worktrees/<name>`, and
+that directory's `commondir` file holds the path back to the shared `.git` — read
+directly with `node:fs`, no `git` subprocess (keeps `forProjectDir` synchronous,
+matching its 4 existing call sites: `src/cli/mcp-compression.ts`,
+`src/cli/proxy-runtime.ts`, `src/cli/stats.ts`, plus test/contract call sites).
+
+New shared function: `src/shared/git-worktree.ts#resolveWorktreeRoot`. Both
+identity decisions route through it — `NativeLosslessCompression.forProjectDir`
+and `src/hooks/post-tool-use.ts`'s write side for CCR, `canonicalProjectId`
+(`src/knowledge/file-driver.ts`) for the vector index — so the two answers cannot
+independently drift, the exact requirement the task doc raised by pointing at
+R11.2's precedent. Wiki page: `docs/wiki/concepts/CCR Ref Scope.md`.
+
+### `UnknownRefError` now distinguishes its causes
+
+`src/interfaces/compression.ts`'s `UnknownRefError` gained `location` and
+`reason: "not-found" | "corrupt"` (backward compatible — `new
+UnknownRefError(refId)` alone still works, defaulting both). `CcrStore.getEnvelope`
+now throws with the store's own `#location` and the correct reason for each of
+the three real causes (never stored / stored under a different root — both
+"not-found", since a store cannot tell them apart from the outside; invalid JSON;
+schema validation failure — both "corrupt", with `detail`). `src/mcp/server.ts`'s
+`expand` tool and `src/mcp/in-memory-compression.ts`'s stub now surface
+`error.message` directly instead of a fixed "Unknown or expired" string.
+
+### End-to-end confirmation, before and after, against the real built artifacts
+
+Rebuilt (`npm run build`) and ran a standalone script against `dist/` (not
+source-via-vitest) reproducing the exact scenario: real `git worktree add`, the
+built `dist/hooks/index.js` PostToolUse handler with `cwd` = worktree, then the
+built `dist/compression/index.js` `NativeLosslessCompression.forProjectDir(mainRoot)`
+— `expand`'s real code path. Result:
+
+```
+ref issued from worktree hook: 33346a47987f1e9200e4fbe85e8e2c161189b1e2b4ebd0417f89dcd20ca6f8ab
+RESULT: expand from main retrieved 40000 bytes; byte-identical: true
+RESULT: unsatisfiable-ref error message:
+  no envelope for CCR ref "000...000" at <main>\.golem\ccr — either it was never stored, or it was stored under a different project root.
+  reason: not-found location: <main>\.golem\ccr
+```
+
+Proxy rebuilt and restarted (`golem proxy restart`) against the new `dist/`.
+
+### Verification run (2026-08-22, CI still billing-blocked per the suspended gate)
+
+- `npx tsc --noEmit` — exit 0
+- `npm run lint` (biome check) — exit 0 (after fixing import order/quote-style in
+  the two new test files and a line-wrap in `ccr-store.ts` that biome's formatter
+  wanted)
+- `npm run format:check` — exit 0
+- `npx vitest run` — **233 files passed, 1 skipped (234); 2998 tests passed, 2
+  skipped (3000)** — exit 0
+- `golem wiki check` — 171 pages + 1 doc, no issues — exit 0
+
+New/extended tests: `tests/integration/ccr-worktree-scope.test.ts` (the
+reproduction, at the seam that broke), `tests/unit/shared/git-worktree.test.ts`
+(9 cases for `resolveWorktreeRoot`, including malformed-layout fallbacks),
+`tests/unit/compression/ccr-store.test.ts` (7 cases for the split
+`UnknownRefError`), plus a worktree case added to
+`tests/unit/knowledge/file-driver.test.ts`'s `canonicalProjectId` suite proving
+it agrees with the CCR store's answer.
 ## §139 — `docs-slider-drift-remainder`: the check reached the spec body, and the Decisions Log needed a heading-scoped exemption, not a weaker one (2026-08-22)
 
 §132 (2026-08-20) retired the slider in code; the `golem wiki check` retired-
@@ -6920,3 +7093,112 @@ fixed in a follow-up commit). `npm run format:check` → 0. `npx vitest run` →
 0, **230 files passed + 1 skipped (231), 2983 tests passed + 2 skipped
 (2985)**. `golem wiki check` (built CLI, `dist/cli/main.js`) → 0, `171 page(s)
 + 3 doc(s), no issues`.
+## §140 — redaction-path-uuid: a hex chunk now counts as clean in `isPathLikeToken` (2026-08-22)
+
+Closes the false positive §136 hit incidentally (line above: `-o
+C:[REDACTED:high-entropy:1].md`) and the task brief's own two sightings — the
+session scratchpad path (`AppData/Local/Temp/claude/…/<uuid>/scratchpad`) and
+`.claude/worktrees/agent-<id>/` both redact whole, because a UUID segment mixes
+letters and digits and so is neither purely alphabetic nor purely numeric, the
+two clean-chunk classes `isPathLikeToken` recognised until now.
+
+**What changed, precisely.** `isPathLikeToken` (src/pipeline/redaction-rules.ts)
+now accepts a third clean-chunk class: a chunk that is pure hex (dehyphenated
+digits/`a-f`, either case). This is gated by `MIN_CHUNKS_FOR_HEX_ALLOWANCE = 3`
+— a token needs at least 3 `/`-`_`-`-`-delimited chunks before a hex chunk is
+allowed to count as clean, so a two-chunk `word-hexlike` pair (the shape a real
+hyphenated secret most resembles) still fails the path-like check and reaches
+the entropy sweep.
+
+**Why this does not weaken redaction — the call-order argument, not just the
+guard.** `isHighEntropyToken` already excludes a token that is *pure hex in its
+entirety* (dehyphenated) before it ever calls `isPathLikeToken` — bare UUIDs
+and git SHAs were non-secret before this task. So by the time a token reaches
+`isPathLikeToken`, if a whole-token pure-hex exclusion did not already dispose
+of it, at least one chunk is not hex-clean — either it is a genuine word, or it
+mixes a digit with a letter outside `a-f`. This is a call-order invariant, not
+an assumption: any token where a hex chunk allowance could accidentally admit a
+real random secret would already have been caught earlier by the existing
+whole-token check first, or the guard below.
+
+The chunk-count guard is deliberate defense-in-depth on top of that invariant,
+not the only thing carrying the argument: three-plus chunks matches every real
+case in scope (a directory prefix plus a UUID/hash leaf) while giving a
+hyphenated secret one fewer degree of freedom to hide in. Tests cover the floor
+exactly (`tests/unit/pipeline/redaction-audit.test.ts`, "a hex chunk at exactly
+the chunk-count floor (3) IS accepted as path-like") and one below it (the
+2-chunk adversarial case, which still redacts).
+
+**Left alone, on purpose (task's "Out of scope"):** the rule table, the
+reversible-redaction map (R9.3), `ENTROPY_THRESHOLD_BITS`, the candidate
+charset, and any allowlisting of scratchpad/worktree directories by path — an
+allowlist only helps the two families already noticed and goes stale.
+
+**The adversarial case that must still redact, verified in the suite:** a
+4-chunk hyphenated token where every chunk mixes a digit with a letter drawn
+from *outside* `a-f` (so no chunk is pure-alpha, pure-numeric, or pure-hex)
+still redacts — the pre-existing "every chunk must be clean" rule rejects it
+independent of the hex-chunk addition. Built at runtime from character codes
+(`"g".charCodeAt(0)` through `"z"`), never a literal secret or a literal
+`[REDACTED:…]` placeholder, per the standing fixture rule — see the live
+finding below for why that rule is not academic.
+
+**Live finding while drafting the tests, corroborating the bug from the other
+side.** This dev environment's own tool traffic is routed through Golem's
+proxy, so any Bash/Read output containing a 32–128-char run of the entropy
+candidate charset gets redacted before it reaches the model — including this
+agent's own diagnostic output, mid-task, more than once. Concretely: typing a
+genuinely random 40-character mixed-case letter string (generated
+programmatically, not a literal — via `charCodeAt` iteration, no copy-paste
+involved) into a `console.log` and reading it back through the Bash tool
+produced `[REDACTED:high-entropy:N]` instead of the string. This is not
+data corruption from this task's change — re-verified after the fix, end to
+end, below — it is the entropy sweep doing exactly what it is designed to do to
+a token shaped like a real secret. It is useful corroborating evidence that the
+mechanism described in the task brief is live and general, not a one-off.
+
+**Copy-forward poisoning, reproduced on myself.** Mid-task, retyping a
+scratchpad path that had appeared in earlier tool output (to reuse it in a new
+command) produced a mangled/placeholder path at the moment of composing the
+next tool call — the exact "Copy-forward is poisoned" mechanism the task
+brief's Third-sighting section describes, caught here from the authoring side
+rather than the reading side. Fix in the moment: stop reusing any path that has
+already appeared in tool output; generate a fresh one (`mktemp -d`, or a fresh
+`crypto.randomUUID()`) instead of retyping. See [[Redaction Path Placeholders]]
+for the durable version of this advice.
+
+**End-to-end verification, live, after `npm run build` + `golem proxy
+restart`** (not just unit tests — an actual Bash round-trip through the
+rebuilt pipeline): built fresh UUIDs at runtime (never copied from earlier
+output), wrote them to disk inside path strings for both real path families,
+measured ground truth on disk BEFORE looking at any tool-output view
+(`wc -l`/`wc -c`, `grep -c REDACTED`, `md5sum`), then compared against the
+`cat` view that comes back through the pipeline:
+
+- POSIX scratchpad-shaped path + `.claude/worktrees/agent-<uuid>` path: ground
+  truth 0 occurrences of `REDACTED` on disk (2 lines, 74/60 chars); the `cat`
+  view matched byte-for-byte, no placeholders.
+- The same UUID spelled both with `/` and with `\` in one file (per the Third
+  sighting's requirement to test both separators and assert they agree):
+  ground truth 2 lines, 74 chars each, checksum `631f41304fdef85be24e9c16f88e5236`
+  on disk; the `cat` view showed both spellings intact and identical apart from
+  the separator, confirming the fix (unlike before the fix, where only the `\`
+  spelling would have survived, since `ENTROPY_CANDIDATE_RE` does not include
+  `\`).
+- Negative control, run through the same rebuilt pipeline: a genuine random
+  40-character secret (built from `crypto.getRandomValues`, not a literal)
+  still came back as `[REDACTED:high-entropy:N]` — redaction is not weakened
+  for material that is not path-shaped.
+
+**Verification commands, exit codes and totals (2026-08-22):**
+`npx tsc --noEmit` → exit 0; `npm run lint` (`biome check .`) → exit 0, 561
+files, no fixes; `npm run format:check` (`biome format .`) → exit 0, 561
+files, no fixes; `npx vitest run` → exit 0, 230 test files passed / 1 skipped
+(231), 2987 tests passed / 2 skipped (2989); `golem wiki check` → exit 0, 171
+pages + 1 doc, no issues. `npx vitest run tests/unit/pipeline` alone → exit 0,
+9 files / 140 tests, including the 28 tests (7 new) in
+`redaction-audit.test.ts`.
+
+See wiki [[Redaction Path Placeholders]] and
+`docs/wiki/debriefs/2026-08-22-redaction-path-uuid-hex-chunk-allowance.md` for
+the full writeup, and task `redaction-path-uuid`.

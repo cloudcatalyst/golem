@@ -550,6 +550,24 @@ export const SETTING_META = {
       "Off is ADVISORY — one nudge per window that the agent can work past. Only ever " +
       "fires on a fresh rate-limit reading; a stale feed just warns.",
   },
+  "snooze.spawn_gate": {
+    label: "Gate subagent spawns on headroom",
+    summary: "Refuse to start a subagent the session window cannot pay for",
+    detail:
+      "The park is a tool-call gate and a subagent never reaches it — a child hits the limit " +
+      "on a model request and dies before it can propose a call to deny, losing uncommitted " +
+      "work. The spawn is the one part of that the parent sees as a tool call, so the refusal " +
+      "goes there, with the numbers it measured. A missing or stale reading warns once rather " +
+      "than assuming headroom.",
+  },
+  "snooze.spawn_cost_fraction": {
+    label: "Assumed subagent cost",
+    summary: "Share of a session window one subagent is estimated to consume",
+    detail:
+      "Measured, not guessed: three agents on 2026-08-22 used ~171k–186k tokens each, roughly " +
+      "15–20% of a window. A spawn is refused when utilization + this × (in-flight + 1) " +
+      "exceeds 1.",
+  },
 
   // --- claude ---------------------------------------------------------------
   "claude.settings_scope": {
