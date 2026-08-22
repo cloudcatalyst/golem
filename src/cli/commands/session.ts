@@ -1,17 +1,22 @@
 /**
- * golem session — session tree view (R8.S3).
- * Shows recorded conversation trees: branches, forks, and message depths.
+ * golem session — session tree view (R8.S3), plus `forget` over the R13.2
+ * local conversation store (redacted transcripts, ADR-0007 §6). The two
+ * stores are separate (hashes-only tree vs. redacted-content store) — see
+ * `src/session/session-tree.ts` and `src/session/conversation-store.ts`'s
+ * headers — so `forget` only ever touches the conversation store, never the
+ * tree.
  */
 
 import { stat } from "node:fs/promises";
 import type { Command } from "commander";
 import { findProjectDir } from "../../config/index.js";
+import { LocalConversationStore } from "../../session/conversation-store.js";
 import { readSessionTree, renderSessionTree, sessionTreePath } from "../../session/session-tree.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
 export default function register(program: Command): void {
-  program
+  const session = program
     .command("session")
     .description("Show the recorded session tree (branches, forks, message depths)")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
@@ -39,6 +44,45 @@ export default function register(program: Command): void {
         }
 
         process.stdout.write(renderSessionTree(tree));
+      } catch (err) {
+        process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exitCode = 1;
+      }
+    });
+
+  session
+    .command("forget [id]")
+    .description(
+      "Delete one conversation (by id) from the local conversation store, or every " +
+        "conversation with --all — the retention promise from ADR-0007 §6 (R13.2)",
+    )
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--all", "delete every conversation the store holds", false)
+    .action(async (id: string | undefined, opts: { dir: string; all: boolean }) => {
+      try {
+        const store = LocalConversationStore.forProjectDir(opts.dir);
+
+        if (opts.all) {
+          if (id !== undefined) {
+            process.stderr.write("golem: pass either an id or --all, not both\n");
+            process.exitCode = 1;
+            return;
+          }
+          await store.forgetAll();
+          process.stdout.write("Deleted every conversation in the local store.\n");
+          return;
+        }
+
+        if (id === undefined) {
+          process.stderr.write("golem: session forget requires an <id> or --all\n");
+          process.exitCode = 1;
+          return;
+        }
+
+        const deleted = await store.forget(id);
+        process.stdout.write(
+          deleted ? `Deleted conversation ${id}.\n` : `No stored conversation ${id}.\n`,
+        );
       } catch (err) {
         process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
         process.exitCode = 1;

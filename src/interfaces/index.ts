@@ -59,6 +59,13 @@ export type { BlobStore } from "./storage.js";
 export { BlobNotFoundError } from "./storage.js";
 
 export type {
+  ConversationRecord,
+  ConversationStore,
+  ConversationSummary,
+  ConversationTurn,
+} from "./conversation-store.js";
+
+export type {
   WikiFrontmatter,
   WikiPage,
   WikiPageType,
