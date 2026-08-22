@@ -7465,3 +7465,232 @@ table before a dialog, and therefore a relay, ever exists.
 --dangerously-load-development-channels` runs against a throwaway local project and
 throwaway local test channel (`.tmp-r12.11/`, deleted before commit), real
 first-party billing (~$0.80 total across the session).
+
+## §142 — R13.1: the `claude` CLI *can* be driven as a hosted, multi-turn session — stream-json input is the mechanism, with two real gaps (2026-08-22)
+
+**Client version for every finding below: `2.1.235` (`claude --version`).**
+
+**Verdict on ADR-0007 §3a's runner**: the `claude` CLI qualifies. `claude -p
+--input-format stream-json --output-format stream-json` accepts a second user
+message on stdin after the first turn's `result` event without the process
+exiting, holds one stable `session_id` across both turns, emits assistant text/
+tool calls/tool results as separable structured events, honours
+`ANTHROPIC_BASE_URL` so Golem's proxy sees every request, and loads the
+project's `.claude/settings.json` hooks exactly as an interactive session does.
+The two real gaps: interrupting a running turn could not be made to work via
+`child.kill("SIGINT")` on Windows (process-kill only — see item 3), and the
+usage-limit park is architecturally Golem's own concept, not something a
+spawned `claude` process participates in (item 8) — both are gaps in behaviour,
+not in the viability of the runner itself. §3a is updated accordingly below.
+
+### 1. Multi-turn input — **[OBSERVED]**
+
+Flag spelling and envelope from live docs (`code.claude.com/docs/en/cli-reference`,
+fetched with a cache-busting query to force a fresh copy past Golem's own
+webcache): `--input-format stream-json` paired with `--output-format
+stream-json`, each line of stdin one JSON object
+`{"type":"user","message":{"role":"user","content":"…"},"parent_tool_use_id":null}`.
+
+Ran a throwaway probe (`spawn("claude", ["-p","--input-format","stream-json",
+"--output-format","stream-json","--verbose","--permission-mode","default"])`,
+argument array, no shell) against a scratch project directory: wrote one
+message, waited for a `result` event, wrote a second message on the same
+still-open stdin, waited for a second `result`. Outcome: `resultCount: 2`,
+`sessionIds: ["92e8ffef-7c32-45d7-9181-75b2e2f13d19"]` (one id, both turns),
+`exitCode: 0` after `stdin.end()`, no timeout. One minor oddity: a *second*
+`system/init` event fired ahead of the second turn's `assistant` event — cheap
+to ignore, but a consumer parsing strictly on "first event is init" would need
+to tolerate a repeat.
+
+### 2. Streamed output, structured — **[OBSERVED]**
+
+The same stream-json shape (confirmed again under item 6's hook probe) emits
+tool calls and tool results as their own event objects, not folded into final
+text: an `assistant`-type event whose `message.content` array contains a
+`{"type":"tool_use","id":…,"name":"Bash","input":{...}}` item, followed later by
+a `user`-type event whose `message.content` array contains a
+`{"type":"tool_result","content":…,"is_error":…,"tool_use_id":…}` item
+correlated by id. A `system/permission_denied` event also appeared as its own
+distinct event type when the hook-driven denial fired (see item 6) — a cleaner
+structured signal than plain `-p` gave in §141, which only reported the denial
+inside the final result text. ADR-0007 §2's "visible tool calls" promise is
+deliverable from this stream without inference over prose.
+
+### 3. Interruption — **[OBSERVED, Windows — process-kill only]**
+
+Documentation basis (`code.claude.com/docs/en/cli-reference`, cli-reference and
+SDK docs) — **[DOCUMENTED]**: SIGINT (or the Agent SDK's `interrupt()`) is
+described as ending the current turn cleanly "before you stop the process",
+implying the process can survive an interrupted turn; SIGTERM kills
+unconditionally and loses the turn.
+
+Live test — **[OBSERVED]**: started a Bash `sleep 8` tool call under an
+always-`allow` hook (so no permission gate interfered), waited for the CLI's own
+`system/task_started` event to confirm the tool was actually mid-flight, then
+sent `child.kill("SIGINT")` from Node on Windows. Result: no `result` event, no
+`close` event, and no further stdout at all within a 20-second window; the
+process did not respond to the interrupt request, and had to be finished off
+with `SIGKILL` (confirmed gone afterward via a process listing — no orphan left
+behind, but no graceful "turn ended, session survives" outcome either).
+
+This reads as a Windows platform gap rather than a Claude Code one: Node
+cannot deliver a true POSIX signal to a non-console-attached child process on
+Windows, so `child.kill("SIGINT")` there is not equivalent to a developer
+pressing Ctrl+C in a real terminal on Linux/macOS. **[UNESTABLISHED]** whether
+SIGINT works as the docs describe on a POSIX host — no such host was available
+to test in this session. Per the task brief: on Windows today, only
+process-kill (SIGKILL) was demonstrated to end a turn, and ADR-0007 §2's
+"interrupting a running turn" needs a platform caveat until a POSIX run
+confirms the documented behaviour.
+
+### 4. Resume and identity — **[OBSERVED, partial]** / **[UNESTABLISHED, reboot]**
+
+Cross-*process* continuity — **[OBSERVED]**: took a `session_id` produced by an
+earlier probe run in this session (`97ef2b72-…`, same scratch project
+directory still on disk) and, in a brand-new `claude` process — not the
+long-lived stream-json child, a completely separate invocation — ran `claude
+--resume 97ef2b72-… -p "…what did you just attempt to run…" --output-format
+json`. It returned the *same* `session_id` and correctly recalled the specific
+prior turn's content (the exact echo command it had attempted and the exact
+hook-denial message text), at a fraction of the token cost of a cold start
+(19,084 cache-creation + 27,498 cache-read tokens vs. ~44k cache-creation on a
+cold session) — strong evidence the resumed context, not just the id, survives
+a process restart. Session storage is scoped to the project directory (cwd),
+consistent with §65's original finding.
+
+Machine-reboot survival — **[UNESTABLISHED]**: not tested; rebooting the host
+was out of proportion for a spike and not available in this environment. The
+resume test's behaviour (a brand-new process reading a completed prior
+conversation, at a cost profile consistent with reading persisted data off
+disk rather than a resident daemon) is circumstantial evidence session state is
+file-backed, which would usually survive a reboot — but that is an inference,
+not a run, and is not upgraded past UNESTABLISHED here.
+
+### 5. Working directory and project scope — **[OBSERVED]**
+
+A throwaway project directory with only a `.claude/settings.json` (no other
+project scaffolding) got a `PreToolUse` hook on `Bash` to fire during a hosted
+stream-json session: the hook process wrote a log line
+(`{"timestamp":…,"tool_name":"Bash","tool_input":{"command":"echo
+golem-r13-1-hook-probe",…}}`) that showed up on disk exactly once, matching the
+one Bash call the model attempted. `cwd` alone was sufficient — no
+`--add-dir`, no extra settings flags — for `.claude/` to load and its hook to
+run, the same as an interactive session per the cli-reference docs
+(**[DOCUMENTED]** for the "same as interactive" framing; **[OBSERVED]** for
+"the hook actually fires"). This directly answers the invariant-2 precondition:
+Golem's own hooks are reachable in a hosted session.
+
+### 6. Permission behaviour — **[OBSERVED]**, extending §141
+
+§141 established (plain `-p`, single-shot) that a hook emitting Golem's real
+`ask` (never `deny` — `src/autonomy/gate.ts`) resolves to a synchronous denial
+in headless mode because no dialog can ever open. This session repeated that
+test in the *hosted, multi-turn stream-json* shape specifically, and it holds:
+the always-`ask` hook fired once, and the assistant's own reply reported "The
+command was blocked by a hook, not executed. Hook output: `golem-r13.1-spike-
+always-ask`. Stopping here as instructed" — no dialog, no hang, a clean
+synchronous refusal surfaced back into the conversation. The `result` event's
+own `permission_denials` array also carried a structured record of the denied
+call (`tool_name`, `tool_use_id`, `tool_input`) independent of the prose.
+
+This is good news for ADR-0007 invariant 2 specifically: contrary to the ADR's
+current §3a text, which frames "a refusal is a real deny" as something only
+available if *Golem* owns the loop (the fallback), a *hosted* session running
+the unmodified `claude` CLI already gets an effectively-hard refusal for
+`ask`-classified calls, for free, purely because headless/hosted mode
+structurally cannot open a dialog. Golem does not need to own tool execution to
+hold the class line here; it needs its hook registered, which item 5 confirms
+it can be.
+
+### 7. Proxy interposition — **[OBSERVED]**
+
+Spawned `claude -p "hi" --output-format json` with `ANTHROPIC_BASE_URL` pointed
+at a local stub HTTP server (never a real upstream — zero API billing for this
+one). The stub recorded 6 requests: one `/api/hello` and five retried
+`/v1/messages?beta=true` calls (the CLI retrying against the stub's constant
+HTTP 500, consistent with documented `system/api_retry` behaviour), every one
+carrying real `authorization: Bearer …` and `anthropic-version: 2023-06-01`
+headers — proof the spawned process's actual model traffic, headers included,
+goes wherever `ANTHROPIC_BASE_URL` points. Golem's proxy sitting at that URL
+would see, and could act on, every request. Satisfies ADR-0007 invariant 8 for
+the "does the traffic even arrive" question; it does not by itself prove
+Golem's redaction/telemetry code paths engage correctly against this traffic
+shape, which is a proxy-side integration concern for R13.3, not this spike.
+
+### 8. Cost and lifetime — **[OBSERVED, rough]** / **[DOCUMENTED + reasoned, park]**
+
+Measured, not modelled, per real `result` events from this session's own
+probes: turns with essentially no content (a one-word reply, or a single
+short Bash call) cost **$0.21–$0.51 each** at Opus-5 pricing, with the spread
+explained almost entirely by prompt-cache state — a cold project directory
+pays ~44–46k `cache_creation_input_tokens` (system prompt + tool schemas, not
+the message itself), a warm one drops to single-digit-thousands of
+cache-creation plus tens of thousands of cheap `cache_read_input_tokens`. In
+other words: an *idle* hosted session is not free to keep resident — every
+turn it takes, however trivial, pays most of a full context-window's worth of
+system-prompt tokens unless the cache is warm, and idle time itself (no turns
+at all) costs nothing beyond the OS process. One further finding: interrupting
+a turn (item 3) means the local `result` event — the only place the CLI
+reports `total_cost_usd` — never arrives, so a host that kills a turn loses
+its own cost accounting for that turn; Anthropic's own billing is presumably
+unaffected, but Golem's local telemetry would need another source of truth for
+cost incurred during an interrupted turn.
+
+Usage-limit park — **[DOCUMENTED reasoning, not run]**: Golem's own park
+(`snooze`, `.claude/rules/golem-snooze-hold.md`) is a tool-call gate inside
+Golem's *own* orchestration layer; a spawned `claude` process is not a
+participant in that gate, it is an independent API consumer. If the
+account backing it hits Anthropic's usage limit, the expected surface (per the
+retry behaviour already observed in item 7) is an API-level error event in the
+same process, not Golem's park mechanism — the two are orthogonal, and
+ADR-0007 should not assume a hosted session inherits Golem's park behaviour for
+free. Running an account to its actual limit to confirm this was judged out of
+proportion for a spike (destructive to quota needed for the rest of this task
+and for sibling agents running concurrently); left **[UNESTABLISHED]** as a
+live-confirmed fact, filed as a follow-up if §3a is built.
+
+### The fallback, priced (per the task brief — not built)
+
+**Claude Agent SDK** (TypeScript/Python): a new dependency, but not a
+foreign-runtime one — Golem is already TypeScript, so the "five-dep runtime
+pin" concern in CLAUDE.md is about weight and surface, not language boundary.
+It gives structured streaming input/output and interrupt as first-class SDK
+calls (`query()` async generator, `interrupt()`) rather than hand-rolled
+stdin/stdout JSON framing, which would remove items 1–3's plumbing risk
+entirely — including, plausibly, item 3's Windows gap, since the SDK's
+`interrupt()` is documented as a distinct call, not a signal, so it may not
+inherit Windows' POSIX-signal limitation (untested here — that would be its
+own spike). Cost: one more package to pin and update, and it still shells out
+to the same `claude` binary underneath for the actual model/tool work per its
+own docs, so it does not remove the runner dependency, it wraps it.
+
+**Golem's own agent loop via `src/providers/`**: no new dependency, and would
+give Golem a real `deny` (not the `ask`-that-resolves-to-denial this spike
+found) since Golem would own tool execution directly. Cost: Golem then owns
+the entire tool-execution surface — every tool Claude Code ships today, kept in
+sync, forever — which is a categorically larger maintenance and security
+surface than spawning a product that already does this. Item 6's finding
+weakens the case for this option specifically: a *hosted* session already gets
+an effectively-hard refusal for `ask`-classified calls without Golem writing
+its own loop, so the main reason to prefer this fallback (real `deny`) is
+already available more cheaply via the CLI-spawn primary.
+
+**Recommendation**: keep the `claude` CLI as §3a's runner. Neither fallback is
+justified by anything found here — the primary works, with two documented gaps
+(Windows interrupt, park semantics) rather than a viability failure.
+
+**Sources for §142** (client `2.1.235`, fetched or re-confirmed 2026-08-22):
+`https://code.claude.com/docs/en/cli-reference` (cache-busted fetch, past
+Golem's own webcache, for `--input-format`/`--output-format stream-json`
+flags); prior live-docs research this session on the background-session/
+supervisor subsystem (`claude agents`/`attach`/`--bg`) and on `PermissionRequest`
+vs `PreToolUse` (ruling out `--bg` as §3a's mechanism — no programmatic send
+path, and `--bg` rejects `-p`); `docs/decisions/ADR-0007-remote-conversation-and-hosted-sessions.md`
+§§2, 3a, 5; `src/tasks/resume.ts`, `src/tasks/types.ts`; verification-notes
+§65 and §141 (precedent, extended not re-derived); five throwaway Node
+probes against scratch project directories under `.tmp-r13.1/` (argument-array
+spawn, no shell, no PTY — deleted before commit); real first-party billing,
+measured per-turn as recorded above, roughly $2 total across the session's
+live runs (the exact grand total is not fully reconstructable — one turn was
+deliberately interrupted before its `result`/cost event could arrive, which is
+itself the item-8 finding about cost-visibility on an interrupted turn).
