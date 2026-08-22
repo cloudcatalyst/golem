@@ -430,4 +430,171 @@ describe("runPreToolUseHook", () => {
       expect(raw).toContain("[REDACTED:anthropic-key:1]");
     });
   });
+
+  /**
+   * Task `subagent-park` — the SPAWN gate.
+   *
+   * The park above is a tool-call gate and a subagent never reaches it: the child
+   * hits the limit on a model request and dies before it can propose a call to be
+   * denied, losing anything uncommitted. The parent's spawn IS a tool call, so
+   * that is where the refusal goes. Driven here with an injected utilization —
+   * the same shape the park's tests use — because the gate has to be demonstrated,
+   * not argued from the code.
+   */
+  describe("spawn gate (subagent-park)", () => {
+    const spawnSettings = (enabled: boolean, costFraction = 0.18) => ({
+      readSpawnGateSettings: () => Promise.resolve({ enabled, costFraction }),
+    });
+    /**
+     * `Agent`/`Task` are UNCLASSIFIED actions, so once the spawn gate lets one
+     * through the autonomy gate asks the human (ADR-0002 fail-closed) — that is
+     * the unchanged behaviour these tests are protecting, not silence.
+     */
+    const decisionOf = (text: string): string =>
+      text === "" ? "" : JSON.parse(text).hookSpecificOutput.permissionDecision;
+    const atUtilization = (u: number, observedAtIso = "2026-07-18T00:00:00.000Z") => ({
+      readPrediction: () =>
+        Promise.resolve({
+          observedAtIso,
+          fiveHour: { utilization: u, resetAtIso: "2026-07-18T02:00:00.000Z" },
+        } satisfies LimitPrediction),
+      now: () => NOW_MS,
+      isSnoozeEnforced: () => Promise.resolve(false),
+    });
+
+    it("refuses a spawn with no headroom, and says what it measured", async () => {
+      const h = io(payload("Agent", { prompt: "go do R12.2" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.86),
+        ...spawnSettings(true),
+      });
+      const out = JSON.parse(h.stdout.text);
+      expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+      const reason = out.hookSpecificOutput.permissionDecisionReason;
+      expect(reason).toContain("86%");
+      expect(reason).toContain("18%");
+      expect(reason).toContain("104%");
+    });
+
+    it("gates the spawn tool under BOTH its names", async () => {
+      for (const tool of ["Task", "Agent"]) {
+        const h = io(payload(tool, { prompt: "go" }, dir));
+        await runPreToolUseHook(h, {
+          projectDir: dir,
+          ...level("outcome"),
+          ...atUtilization(0.86),
+          ...spawnSettings(true),
+        });
+        expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision, tool).toBe("deny");
+      }
+    });
+
+    it("leaves the path with headroom exactly as it is today", async () => {
+      const h = io(payload("Agent", { prompt: "go" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.4),
+        ...spawnSettings(true),
+      });
+      // Not refused: falls through to the autonomy gate, which asks the human for
+      // an unclassified action exactly as it did before this gate existed.
+      expect(decisionOf(h.stdout.text)).toBe("ask");
+    });
+
+    it("does not touch non-spawn tools", async () => {
+      const h = io(payload("Read", { file_path: "x" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.86),
+        ...spawnSettings(true),
+      });
+      // 86% refuses a spawn outright; an ordinary read is untouched by it. (Kept
+      // under the 90% park threshold so the park is not what is being observed.)
+      expect(JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecision).toBe("allow");
+    });
+
+    /**
+     * The fan-out that lost two agents: three spawns in one turn, all reading the
+     * same pre-batch utilization. The first is affordable; by the third it is not.
+     */
+    it("charges for siblings dispatched since the reading", async () => {
+      const opts = {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.5),
+        ...spawnSettings(true, 0.2),
+        nowIso: "2026-07-18T00:00:10.000Z",
+      };
+      const first = io(payload("Agent", { prompt: "a" }, dir));
+      await runPreToolUseHook(first, opts);
+      expect(decisionOf(first.stdout.text)).toBe("ask");
+      const second = io(payload("Agent", { prompt: "b" }, dir));
+      await runPreToolUseHook(second, opts);
+      expect(decisionOf(second.stdout.text)).toBe("ask");
+      const third = io(payload("Agent", { prompt: "c" }, dir));
+      await runPreToolUseHook(third, opts);
+      // 0.5 + 0.2 x 3 = 1.1
+      const out = JSON.parse(third.stdout.text);
+      expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(out.hookSpecificOutput.permissionDecisionReason).toContain(
+        "2 spawns dispatched since that reading",
+      );
+    });
+
+    it("never silently allows a spawn it cannot measure — warns once, then proceeds", async () => {
+      const blind = {
+        projectDir: dir,
+        ...level("outcome"),
+        ...spawnSettings(true),
+        readPrediction: () => Promise.resolve(null),
+        now: () => NOW_MS,
+        isSnoozeEnforced: () => Promise.resolve(false),
+      };
+      const first = io(payload("Agent", { prompt: "a" }, dir));
+      await runPreToolUseHook(first, blind);
+      const out = JSON.parse(first.stdout.text);
+      expect(out.hookSpecificOutput.permissionDecision).toBe("deny");
+      expect(out.hookSpecificOutput.permissionDecisionReason).toContain("BLIND");
+      // One-shot: re-issuing proceeds, so a cold feed informs but never deadlocks.
+      const second = io(payload("Agent", { prompt: "a" }, dir));
+      await runPreToolUseHook(second, blind);
+      expect(decisionOf(second.stdout.text)).toBe("ask");
+    });
+
+    it("is skipped entirely when the gate is turned off", async () => {
+      // 0.86 refuses with the gate on (see above) and is under the park threshold,
+      // so the only thing that could deny here is the spawn gate itself.
+      const h = io(payload("Agent", { prompt: "go" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.86),
+        ...spawnSettings(false),
+      });
+      expect(decisionOf(h.stdout.text)).toBe("ask");
+    });
+
+    /**
+     * At/above the park threshold the spawn is denied by the PARK, not by this
+     * gate — and being told to park is the more useful instruction, so the
+     * ordering is deliberate.
+     */
+    it("yields to the park above the park threshold", async () => {
+      const h = io(payload("Agent", { prompt: "go" }, dir));
+      await runPreToolUseHook(h, {
+        projectDir: dir,
+        ...level("outcome"),
+        ...atUtilization(0.95),
+        ...spawnSettings(true),
+        isSnoozeEnforced: () => Promise.resolve(true),
+      });
+      const reason = JSON.parse(h.stdout.text).hookSpecificOutput.permissionDecisionReason;
+      expect(reason).toContain("ENFORCEMENT");
+      expect(reason).not.toContain("Not enough headroom");
+    });
+  });
 });
