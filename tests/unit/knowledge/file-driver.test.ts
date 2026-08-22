@@ -6,7 +6,7 @@
  * index survives a fresh driver instance (process restart) reading the same dir.
  */
 
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Chunk } from "../../../src/interfaces/index.js";
@@ -85,6 +85,27 @@ describe("canonicalProjectId", () => {
   it("only rewrites the drive letter, never the rest of the path's case", () => {
     expect(canonicalProjectId("d:\\Foo\\BarBaz")).toBe("D:\\Foo\\BarBaz");
   });
+
+  it(
+    "collapses a git linked worktree to its main checkout's id, agreeing with " +
+      "the CCR store's identical decision (task ccr-ref-scope — same shared " +
+      "resolveWorktreeRoot, docs/wiki/concepts/CCR Ref Scope.md)",
+    async () => {
+      const mainRoot = path.join(base, "main-checkout");
+      const sharedGitDir = path.join(mainRoot, ".git");
+      const worktreeRoot = path.join(base, "agent-worktree");
+      const worktreeGitDir = path.join(sharedGitDir, "worktrees", "agent-worktree");
+
+      await mkdir(sharedGitDir, { recursive: true });
+      await mkdir(worktreeGitDir, { recursive: true });
+      await mkdir(worktreeRoot, { recursive: true });
+      await writeFile(path.join(worktreeGitDir, "commondir"), "../..\n", "utf8");
+      await writeFile(path.join(worktreeRoot, ".git"), `gitdir: ${worktreeGitDir}\n`, "utf8");
+
+      expect(canonicalProjectId(worktreeRoot)).toBe(canonicalProjectId(mainRoot));
+      expect(collectionDir("/base", worktreeRoot)).toBe(collectionDir("/base", mainRoot));
+    },
+  );
 });
 
 describe("FileVectorDriver", () => {

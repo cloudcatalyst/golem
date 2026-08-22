@@ -1,7 +1,7 @@
 ---
 task: ccr-ref-scope
 title: "`expand` cannot find a ref issued minutes earlier — the CCR store is per-project-root, and a worktree is a different root"
-state: queued
+state: done
 owner: agent
 size: M
 design: No memo. The store is `src/compression/ccr-store.ts` over `LocalDirBlobStore`, rooted at `<projectRoot>/.golem/ccr` by `src/compression/native-lossless.ts:343`. The error text is `src/mcp/server.ts:128`. The offload marker is written by the PostToolUse hook (`src/hooks/post-tool-use.ts`); `.claude/rules/golem-ccr-refs.md` is the promise it makes.
@@ -9,7 +9,7 @@ gate: A ref a hook issued is retrievable by `expand` for as long as the marker i
 depends_on: []
 touches: [src/compression/ccr-store.ts, src/compression/native-lossless.ts, src/hooks/post-tool-use.ts, src/mcp/server.ts, src/knowledge/file-driver.ts, docs/wiki]
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-21T23:22:11.749Z
 ---
 
 ## The report
@@ -94,3 +94,7 @@ A reproduction first, named in the commit. Then: a ref issued by a hook in a
 worktree is expandable from the session that spawned it, and an error that cannot
 be satisfied says which root it searched. Plus a regression test at the seam that
 broke — not only at the unit that works.
+
+## Outcome
+
+shipped

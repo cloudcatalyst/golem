@@ -28,6 +28,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { finished } from "node:stream/promises";
 import type { Chunk } from "../interfaces/knowledge.js";
+import { resolveWorktreeRoot } from "../shared/git-worktree.js";
 import {
   assertEmbedderSpaceMatch,
   cosineSimilarity,
@@ -48,15 +49,23 @@ import {
  * per-project collections that each re-embed the tree independently — this
  * repo had three, 231 MB, two of them unreachable.
  *
- * So for a Windows path (the only shape where these are the same location) the
- * drive letter is uppercased, `/` is folded to `\`, and trailing separators are
- * dropped (never past the root, so `D:\` survives). POSIX paths and bare ids are
- * left ALONE: `\` is a legal filename character there, and folding it would
- * merge two genuinely different directories.
+ * Task ccr-ref-scope (2026-08-22) added a second collapse ahead of the
+ * spelling one: a git LINKED WORKTREE is resolved to its main checkout's root
+ * via {@link resolveWorktreeRoot} FIRST, because a worktree is the SAME
+ * project as its main checkout — the identical decision made for the CCR
+ * store (`src/compression/`), through the same shared function, so the two
+ * can't independently drift into disagreeing about one project's identity.
+ *
+ * Then, for a Windows path (the only shape where these are the same location)
+ * the drive letter is uppercased, `/` is folded to `\`, and trailing
+ * separators are dropped (never past the root, so `D:\` survives). POSIX
+ * paths and bare ids are left ALONE: `\` is a legal filename character there,
+ * and folding it would merge two genuinely different directories.
  */
 export function canonicalProjectId(projectId: string): string {
-  if (!/^[A-Za-z]:/.test(projectId)) return projectId;
-  const drive = `${projectId[0]?.toUpperCase() ?? ""}${projectId.slice(1)}`;
+  const resolved = resolveWorktreeRoot(projectId);
+  if (!/^[A-Za-z]:/.test(resolved)) return resolved;
+  const drive = `${resolved[0]?.toUpperCase() ?? ""}${resolved.slice(1)}`;
   const separators = drive.replace(/\//g, "\\");
   // `D:\` (3) and drive-relative `D:` (2) are already minimal.
   if (separators.length <= 3) return separators;

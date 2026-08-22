@@ -125,9 +125,7 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
             "expand",
             startMs,
             errorResult(
-              `Unknown or expired CCR ref "${ref_id}". The original content is no ` +
-                "longer in the Golem store; re-run the tool that produced it if the " +
-                "full output is still needed.",
+              `${error.message} Re-run the tool that produced it if the full output is still needed.`,
             ),
           );
         }
