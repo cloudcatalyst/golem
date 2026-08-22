@@ -5,7 +5,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -211,7 +211,10 @@ describe("conversationIdFor — identity agrees with session-tree.ts", () => {
 
   it("is stable across otherwise-identical requests, same as session-tree's key", () => {
     const body1 = req([{ role: "user", content: "hello" }]);
-    const body2 = req([{ role: "user", content: "hello" }, { role: "assistant", content: "hi" }]);
+    const body2 = req([
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" },
+    ]);
     // Same first message -> same conversation id, regardless of what follows.
     expect(conversationIdFor(body1)).toBe(conversationIdFor(body2));
   });

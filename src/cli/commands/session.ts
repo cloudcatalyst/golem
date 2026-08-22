@@ -58,46 +58,48 @@ export default function register(program: Command): void {
     )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--all", "delete every conversation the store holds", false)
-    .action(async (id: string | undefined, opts: { dir: string; all: boolean }, command: Command) => {
-      try {
-        // Commander quirk (verified empirically, R13.2): when a parent
-        // command and one of its subcommands both declare the SAME option
-        // flag (here `--dir`, also declared on `session` above for the
-        // tree-view action), commander's default non-positional option
-        // parsing lets the value typed on the command line get captured by
-        // whichever command's parser reaches it first while scanning the
-        // full remaining argv — NOT necessarily this subcommand's own
-        // `opts()`. `opts.dir` above is therefore unreliable here; the
-        // parent's own parsed value (`command.parent.opts().dir`) is the one
-        // that actually reflects what the user typed, in both
-        // `forget --dir <path> <id>` and `forget <id> --dir <path>` order.
-        const dir = command.parent?.opts<{ dir: string }>().dir ?? opts.dir;
-        const store = LocalConversationStore.forProjectDir(dir);
+    .action(
+      async (id: string | undefined, opts: { dir: string; all: boolean }, command: Command) => {
+        try {
+          // Commander quirk (verified empirically, R13.2): when a parent
+          // command and one of its subcommands both declare the SAME option
+          // flag (here `--dir`, also declared on `session` above for the
+          // tree-view action), commander's default non-positional option
+          // parsing lets the value typed on the command line get captured by
+          // whichever command's parser reaches it first while scanning the
+          // full remaining argv — NOT necessarily this subcommand's own
+          // `opts()`. `opts.dir` above is therefore unreliable here; the
+          // parent's own parsed value (`command.parent.opts().dir`) is the one
+          // that actually reflects what the user typed, in both
+          // `forget --dir <path> <id>` and `forget <id> --dir <path>` order.
+          const dir = command.parent?.opts<{ dir: string }>().dir ?? opts.dir;
+          const store = LocalConversationStore.forProjectDir(dir);
 
-        if (opts.all) {
-          if (id !== undefined) {
-            process.stderr.write("golem: pass either an id or --all, not both\n");
+          if (opts.all) {
+            if (id !== undefined) {
+              process.stderr.write("golem: pass either an id or --all, not both\n");
+              process.exitCode = 1;
+              return;
+            }
+            await store.forgetAll();
+            process.stdout.write("Deleted every conversation in the local store.\n");
+            return;
+          }
+
+          if (id === undefined) {
+            process.stderr.write("golem: session forget requires an <id> or --all\n");
             process.exitCode = 1;
             return;
           }
-          await store.forgetAll();
-          process.stdout.write("Deleted every conversation in the local store.\n");
-          return;
-        }
 
-        if (id === undefined) {
-          process.stderr.write("golem: session forget requires an <id> or --all\n");
+          const deleted = await store.forget(id);
+          process.stdout.write(
+            deleted ? `Deleted conversation ${id}.\n` : `No stored conversation ${id}.\n`,
+          );
+        } catch (err) {
+          process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
           process.exitCode = 1;
-          return;
         }
-
-        const deleted = await store.forget(id);
-        process.stdout.write(
-          deleted ? `Deleted conversation ${id}.\n` : `No stored conversation ${id}.\n`,
-        );
-      } catch (err) {
-        process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
-        process.exitCode = 1;
-      }
-    });
+      },
+    );
 }
