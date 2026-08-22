@@ -571,6 +571,27 @@ export const SETTINGS_LEAVES = {
      * snooze quickly, it is not a hard token freeze.
      */
     enforce: z.boolean(),
+    /**
+     * Task `subagent-park`: refuse to START a subagent when the session window
+     * cannot pay for it. **Default true.** The park (`enforce`) is a tool-call
+     * gate and a subagent never reaches it — a child hits the limit on a MODEL
+     * request and dies before it can propose a call to deny, taking uncommitted
+     * work with it (observed 2026-08-22, two of three dispatched agents). The
+     * spawn, however, IS a tool call the parent makes, so that is where the
+     * decision belongs. Refusal states what it measured, because a refusal that
+     * does not will be worked around. Fails to ON: a config-read failure cannot
+     * deadlock a session here, since the gate touches exactly one tool.
+     */
+    spawn_gate: z.boolean(),
+    /**
+     * Share of a session (5h) window one subagent is assumed to cost. **Measured,
+     * not guessed:** the three agents of 2026-08-22 consumed ~171k, ~186k and
+     * ~186k subagent tokens over 85–94 tool calls each — roughly 15–20% of a
+     * window apiece. A spawn is refused when `utilization + spawn_cost_fraction ×
+     * (in-flight + 1) > 1`. Lower it if your subagents are genuinely cheaper;
+     * raising it makes the gate more conservative.
+     */
+    spawn_cost_fraction: z.number().min(0.01).max(1),
   },
   claude: {
     /**
@@ -807,6 +828,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   },
   snooze: {
     enforce: true,
+    spawn_gate: true,
+    // ~171k–186k tokens per subagent, measured 2026-08-22 (task `subagent-park`).
+    spawn_cost_fraction: 0.18,
   },
   claude: {
     // Machine-local wiring belongs in the gitignored file (see the leaf comment).
