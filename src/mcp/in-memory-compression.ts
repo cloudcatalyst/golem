@@ -104,7 +104,12 @@ export class InMemoryCompressionService implements CompressionService {
   retrieve(ref: CCRRef): Promise<Original> {
     const original = this.#store.get(ref.refId);
     if (original === undefined) {
-      return Promise.reject(new UnknownRefError(ref.refId));
+      return Promise.reject(
+        new UnknownRefError(ref.refId, {
+          location: "the in-memory CCR stub (`golem mcp serve` standalone)",
+          reason: "not-found",
+        }),
+      );
     }
     this.#global.ccrRefsRetrieved += 1;
     return Promise.resolve(original);
