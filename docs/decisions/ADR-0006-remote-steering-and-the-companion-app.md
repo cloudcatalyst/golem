@@ -84,7 +84,7 @@ switch. Most of the value is in the first, which carries almost none of the risk
 | # | Capability | What it grants | Risk |
 |---|---|---|---|
 | **1. Observe** | Read the blocked state, limits and telemetry from a paired device | Disclosure of tool arguments and project names | Moderate — and bounded by redaction |
-| **2. Authorize** | Answer a permission prompt the hook is holding open | Code execution on the developer's machine | **Severe** |
+| **2. Authorize** | Answer a permission prompt the hook is holding open | Code execution on the developer's machine | **Severe** — for `read`/`write`/`unknown`, now carried first-party by Anthropic's channel relay (R12.7); the `destructive`/`outward` exclusion needs a hook fix to hold against it (R12.11, R12.12) |
 | **3. Resume** | Start work in an idle session | — | ~~Structurally unavailable (Decision 37)~~ — **not built by choice; see the re-verification below** |
 
 Capability 3 is not a design choice. It does not exist, R12.7 re-verifies that
@@ -119,6 +119,56 @@ the opposite — read this paragraph together with the block below.]**
 > Full evidence, quotes and URLs: `docs/plan/verification-notes.md` §136. Spec
 > Decision 59(g)'s wording ("Capability 3 does not exist") needs a user amendment
 > for the same reason.
+
+> **Re-verification (2026-08-22, R12.11) — capability 2 does not need Golem's own
+> transport, on one condition.** R12.7 (above) found that Anthropic's channel
+> relay already carries capability 2 first-party
+> (`notifications/claude/channel/permission_request`). R12.11 was the spike this
+> ADR's own §"What must be ratified" anticipated at item 3 — "declining 2 cancels
+> R12.3 and leaves the rest useful" — and it answers that the class line in §2
+> **can** hold against the relay, but not as Golem ships today.
+>
+> Golem's gate (`src/autonomy/gate.ts`) never emits `deny` for `destructive`/
+> `outward`; it emits `ask` at every autonomy level, which forces a question but
+> does not resolve one. Documentation (`code.claude.com/docs/en/channels-reference`,
+> fetched 2026-08-22) is consistent — though not live-confirmed for this exact
+> case — that a permission dialog, once opened, is exactly what a connected
+> relay-capable channel is notified of, with no field anywhere in the hooks or
+> channels reference that exempts a call from relay after a dialog exists. Left
+> as `ask`, a hook-forced dialog on a `destructive`/`outward` call is, per that
+> reading, no different from any other dialog a channel can answer.
+>
+> The same documentation names an event Golem does not use — `PermissionRequest`
+> — whose decision resolves the call **before** a dialog exists at all: "if no
+> hook returns a decision, it denies the tool call," run "when Claude Code is
+> about to ask you for permission," strictly earlier than `PreToolUse`'s `ask`
+> takes effect. No dialog means nothing for a channel to be notified of. Moving
+> `destructive`/`outward` enforcement from `PreToolUse`'s `ask` to a
+> `PermissionRequest` hook returning `behavior:"deny"` is a change to a hook
+> Golem already owns, not a new pairing/relay/account stack.
+>
+> **What does not change:** the class line itself (§2) is unamended; this
+> re-verification is about which layer enforces it. **What is not yet true:**
+> the `PermissionRequest` fix has not been built, and whether it actually
+> pre-empts a connected channel's relay has not been observed live — headless
+> `-p` sessions cannot open a dialog at all (confirmed: `ask` resolves to a
+> synchronous denial with no dialog and no channel notification in four live
+> runs), so the live interactive case remains unconfirmed for lack of a way to
+> drive one safely from this repo. **Until that fix ships and is confirmed, treat
+> the class line as at-risk — not safe — for a user running both Golem's current
+> build and a connected permission-relay channel.**
+>
+> **Disposition:** recommend cancelling R12.3/R12.4/R12.8/R12.9 (the pairing,
+> hook-timing, relay, and hosted-account stack built to carry capability 2
+> end-to-end) rather than resuming them — this ADR's own §"What must be
+> ratified" already named that outcome as the consequence of declining to build
+> capability 2 ourselves. Recommend reducing R12.5 to capability 1 (observe)
+> only, since its would-be novel value (a phone-shaped approve/deny surface) is
+> subsumed by Anthropic's first-party relay once a channel is connected. A new
+> task, `R12.12`, carries the `PermissionRequest` fix plus the live
+> confirmation this block says is still owed.
+>
+> Full evidence, quotes and URLs: `docs/plan/verification-notes.md` §141.
 
 ## The honest part
 
