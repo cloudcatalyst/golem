@@ -332,9 +332,9 @@ export const SETTING_META = {
     label: "Compression level",
     summary: "off (redaction only) · 1 lossless · 2 balanced · 3 aggressive",
     detail:
-      "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). " +
-      "until you set it back to auto. 0 is not offerable — passthrough belongs to the " +
-      "slider, where turning redaction off is surfaced loudly.",
+      "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). No level " +
+      "disables redaction — full bypass is a separate setting, `proxy.bypass_all`, " +
+      "surfaced loudly and never the default.",
     restart: "proxy",
   },
   "compression.headroom_config": {
@@ -354,7 +354,7 @@ export const SETTING_META = {
   // --- brevity --------------------------------------------------------------
   "brevity.level": {
     label: "Brevity level",
-    summary: "auto (follow the slider) · off · lite · full · ultra",
+    summary: "off · lite · full · ultra",
     detail:
       "Decision 52: the output-side dial. Appends a fixed brevity directive to the system " +
       "prompt so the model answers more tersely — it shortens replies, it does not " +
@@ -549,6 +549,24 @@ export const SETTING_META = {
     detail:
       "Off is ADVISORY — one nudge per window that the agent can work past. Only ever " +
       "fires on a fresh rate-limit reading; a stale feed just warns.",
+  },
+  "snooze.spawn_gate": {
+    label: "Gate subagent spawns on headroom",
+    summary: "Refuse to start a subagent the session window cannot pay for",
+    detail:
+      "The park is a tool-call gate and a subagent never reaches it — a child hits the limit " +
+      "on a model request and dies before it can propose a call to deny, losing uncommitted " +
+      "work. The spawn is the one part of that the parent sees as a tool call, so the refusal " +
+      "goes there, with the numbers it measured. A missing or stale reading warns once rather " +
+      "than assuming headroom.",
+  },
+  "snooze.spawn_cost_fraction": {
+    label: "Assumed subagent cost",
+    summary: "Share of a session window one subagent is estimated to consume",
+    detail:
+      "Measured, not guessed: three agents on 2026-08-22 used ~171k–186k tokens each, roughly " +
+      "15–20% of a window. A spawn is refused when utilization + this × (in-flight + 1) " +
+      "exceeds 1.",
   },
 
   // --- claude ---------------------------------------------------------------

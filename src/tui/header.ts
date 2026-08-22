@@ -39,7 +39,7 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
   // level that is RUNNING and marks the set-but-inert one, rather than displaying a
   // name the pipeline is not honouring.
   const ec = report.effective_compression;
-  const slider: HeaderSegment = {
+  const level: HeaderSegment = {
     label: "Level",
     // R11.1: `proxy.bypass_all` is the redaction-off bypass — flagged in the
     // header, not just in a warning line, so it cannot be running unnoticed.
@@ -80,7 +80,7 @@ export function headerLines(report: StatusReport): readonly HeaderLine[] {
 
   return [
     [{ label: "Golem", value: `${report.version} · ${report.project_dir}` }],
-    [proxy, slider, { label: "Upstream", value: renderUpstream(report.upstream) }],
+    [proxy, level, { label: "Upstream", value: renderUpstream(report.upstream) }],
     line3,
   ];
 }

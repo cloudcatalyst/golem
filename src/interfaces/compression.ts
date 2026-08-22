@@ -70,11 +70,58 @@ export interface CompressionStats {
   readonly ccrRefsRetrieved: number;
 }
 
-/** Thrown by retrieve() when a CCR ref does not exist (or was evicted). */
+/**
+ * What a store checked before giving up on a ref — carried on
+ * {@link UnknownRefError} so a caller can tell "never stored" apart from
+ * "stored under a different root" apart from "corrupt" (task ccr-ref-scope:
+ * one error name used to cover all three, plus a hypothetical eviction that
+ * no implementation of this contract actually has).
+ */
+export interface UnknownRefOptions {
+  /**
+   * Where the store looked: a filesystem path, an S3 key prefix, or a plain
+   * description for a backend with no single location (e.g. "in-memory").
+   * Shown in the message so "no envelope at <path>" is actionable rather than
+   * a bare "unknown or expired".
+   */
+  readonly location?: string;
+  /**
+   * "not-found" (default): nothing was stored at `location` under this
+   * refId — never stored at all, or stored under a DIFFERENT root than the
+   * one this store is rooted at (the ccr-ref-scope worktree bug). "corrupt":
+   * an envelope exists at `location` but failed to parse or validate — see
+   * `detail`.
+   */
+  readonly reason?: "not-found" | "corrupt";
+  /** Why a "corrupt" envelope failed (JSON parse error, schema issues). */
+  readonly detail?: string;
+}
+
+/**
+ * Thrown by retrieve() when a CCR ref cannot be resolved. Distinguishes its
+ * causes (see {@link UnknownRefOptions}) rather than reporting one
+ * "unknown or expired" for all of them — no implementation of this contract
+ * has ever implemented eviction, so "expired" was never a real cause.
+ */
 export class UnknownRefError extends Error {
-  constructor(refId: string) {
-    super(`unknown CCR ref: ${refId}`);
+  readonly refId: string;
+  readonly location: string;
+  readonly reason: "not-found" | "corrupt";
+
+  constructor(refId: string, options: UnknownRefOptions = {}) {
+    const location = options.location ?? "an unspecified CCR store";
+    const reason = options.reason ?? "not-found";
+    const message =
+      reason === "corrupt"
+        ? `CCR ref "${refId}" has a stored envelope at ${location} that is ` +
+          `corrupt (${options.detail ?? "no further detail"}) — it exists but cannot be read back.`
+        : `no envelope for CCR ref "${refId}" at ${location} — either it was ` +
+          "never stored, or it was stored under a different project root.";
+    super(message);
     this.name = "UnknownRefError";
+    this.refId = refId;
+    this.location = location;
+    this.reason = reason;
   }
 }
 
