@@ -2,7 +2,7 @@
 title: Redaction Path Placeholders
 type: concept
 tags: [security, pipeline, redaction, t-c3, dogfooding]
-sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/tasks/redaction-path-uuid.md, docs/plan/verification-notes.md#§137]
+sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/tasks/redaction-path-uuid.md, docs/plan/verification-notes.md#§140]
 created: 2026-08-22
 updated: 2026-08-22
 ---
@@ -23,15 +23,15 @@ POSIX-style absolute path is therefore one candidate token end to end.
 `isPathLikeToken` is the guard that keeps an ordinary path out of the entropy
 sweep, by splitting on `/-_` and requiring every chunk to be recognizably
 clean (pure-alpha, pure-numeric, and — since R12/`redaction-path-uuid`,
-§137 — pure-hex, gated by a 3-chunk floor). A UUID or hash segment is exactly
+§140 — pure-hex, gated by a 3-chunk floor). A UUID or hash segment is exactly
 the shape most likely to slip past the alpha/numeric checks; see
-[[Redaction Stage]] for the full false-positive history (§31/§37/§49/§50/§137).
+[[Redaction Stage]] for the full false-positive history (§31/§37/§49/§50/§140).
 
 **The separator matters independently of all of that.** The candidate charset
 includes `/` but not `\`. A Windows-spelled path (`C:\Users\...\<uuid>\...`)
 breaks into short runs at every backslash and never reaches the 32-character
 floor, so it survives even when the identical POSIX-spelled path would not
-have (before §137) or would (after). This is why the symptom can look
+have (before §140) or would (after). This is why the symptom can look
 separator-dependent, and why the task that fixed the false positive
 (`redaction-path-uuid`) also required a test asserting **both spellings of the
 same path agree** — a fix that only cleared the POSIX form would leave the
@@ -53,7 +53,7 @@ confusing half of the bug in place.
      what a tool echoed back?
    - `md5sum <file>` (or any checksum) — a stable fingerprint you can compare
      across two separate reads without re-displaying the content itself.
-   These three commands were how §137's end-to-end verification told "ground
+   These three commands were how §140's end-to-end verification told "ground
    truth on disk" apart from "what the view showed" without ever re-pasting
    the path itself.
 3. **Never re-paste a path out of tool output into the next command.** This
@@ -67,12 +67,12 @@ confusing half of the bug in place.
    itself passed through a redacted view.
 4. **On Windows, spelling the path with `\` is a workaround available today**
    (not a fix — the underlying false positive on POSIX-spelled paths with
-   UUID/hash segments is what §137 addresses). If a command's own construction
+   UUID/hash segments is what §140 addresses). If a command's own construction
    allows either spelling, prefer `\`.
 5. **This can happen to programmatically generated strings too, not just
    paths.** A 32+ char mixed-case run generated via `charCodeAt`/`crypto`
    with no literal anywhere in the source still measures as high-entropy and
-   still redacts — reproduced live while drafting §137's tests. If a
+   still redacts — reproduced live while drafting §140's tests. If a
    diagnostic string comes back redacted, that is not necessarily evidence of
    an authoring typo; measure it the same way as a path (steps 2 above) before
    assuming you mistyped something.
@@ -115,8 +115,8 @@ the case this page is about — assume it is not.
 ## See also
 
 - [[Redaction Stage]] — the full rule table + entropy-backstop reference,
-  including the false-positive history this page's fix (§137) extends.
-- `docs/plan/verification-notes.md#§137` — the dated write-up: what changed
+  including the false-positive history this page's fix (§140) extends.
+- `docs/plan/verification-notes.md#§140` — the dated write-up: what changed
   in `isPathLikeToken`, the call-order safety argument, and the end-to-end
   verification (ground truth on disk vs. the tool-output view, both path
   families, both separator spellings, and a negative control proving

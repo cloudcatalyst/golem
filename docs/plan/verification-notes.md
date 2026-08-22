@@ -6817,7 +6817,7 @@ permission prompts); `https://code.claude.com/docs/en/cross-session-messaging.md
 `claude attach`, `claude agents`, `claude respawn`, `claude daemon status`);
 `https://code.claude.com/docs/en/changelog.md`; `https://code.claude.com/docs/llms.txt`.
 
-## §137 — redaction-path-uuid: a hex chunk now counts as clean in `isPathLikeToken` (2026-08-22)
+## §140 — redaction-path-uuid: a hex chunk now counts as clean in `isPathLikeToken` (2026-08-22)
 
 Closes the false positive §136 hit incidentally (line above: `-o
 C:[REDACTED:high-entropy:1].md`) and the task brief's own two sightings — the

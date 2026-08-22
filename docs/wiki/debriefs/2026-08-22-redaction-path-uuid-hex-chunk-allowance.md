@@ -2,7 +2,7 @@
 title: redaction-path-uuid — a hex chunk is now clean enough to be a path
 type: debrief
 tags: [redaction, t-c3, pipeline, entropy-heuristic, false-positive, uuid, worktree, scratchpad, r12]
-sources: [docs/plan/tasks/redaction-path-uuid.md, src/pipeline/redaction-rules.ts, tests/unit/pipeline/redaction-audit.test.ts, docs/plan/verification-notes.md#§137]
+sources: [docs/plan/tasks/redaction-path-uuid.md, src/pipeline/redaction-rules.ts, tests/unit/pipeline/redaction-audit.test.ts, docs/plan/verification-notes.md#§140]
 created: 2026-08-22
 updated: 2026-08-22
 ---
@@ -18,7 +18,7 @@ segment — the session scratchpad path
 (`AppData/Local/Temp/claude/…/<uuid>/scratchpad`) and `.claude/worktrees/agent-<id>/`
 — now survives the pipeline intact, in both `/` and `\` separator spellings, and
 every existing entropy/redaction fixture (140 pipeline tests, 2987 tests project-wide)
-still passes. Full write-up: `docs/plan/verification-notes.md` §137. Companion
+still passes. Full write-up: `docs/plan/verification-notes.md` §140. Companion
 reference for readers who hit the symptom again: [[Redaction Path Placeholders]].
 
 ## Why this was safe, not just narrow
@@ -66,7 +66,7 @@ path. Reproduced again, deliberately, as part of the end-to-end verification bel
 (the negative control), and again while retyping a scratchpad path copied forward
 from earlier tool output into a new command — the exact "copy-forward is poisoned"
 mechanism the task brief's Third-sighting section names, caught live from the
-authoring side. Both are recorded in verification-notes §137 and in
+authoring side. Both are recorded in verification-notes §140 and in
 [[Redaction Path Placeholders]] as the practical playbook: measure the file on
 disk (`grep -c`, `wc -c`, `md5sum`) before believing a write failed, and never
 retype a path that has already passed through a tool-output view.
@@ -113,6 +113,6 @@ finding about the system's behaviour.
 ## See also
 
 [[Redaction Stage]] — the rule table + entropy-backstop reference this task
-extends (§31/§37/§49/§50/§137). [[Redaction Path Placeholders]] — the reader-facing
+extends (§31/§37/§49/§50/§140). [[Redaction Path Placeholders]] — the reader-facing
 playbook this task's "Note for whoever fixes it" section asked for, including the
 reversible-vs-standalone placeholder asymmetry.

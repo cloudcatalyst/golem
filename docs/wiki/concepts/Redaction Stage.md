@@ -2,7 +2,7 @@
 title: Redaction Stage
 type: concept
 tags: [security, pipeline, redaction, t-c3, r1-batch]
-sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/verification-notes.md, docs/plan/verification-notes.md#§55, docs/plan/verification-notes.md#§56, docs/plan/verification-notes.md#§137]
+sources: [src/pipeline/redaction-rules.ts, src/pipeline/redaction.ts, docs/plan/verification-notes.md, docs/plan/verification-notes.md#§55, docs/plan/verification-notes.md#§56, docs/plan/verification-notes.md#§140]
 created: 2026-07-10
 updated: 2026-08-22
 ---
@@ -144,7 +144,7 @@ docs/plan/verification-notes.md#§56.
 
 ---
 
-## Resolved: path-with-embedded-UUID false positive (§137, 2026-08-22)
+## Resolved: path-with-embedded-UUID false positive (§140, 2026-08-22)
 
 Extends the §49 fix rather than replacing it. §49 required every chunk of a
 path-like candidate to be purely alphabetic or purely numeric; a UUID or hash
@@ -152,7 +152,7 @@ segment (mixed letters + digits) failed both, so an otherwise-clean path —
 notably the session scratchpad path and `.claude/worktrees/agent-<id>/` —
 still redacted whole.
 
-- **§137 — hex chunks.** `isPathLikeToken` now also accepts a chunk that is
+- **§140 — hex chunks.** `isPathLikeToken` now also accepts a chunk that is
   pure hex (dehyphenated digits/`a-f`, either case), gated by
   `MIN_CHUNKS_FOR_HEX_ALLOWANCE = 3` chunks. Safe by call order, not just by
   the guard: `isHighEntropyToken` already excludes a token that is pure hex
@@ -167,5 +167,5 @@ See [[Redaction Path Placeholders]] for the full write-up — the mechanism
 (including why the `/` vs `\` separator spelling matters independently of
 this fix), what to do when a path comes back as a placeholder, and the
 reversible-vs-standalone placeholder asymmetry — and
-docs/plan/verification-notes.md#§137 for the dated measurement (exit codes,
+docs/plan/verification-notes.md#§140 for the dated measurement (exit codes,
 suite totals, end-to-end round-trip verification).
