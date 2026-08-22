@@ -4,7 +4,7 @@ type: concept
 tags: [pipeline, compression, headroom, situational, decision-23]
 sources: [src/compression/native-lossless.ts, src/compression/headroom-adapter.ts, docs/golem-spec.md, docs/plan/verification-notes.md]
 created: 2026-07-17
-updated: 2026-08-21
+updated: 2026-08-22
 ---
 
 # Compression
@@ -57,7 +57,9 @@ the pinned Headroom semantic stage).
 page, see [[Web Cache]]) is stored losslessly under `.golem/ccr` and replaced with a
 compact digest carrying a `hash=<id>` marker. Nothing is lost — Claude re-hydrates
 the original in one step with the `expand` MCP tool only when the excerpt isn't
-enough.
+enough. `.golem/ccr` is rooted per PROJECT, not per directory — see
+[[CCR Ref Scope]] for how a git worktree resolves to its main checkout's root so
+a ref survives across the two.
 
 ```mermaid
 sequenceDiagram

@@ -272,6 +272,16 @@ export interface StatusReport {
     readonly stale: boolean;
     /** Whether the snooze auto-park is ENFORCING (persistent deny) vs advisory. */
     readonly enforced: boolean;
+    /** Task `subagent-park`: whether subagent spawns are gated on headroom at all. */
+    readonly spawn_gate?: boolean;
+    /** Share of a window one subagent is assumed to cost (`snooze.spawn_cost_fraction`). */
+    readonly spawn_cost_fraction?: number;
+    /**
+     * Whether a spawn WOULD be refused right now on this reading — the gate being
+     * on is not the same claim as the gate biting, and only the second one is
+     * worth a line in `golem status`.
+     */
+    readonly spawn_blocked?: boolean;
     /**
      * R9.2 — the target whose response carried these headers, when routing is on.
      * A prediction is a statement about ONE target, never about "the limit".

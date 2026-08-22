@@ -56,6 +56,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
+import { resolveWorktreeRoot } from "../shared/git-worktree.js";
 import { type HookIo, readAll } from "./hook-io.js";
 import { buildDigest, buildReadSkeleton } from "./post-tool-use/digest.js";
 import { servedFetchLabel } from "./post-tool-use/served-fetch-label.js";
@@ -283,7 +284,16 @@ export async function runPostToolUseHook(
       return 0; // swap would not pay for itself (tiny custom thresholds only)
     }
 
-    const ccr = new CcrStore(new LocalDirBlobStore(join(projectDir, ".golem", "ccr")));
+    // ccr-ref-scope: a hook's `cwd` may be a git linked worktree (a
+    // Task-tool subagent under `isolation: "worktree"`, e.g.). Resolve to the
+    // MAIN checkout root BEFORE joining `.golem/ccr` so this write lands
+    // where `expand`'s NativeLosslessCompression.forProjectDir(mainRoot)
+    // reads from — a worktree and its main checkout are the SAME project for
+    // CCR purposes (docs/wiki/concepts/CCR Ref Scope.md). Non-repos and an
+    // already-main `projectDir` are returned unchanged.
+    const ccrRoot = resolveWorktreeRoot(projectDir);
+    const ccrDir = join(ccrRoot, ".golem", "ccr");
+    const ccr = new CcrStore(new LocalDirBlobStore(ccrDir), ccrDir);
     await ccr.putIfAbsent(refId, {
       v: 1,
       contentType: "text/plain",
