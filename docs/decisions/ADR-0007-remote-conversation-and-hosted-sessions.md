@@ -205,7 +205,7 @@ decision**; the rest are switches R13.9 builds and the user chooses.
 |---|---|---|---|
 | 1 | **Session visibility** | which sessions/projects a device may see and address (all, hosted-only, an allowlist) | on — all, for the paired device |
 | 2 | **Origination scope** | which project roots a device may start a session in | on — all known roots |
-| 3 | **Remote answer to `destructive`/`outward`** | whether a device may answer those prompts at all | **off, and locked** — Decision 59(a) says never, "with no setting to change it". Unlocking it is an explicit 59(a) amendment, not a toggle Golem ships quietly |
+| 3 | **Remote answer to `destructive`/`outward`** | whether a device may answer those prompts at all | **off by default, and now unlockable** — Decision 61 (2026-08-22) amended 59(a) at the user's request. On requires: a fresh user-factor re-authentication per answer, loud logging, and the kill switch overriding it. Off keeps 59(a)'s original posture |
 | 4 | **Approval routing when nobody is local** | whether a prompt with no local answerer times out (denies) or routes to the device | on — routes to the device for `read`/`write`/`unknown`, per 59(a) |
 | 5 | **Re-authentication for high-risk acts** | require the user factor again (not just the device cert) before originating a session, or before answering a prompt | on for origination, off for ordinary messages |
 | 6 | **Rate and size limits per device** | flood protection, oversized-message rejection | on, generous |
@@ -214,7 +214,10 @@ decision**; the rest are switches R13.9 builds and the user chooses.
 | 9 | **Per-session pause** | suspend remote authorship for one conversation without unpairing | on |
 
 Item 3 is the one that matters, and it is deliberately the one Golem will not
-default. Everything else is convenience; that one is the class line.
+default. Everything else is convenience; that one is the class line — and per
+Decision 61 it is now a setting rather than a wall, which makes the *default* and
+the re-authentication requirement the whole of its safety, not the absence of the
+control.
 
 ## 4. Capability table (extends ADR-0006 §84)
 
@@ -237,8 +240,11 @@ cite one. Invariants 1 and 2 were rewritten by Revision 1.
    classified and gated exactly as a locally-authored one — no exemption, no
    extra restriction. ADR-0002 invariant 5 is untouched: `allow` is never emitted
    for `destructive` or `outward`. Whether a *device* may answer such a prompt
-   stays governed by Decision 59(a) (currently: never) and is gate-map item 3,
-   changeable only by an explicit amendment to that decision.
+   is gate-map item 3, governed by Decision 59(a) as amended by **Decision 61**:
+   off by default, unlockable by the user, and when unlocked it requires a fresh
+   user-factor re-authentication per answer. Golem itself still never emits
+   `allow` for those classes — the setting changes who counts as the human, not
+   what Golem decides.
 3. **Silence denies.** Link loss, credential expiry, an unresolvable project, an
    ambiguous target session, or anything in the remote path throwing produces the
    same outcome as no device existing: no turn delivered, no tool allowed, and
@@ -361,8 +367,8 @@ something smaller: **v1's device credential is phase 2's transport security.**
 
 1. **Remote authorship** — ACCEPTED, and *widened*: no limits (§3c), with
    controls enumerated in §3d for the user to choose from. Gate-map item 3
-   (remote answers to `destructive`/`outward`) stays locked pending an explicit
-   Decision 59(a) amendment.
+   (remote answers to `destructive`/`outward`) was unlocked by **Decision 61**
+   the same day — a setting, off by default, re-authenticated per answer.
 2. **Prompt content at rest** — ACCEPTED (§6), on the narrower justification of
    scrollback and continuation, since branching is dropped.
 3. **Pairing that mints credentials** — ACCEPTED and *enlarged* to mTLS plus a
@@ -377,9 +383,11 @@ Push notification when a hosted session needs input (R12.6's question, separate
 by design). Whether Golem becomes a channel (an adapter option in R13.7, not a
 commitment). Multi-user or team access — every device here belongs to the same
 developer, and anything else is a different ADR. Editing files from the phone.
+Whether gate-map item 3 should ever default to on (it should not; Decision 61(d)
+states the blast radius).
 Running a *non*-Claude harness as the hosted runner: §3b's injection path is
 harness-agnostic today, but §3a's runner is the `claude` CLI until someone writes
-and verifies a second adapter. Unlocking gate-map item 3.
+and verifies a second adapter.
 
 ## 11. Amends and supersedes
 
@@ -390,9 +398,11 @@ and verifies a second adapter. Unlocking gate-map item 3.
 - **Decision 59(g)** — capability 3 moves from DECLINED to permitted and
   unrestricted (§3c). The authority argument is answered by separating text from
   acts, not by overruling it.
-- **Decision 59(a)** — untouched and deliberately so. It remains the reason
-  gate-map item 3 is locked; this ADR does not amend it and must not be read as
-  having done so.
+- **Decision 59(a)** — amended by **Decision 61** (2026-08-22, USER DECISION),
+  and only in its "no setting to change it" clause: gate-map item 3 is now a
+  control, off by default. Revision 1 of this ADR did *not* make that change; a
+  separate user decision did, and the distinction is worth keeping because the
+  default is now the entire safety margin.
 - **Decision 59(i)** — R12.3/R12.4/R12.8/R12.9 stay cancelled *as designed*. §7a
   revives R12.4's **mechanism** for a different purpose (authenticating a LAN
   write surface, and carrying phase 2), and §7c plans the relay as phase 2 rather
