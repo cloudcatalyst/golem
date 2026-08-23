@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { generateSelfSignedLeaf } from "./loopback-cert.js";
+import { signDeviceCertificate } from "./loopback-cert.js";
 
 // ---------------------------------------------------------------------------
 // Types & schema
@@ -69,44 +69,42 @@ function resolveFile(name: string, projectDir: string, deviceId: string): string
 // Certificate issuance
 // ---------------------------------------------------------------------------
 
-/** Issue a client certificate for a new device pairing. */
+/** Issue a CA-signed client certificate for a new device pairing. */
 export async function issueDeviceCertificate(
-  projectId: string,
+  deviceId: string,
   label: string,
   projectDir: string,
   opts?: { days?: number },
 ): Promise<DeviceCertificate> {
   const nowMs = Date.now();
-  const leaf = generateSelfSignedLeaf({
-    dnsNames: ["localhost"],
-    ipAddresses: ["127.0.0.1"],
-    nowMs,
-  });
 
-  const dir = deviceDir(projectDir, projectId);
+  // Sign with the constrained CA (ensureLoopbackCert must have been called first).
+  const caSigned = await signDeviceCertificate(projectDir, opts);
+
+  const dir = deviceDir(projectDir, deviceId);
   await mkdir(dir, { recursive: true });
 
-  const cPath = resolveFile("cert.pem", projectDir, projectId);
-  const kPath = resolveFile("key.pem", projectDir, projectId);
-  const mPath = resolveFile("metadata.json", projectDir, projectId);
+  const cPath = resolveFile("cert.pem", projectDir, deviceId);
+  const kPath = resolveFile("key.pem", projectDir, deviceId);
+  const mPath = resolveFile("metadata.json", projectDir, deviceId);
 
   await Promise.all([
-    writeFile(cPath, leaf.certPem, { encoding: "utf8", mode: 0o644 }),
-    writeFile(kPath, leaf.keyPem, { encoding: "utf8", mode: 0o600 }),
+    writeFile(cPath, caSigned.certPem, { encoding: "utf8", mode: 0o644 }),
+    writeFile(kPath, caSigned.keyPem, { encoding: "utf8", mode: 0o600 }),
   ]);
 
   const created = new Date(nowMs).toISOString();
   const meta: RawMetadata = {
-    deviceId: projectId,
+    deviceId,
     label,
-    notAfter: leaf.notAfter.toISOString(),
+    notAfter: caSigned.notAfter.toISOString(),
     createdAt: created,
     lastSeen: created,
     revoked: false,
   };
   await writeFile(mPath, JSON.stringify(meta, null, 2) + "\n", "utf8");
 
-  return { certPath: cPath, keyPath: kPath, certPem: leaf.certPem, keyPem: leaf.keyPem };
+  return { certPath: cPath, keyPath: kPath, certPem: caSigned.certPem, keyPem: caSigned.keyPem };
 }
 
 // ---------------------------------------------------------------------------

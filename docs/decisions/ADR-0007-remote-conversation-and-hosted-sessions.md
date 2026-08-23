@@ -145,18 +145,39 @@ the proxy", and it is the honest form of continuing a conversation on the user's
 behalf: Golem does not ghost-type into the developer's terminal, it runs a
 session of its own and shows it.
 
-A hosted session is also where Golem's own enforcement is strongest, and that
-remains true even though enforcement is no longer a precondition for sending: in
-a loop Golem owns, a refusal is a real `deny`, not the `ask` that
-`src/autonomy/gate.ts` is limited to as a guest in the harness's hook chain
-(§141). The gate map (§3d) is what decides when that strength is used.
+A hosted session is also where Golem's own enforcement is strongest — and, per
+R13.1 (verification-notes §142), that strength does not require Golem to own
+the loop after all: a *hosted* session running the unmodified `claude` CLI in
+headless/stream-json mode cannot open a permission dialog, so a hook emitting
+`src/autonomy/gate.ts`'s real `ask` (never `deny`) already resolves to an
+effectively-hard synchronous refusal, the same mechanism §141 found for
+plain `-p`, now confirmed in the multi-turn hosted shape too. Golem does not
+need to write its own agent loop to hold the class line here; it needs its
+hook reachable, which R13.1 also confirmed (below). The gate map (§3d) is what
+decides when that strength is used.
 
 The runner is **the `claude` CLI the user already has**, spawned as a subprocess,
 not a new SDK dependency — `src/tasks/resume.ts` already does this for queued
-tasks, so the five-dep runtime pin holds. Whether that CLI's streaming input mode
-supports a multi-turn conversation of this shape is **unverified**, and is
-R13.1's entire job. If it does not, R13.1 reports that and this section is
-revised before anything is built on it.
+tasks, so the five-dep runtime pin holds.
+
+**R13.1 (verification-notes §142, client `2.1.235`) verified this.** `claude -p
+--input-format stream-json --output-format stream-json` accepts a second user
+message on stdin after the first turn's `result` event without exiting, holds
+one stable `session_id` across turns, emits tool calls and tool results as
+separable structured events, honours `ANTHROPIC_BASE_URL` (invariant 8), and
+loads the project's `.claude/settings.json` hooks the same as an interactive
+session (invariant 2's precondition). The runner is confirmed; build on it.
+
+Two gaps R13.1 found, not viability failures but open items for whoever builds
+R13.3: (1) on Windows, `child.kill("SIGINT")` does not interrupt a running
+turn — only killing the process does, so §2's "interrupting a running turn"
+needs a platform caveat until a POSIX host confirms the documented SIGINT
+behaviour; (2) the usage-limit park (`snooze`) is Golem's own orchestration
+concept and a spawned `claude` process is not a participant in it — hitting a
+real usage limit inside a hosted session is expected to surface as an
+ordinary API-level error in that process, not as Golem's park, and this was
+reasoned, not live-confirmed (running an account to its limit was out of
+proportion for a spike).
 
 ### 3b. Secondary — join a live harness session (capability 3, "author")
 
