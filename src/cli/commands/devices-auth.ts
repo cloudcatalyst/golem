@@ -9,11 +9,15 @@
  * relay-mediated pairing and no message type for one.
  */
 
-import { Command } from "commander";
 import process from "node:process";
+import type { Command } from "commander";
 
 import { findProjectDir } from "../../config/index.js";
+import { loopbackCaKeyPath, loopbackCaPath } from "../../proxy/loopback-cert.js";
+import { devicesDir } from "../../security/device-catalog.js";
+import { DEVICE_CN_PREFIX } from "../../security/device-cert-builder.js";
 import {
+  ExpiryError,
   enroll,
   getClientCertAndKey,
   isDeviceRevoked,
@@ -21,11 +25,7 @@ import {
   loadDevice,
   type PairingCodeResult,
   RevocationError,
-  ExpiryError,
 } from "../../security/device-credentials.js";
-import { DEVICE_CN_PREFIX } from "../../security/device-cert-builder.js";
-import { devicesDir } from "../../security/device-catalog.js";
-import { loopbackCaPath, loopbackCaKeyPath } from "../../proxy/loopback-cert.js";
 import { checkStatus, isActive } from "../../security/user-factor.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
@@ -66,10 +66,12 @@ export default function register(program: Command): void {
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .action(async (deviceId: string, code: string, opts: { dir: string }) => {
       try {
-        const caCertPem = await import("node:fs/promises")
-          .then((fs) => fs.readFile(loopbackCaPath(opts.dir), "utf8"));
-        const caKeyPem = await import("node:fs/promises")
-          .then((fs) => fs.readFile(loopbackCaKeyPath(opts.dir), "utf8"));
+        const caCertPem = await import("node:fs/promises").then((fs) =>
+          fs.readFile(loopbackCaPath(opts.dir), "utf8"),
+        );
+        const caKeyPem = await import("node:fs/promises").then((fs) =>
+          fs.readFile(loopbackCaKeyPath(opts.dir), "utf8"),
+        );
         const result = await completeEnrollment(
           opts.dir,
           deviceId,
@@ -78,10 +80,7 @@ export default function register(program: Command): void {
           caKeyPem.toString(),
         );
         const len = Buffer.byteLength(result.certPem);
-        console.log(
-          `Device "${deviceId}" enrolled successfully.`,
-          `cert PEM: ${len} bytes`,
-        );
+        console.log(`Device "${deviceId}" enrolled successfully.`, `cert PEM: ${len} bytes`);
       } catch (e) {
         await fail(e);
       }
@@ -148,7 +147,8 @@ export default function register(program: Command): void {
 
         let ufStatus: string;
         try {
-          const userDir = opts.userDir ?? require("node:path").join(require("node:os").homedir(), ".golem");
+          const userDir =
+            opts.userDir ?? require("node:path").join(require("node:os").homedir(), ".golem");
           const status = await checkStatus(userDir);
           const alive = await isActive(userDir);
           ufStatus = `${status}${alive ? " (active)" : ""}`;
@@ -186,7 +186,9 @@ export async function runCompleteEnrollment(
 }
 
 async function revokeDevice(projectDir: string, deviceId: string): Promise<void> {
-  const cat = await import("../../security/device-catalog.js").then((m) => m.readOrCreate(projectDir));
+  const cat = await import("../../security/device-catalog.js").then((m) =>
+    m.readOrCreate(projectDir),
+  );
   if (!cat.entries[deviceId]) throw new Error(`device not found: ${deviceId}`);
   cat.entries[deviceId].revoked = true;
   await import("../../security/device-catalog.js").then((m) => m.writeCatalog(projectDir, cat));

@@ -13,9 +13,9 @@
  * idle re-prompt at 10 min.
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 
 export interface UserFactorSession {
   readonly active: true;
@@ -53,9 +53,7 @@ function sessionPath(userDir: string): string {
 }
 
 function randomSalt(): string {
-  return Buffer.from(
-    globalThis.crypto.getRandomValues(new Uint8Array(16)),
-  ).toString("hex");
+  return Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(16))).toString("hex");
 }
 
 function generatePasscode(length: number): string {
@@ -83,16 +81,9 @@ async function loadStored(userDir: string): Promise<StoredSession | null> {
   }
 }
 
-async function saveStored(
-  userDir: string,
-  session: StoredSession,
-): Promise<void> {
+async function saveStored(userDir: string, session: StoredSession): Promise<void> {
   await mkdir(join(userDir, ".golem", "user-factor"), { recursive: true });
-  await writeFile(
-    sessionPath(userDir),
-    JSON.stringify(session, null, 2) + "\n",
-    "utf8",
-  );
+  await writeFile(sessionPath(userDir), JSON.stringify(session, null, 2) + "\n", "utf8");
 }
 
 /**
@@ -104,14 +95,13 @@ export async function unlock(
   userDir: string,
   prompt: (message: string) => Promise<string>,
 ): Promise<void> {
-  let existing = await loadStored(userDir);
+  const existing = await loadStored(userDir);
 
   if (!existing) {
     const code = generatePasscode(PASSCODE_DIGITS);
-    const msg = [
-      `Registration: your temporary passcode is ${code}.`,
-      `Enter it to confirm:`,
-    ].join("\n");
+    const msg = [`Registration: your temporary passcode is ${code}.`, `Enter it to confirm:`].join(
+      "\n",
+    );
     const attempt = await prompt(msg);
     if (attempt !== code) {
       throw new BoundedUnlockError("confirmation mismatch");
