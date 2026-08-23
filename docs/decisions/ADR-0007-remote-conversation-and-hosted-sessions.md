@@ -433,3 +433,25 @@ and verifies a second adapter.
   verbatim, not rewritten.
 - **R12.10** — absorbed. Both its questions are answered here: a phone may do
   more than enqueue, and Golem does not need to become a channel.
+
+
+---
+
+### Revision 2 — 2026-08-23 (R13.1 findings)
+
+**R13.1 tested `claude` CLI v2.1.235 as runner for this section.** Findings:
+
+- The `-p` flag exits after exactly one turn. Multi-turn stdin mode (`--input-format
+  stream-json --output-format stream-json`) could NOT be reproduced under standalone testing,
+  despite claims of such a mechanism existing. Label remains [UNESTABLISHED].
+- **Separate-invocation chaining works**: `--continue` and `--resume <session-id>` reliably
+  chain separate `-p` processes into a single session with stable IDs. This is the viable path.
+- Golem's hooks fire in non-bare `-p` sessions (PostToolUse caused `num_turns=2` vs `1`).
+  PreToolUse can block tool execution. **Invariants 2 (enforcement) and 7 (identity) are enforceable.**
+- `--bare` isolates completely from project config, settings, and hooks. Available for constrained runs.
+- `--permission-mode default` and `bypassPermissions` work in `-p`; `auto` timed out.
+- Cost: $0.15/base turn via opus-5; hook overhead adds ~$0.19/invocation.
+- Interruption via SIGINT unreliable on Windows (turns resolve before signal lands). Process-kill required.
+
+**Conclusion:** Build R13.3 using separate-invocation chaining (fork/exec pipeline), matching
+the existing `src/tasks/resume.ts` pattern. Do not attempt persistent daemon or multi-turn stdin.
