@@ -25,6 +25,7 @@
  */
 
 import {
+  createPrivateKey,
   createSign,
   randomBytes as cryptoRandomBytes,
   generateKeyPair,
@@ -590,4 +591,74 @@ export async function ensureLoopbackCert(
     notAfter: pair.notAfter,
     regenerated: true,
   };
+
+// ---------------------------------------------------------------------------
+// Device certificate signing
+// ---------------------------------------------------------------------------
+
+export interface DeviceLeaf {
+  readonly certPem: string;
+  readonly keyPem: string;
+  readonly notBefore: Date;
+  readonly notAfter: Date;
+}
+
+/**
+ * Sign a device certificate with the project's constrained CA.
+ *
+ * Loads the CA PEM/key from disk, generates a P-256 keypair for the device,
+ * and builds a leaf whose issuer chains to the constrained CA. Suitable for
+ * mTLS device identity — signed by the same CA that signs the loopback server
+ * leaf, so both trust the same anchor.
+ */
+export async function signDeviceCertificate(
+  projectDir: string,
+  opts?: { readonly days?: number; readonly dnsNames?: readonly string[]; readonly ipAddresses?: readonly string[] },
+): Promise<DeviceLeaf> {
+  const { days = 365, dnsNames = ["localhost"], ipAddresses = ["127.0.0.1"] } = opts ?? {};
+  const nowMs = Date.now();
+  const notBefore = new Date(nowMs - CLOCK_SKEW_MS);
+  const notAfter = new Date(nowMs + days * 24 * 60 * 60 * 1000);
+
+  // Read the existing CA pair from disk.
+  const caPem = await readFile(loopbackCaPath(projectDir), "utf8");
+  const caKeyPem = await readFile(loopbackCaKeyPath(projectDir), "utf8");
+
+  // Parse CA cert to extract its CN for the issuer field.
+  const caX509 = readCertificate(caPem);
+  const issuerName = cnFromSubject(caX509.subject) ?? "Golem loopback CA (constrained)";
+
+  // Generate a fresh P-256 keypair for this device.
+  const { publicKey: devPublic, privateKey: devPrivate } = generateKeyPairSync("ec", {
+    namedCurve: "prime256v1",
+  });
+
+  // Parse CA private key for signing.
+  const caPrivateKey = createPrivateKey({ format: "pem", key: caKeyPem });
+
+  const serial = randomSerial(cryptoRandomBytes);
+
+  const leafDer = buildCertificate({
+    subjectCn: issuerName.replace(/Golem loopback CA \(constrained\)/, "Golem device"),
+    issuerCn: issuerName,
+    subjectPublicKey: devPublic,
+    issuerPrivateKey: caPrivateKey,
+    extensions: leafExtensions(dnsNames, ipAddresses),
+    notBefore,
+    notAfter,
+    serial,
+  });
+
+  return {
+    certPem: toPem("CERTIFICATE", leafDer),
+    keyPem: devPrivate.export({ type: "pkcs8", format: "pem" }).toString(),
+    notBefore,
+    notAfter,
+  };
+}
+
+/** Extract CN from an X.500 subject string like "CN=Golem loopback CA (constrained)". */
+function cnFromSubject(subject: string): string | null {
+  const match = subject.match(/CN\s*=\s*([^,/]+)/);
+  return match ? match[1].trim() : null;
 }
