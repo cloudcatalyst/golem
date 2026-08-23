@@ -58,9 +58,7 @@ const T_SET = 0x31;
  */
 export function buildClientCertificate(params: BuildCertParams): string {
   const notBefore = new Date(Date.now() - CLOCK_SKEW_MS);
-  const notAfter = new Date(
-    Date.now() + (params.days ?? 365) * DAY_MS,
-  );
+  const notAfter = new Date(Date.now() + (params.days ?? 365) * DAY_MS);
 
   const tbs = derSequence([
     mkTLV(0xa0, intBuf(Buffer.from([2]))), // [0] EXPLICIT version v3
@@ -121,9 +119,7 @@ function derBool(v: boolean): Buffer {
 function intBuf(bytes: Buffer): Buffer {
   const first = bytes[0];
   const body =
-    first !== undefined && (first & 0x80) !== 0
-      ? Buffer.concat([Buffer.from([0]), bytes])
-      : bytes;
+    first !== undefined && (first & 0x80) !== 0 ? Buffer.concat([Buffer.from([0]), bytes]) : bytes;
   return mkTLV(T_INT, body);
 }
 
@@ -131,8 +127,7 @@ function derOid(dotted: string): Buffer {
   const arcs = dotted.split(".").map(Number);
   const first = arcs[0];
   const second = arcs[1];
-  if (first === undefined || second === undefined)
-    throw new Error(`bad OID: ${dotted}`);
+  if (first === undefined || second === undefined) throw new Error(`bad OID: ${dotted}`);
   const out: number[] = [first * 40 + second];
   for (const arc of arcs.slice(2)) {
     const septets: number[] = [arc & 0x7f];
@@ -164,11 +159,7 @@ function bitStr(data: Buffer, unusedBits = 0): Buffer {
 }
 
 function ext(oid: string, critical: boolean, value: Buffer): Buffer {
-  return derSequence([
-    derOid(oid),
-    ...(critical ? [derBool(true)] : []),
-    mkTLV(T_OCTSTR, value),
-  ]);
+  return derSequence([derOid(oid), ...(critical ? [derBool(true)] : []), mkTLV(T_OCTSTR, value)]);
 }
 
 function sigAlgoDer(): Buffer {
@@ -176,9 +167,7 @@ function sigAlgoDer(): Buffer {
 }
 
 function cnOfDer(commonName: string): Buffer {
-  return derSequence([
-    derSet([derSequence([derOid(OID_COMMON_NAME), derUtf8(commonName)])]),
-  ]);
+  return derSequence([derSet([derSequence([derOid(OID_COMMON_NAME), derUtf8(commonName)])])]);
 }
 
 function spkiBuf(publicKey: KeyObject): Buffer {

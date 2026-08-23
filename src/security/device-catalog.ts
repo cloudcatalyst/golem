@@ -10,7 +10,7 @@
  * operates without it.
  */
 
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -69,23 +69,13 @@ export async function readOrCreate(projectDir: string): Promise<Catalog> {
 }
 
 /** Persist the full catalog back to disk. */
-export async function writeCatalog(
-  projectDir: string,
-  cat: Catalog,
-): Promise<void> {
+export async function writeCatalog(projectDir: string, cat: Catalog): Promise<void> {
   await mkdir(devicesDir(projectDir), { recursive: true });
-  await writeFile(
-    catalogPath(projectDir),
-    JSON.stringify(cat, null, 2) + "\n",
-    "utf8",
-  );
+  await writeFile(catalogPath(projectDir), JSON.stringify(cat, null, 2) + "\n", "utf8");
 }
 
 /** Create (if needed) the per-device subdirectory and return its path. */
-export async function ensureDeviceDir(
-  projectDir: string,
-  deviceId: string,
-): Promise<string> {
+export async function ensureDeviceDir(projectDir: string, deviceId: string): Promise<string> {
   const dir = deviceDirPath(projectDir, deviceId);
   await mkdir(dir, { recursive: true });
   return dir;

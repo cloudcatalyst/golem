@@ -11,12 +11,11 @@
  * pairing and no message type for one.
  */
 
-import crypto, { type X509Certificate, createHash } from "node:crypto";
+import crypto, { createHash, type X509Certificate } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { TLSSocket } from "node:tls";
-
-import { loadDevice, isDeviceRevoked } from "../security/device-credentials.js";
 import { DEVICE_CN_PREFIX } from "../security/device-cert-builder.js";
+import { isDeviceRevoked, loadDevice } from "../security/device-credentials.js";
 import { checkStatus } from "../security/user-factor.js";
 
 export interface MtlsAuthConfig {
@@ -37,10 +36,7 @@ export function isWriteSurface(req: IncomingMessage): boolean {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function respondUnauth(
-  res: ServerResponse,
-  reason: string,
-): void {
+function respondUnauth(res: ServerResponse, reason: string): void {
   if (res.headersSent) return;
   const body = JSON.stringify({ error: reason });
   res.writeHead(401, {
@@ -89,9 +85,7 @@ export function mountMtlsAuth(
   try {
     caX509 = new crypto.X509Certificate(config.trustedCaCert);
   } catch {
-    throw new Error(
-      "[mTLS] provided trustedCaCert is not a valid X.509 PEM certificate",
-    );
+    throw new Error("[mTLS] provided trustedCaCert is not a valid X.509 PEM certificate");
   }
 
   // Snapshot the existing handler(s) so we delegate after auth passes.
@@ -99,9 +93,7 @@ export function mountMtlsAuth(
     (req: IncomingMessage, res: ServerResponse) => void
   >;
   if (originalHandlers.length === 0) {
-    throw new Error(
-      "[mTLS] cannot mount: the server has no 'request' listener attached",
-    );
+    throw new Error("[mTLS] cannot mount: the server has no 'request' listener attached");
   }
 
   server.removeAllListeners("request");
@@ -148,10 +140,7 @@ export function mountMtlsAuth(
     // Scan the catalog looking for this cert's SHA-256 fingerprint.
     // Compare .fingerprint directly — identical X509Certificate → identical string.
     const fingerprint = clientCert.fingerprint;
-    const deviceRecord = await findDeviceByFingerprint(
-      config.projectDir,
-      fingerprint,
-    );
+    const deviceRecord = await findDeviceByFingerprint(config.projectDir, fingerprint);
 
     if (!deviceRecord) {
       respondUnauth(res, "certificate not found in device catalog");
@@ -172,10 +161,7 @@ export function mountMtlsAuth(
     // --- 5. User-factor session ---
     const ufStatus = await checkStatus(config.userDir);
     if (ufStatus !== "granted") {
-      respondUnauth(
-        res,
-        `user session required for writes (current state: ${ufStatus})`,
-      );
+      respondUnauth(res, `user session required for writes (current state: ${ufStatus})`);
       return;
     }
 

@@ -18,22 +18,17 @@
  */
 
 import {
+  createHash,
   createPrivateKey,
   generateKeyPairSync,
+  randomUUID,
   timingSafeEqual,
-  createHash,
+  X509Certificate,
 } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { randomUUID, X509Certificate } from "node:crypto";
-
+import { devicesDir, ensureDeviceDir, readOrCreate, writeCatalog } from "./device-catalog.js";
 import { buildClientCertificate, DEVICE_CN_PREFIX } from "./device-cert-builder.js";
-import {
-  devicesDir,
-  readOrCreate,
-  writeCatalog,
-  ensureDeviceDir,
-} from "./device-catalog.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -79,9 +74,7 @@ export class RevocationError extends Error {
 // ---------------------------------------------------------------------------
 
 function randomSalt(): string {
-  return Buffer.from(
-    globalThis.crypto.getRandomValues(new Uint8Array(16)),
-  ).toString("hex");
+  return Buffer.from(globalThis.crypto.getRandomValues(new Uint8Array(16))).toString("hex");
 }
 
 function derivePin(): string {
@@ -115,10 +108,7 @@ function pinMatches(code: string, storedHash: string, salt: string): boolean {
  *
  * The pairing code is valid for 90 seconds and single-use.
  */
-export async function enroll(
-  projectDir: string,
-  deviceLabel: string,
-): Promise<PairingCodeResult> {
+export async function enroll(projectDir: string, deviceLabel: string): Promise<PairingCodeResult> {
   const dir = devicesDir(projectDir);
   await require("node:fs/promises").mkdir(dir, { recursive: true });
 
@@ -229,10 +219,7 @@ export async function listDevices(
 }
 
 /** Revoke a device. Effectively immediate: every request checks the flag. */
-export async function revokeDevice(
-  projectDir: string,
-  deviceId: string,
-): Promise<void> {
+export async function revokeDevice(projectDir: string, deviceId: string): Promise<void> {
   const cat = await readOrCreate(projectDir);
   if (!cat.entries[deviceId]) throw new Error(`device "${deviceId}" not found`);
   cat.entries[deviceId].revoked = true;
@@ -240,20 +227,14 @@ export async function revokeDevice(
 }
 
 /** Load a single device's metadata. Returns null when absent. */
-export async function loadDevice(
-  projectDir: string,
-  deviceId: string,
-): Promise<DeviceInfo | null> {
+export async function loadDevice(projectDir: string, deviceId: string): Promise<DeviceInfo | null> {
   const cat = await readOrCreate(projectDir);
   const entry = cat.entries[deviceId];
   if (!entry || !entry.certPem) return null;
   const cert = new X509Certificate(entry.certPem);
   let keyPem = "";
   try {
-    keyPem = await readFile(
-      join(devicesDir(projectDir), deviceId, "key.pem"),
-      "utf8",
-    );
+    keyPem = await readFile(join(devicesDir(projectDir), deviceId, "key.pem"), "utf8");
   } catch {
     // pre-v1 migration path only.
   }
@@ -270,10 +251,7 @@ export async function loadDevice(
 }
 
 /** Update the lastSeen timestamp for a device. Call on each authenticated request. */
-export async function trackLastSeen(
-  projectDir: string,
-  deviceId: string,
-): Promise<void> {
+export async function trackLastSeen(projectDir: string, deviceId: string): Promise<void> {
   const cat = await readOrCreate(projectDir);
   if (!cat.entries[deviceId]) throw new Error(`device "${deviceId}" not found`);
   cat.entries[deviceId].lastSeen = new Date().toISOString();
@@ -299,10 +277,7 @@ export async function getClientCertAndKey(
 }
 
 /** Fast check: is this device ID marked revoked? */
-export async function isDeviceRevoked(
-  projectDir: string,
-  deviceId: string,
-): Promise<boolean> {
+export async function isDeviceRevoked(projectDir: string, deviceId: string): Promise<boolean> {
   try {
     const cat = await readOrCreate(projectDir);
     return !!cat.entries[deviceId]?.revoked;
