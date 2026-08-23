@@ -11,8 +11,9 @@
  * pairing and no message type for one.
  */
 
-import crypto, { type X509Certificate } from "node:crypto";
+import crypto, { type X509Certificate, createHash } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import type { TLSSocket } from "node:tls";
 
 import { loadDevice, isDeviceRevoked } from "../security/device-credentials.js";
 import { DEVICE_CN_PREFIX } from "../security/device-cert-builder.js";
@@ -53,10 +54,10 @@ function respondUnauth(
  * Extract the full peer leaf cert as PEM from Node's tls socket.
  * `getPeerCertificate(true)` returns raw DER in .raw; we re-wrap it.
  */
-function peerCertAsPem(socket: typeof IncomingMessage.prototype.socket): string | null {
-  if (!socket || typeof socket.getPeerCertificate !== "function") return null;
+function peerCertAsPem(socket: TLSSocket | typeof IncomingMessage.prototype.socket): string | null {
+  if (!socket || typeof (socket as TLSSocket).getPeerCertificate !== "function") return null;
   try {
-    const raw = socket.getPeerCertificate(true)?.raw;
+    const raw = (socket as TLSSocket).getPeerCertificate(true)?.raw;
     if (!raw || !Buffer.isBuffer(raw)) return null;
     const b64 = raw.toString("base64");
     const line = b64.replace(/(.{64})/g, "$1\n").trimEnd();
@@ -128,14 +129,16 @@ export function mountMtlsAuth(
     }
 
     // --- 2. Verify against the known CA ---
-    const verified = clientCert.verify(caX509);
+    const verified = clientCert.verify(caX509.publicKey);
     if (!verified) {
       respondUnauth(res, "certificate not signed by the trusted GoLem CA");
       return;
     }
 
     // --- 3. CN format check ---
-    const cn = clientCert.subjectCN ?? "";
+    const subjectLines = clientCert.subject.split(",");
+    const cnEntry = subjectLines.find((line) => line.startsWith("CN="));
+    const cn = cnEntry ? cnEntry.slice(3) : "";
     if (!cn.startsWith(DEVICE_CN_PREFIX)) {
       respondUnauth(res, "certificate CN does not match a registered device");
       return;
@@ -143,7 +146,8 @@ export function mountMtlsAuth(
 
     // --- 4. Device lookup and revocation check ---
     // Scan the catalog looking for this cert's SHA-256 fingerprint.
-    const fingerprint = clientCert.fingerprint256();
+    // Compare .fingerprint directly — identical X509Certificate → identical string.
+    const fingerprint = clientCert.fingerprint;
     const deviceRecord = await findDeviceByFingerprint(
       config.projectDir,
       fingerprint,
@@ -198,7 +202,8 @@ async function findDeviceByFingerprint(
     for (const [id, entry] of Object.entries(catalog.entries)) {
       if (!entry.certPem) continue;
       const cert = new crypto.X509Certificate(entry.certPem);
-      if (cert.fingerprint256() === targetFingerprint) {
+      const certFingerprint = cert.fingerprint.replace("SHA256:", "");
+      if (certFingerprint === targetFingerprint) {
         return { deviceId: id };
       }
     }

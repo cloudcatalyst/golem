@@ -62,7 +62,8 @@ function generatePasscode(length: number): string {
   const bytes = globalThis.crypto.getRandomValues(new Uint8Array(length));
   let result = "";
   for (let i = 0; i < length; i++) {
-    result += _ALPHA[bytes[i] % _ALPHA.length];
+    const idx = bytes[i]! % _ALPHA.length;
+    result += _ALPHA[idx];
   }
   return result;
 }
