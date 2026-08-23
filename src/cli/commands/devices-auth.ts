@@ -19,7 +19,7 @@ import {
   isDeviceRevoked,
   listDevices,
   loadDevice,
-  PairingCodeResult,
+  type PairingCodeResult,
   RevocationError,
   ExpiryError,
 } from "../../security/device-credentials.js";
@@ -82,9 +82,6 @@ export default function register(program: Command): void {
           `Device "${deviceId}" enrolled successfully.`,
           `cert PEM: ${len} bytes`,
         );
-        if (opts.json) {
-          console.log(JSON.stringify({ certPem: result.certPem }));
-        }
       } catch (e) {
         await fail(e);
       }
