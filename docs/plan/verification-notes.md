@@ -7465,3 +7465,106 @@ table before a dialog, and therefore a relay, ever exists.
 --dangerously-load-development-channels` runs against a throwaway local project and
 throwaway local test channel (`.tmp-r12.11/`, deleted before commit), real
 first-party billing (~$0.80 total across the session).
+
+## §143 — R13.2: the conversation store — what is retained, the bounds chosen, and a Commander.js option-collision worth recording for the sibling tasks that will add subcommands here (2026-08-22)
+
+Task: `docs/plan/tasks/R13.2.md`. Decision base: ADR-0007 §5 invariant 5
+(redaction before storage, local-only, bounded, one documented delete) and §6
+Retention (the deliberate, narrowly-argued exception to `session-tree.ts`'s
+*content hashes, no prompt content* rule — Revision 1 narrowed the
+justification to scrollback + continuation, explicitly not an indefinite
+archive, after branching was dropped).
+
+### What is retained, and for how long
+
+One JSON file per conversation under `<project-root>/.golem/conversations/<conversationId>.json`
+(`src/session/conversation-store.ts`), written mode `0o600` (owner-only where
+the platform honours file modes — a documented no-op on Windows, same caveat
+`credentials/backends.ts` already carries for the same reason). Every turn's
+`content` is passed through `redactRequestBody` (`src/pipeline/redaction.ts`)
+**unconditionally, inside `appendTurn`** — there is no parameter, flag, or
+branch that writes the raw value instead; the redacted result is the only
+thing this class ever persists. Proven, not asserted: `tests/unit/session/conversation-store.test.ts`
+builds a github-token-shaped secret **at runtime** (`` `ghp_${"a".repeat(36)}` ``,
+per the standing fixture rule — a hardcoded literal gets swept up by the
+entropy sweep before the test ever runs, and a hardcoded literal
+`[REDACTED:...]` would pass without exercising anything), places it in a
+turn's content, and asserts the stored bytes contain `[REDACTED:github-token:1]`
+and do **not** contain the secret substring.
+
+Bounds, both configurable (`ConversationStoreOptions`), honest defaults chosen
+against ADR-0007 Revision 1's narrowed justification (scrollback +
+continuation, not an archive):
+- **Count** — `maxConversations`, default 32.
+- **Age** — `maxAgeMs`, default 30 days.
+
+Eviction runs after every `appendTurn` (age first, then count, oldest
+`lastTurnAt` first) — same shape precedent as `web-cache.ts` (bounded local
+store under `.golem/`) and `session-tree.ts` (count-based `MAX_CONVERSATIONS`).
+Deletion: `golem session forget <id>` (one conversation) or
+`golem session forget --all` (the whole store, then recreates an empty
+directory so the next `appendTurn` doesn't need to special-case "never
+existed" vs. "just emptied").
+
+`.golem/conversations/` was added to `.gitignore` explicitly — this repo lists
+every `.golem/` subdirectory individually rather than relying on a blanket
+`.golem/` pattern, so the coverage was **verified, not assumed**, with a test
+that shells out to `git check-ignore -q` against the real repo (exits 0 only
+when ignored) and a second test asserting `git ls-files .golem/conversations`
+returns nothing (a fresh clone carries no store).
+
+Identity: `conversationIdFor` delegates entirely to `cachePrefixFingerprint`
+(`src/proxy/cache-prefix.ts`, fixed by R8.13) — the exact function
+`session-tree.ts` already uses for its own conversation key — so one
+conversation has one id in both stores; this file does not derive a second
+hash of its own. `conversationStoreDir` resolves `projectRoot` through
+`resolveWorktreeRoot` (`src/shared/git-worktree.ts`, task `ccr-ref-scope`)
+*first*, so a conversation recorded from inside a linked worktree checkout is
+rooted at the same directory a main-checkout reader sees — verified with a
+test that runs from inside this very worktree checkout and asserts the
+collapse is actually applied, not merely that a bare non-repo temp dir passes
+through unchanged (a distinct, separately-asserted case).
+
+### A Commander.js option-collision, recorded because R13.3/R13.5/R13.8 will add more subcommands under `session`
+
+**[OBSERVED, isolated in a minimal standalone repro outside this codebase]**
+`src/cli/commands/session.ts` registers `session` (parent, its own `--dir`
+option for the tree-view action) and `session forget [id]` (child, its own
+separately-declared `--dir` option). When both a parent command and one of its
+subcommands declare the **same option flag**, Commander's default
+(non-positional) argument parsing does not reliably route a CLI-typed value to
+the subcommand's own `opts()` — the value can be captured by whichever
+command's parser reaches it first while scanning the full remaining argv, and
+the child falls back to *its own* default rather than the parent's, discarding
+what the user actually typed. Confirmed with three isolated single-file node
+scripts (no vitest, no project code) varying only which command(s) declare
+`--dir`:
+- parent-only declares it → child's action sees the correct value via
+  `command.parent.opts().dir`, in both `forget --dir <path> <id>` and
+  `forget <id> --dir <path>` order.
+- both declare it, distinct default strings → the CLI-typed value is lost
+  entirely; the child's action reports **its own** default, not the parent's,
+  regardless of argument order.
+- `program.enablePositionalOptions()` (root only) also fixes it, but scoping
+  that call to the child subcommand alone does **not** — it must sit on the
+  command that owns the ambiguous scan, empirically the root in this shape.
+
+Fix applied (kept both `--dir` declarations, for `--help` visibility on each
+subcommand, per the code comment in `session.ts`): the `forget` action reads
+`command.parent?.opts<{ dir: string }>().dir ?? opts.dir` instead of trusting
+its own `opts.dir`. Verified for `forget --dir <path> <id>`,
+`forget <id> --dir <path>`, and the no-flag default case, both in the minimal
+repro and in `tests/unit/cli/session-forget.test.ts` against the real
+`LocalConversationStore` (not mocked). **Flagging for R13.3/R13.5/R13.8**:
+any new subcommand nested under `session` that re-declares `--dir` (or any
+other flag `session` itself already owns) will hit the exact same bug — either
+avoid redeclaring the parent's flag and read it via `command.parent.opts()`,
+or declare it nowhere but the parent.
+
+**Sources for §143**: `docs/decisions/ADR-0007-remote-conversation-and-hosted-sessions.md`
+§5 invariant 5, §6; `src/session/session-tree.ts` header; `src/knowledge/web-cache.ts`;
+`src/credentials/backends.ts` (the `0o600`-on-Windows caveat precedent); the
+Commander.js collision was isolated empirically against the installed
+`commander` package version in this repo (`node_modules/commander`), not
+against upstream docs — no live-doc claim is made about Commander's documented
+behavior, only what this installed version does.

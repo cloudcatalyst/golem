@@ -26,6 +26,10 @@ coverage/
 .golem/distill/
 .golem/tasks/
 .golem/compact/
+# R13.2: redacted local conversation transcripts (ADR-0007 §6). Never
+# tracked — this is prompt content, gitignore coverage is verified by a test,
+# not assumed.
+.golem/conversations/
 # R9.12: the loopback CA + leaf, and the CA's PRIVATE KEY. Machine-local by
 # nature (the cert is issued for this machine's 127.0.0.1 and regenerated on
 # demand), and a committed CA key would be trusted by every clone.
