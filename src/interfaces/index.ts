@@ -16,7 +16,12 @@ export type {
   TokenDelta,
 } from "./compression.js";
 export { tokensSaved, UnknownRefError } from "./compression.js";
-
+export type {
+  ConversationRecord,
+  ConversationStore,
+  ConversationSummary,
+  ConversationTurn,
+} from "./conversation-store.js";
 export type {
   ChatMessage,
   ChatOptions,
@@ -26,7 +31,6 @@ export type {
   Vector,
 } from "./inference.js";
 export { ALL_ROLES, CapabilityUnavailableError, HardwareTier } from "./inference.js";
-
 export type {
   Chunk,
   FederatedSearch,
@@ -36,7 +40,6 @@ export type {
   Scope,
 } from "./knowledge.js";
 export { DEFAULT_SCOPES, UnknownChunkError } from "./knowledge.js";
-
 export type {
   PipelinePolicy,
   SemanticCache,
@@ -54,7 +57,6 @@ export {
   policyFor,
   stagesForCompression,
 } from "./policy.js";
-
 export type { BlobStore } from "./storage.js";
 export { BlobNotFoundError } from "./storage.js";
 
