@@ -2,7 +2,7 @@
 title: Hosted multi-turn claude CLI spike (R13.1)
 type: synthesis
 tags: [r13, adr-0007, spike, stream-json]
-sources: [https://code.claude.com/docs/en/cli-reference]
+sources: [https://code.claude.com/docs/en/cli-reference]`nupdated: 2026-08-23
 created: 2026-08-23
 ---
 
@@ -26,4 +26,5 @@ Client 2.1.235. This page records what R13.1 measured before building on [[ADR-0
 ## Verdict
 
 The claude CLI qualifies as the runner for ADR-0007 section 3a. Two documented gaps, neither a viability failure: Windows SIGINT gap (item 3) and park semantics (item 8). See [[Verification Notes]].
+
 
