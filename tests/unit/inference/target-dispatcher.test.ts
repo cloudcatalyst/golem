@@ -17,7 +17,9 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildDispatchMessages,
   createTargetDispatcher,
+  NoDrafterConfiguredError,
   TargetDispatchError,
 } from "../../../src/inference/target-dispatcher.js";
 import type {
@@ -339,7 +341,10 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
         ],
       },
       fetchImpl,
-      env: {},
+      // R13.11 — an Anthropic target leaves `auth_scheme` at `inherit`, which for
+      // an originated request means "present nothing". It is dispatchable only
+      // with a key to present, so the key is part of the fixture now.
+      env: { GOLEM_UPSTREAM_API_KEY__VENDORGW: "sk-ant-vendorgw" },
       workerTargets: { coder: "cheap" },
     });
 
@@ -386,7 +391,8 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
       inference,
       settings: { ...REMOTE, upstream_model: "claude-sonnet-5" },
       fetchImpl,
-      env: {},
+      // R13.11 — step 4 is only a destination when Golem has a credential for it.
+      env: { GOLEM_UPSTREAM_API_KEY: "sk-ant-harness" },
       workerTargets: { coder: "" }, // an empty entry is "no entry", not a target id
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
@@ -436,7 +442,20 @@ describe("R10.8 — the resolution chain", () => {
     ],
   };
 
-  const KEY = { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey" };
+  /**
+   * R13.11 — the chain's steps can only be observed if the target they pick can
+   * actually be authenticated. Before R13.11 an `inherit`-scheme Anthropic target
+   * dispatched with no auth header at all, so these tests could assert routing
+   * with an empty env; that is exactly the defect (a guaranteed upstream 401),
+   * and it is now refused before the request is built. So the keys are part of
+   * the fixture: `GOLEM_UPSTREAM_API_KEY` for the synthetic harness default,
+   * which has no account of its own, and one per named gateway.
+   */
+  const KEY = {
+    GOLEM_UPSTREAM_API_KEY: "sk-ant-harness",
+    GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-thekey",
+    GOLEM_UPSTREAM_API_KEY__VENDORGW: "sk-ant-vendorgw",
+  };
 
   it("step 1 — an explicit targetId beats both worker_targets and default_target", async () => {
     const { fetchImpl, sent } = captureFetch({
@@ -506,13 +525,46 @@ describe("R10.8 — the resolution chain", () => {
       inference,
       settings: CHAIN,
       fetchImpl,
-      env: {},
+      env: KEY,
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
     // The synthetic default over `proxy.upstream_*`, which always exists.
     expect(result.targetId).toBe("anthropic");
     expect(result.route).toBe("harness");
     expect(sent[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(inference.calls).toHaveLength(0);
+    // R13.11 — the harness default's scheme is `inherit`, which for an ORIGINATED
+    // request can only mean "present nothing". A stored key must therefore be
+    // presented under the provider's own header instead, or step 4 is a
+    // guaranteed 401 rather than a destination.
+    expect(sent[0]?.headers["x-api-key"]).toBe("sk-ant-harness");
+  });
+
+  it("DECLINES step 4 when the harness default has no credential of its own", async () => {
+    // The R10.8 gap this closes. `inherit` is a PROXY instruction — forward the
+    // caller's headers — and there is no caller here, so on the commonest
+    // configuration there is (a Claude Code session against an `inherit`-auth
+    // Anthropic upstream) step 4 could only ever dispatch unauthenticated and
+    // come back 401. It is not a broken config: nothing was routed, so the honest
+    // outcome is a DECLINE that hands the work back, and it must be
+    // distinguishable from a failure by type, not by parsing the message.
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createTargetDispatcher({
+      inference,
+      settings: CHAIN,
+      fetchImpl,
+      env: {},
+    });
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(NoDrafterConfiguredError);
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(/nothing routes `coder`.*never holds that.*Do this work yourself/s);
+    // Nothing left the machine, and it did NOT quietly draft locally instead —
+    // R10.8's rule still holds: local is a destination, never a fallback.
+    expect(sent).toHaveLength(0);
     expect(inference.calls).toHaveLength(0);
   });
 
@@ -535,7 +587,7 @@ describe("R10.8 — the resolution chain", () => {
       inference: exploding,
       settings: CHAIN,
       fetchImpl,
-      env: {},
+      env: KEY,
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
     expect(result.text).toBe("drafted upstream");
@@ -596,7 +648,7 @@ describe("R10.8 — the resolution chain", () => {
       inference: stubInference(),
       settings: noUpstreamModel,
       fetchImpl,
-      env: {},
+      env: KEY,
       sessionModel: () => "claude-opus-5",
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
@@ -663,7 +715,7 @@ describe("R10.8 — the resolution chain", () => {
       inference: stubInference(),
       settings: CHAIN,
       fetchImpl,
-      env: {},
+      env: KEY,
     });
     const result = await dispatcher.dispatch({
       role: "drafter",
@@ -719,7 +771,7 @@ describe("R10.8 — the resolution chain", () => {
       inference: stubInference(),
       settings: CHAIN,
       fetchImpl,
-      env: {},
+      env: KEY,
       audit: (e) => events.push(e),
     });
     await dispatcher.dispatch({ role: "drafter", prompt: SECRET_PROMPT, worker: "coder" });
@@ -1088,12 +1140,18 @@ describe("transport and audit", () => {
         ],
       },
       fetchImpl,
-      env: {},
+      env: { GOLEM_UPSTREAM_API_KEY__VENDORGW2: "sk-ant-vendorgw2" },
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "vendor" });
 
     expect(sent[0]?.url).toBe("https://api.anthropic.com/v1/messages");
     expect(result.text).toBe("ok");
+    // R13.11 — an Anthropic gateway's `inherit` resolves to the native header when
+    // Golem originates the request, so a stored key is actually presented. It
+    // used to be discarded, and the request went out bare.
+    expect(sent[0]?.headers["x-api-key"]).toBe("sk-ant-vendorgw2");
+    // R13.11 — both transports pin the same output cap.
+    expect(JSON.parse(sent[0]?.body ?? "{}").max_tokens).toBe(4096);
   });
 
   it("audits every dispatch with the resolved target and reason, and no secret", async () => {
@@ -1205,37 +1263,240 @@ describe("credential resolution without the environment", () => {
     expect(sent).toHaveLength(0);
   });
 
-  it("still dispatches with no credential when the scheme is inherit", async () => {
+  /**
+   * R13.11 — this pair replaces a test that asserted the defect as intent
+   * ("still dispatches with no credential when the scheme is inherit", which
+   * expected an Anthropic request to go out with no `x-api-key` at all).
+   *
+   * `inherit` means "forward the caller's headers", and a dispatch has no caller
+   * to forward from — so on this path it could only ever mean "send nothing",
+   * which `api.anthropic.com` answers with a bare 401. The rule is the same one
+   * the openrouter test above proves: a provider that needs a credential and has
+   * none must refuse before building a request. What differs by provider is
+   * whether a credential is needed at all, and that is `originationAuthScheme`.
+   */
+  const INHERIT_SETTINGS: TargetRegistrySettings = {
+    ...REMOTE,
+    gateways: [
+      {
+        id: "inheritsgw",
+        provider: "anthropic",
+        base_url: "https://api.anthropic.com",
+        models: ["claude-sonnet-5"],
+      },
+    ],
+    targets: [{ id: "inherits", gateway: "inheritsgw", model: "claude-sonnet-5", trust: "vendor" }],
+  };
+
+  it("REFUSES an inherit-scheme Anthropic target with no credential (R13.11)", async () => {
     const { fetchImpl, sent } = captureFetch({ content: [{ type: "text", text: "ok" }] });
     const dispatcher = createTargetDispatcher({
       inference: stubInference(),
-      settings: {
-        ...REMOTE,
-        gateways: [
-          {
-            id: "inheritsgw",
-            provider: "anthropic",
-            base_url: "https://api.anthropic.com",
-            models: ["claude-sonnet-5"],
-          },
-        ],
-        targets: [
-          {
-            id: "inherits",
-            gateway: "inheritsgw",
-            model: "claude-sonnet-5",
-            trust: "vendor",
-          },
-        ],
-      },
+      settings: INHERIT_SETTINGS,
       fetchImpl,
       env: {},
       resolveKey: () => undefined,
     });
 
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "inherits" }),
+    ).rejects.toThrow(/needs a credential.*account "inheritsgw"/s);
+    // A named target is a configuration error, NOT a decline: the user asked for
+    // this destination, so the missing key is worth reporting as a fault.
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "inherits" }),
+    ).rejects.not.toThrow(NoDrafterConfiguredError);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("PRESENTS a resolved key under the native header despite scheme inherit (R13.11)", async () => {
+    const { fetchImpl, sent } = captureFetch({ content: [{ type: "text", text: "ok" }] });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: INHERIT_SETTINGS,
+      fetchImpl,
+      env: {},
+      resolveKey: () => "sk-ant-stored",
+    });
+
     await dispatcher.dispatch({ role: "drafter", prompt: "hi", targetId: "inherits" });
 
+    // `makeAuthMapper("inherit", key)` discarded the key whatever it was, so a
+    // credential the user had genuinely stored could never reach the request.
     expect(sent).toHaveLength(1);
-    expect(sent[0]?.headers["x-api-key"]).toBeUndefined();
+    expect(sent[0]?.headers["x-api-key"]).toBe("sk-ant-stored");
+  });
+});
+
+/**
+ * R13.11 — a dispatch is a conversation, not a prompt.
+ *
+ * The request used to carry one `prompt` string, so every dispatch was turn one
+ * of a fresh conversation: a caller that disliked a draft and called again
+ * re-asked a near-identical question and necessarily got a near-identical
+ * answer. Read from outside that looks like the model looping; it is really a
+ * stateless transport. These tests pin the two properties that make iteration
+ * real — the prior attempts actually reach the model as turns, and they cross the
+ * SAME egress boundary as the prompt.
+ */
+describe("R13.11 — prior attempts reach the model, redacted like everything else", () => {
+  const ATTEMPTS = [
+    { draft: "const a = 1;", problem: "the test expects a function, not a constant" },
+  ] as const;
+
+  it("renders prior attempts as real assistant/user turns", () => {
+    const messages = buildDispatchMessages({
+      prompt: "write addTwo",
+      system: "you are a drafter",
+      attempts: ATTEMPTS,
+    });
+    expect(messages.map((m) => m.role)).toEqual(["system", "user", "assistant", "user"]);
+    expect(messages[2]?.content).toBe("const a = 1;");
+    expect(messages[3]?.content).toContain("the test expects a function");
+    // The last turn must be the user's, or the model has nothing to answer.
+    expect(messages.at(-1)?.role).toBe("user");
+  });
+
+  it("is exactly one user turn when there are no attempts — the old behaviour", () => {
+    const messages = buildDispatchMessages({ prompt: "write addTwo" });
+    expect(messages).toEqual([{ role: "user", content: "write addTwo" }]);
+  });
+
+  it("sends the whole conversation to an OpenAI-shaped target", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "openai/gpt-oss-20b:free",
+      choices: [{ message: { content: "fixed" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-k" },
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: "write addTwo",
+      system: "you are a drafter",
+      attempts: ATTEMPTS,
+      targetId: "cheap",
+    });
+    const body = JSON.parse(sent[0]?.body ?? "{}");
+    expect(body.messages.map((m: { role: string }) => m.role)).toEqual([
+      "system",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    // R13.11 — the cap was previously unset on this transport only.
+    expect(body.max_tokens).toBe(4096);
+    expect(result.text).toBe("fixed");
+  });
+
+  it("hoists the system line into Anthropic's top-level field, not a turn", async () => {
+    const { fetchImpl, sent } = captureFetch({
+      model: "claude-x",
+      content: [{ type: "text", text: "ok" }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: { ...REMOTE, upstream_model: "claude-sonnet-5" },
+      fetchImpl,
+      env: { GOLEM_UPSTREAM_API_KEY: "sk-ant-harness" },
+    });
+    await dispatcher.dispatch({
+      role: "drafter",
+      prompt: "write addTwo",
+      system: "you are a drafter",
+      attempts: ATTEMPTS,
+    });
+    const body = JSON.parse(sent[0]?.body ?? "{}");
+    // The Messages API rejects a system-role turn inside `messages`.
+    expect(body.system).toBe("you are a drafter");
+    expect(body.messages.map((m: { role: string }) => m.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
+
+  it("REDACTS every turn, not just the prompt", async () => {
+    // The hole this closes: redaction ran on `request.prompt` alone, so an
+    // attempt's draft — ordinary code, carrying exactly the material worth
+    // redacting — would have gone out in the clear beside a redacted prompt.
+    const { fetchImpl, sent } = captureFetch({
+      model: "openai/gpt-oss-20b:free",
+      choices: [{ message: { content: "done" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-k" },
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: SECRET_PROMPT,
+      attempts: [{ draft: `const key = "${FAKE_KEY}";`, problem: `mailed ${FAKE_EMAIL}` }],
+      targetId: "cheap",
+    });
+    const body = sent[0]?.body ?? "";
+    expect(body).not.toContain(FAKE_KEY);
+    expect(body).not.toContain(FAKE_EMAIL);
+    expect(result.redactedCount).toBeGreaterThan(3);
+  });
+
+  it("shares ONE placeholder table across turns, so restoration is unambiguous", async () => {
+    // Independent per-message tables would give the same secret different numbers
+    // in different turns — and a single restore map could then only put one of
+    // them back. Echo the whole outbound conversation and check the round trip.
+    const { fetchImpl } = captureFetch((body: string) => ({
+      model: "openai/gpt-oss-20b:free",
+      choices: [
+        {
+          message: {
+            content: JSON.parse(body)
+              .messages.map((m: { content: string }) => m.content)
+              .join(" || "),
+          },
+        },
+      ],
+    }));
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-k" },
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: `first ${FAKE_KEY}`,
+      attempts: [{ draft: `second ${FAKE_KEY}`, problem: "still wrong" }],
+      targetId: "cheap",
+    });
+    // Both turns restored to the same original value.
+    const halves = result.text.split(" || ");
+    expect(halves[0]).toContain(FAKE_KEY);
+    expect(halves[1]).toContain(FAKE_KEY);
+  });
+
+  it("reads reasoning_content when a reasoning model leaves content empty", async () => {
+    // Surfaced as "unexpected response shape" before, which named the wrong
+    // problem: the model answered, just in the field this transport ignored.
+    const { fetchImpl } = captureFetch({
+      model: "qwen-reasoner",
+      choices: [{ message: { content: "", reasoning_content: "the answer" } }],
+    });
+    const dispatcher = createTargetDispatcher({
+      inference: stubInference(),
+      settings: REMOTE,
+      fetchImpl,
+      env: { GOLEM_UPSTREAM_API_KEY__OPENROUTER: "sk-or-k" },
+    });
+    const result = await dispatcher.dispatch({
+      role: "drafter",
+      prompt: "hi",
+      targetId: "cheap",
+    });
+    expect(result.text).toBe("the answer");
   });
 });

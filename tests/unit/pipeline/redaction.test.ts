@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import { redactRequestBody } from "../../../src/pipeline/index.js";
+import { redactReversibleText, redactReversibleTexts } from "../../../src/pipeline/redaction.js";
 
 /** Redact a bare string (fresh table each call). */
 function redact(text: string): string {
@@ -149,5 +150,52 @@ describe("determinism & prefix stability", () => {
     const out = redactRequestBody(input);
     expect(out.count).toBe(0);
     expect(out.value).toBe(input);
+  });
+});
+
+/**
+ * R13.11 — the multi-string reversible form, for a dispatch that sends a
+ * conversation rather than one prompt.
+ *
+ * The property that matters is the SHARED placeholder table. Redacting each turn
+ * with its own table would give the same secret different numbers in different
+ * turns, and a single restore map could then only put one of them back — so the
+ * failure mode is not a leak, it is silent corruption of the reply.
+ */
+describe("redactReversibleTexts — one table across many strings", () => {
+  // Built at runtime: a literal secret here would be redacted out from under the
+  // test, and a literal placeholder would pass vacuously.
+  const KEY = ["sk", "ant", "api03", "Z".repeat(95)].join("-");
+
+  it("gives the same secret the same placeholder in every string", () => {
+    const r = redactReversibleTexts([`alpha ${KEY}`, `beta ${KEY}`]);
+    const first = r.texts[0]?.match(/\[REDACTED:[^\]]+\]/)?.[0];
+    const second = r.texts[1]?.match(/\[REDACTED:[^\]]+\]/)?.[0];
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+    expect(r.texts.join(" ")).not.toContain(KEY);
+    expect(r.count).toBe(2);
+  });
+
+  it("restores every occurrence across all strings", () => {
+    const r = redactReversibleTexts([`alpha ${KEY}`, `beta ${KEY}`]);
+    // A reply that quotes both turns back must come out whole.
+    expect(r.restore(r.texts.join(" || "))).toBe(`alpha ${KEY} || beta ${KEY}`);
+  });
+
+  it("returns one output per input, positionally, including clean strings", () => {
+    const r = redactReversibleTexts(["nothing here", `has ${KEY}`, ""]);
+    expect(r.texts).toHaveLength(3);
+    expect(r.texts[0]).toBe("nothing here");
+    expect(r.texts[2]).toBe("");
+    expect(r.count).toBe(1);
+  });
+
+  it("agrees with the single-string form, which is implemented in terms of it", () => {
+    const one = redactReversibleText(`solo ${KEY}`);
+    const many = redactReversibleTexts([`solo ${KEY}`]);
+    expect(one.text).toBe(many.texts[0]);
+    expect(one.count).toBe(many.count);
+    expect(one.restore(one.text)).toBe(`solo ${KEY}`);
   });
 });

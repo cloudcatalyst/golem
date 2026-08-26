@@ -55,6 +55,16 @@ export interface RefineOutcome {
   readonly issues?: readonly RefineIssue[];
   /** Which role produced the critique: "judge", or "drafter" when the judge model was unavailable. */
   readonly critiquedBy?: Role;
+  /**
+   * R13.11 — the concrete LOCAL model that produced the revision, set only when
+   * `rounds > 0`.
+   *
+   * Refinement always runs on the local tiered service, including for a draft
+   * that came from a remote target. Without this the caller could only attribute
+   * the returned text to whatever produced the *original* draft, so a remote
+   * draft rewritten by the local 7B was reported under the remote model's name.
+   */
+  readonly revisedBy?: string;
 }
 
 /** JSON Schema the judge is forced to fill (same shape convention as rerank's). */
@@ -221,6 +231,7 @@ export async function refineDraft(
     rounds: 1,
     status: "revised",
     critiquedBy,
+    revisedBy: revised.model,
     critiqueSummary: parsed.data.summary,
     issues: parsed.data.issues,
   };

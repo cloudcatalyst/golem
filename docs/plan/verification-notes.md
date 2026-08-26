@@ -7839,3 +7839,98 @@ Commander.js collision was isolated empirically against the installed
 `commander` package version in this repo (`node_modules/commander`), not
 against upstream docs — no live-doc claim is made about Commander's documented
 behavior, only what this installed version does.
+
+## §144 — R13.11: `inherit` auth means two incompatible things, and step 4 of the R10.8 chain had never once worked (2026-08-27)
+
+**Reported by the user, both symptoms reproduced live before any code changed.**
+
+### The finding that matters
+
+`upstream_auth_scheme = "inherit"` is answering **two different questions** in two
+different places, and the answers are incompatible:
+
+- **The proxy** asks "how do I forward this request?" and `inherit` correctly
+  means *forward the client’s own credential headers unchanged*. That is why
+  `defaultAuthScheme("anthropic")` returns `inherit`: Golem is a transparent
+  passthrough and injects nothing.
+- **`dispatch()`** asks "how do I authenticate a request I am making myself?" and
+  there `inherit` can only mean *send nothing* — there is no client request whose
+  headers could be forwarded.
+
+For a keyless loopback server (`ollama`, `llamacpp`) "send nothing" is right. For
+`api.anthropic.com` it is a guaranteed `401`. The guard before the request read
+
+```ts
+if (mapper === undefined && target.authScheme !== "inherit") throw …
+```
+
+so it **exempted the one case that could not work**, and every unrouted `coder`
+call POSTed unauthenticated.
+
+### Why the gate did not catch it
+
+R10.8’s recorded gate was *"provable from the audit record and `golem status`,
+without a local model installed at all"*. Both were correct throughout: `golem
+status` truthfully said `coder: anthropic (target anthropic) — via the harness
+default upstream; nothing routes coder`, and the audit line named the right
+target and route. **Routing and reporting were right; the request failed.** The
+gate never completed one.
+
+Worse, a test asserted the defect as intent —
+*"still dispatches with no credential when the scheme is inherit"* — expecting an
+Anthropic request to go out with no `x-api-key` at all. It passed for the whole
+time the feature was broken.
+
+Lesson worth carrying: a gate phrased over *observability surfaces* can be fully
+green while the behaviour those surfaces describe has never once succeeded. When
+a step’s whole purpose is "reach a destination", the gate has to reach it.
+
+### The second, latent defect found beside it
+
+`makeAuthMapper("inherit", apiKey)` returns `undefined` **whatever key is
+passed** — the scheme is checked before the key. So a credential the user had
+genuinely stored with `golem gateway login anthropic` could never reach a
+dispatch, and `golem target list` truthfully reporting "key set" told them
+nothing about whether `coder` could use it. Same class as the R10.8-era finding
+that the MCP server inherits no `GOLEM_UPSTREAM_API_KEY__*` env at all: the key
+existed, the request went out bare.
+
+### Live evidence for the "looping model"
+
+`DispatchRequest` carried one `prompt` string; dispatch sent a single user turn.
+Asked to retry, `openrouter:qwen/qwen3.7-flash` answered:
+
+> "I'd be glad to fix it, but I don't have visibility into your previous attempt
+> or the failing test."
+
+The model was not looping. Each call was **turn one of a fresh conversation**, so
+re-asking a near-identical question necessarily produced a near-identical answer.
+Anything that reads as an LLM repeating itself across tool calls is worth
+checking against the transport before the model.
+
+### Redaction consequence, recorded because it is easy to get wrong
+
+Once a dispatch carries several strings, they must share ONE `PlaceholderTable`.
+Independent per-message tables give the same secret different numbers in
+different turns, and a single `restore` map can then only put one of them back —
+so the failure mode is **silent corruption of the reply**, not a leak. Hence
+`redactReversibleTexts`, with `redactReversibleText` reimplemented in terms of it
+so the two cannot drift. `redactRequestBody` already shared a table across a whole
+request body for the same reason.
+
+### Decisions taken (USER, 2026-08-26)
+
+1. When nothing routes `coder` and the harness default cannot be authenticated,
+   **decline** so the session’s own model does the work inline — not a fallback to
+   the local Ollama model, and not merely a clearer error. R10.8’s "local is a
+   destination, never a fallback" rule is preserved intact.
+2. Fix the stateless-iteration defect as well as the transport quick wins.
+
+### Deliberately not done
+
+`golem status` does **not** read the credential store to predict the decline.
+That would add a DPAPI-backed lookup to every statusline render (status feeds the
+per-turn statusline). It states the dependency and points at `golem target list`
+instead. Predicting either "it drafts here" or "it declines" without checking
+would be the dishonest-signal class this project exists to close.
+

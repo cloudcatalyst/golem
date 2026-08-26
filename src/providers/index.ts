@@ -263,6 +263,61 @@ export function resolveAuthScheme(
   return configured === "inherit" ? defaultAuthScheme(provider) : configured;
 }
 
+/**
+ * R13.11 — the header scheme to use when Golem **originates** a request to this
+ * provider, rather than proxying one.
+ *
+ * `inherit` means two incompatible things depending on who is asking, and
+ * conflating them is what made `coder` 401 on the commonest configuration there
+ * is:
+ *
+ * - **To the proxy** it means "forward the client's own credential unchanged" —
+ *   correct, and the reason Anthropic defaults to it: Golem is a transparent
+ *   passthrough and injects nothing.
+ * - **To the dispatcher** it can only mean "present nothing", because there is
+ *   no client request whose headers could be forwarded. For a keyless local
+ *   server that is right. For `api.anthropic.com` it is a guaranteed 401.
+ *
+ * So origination asks a different question — *which header would Golem have to
+ * set to authenticate itself here?* — and `undefined` is the honest answer only
+ * where no header would do it: a keyless local server (`ollama`, `llamacpp`),
+ * Gemini's `?key=` query parameter, and a spawned Claude Code that authenticates
+ * as itself.
+ *
+ * Note this is NOT {@link defaultAuthScheme}: that function answers the proxy's
+ * question and returns `inherit` for four providers. Deriving one from the other
+ * would collapse the distinction this exists to draw.
+ */
+export function originationAuthScheme(
+  provider: UpstreamProvider,
+): Exclude<UpstreamAuthScheme, "inherit"> | undefined {
+  switch (provider) {
+    case "anthropic":
+      return "x-api-key";
+    case "custom":
+      // Matches `defaultAuthScheme`'s note: a self-hosted Anthropic-compatible
+      // gateway commonly reuses `x-api-key`.
+      return "x-api-key";
+    case "azure-foundry":
+      return "api-key";
+    case "openrouter":
+    case "openai":
+      return "bearer";
+    case "ollama":
+    case "llamacpp":
+      // Keyless by default. A user who did start one with a key sets an explicit
+      // non-`inherit` scheme on the gateway, which never reaches this function.
+      return undefined;
+    case "gemini":
+      // The credential rides in the path, not a header — unreachable by a mapper.
+      return undefined;
+    case "claude-cli":
+      // There is no request for Golem to sign; the spawned client authenticates
+      // as itself (R9.15).
+      return undefined;
+  }
+}
+
 /** Header map the proxy forwards upstream (lowercased names, Node semantics). */
 type UpstreamHeaders = Record<string, string | string[]>;
 
