@@ -553,6 +553,21 @@ export const SETTINGS_LEAVES = {
     enabled: z.boolean(),
     /** Port for the local savings dashboard. */
     dashboard_port: portSchema,
+    /**
+     * R12.5 — bind the dashboard to every interface instead of loopback, so a
+     * phone on the same network can reach it as a read-only companion app.
+     *
+     * OFF by default and deliberately not something a phone can turn on: this
+     * is the one setting that takes a surface which has only ever been reachable
+     * from the machine it runs on and makes it reachable from the network. What
+     * it exposes is bounded by construction rather than by policy — the server
+     * has no write route and refuses every method but GET/HEAD — but "read-only"
+     * still means the project directory, the blocked tool call and its argument,
+     * and the savings figures are readable by anything on that LAN.
+     *
+     * `golem dashboard --lan` sets it for one run without changing config.
+     */
+    dashboard_lan: z.boolean(),
   },
   ui: {
     /**
@@ -849,6 +864,8 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   telemetry: {
     enabled: true,
     dashboard_port: 4654,
+    // Loopback. Widening the bind is an explicit act, never a default.
+    dashboard_lan: false,
   },
   ui: {
     pet: true,

@@ -4,7 +4,7 @@
 
 import type { Command } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
-import { startDashboard } from "../../dashboard/index.js";
+import { LAN_HOST, startDashboard } from "../../dashboard/index.js";
 import { InitError } from "../init.js";
 import { statsSourceForCli } from "../mcp-compression.js";
 import { appendNote, listNotes, renderNotes } from "../notes.js";
@@ -87,19 +87,27 @@ export default function register(program: Command): void {
 
   program
     .command("dashboard")
-    .description("Serve the local savings dashboard (loopback only)")
+    .description("Serve the local savings dashboard (loopback by default; --lan for a phone)")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--port <port>", "listen port (overrides config telemetry.dashboard_port)")
-    .action(async (opts: { dir: string; port?: string }) => {
+    .option(
+      "--lan",
+      "bind every interface so a phone on the same network can read it (R12.5) — read-only, no write route exists",
+    )
+    .action(async (opts: { dir: string; port?: string; lan?: boolean }) => {
       try {
         const { settings } = await loadConfig({ projectDir: opts.dir });
         const port =
           opts.port === undefined ? settings.telemetry.dashboard_port : Number(opts.port);
         if (!Number.isInteger(port) || port < 0 || port > 65535)
           throw new InitError(`invalid port "${opts.port}"`);
+        // The flag is a one-run override of the config setting; neither can be
+        // set from the phone, which is the point (see `telemetry.dashboard_lan`).
+        const lan = opts.lan === true || settings.telemetry.dashboard_lan;
         const source = await statsSourceForCli(opts.dir);
         const handle = await startDashboard({
           port,
+          ...(lan ? { host: LAN_HOST } : {}),
           snapshot: async () => {
             const { getDialInfo } = await import("../dials.js");
             const { blockedView } = await import("../blocked-view.js");
@@ -123,6 +131,27 @@ export default function register(program: Command): void {
         });
         process.stdout.write(`golem dashboard on ${handle.url} (Ctrl+C to stop)\n`);
         process.stdout.write(`  consolidated session state: ${handle.url}api/state\n`);
+        if (lan) {
+          // Print the addresses a phone can actually type. `0.0.0.0` is a bind
+          // target, not a destination, and `127.0.0.1` is the one address on the
+          // machine that a phone definitely cannot reach — so a LAN bind that
+          // only prints those two is a feature the user cannot use.
+          const { lanUrls } = await import("../../dashboard/index.js");
+          const urls = lanUrls(handle.port);
+          process.stdout.write(
+            "\n⚠ LAN mode: this dashboard is now readable by anything on your network.\n" +
+              "  It is READ-ONLY — no write route exists and every method but GET/HEAD is refused —\n" +
+              "  but the project path, the tool call being waited on, and your savings figures are visible.\n",
+          );
+          if (urls.length === 0) {
+            process.stdout.write(
+              "  no non-loopback address found — is this machine on a network?\n",
+            );
+          } else {
+            process.stdout.write("  open on your phone (same Wi-Fi), then Add to Home Screen:\n");
+            for (const url of urls) process.stdout.write(`    ${url}\n`);
+          }
+        }
         const shutdown = (): void => {
           void handle.close().finally(() => process.exit(0));
         };
