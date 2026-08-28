@@ -16,6 +16,7 @@
 import { describe, expect, it } from "vitest";
 import { createCoderDispatcher } from "../../../src/cli/commands/mcp-serve.js";
 import { DEFAULT_SETTINGS, type GolemSettings } from "../../../src/config/schema.js";
+import { NoDrafterConfiguredError } from "../../../src/inference/target-dispatcher.js";
 import type { ChatMessage, InferenceService, Role } from "../../../src/interfaces/inference.js";
 
 /** The frozen contract, stubbed. Records whether the LOCAL path was taken. */
@@ -143,7 +144,10 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
     const dispatcher = createCoderDispatcher(settingsWith({}), inference, process.cwd(), {
       fetchImpl,
       env: {},
-      resolveKey: () => undefined,
+      // R13.11 — step 4 is a destination only when Golem holds a credential for
+      // that upstream. With none it declines (the test below); the gate this test
+      // states is about ROUTING, so give it one.
+      resolveKey: () => "sk-ant-stored",
       audit: () => {},
     });
 
@@ -152,6 +156,31 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
     expect(result.route).toBe("harness");
     expect(result.targetId).toBe("anthropic");
     expect(sent[0]?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(inference.calls).toBe(0);
+  });
+
+  it("DECLINES through the real wiring when the harness default has no credential", async () => {
+    // The reported defect, end to end and in the exact shape a user meets it: a
+    // Claude Code session whose upstream is Anthropic on the default `inherit`
+    // scheme, with nothing in `worker_targets` or `default_target`. Golem never
+    // holds that session's credential, so it cannot originate a request there —
+    // this used to POST unauthenticated and surface a bare `401 Unauthorized`,
+    // which reads as a broken proxy rather than as "nothing is routed here".
+    const inference = stubInference();
+    const { fetchImpl, sent } = captureFetch({});
+    const dispatcher = createCoderDispatcher(settingsWith({}), inference, process.cwd(), {
+      fetchImpl,
+      env: {},
+      resolveKey: () => undefined,
+      audit: () => {},
+    });
+
+    await expect(
+      dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
+    ).rejects.toThrow(NoDrafterConfiguredError);
+    // No request was built, and the local model was NOT quietly used instead:
+    // R10.8's rule holds — local is a destination, never a fallback.
+    expect(sent).toHaveLength(0);
     expect(inference.calls).toBe(0);
   });
 
@@ -164,7 +193,7 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
     const dispatcher = createCoderDispatcher(settingsWith({}), stubInference(), process.cwd(), {
       fetchImpl,
       env: {},
-      resolveKey: () => undefined,
+      resolveKey: () => "sk-ant-stored",
       audit: (e) => events.push(e),
     });
 

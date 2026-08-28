@@ -123,6 +123,13 @@ export async function collectTargets(
       // authenticate. The synthetic default is exempt: it may legitimately run
       // keyless, because `inherit` forwards the client's own auth.
       //
+      // R13.11 — that exemption is right for PROXIED traffic and only for proxied
+      // traffic. A dispatch (`coder`) originates its own request, so there are no
+      // client headers to forward and a keyless default cannot authenticate at
+      // all; it declines rather than 401ing. Keep the exemption here — this
+      // report describes the proxy path — but do not read it as "keyless is fine
+      // everywhere". See `originationAuthScheme`.
+      //
       // R10.8: so is a model server the user runs themselves (`ollama`,
       // `llamacpp`). It is not that a missing key is tolerable there — it is
       // that a key is not part of how you reach it, so reporting its absence as

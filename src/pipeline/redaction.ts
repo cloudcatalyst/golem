@@ -204,11 +204,53 @@ export interface ReversibleRedaction {
  * restoration needs no ordering care.
  */
 export function redactReversibleText(text: string): ReversibleRedaction {
+  const many = redactReversibleTexts([text]);
+  return {
+    // `redactReversibleTexts` always returns one entry per input.
+    text: many.texts[0] as string,
+    count: many.count,
+    restore: many.restore,
+  };
+}
+
+/** A reversible redaction over several strings that share one placeholder table. */
+export interface ReversibleRedactionMulti {
+  /** The redacted strings, positionally matching the input — these may leave the machine. */
+  readonly texts: readonly string[];
+  /** Total redacted occurrences across every input. */
+  readonly count: number;
+  /** Restore the original values in a reply. Pure; safe on text containing none. */
+  readonly restore: (reply: string) => string;
+}
+
+/**
+ * R13.11 — the multi-string form of {@link redactReversibleText}, for a dispatch
+ * that sends a CONVERSATION rather than one prompt.
+ *
+ * One shared {@link PlaceholderTable} is the whole point, and the reason this is
+ * not just a `.map()` over the single-string entry point. Redacting each message
+ * independently would allocate a fresh table per message, so the same secret
+ * would become `[REDACTED:aws-key:1]` in two different messages while meaning
+ * two different values — and a single `restore` map could then only put one of
+ * them back, silently corrupting the other. Sharing the table is exactly what
+ * {@link redactRequestBody} already does across a whole request body, for the
+ * same reason.
+ *
+ * **This does not weaken redaction.** Same rules, same allocation, same
+ * in-memory-only restoration map as the single-string form — which is now
+ * implemented in terms of this function so the two cannot drift.
+ */
+export function redactReversibleTexts(texts: readonly string[]): ReversibleRedactionMulti {
   const table = new PlaceholderTable();
-  const { text: redacted, count } = redactText(text, table);
+  let count = 0;
+  const redacted = texts.map((text) => {
+    const result = redactText(text, table);
+    count += result.count;
+    return result.text;
+  });
   const entries = table.entries();
   return {
-    text: redacted,
+    texts: redacted,
     count,
     restore: (reply: string): string => {
       let out = reply;
