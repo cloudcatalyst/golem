@@ -98,6 +98,26 @@ export interface GolemMcpServerDeps {
    */
   readonly localEditor?: boolean;
   /**
+   * R13.12 — `inference.coder_prompt`, the framing applied to every coder task.
+   *
+   * Injected rather than read here so this module keeps its "frozen interfaces
+   * only" boundary: the MCP layer takes settings as data, it does not load config.
+   * Absent → `DEFAULT_CODER_PROMPT`.
+   */
+  readonly coderPrompt?: string;
+  /**
+   * R13.12 — the model `inference.default_coder` names when it names a MODEL
+   * rather than a registry target.
+   *
+   * Present means the work is meant to run as a `golem-coder` subagent on that
+   * model, which **Golem cannot start**: an MCP server exposes tools to its
+   * client and cannot invoke the client's own tools, so there is no call `coder`
+   * could make that spawns one. So `coder` declines and names the agent, which is
+   * the only honest thing it can do — and better than silence, because otherwise
+   * the generated definition may never be noticed.
+   */
+  readonly harnessCoderModel?: string;
+  /**
    * R9.3 — lets `coder` draft on any declared target, not only the local model.
    *
    * When present, `coder` gains an optional `target` parameter whose enum lists

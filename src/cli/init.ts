@@ -29,9 +29,12 @@
 import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { removeVersionStamp, writeSetting } from "../config/index.js";
+import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
+import { type CoderRoute, resolveCoderRoute } from "../inference/coder-route.js";
 import type { CompressionLevel } from "../interfaces/index.js";
+import { withDefaultTarget } from "../providers/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
+import { coderAgentPath, installCoderAgent, removeCoderAgent } from "./init-agents.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
 // because the permission rules are built from it at module scope.
@@ -276,6 +279,47 @@ export async function golemInitStatus(
   };
 }
 
+/**
+ * R13.12 — step 3c: resolve `inference.default_coder` and install/remove the
+ * `golem-coder` subagent accordingly.
+ *
+ * Wrapped rather than inlined so init's step list stays readable and so the
+ * config read has one place to fail safely. A malformed `default_coder` must NOT
+ * abort `golem init`: the whole point of init is to repair project wiring, and
+ * refusing to wire the proxy because one optional setting is a typo would be the
+ * cure being worse than the disease. It comes back as a `conflict` action, which
+ * is how init already reports "this needs a human".
+ */
+async function installCoderAgentStep(projectDir: string, dryRun: boolean): Promise<InitAction[]> {
+  let route: CoderRoute;
+  let coderPrompt: string | undefined;
+  try {
+    const { settings } = await loadConfig({ projectDir });
+    coderPrompt = settings.inference.coder_prompt;
+    route = resolveCoderRoute({
+      settings: withDefaultTarget(settings),
+      workerTargets: settings.inference.worker_targets,
+      ...(settings.inference.default_coder === undefined
+        ? {}
+        : { defaultCoder: settings.inference.default_coder }),
+    });
+  } catch (err) {
+    return [
+      {
+        kind: "conflict",
+        path: rel(projectDir, coderAgentPath(projectDir)),
+        detail: `not written — ${err instanceof Error ? err.message : String(err)}`,
+      },
+    ];
+  }
+  return await installCoderAgent(projectDir, dryRun, {
+    // Only the harness route produces a definition. A registry target is
+    // dispatched to by Golem itself and needs no agent.
+    ...(route.kind === "harness" ? { model: route.model } : {}),
+    ...(coderPrompt === undefined ? {} : { coderPrompt }),
+  });
+}
+
 export async function golemInit(options: InitOptions): Promise<InitReport> {
   const { projectDir } = options;
   const dryRun = options.dryRun ?? false;
@@ -369,6 +413,16 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // (`/golem/slider` outlived R11.1 by a release). Provenance-guarded: an
   // edited skill is reported, never deleted.
   actions.push(...(await pruneRetiredSkills(projectDir, dryRun)));
+  // 3c. R13.12 — the `golem-coder` subagent, when `inference.default_coder` names
+  // a MODEL rather than a registry target. This is the whole delivery mechanism
+  // for a harness-run coder: an MCP server cannot invoke its client's tools, so
+  // Golem cannot spawn a subagent — what it can do is write the definition so the
+  // delegation is native.
+  //
+  // Also REMOVES a stale definition when `default_coder` changes to a target or
+  // is unset. An install-only step would leave a file naming a model the config
+  // no longer selects, and nothing about that file would say so.
+  actions.push(...(await installCoderAgentStep(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
   // (gitignored). The compression level and per-project proxy port are personal /
@@ -490,6 +544,9 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
 
   // 3. Remove the whole golem skills namespace (all files in it are ours).
   actions.push(...(await removeSkills(projectDir, dryRun)));
+  // 3c. And Golem's generated subagent. Only that one basename: `.claude/agents/`
+  // is a SHARED namespace, unlike `.claude/skills/golem/`.
+  actions.push(...(await removeCoderAgent(projectDir, dryRun)));
 
   // 4 / 5 / 5b. Every hook init installed: the PostToolUse CCR hook + the seeded
   // guidance rules, the status line and blocked-state event hooks, the WebFetch
