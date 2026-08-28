@@ -16,6 +16,10 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { InferenceEndpointError, ModelNotAvailableError } from "../../src/inference/index.js";
+import {
+  NoDrafterConfiguredError,
+  type TargetDispatcher,
+} from "../../src/inference/target-dispatcher.js";
 import type {
   ChatMessage,
   ChatOptions,
@@ -586,6 +590,44 @@ describe("coder tool", () => {
     const client = await connectInMemory({ ...createStandaloneDeps(), inference: fake });
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name)).not.toContain("coder");
+  });
+
+  /**
+   * R13.11 — the decline, as the caller actually sees it.
+   *
+   * With a dispatcher wired and nothing routed, the dispatch cannot reach the
+   * session's own upstream (Golem never holds that credential) and raises
+   * `NoDrafterConfiguredError`. That is not a failure — nothing is misconfigured,
+   * there is simply no drafter — so it must come back as an ORDINARY result that
+   * redirects the work inline. It used to surface as `401 Unauthorized`, which
+   * reads as a broken tool and tells the caller nothing about what to do.
+   */
+  it("returns a NON-error decline when nothing routes coder", async () => {
+    const fake = new FakeInferenceService(async () => {
+      throw new Error("the local service must NOT be used as a silent fallback");
+    });
+    const declining: TargetDispatcher = {
+      selectableTargets: () => [],
+      dispatch: async () => {
+        throw new NoDrafterConfiguredError("nothing routes `coder`, so it fell through");
+      },
+    };
+    const client = await connectInMemory({
+      ...depsWithInference(fake),
+      targetDispatcher: declining,
+    });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write a hello world function" },
+    });
+
+    // The distinction the whole change turns on: not an error.
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).toContain("No draft");
+    expect(text).toContain("Proceed with the task directly");
+    expect(result.structuredContent).toMatchObject({ declined: true });
   });
 
   it("drafts a task-only call and reports the local model in text and structuredContent", async () => {

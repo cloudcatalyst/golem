@@ -4,7 +4,11 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { TargetDispatcher } from "../inference/target-dispatcher.js";
+import {
+  buildDispatchMessages,
+  NoDrafterConfiguredError,
+  type TargetDispatcher,
+} from "../inference/target-dispatcher.js";
 import type { InferenceService, KnowledgeBase, WikiReader } from "../interfaces/index.js";
 import { type RefineOutcome, refineDraft } from "./coder-refine.js";
 import { backendUnavailableMessage, gatherGrounding } from "./search.js";
@@ -85,6 +89,28 @@ const EDIT_MODE_SCHEMA = {
     ),
 } as const;
 
+/**
+ * R13.11 — the system line for a dispatched draft.
+ *
+ * Remote dispatch used to send the task as a bare user turn with no framing at
+ * all, while the local edit path has had a real role line since R8.7
+ * (`ROLE_LINE` in `coder-edit.ts`). An unframed model answers the question it
+ * thinks it was asked — often by restating the task or asking for the context it
+ * was not given — which is indistinguishable, from the caller's side, from a
+ * model that simply could not do the work.
+ */
+const DRAFTER_SYSTEM_LINE =
+  "You are a coding assistant producing a first draft for another engineer to " +
+  "review. Answer with the code or text asked for and nothing else: no preamble, " +
+  "no restatement of the task, no offer to help further. If the request cannot be " +
+  "completed from what you were given, say precisely what is missing in one line " +
+  "instead of guessing.";
+
+/** Normalize a task for repeat detection — whitespace and case carry no intent. */
+function taskKey(task: string): string {
+  return task.trim().toLowerCase().replace(/\s+/gu, " ");
+}
+
 export function registerCoderTool(
   server: McpServer,
   inference: InferenceService,
@@ -93,6 +119,21 @@ export function registerCoderTool(
   dispatcher?: TargetDispatcher,
 ): void {
   const editEnabled = grounding.editEnabled === true;
+  /**
+   * R13.11 — how many times this server has been asked each task.
+   *
+   * A dispatched draft is stateless: the model sees one conversation built from
+   * what THIS call passed and nothing else. So an agent that calls `coder`,
+   * dislikes the draft, and calls again with the same task gets the same draft —
+   * and reads that as the model looping, when it is really the harness asking
+   * the same question twice. Counting repeats lets the reply say so, and point at
+   * `previous_attempts`, which is the parameter that actually breaks the cycle.
+   *
+   * In-process and unbounded-by-session only: a Map in this closure, cleared when
+   * the server exits. Nothing durable, because the observation is only useful
+   * within the run that made it.
+   */
+  const taskCounts = new Map<string, number>();
   // R9.3: the conversation may pick a target, bounded to what config declares
   // AND marks agent-selectable. An enum (rather than a free string) is what
   // makes "can never reach anything undeclared" visible in the schema itself —
@@ -114,7 +155,9 @@ export function registerCoderTool(
             .enum(selectable.map((t) => t.id) as [string, ...string[]])
             .optional()
             .describe(
-              "Which configured target to draft on; omit for the local model. " +
+              "Which configured target to draft on; omit to use the configured " +
+                "route (`inference.worker_targets.coder`, then " +
+                "`inference.default_target`, then the session's own upstream). " +
                 `Available: ${selectable
                   .map((t) => `${t.id} (${t.provider}, trust=${t.trust})`)
                   .join("; ")}. Anything non-local is REDACTED before dispatch — ` +
@@ -125,20 +168,48 @@ export function registerCoderTool(
   server.registerTool(
     "coder",
     {
-      title: "Draft code or tests with a local model",
+      title: "Draft code or tests with a delegated model",
       description:
-        'Delegate a task to Golem\'s local tiered Ollama inference (the "drafter" ' +
-        "role — currently backed by a qwen2.5-coder-family model tuned for cheap " +
-        "first-draft code generation) instead of doing everything yourself. Use it " +
-        "to offload simple or initial work — e.g. a first coding draft — then " +
-        "refine the result. By default it grounds the draft in relevant hits from " +
-        "Golem's local knowledge base (project code, docs, wiki) so the draft fits " +
-        "this codebase; pass `ground: false` to skip that. Nothing leaves the " +
-        "machine, but the local model may be slower or lower-quality than you: " +
-        "treat the result as a draft to review, not a final answer." +
+        'Delegate a task to Golem\'s "drafter" role instead of doing everything ' +
+        "yourself — a first coding draft you then review and refine. Where it runs " +
+        "is a ROUTING decision, not a property of this tool: `inference." +
+        "worker_targets.coder`, then `inference.default_target`, then the session's " +
+        "own upstream (R10.8). It is the local tiered Ollama model only when a " +
+        "target points there, so do NOT assume the work stays on this machine — " +
+        "anything non-local is REDACTED before dispatch and restored in the reply, " +
+        "and the reply always says which model and target served it. With nothing " +
+        "routed at all this tool DECLINES and tells you to do the work yourself. " +
+        "By default it grounds the draft in relevant hits from Golem's local " +
+        "knowledge base (project code, docs, wiki) so the draft fits this codebase; " +
+        "pass `ground: false` to skip that. The drafter may be slower or " +
+        "lower-quality than you: treat the result as a draft to review, not a final " +
+        "answer. **Each call is a fresh conversation** — the model cannot see any " +
+        "earlier call, so if a draft did not work, do not just call again with the " +
+        "same task (you will get the same answer): pass `previous_attempts` so it " +
+        "can see what it already tried and why that failed." +
         (editEnabled ? EDIT_MODE_DESCRIPTION : ""),
       inputSchema: {
-        task: z.string().min(1).describe("The task or instructions for the local model"),
+        task: z.string().min(1).describe("The task or instructions for the drafter"),
+        previous_attempts: z
+          .array(
+            z.object({
+              draft: z.string().min(1).describe("What the drafter produced last time, verbatim"),
+              problem: z
+                .string()
+                .min(1)
+                .describe(
+                  "What was actually wrong with it — the test that failed, the error, " +
+                    "the behaviour you observed. Be specific: this is the only thing " +
+                    "distinguishing this call from the one that already failed.",
+                ),
+            }),
+          )
+          .optional()
+          .describe(
+            "Earlier attempts at THIS task, oldest first, sent as real conversation " +
+              "turns. Without this the drafter starts from zero every call and will " +
+              "re-derive the same answer — pass it whenever you are retrying.",
+          ),
         ...targetSchema,
         ...(editEnabled ? EDIT_MODE_SCHEMA : {}),
         context: z
@@ -170,6 +241,8 @@ export function registerCoderTool(
         text: z.string(),
         model: z.string(),
         role: z.string(),
+        /** R13.11 — true when no drafter is routed and the caller should do the work. */
+        declined: z.boolean().optional(),
         ...(editEnabled
           ? {
               edit: z
@@ -200,7 +273,18 @@ export function registerCoderTool(
           .optional(),
       },
     },
-    async ({ task, target, mode, file, apply, context, ground, refine, project_id }) => {
+    async ({
+      task,
+      target,
+      mode,
+      file,
+      apply,
+      context,
+      ground,
+      refine,
+      project_id,
+      previous_attempts,
+    }) => {
       const startMs = Date.now();
 
       if (mode === "edit") {
@@ -275,31 +359,76 @@ export function registerCoderTool(
       if (context !== undefined && context !== "") sections.push(`---\nContext:\n${context}`);
       if (grounded !== null) sections.push(grounded.block);
       const prompt = sections.length === 0 ? task : `${task}\n\n${sections.join("\n\n")}`;
+      // R13.11 — count this ask BEFORE dispatching, so the note below is right
+      // even when the dispatch throws.
+      const key = taskKey(task);
+      const askCount = (taskCounts.get(key) ?? 0) + 1;
+      taskCounts.set(key, askCount);
+
       try {
-        // R9.3: with a target named, go through the dispatcher — which redacts
-        // before any non-local dispatch and restores the placeholders in the
-        // reply. Without one, this is exactly the previous call.
+        // R9.3: the dispatcher redacts before any non-local dispatch and restores
+        // the placeholders in the reply. R10.8 wired it unconditionally — it
+        // decides WHERE an unrouted draft goes, not just which of several targets
+        // to offer — so this is the path for every call, with or without a named
+        // target. The `inference.chat` branch below survives only for a caller
+        // that constructs this tool without a dispatcher at all (tests, and an
+        // embedding host that wires no target registry).
         const dispatched =
           dispatcher !== undefined
             ? await dispatcher.dispatch({
                 role: "drafter",
                 prompt,
+                system: DRAFTER_SYSTEM_LINE,
                 worker: "coder",
+                ...(previous_attempts !== undefined && previous_attempts.length > 0
+                  ? { attempts: previous_attempts }
+                  : {}),
                 ...(target !== undefined ? { targetId: target } : {}),
               })
             : null;
         const result =
           dispatched !== null
             ? { text: dispatched.text, model: dispatched.model, role: "drafter" as const }
-            : await inference.chat("drafter", [{ role: "user", content: prompt }]);
+            : await inference.chat(
+                "drafter",
+                // Same conversation the dispatcher would have built, from the same
+                // function — a second copy of the rendering would drift.
+                buildDispatchMessages({
+                  prompt,
+                  system: DRAFTER_SYSTEM_LINE,
+                  ...(previous_attempts !== undefined && previous_attempts.length > 0
+                    ? { attempts: previous_attempts }
+                    : {}),
+                }),
+              );
         // Refinement stays on the LOCAL service: it is a cheap critique loop,
         // and sending the draft out a second time would double the egress for
         // no benefit the target was chosen for.
         const refined = refine === true ? await refineDraft(inference, task, result.text) : null;
         const finalText = refined !== null ? refined.text : result.text;
+        // R13.11 — attribute the text that is actually being returned. Refinement
+        // runs on the LOCAL service even when the draft came from a remote
+        // target, so a revised remote draft was being reported under the remote
+        // model's name while the words on screen were the local 7B's.
+        const revisedLocally = refined !== null && refined.rounds > 0;
+        const attributedModel = revisedLocally
+          ? `${result.model}, revised locally by ${refined?.revisedBy ?? "the local model"}`
+          : result.model;
         const groundedNote =
           grounded !== null ? ` Grounded on ${grounded.sources.length} local source(s).` : "";
         const refinedNote = refined === null ? "" : refineNote(refined);
+        // R13.11 — a dispatched draft is a fresh conversation every call, so the
+        // same task asked twice returns the same answer. That reads as the model
+        // looping when it is really the harness re-asking; say so, and name the
+        // parameter that breaks the cycle.
+        const repeatNote =
+          askCount > 1 && (previous_attempts === undefined || previous_attempts.length === 0)
+            ? ` NOTE: this is ask #${askCount} for this same task and you passed no ` +
+              "`previous_attempts` — the drafter cannot see any earlier call, so this " +
+              "answer is derived from scratch and will keep matching the last one. Pass " +
+              "`previous_attempts` with what it produced and what was wrong, or do the " +
+              "work yourself."
+            : "";
         // Say where it ran and whether anything was redacted — a remote draft
         // must never read like a local one.
         //
@@ -326,12 +455,12 @@ export function registerCoderTool(
           content: [
             {
               type: "text",
-              text: `**Golem** Used ${result.model} ${whereNote} — verify independently.${groundedNote}${refinedNote}\n\n${finalText}`,
+              text: `**Golem** Used ${attributedModel} ${whereNote} — verify independently.${groundedNote}${refinedNote}${repeatNote}\n\n${finalText}`,
             },
           ],
           structuredContent: {
             text: finalText,
-            model: result.model,
+            model: attributedModel,
             role: result.role,
             ...(dispatched !== null
               ? {
@@ -364,6 +493,26 @@ export function registerCoderTool(
           },
         });
       } catch (err) {
+        // R13.11 — a decline is not a failure. Nothing routes `coder` and the
+        // session's own upstream cannot be dispatched to on Golem's behalf, so
+        // there is no drafter to delegate to; the work falls back to the caller,
+        // which is what an unconfigured project should do. Returned as an ORDINARY
+        // result (no `isError`) precisely so it reads as "do it yourself" rather
+        // than "Golem is broken" — the bare 401 this replaces read as the latter.
+        if (err instanceof NoDrafterConfiguredError) {
+          return instrumented(tel, "coder", startMs, {
+            content: [
+              {
+                type: "text",
+                text:
+                  `**Golem** No draft — ${err.message}\n\n` +
+                  "Nothing is wrong with your configuration; `coder` is simply not " +
+                  "routed anywhere in this project. Proceed with the task directly.",
+              },
+            ],
+            structuredContent: { text: "", model: "", role: "drafter", declined: true },
+          });
+        }
         const msg = backendUnavailableMessage(err);
         if (msg !== null) return errorResult(msg);
         throw err;

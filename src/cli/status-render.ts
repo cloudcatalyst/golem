@@ -293,9 +293,19 @@ export function renderStatus(report: StatusReport): string {
     // R10.8: name the step that chose the target. "went to your upstream" and
     // "went to your upstream because nothing named anything else" are different
     // facts, and only the second one is a prompt to go and configure something.
+    // R13.11: the harness step is not an assured destination. Golem can only
+    // dispatch there if it holds a credential of its own for that upstream — on
+    // the default `inherit` path the credential is the CLIENT's and Golem never
+    // sees it, so the dispatch declines and the work falls back to the session.
+    // Predicting "it drafts here" would be the dishonest-signal class again, and
+    // so would predicting "it declines": that depends on whether a key is stored,
+    // which `golem target list` already answers and this line will not read the
+    // credential store on every status render to duplicate.
     const via =
       configured.route === "harness"
-        ? " — via the harness default upstream; nothing routes `coder`"
+        ? " — nothing routes `coder`, so it falls through to the harness default " +
+          "upstream: it drafts there only if a key is stored for that upstream " +
+          "(`golem target list`), and otherwise declines and leaves the work to the session"
         : configured.route === "default_target"
           ? " — via inference.default_target"
           : "";
