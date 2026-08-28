@@ -320,6 +320,37 @@ describe("addGateway", () => {
     expect((settings.proxy.gateways ?? []).map((g) => g.id)).toContain("foundry-pinned");
   });
 
+  it("R13.13 — does NOT claim the model is ignored on a SPAWN provider, which pins it", async () => {
+    // "not translating" was standing in for "forwards the client's model id", and
+    // those are different sets. A spawn provider forwards nothing — there is no
+    // wire — and `claudeCliArgs` pins the model as an explicit `--model <id>`
+    // argument. So this warning fired on the one provider where the model is the
+    // most load-bearing field there is: it is what the dispatcher's same-model
+    // guard compares against, so a user who believed the warning and omitted it
+    // got a target that could not dispatch at all. It misled a real user.
+    const warnings: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      warnings.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      await addGateway(
+        dir,
+        {
+          id: "spawned",
+          provider: "claude-cli",
+          base_url: "https://api.anthropic.com",
+          models: ["claude-sonnet-5"],
+        },
+        "2026-07-26T00:00:00.000Z",
+      );
+    } finally {
+      process.stderr.write = original;
+    }
+    expect(warnings.join("")).not.toMatch(/IGNORED on the wire/);
+  });
+
   it("warns when the base URL composes into a doubled version segment", async () => {
     const warnings: string[] = [];
     const original = process.stderr.write.bind(process.stderr);

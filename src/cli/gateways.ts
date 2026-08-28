@@ -20,7 +20,12 @@
 
 import { defaultUserDir, loadConfig, writeSetting } from "../config/index.js";
 import { type CredentialStore, createCredentialStore } from "../credentials/index.js";
-import { doubledVersionSegment, isTranslatingProvider, listTargets } from "../providers/index.js";
+import {
+  doubledVersionSegment,
+  isSpawnProvider,
+  isTranslatingProvider,
+  listTargets,
+} from "../providers/index.js";
 import { clearServedModel } from "../proxy/index.js";
 import { logoutGateway } from "./gateways/credentials.js";
 import {
@@ -200,8 +205,22 @@ export async function addGateway(
 
   // R9.23: gateways carry `models[]` instead of a single `model`. The warning
   // about a byte-faithful provider applies to each model individually.
+  //
+  // R13.13 — "not translating" was doing duty for "forwards the client's model
+  // id", and those are not the same set. A SPAWN provider does neither: it has no
+  // wire to forward on, and it pins the model as an explicit argument
+  // (`claudeCliArgs` builds `--model <id>`). So the warning was telling users the
+  // model was display-only on the one provider where it is the most load-bearing
+  // field there is — it is also what the dispatcher's same-model guard compares
+  // against, so a user who believed the warning and left it off got a target that
+  // could not dispatch at all. Ask both questions.
   const models = input.models;
-  if (models !== undefined && models.length > 0 && !isTranslatingProvider(input.provider)) {
+  if (
+    models !== undefined &&
+    models.length > 0 &&
+    !isTranslatingProvider(input.provider) &&
+    !isSpawnProvider(input.provider)
+  ) {
     process.stderr.write(
       `warning: provider "${input.provider}" is byte-faithful (it forwards the client's own ` +
         `model id unchanged), so model(s) "${models.join(", ")}" will be IGNORED on the wire — ` +
