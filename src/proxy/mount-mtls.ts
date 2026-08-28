@@ -11,11 +11,11 @@
  * pairing and no message type for one.
  */
 
-import crypto, { createHash, type X509Certificate } from "node:crypto";
+import crypto, { type X509Certificate } from "node:crypto";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { TLSSocket } from "node:tls";
 import { DEVICE_CN_PREFIX } from "../security/device-cert-builder.js";
-import { isDeviceRevoked, loadDevice } from "../security/device-credentials.js";
+import { isDeviceRevoked } from "../security/device-credentials.js";
 import { checkStatus } from "../security/user-factor.js";
 
 export interface MtlsAuthConfig {
