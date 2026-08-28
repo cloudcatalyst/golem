@@ -630,6 +630,80 @@ describe("coder tool", () => {
     expect(result.structuredContent).toMatchObject({ declined: true });
   });
 
+  /**
+   * R13.12 — `inference.default_coder` names a MODEL, so the work belongs to the
+   * `golem-coder` subagent. Golem cannot start one, so `coder` must say so rather
+   * than drafting somewhere the user did not choose for this purpose.
+   */
+  it("declines and names the subagent when default_coder routes to the harness", async () => {
+    const fake = new FakeInferenceService(async () => {
+      throw new Error("must not draft when the work belongs to a subagent");
+    });
+    const client = await connectInMemory({
+      ...depsWithInference(fake),
+      harnessCoderModel: "claude-sonnet-5",
+    });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write a hello world function" },
+    });
+
+    // Not an error: nothing is broken, the caller simply has a better route.
+    expect(result.isError).toBeFalsy();
+    const text = textOf(result);
+    expect(text).toContain("golem-coder");
+    expect(text).toContain("claude-sonnet-5");
+    expect(result.structuredContent).toMatchObject({
+      declined: true,
+      delegate_to: "golem-coder",
+      delegate_model: "claude-sonnet-5",
+    });
+  });
+
+  it("still honours an EXPLICIT target even when default_coder routes to the harness", async () => {
+    // The caller named a destination for THIS call, which outranks a default.
+    const fake = new FakeInferenceService(async (role) => ({
+      text: "drafted anyway",
+      model: "qwen2.5-coder:7b",
+      role,
+      promptTokens: 1,
+      completionTokens: 1,
+      finishReason: "stop",
+    }));
+    const dispatched: string[] = [];
+    const client = await connectInMemory({
+      ...depsWithInference(fake),
+      harnessCoderModel: "claude-sonnet-5",
+      targetDispatcher: {
+        selectableTargets: () => [
+          { id: "a", provider: "openrouter", model: "m1", trust: "third-party" },
+          { id: "b", provider: "openrouter", model: "m2", trust: "third-party" },
+        ],
+        dispatch: async (req) => {
+          dispatched.push(req.targetId ?? "(none)");
+          return {
+            text: "remote draft",
+            model: "m1",
+            targetId: "a",
+            trust: "third-party",
+            route: "explicit",
+            redactedCount: 0,
+          };
+        },
+      },
+    });
+
+    const result = await client.callTool({
+      name: "coder",
+      arguments: { task: "write a hello world function", target: "a" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(textOf(result)).toContain("remote draft");
+    expect(dispatched).toEqual(["a"]);
+  });
+
   it("drafts a task-only call and reports the local model in text and structuredContent", async () => {
     const fake = new FakeInferenceService(async (role) => ({
       text: "draft code here",

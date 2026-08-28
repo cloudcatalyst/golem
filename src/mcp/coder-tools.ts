@@ -4,6 +4,8 @@
 
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { resolveCoderPrompt } from "../inference/coder-prompt.js";
+import { CODER_AGENT_NAME } from "../inference/coder-route.js";
 import {
   buildDispatchMessages,
   NoDrafterConfiguredError,
@@ -30,6 +32,14 @@ interface CoderGroundingDeps {
    * Its schema is omitted when false, so the mode costs nothing when unused.
    */
   readonly editEnabled?: boolean | undefined;
+  /** R13.12 — `inference.coder_prompt`; undefined uses Golem's default. */
+  readonly coderPrompt?: string | undefined;
+  /**
+   * R13.12 — the model `inference.default_coder` names, when it names a MODEL.
+   * Present means every task here belongs to the `golem-coder` subagent, which
+   * this process cannot start (see `Deps.harnessCoderModel`).
+   */
+  readonly harnessCoderModel?: string | undefined;
 }
 
 /**
@@ -89,23 +99,6 @@ const EDIT_MODE_SCHEMA = {
     ),
 } as const;
 
-/**
- * R13.11 — the system line for a dispatched draft.
- *
- * Remote dispatch used to send the task as a bare user turn with no framing at
- * all, while the local edit path has had a real role line since R8.7
- * (`ROLE_LINE` in `coder-edit.ts`). An unframed model answers the question it
- * thinks it was asked — often by restating the task or asking for the context it
- * was not given — which is indistinguishable, from the caller's side, from a
- * model that simply could not do the work.
- */
-const DRAFTER_SYSTEM_LINE =
-  "You are a coding assistant producing a first draft for another engineer to " +
-  "review. Answer with the code or text asked for and nothing else: no preamble, " +
-  "no restatement of the task, no offer to help further. If the request cannot be " +
-  "completed from what you were given, say precisely what is missing in one line " +
-  "instead of guessing.";
-
 /** Normalize a task for repeat detection — whitespace and case carry no intent. */
 function taskKey(task: string): string {
   return task.trim().toLowerCase().replace(/\s+/gu, " ");
@@ -134,6 +127,10 @@ export function registerCoderTool(
    * within the run that made it.
    */
   const taskCounts = new Map<string, number>();
+  // R13.12 — resolved once here, not per call: it cannot change without the
+  // server restarting, and both the dispatch `system` field and the generated
+  // subagent body must read the same setting.
+  const coderPromptText = resolveCoderPrompt(grounding.coderPrompt);
   // R9.3: the conversation may pick a target, bounded to what config declares
   // AND marks agent-selectable. An enum (rather than a free string) is what
   // makes "can never reach anything undeclared" visible in the schema itself —
@@ -243,6 +240,9 @@ export function registerCoderTool(
         role: z.string(),
         /** R13.11 — true when no drafter is routed and the caller should do the work. */
         declined: z.boolean().optional(),
+        /** R13.12 — the subagent this work belongs to, when one is configured. */
+        delegate_to: z.string().optional(),
+        delegate_model: z.string().optional(),
         ...(editEnabled
           ? {
               edit: z
@@ -346,6 +346,50 @@ export function registerCoderTool(
         });
       }
 
+      // R13.12 — `inference.default_coder` names a MODEL, so this work belongs to
+      // the `golem-coder` subagent. Golem cannot start it: an MCP server exposes
+      // tools to its client and cannot invoke the client's own tools, so there is
+      // no call this handler could make that spawns a subagent.
+      //
+      // So say so, rather than quietly drafting somewhere else. Silence was the
+      // alternative and it is worse: the generated definition would sit unused
+      // while `coder` dispatched to a destination the user did not choose for this
+      // purpose. Returned as an ORDINARY result — nothing is broken, the caller
+      // simply has a better route available than this tool.
+      //
+      // An explicit `target` still wins: the caller named a destination for THIS
+      // call, which outranks a default. `mode: "edit"` is also untouched — it is
+      // the opt-in locally-validated edit path, not a routing decision.
+      if (
+        grounding.harnessCoderModel !== undefined &&
+        grounding.harnessCoderModel !== "" &&
+        target === undefined
+      ) {
+        return instrumented(tel, "coder", startMs, {
+          content: [
+            {
+              type: "text",
+              text:
+                `**Golem** No draft — \`inference.default_coder\` routes coding work to the ` +
+                `\`${CODER_AGENT_NAME}\` subagent on \`${grounding.harnessCoderModel}\`, and this ` +
+                "tool cannot start a subagent (an MCP server cannot invoke its client's tools).\n\n" +
+                `Delegate this task to the \`${CODER_AGENT_NAME}\` subagent instead — it gets real ` +
+                "tool use and its own context, and its traffic still goes through Golem's proxy. " +
+                "If you meant to draft on a configured target with this tool, name it explicitly " +
+                "with `target`.",
+            },
+          ],
+          structuredContent: {
+            text: "",
+            model: "",
+            role: "drafter",
+            declined: true,
+            delegate_to: CODER_AGENT_NAME,
+            delegate_model: grounding.harnessCoderModel,
+          },
+        });
+      }
+
       const grounded =
         ground !== false && grounding.knowledge !== undefined
           ? await gatherGrounding(task, project_id ?? grounding.defaultProjectId, {
@@ -378,7 +422,7 @@ export function registerCoderTool(
             ? await dispatcher.dispatch({
                 role: "drafter",
                 prompt,
-                system: DRAFTER_SYSTEM_LINE,
+                system: coderPromptText,
                 worker: "coder",
                 ...(previous_attempts !== undefined && previous_attempts.length > 0
                   ? { attempts: previous_attempts }
@@ -395,7 +439,7 @@ export function registerCoderTool(
                 // function — a second copy of the rendering would drift.
                 buildDispatchMessages({
                   prompt,
-                  system: DRAFTER_SYSTEM_LINE,
+                  system: coderPromptText,
                   ...(previous_attempts !== undefined && previous_attempts.length > 0
                     ? { attempts: previous_attempts }
                     : {}),

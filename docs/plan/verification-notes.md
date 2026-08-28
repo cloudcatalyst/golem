@@ -7934,3 +7934,84 @@ per-turn statusline). It states the dependency and points at `golem target list`
 instead. Predicting either "it drafts here" or "it declines" without checking
 would be the dishonest-signal class this project exists to close.
 
+## §145 — R13.12: an MCP server cannot spawn a harness subagent, and two adjacent settings nearly resolved the same string differently (2026-08-28)
+
+### The constraint that decided the design
+
+The user's ask was: *"if I set the default_coder to claude-sonnet-5 the harness
+should use an agent to complete the tasks with Sonnet 5."*
+
+**That cannot be implemented inside the `coder` tool.** MCP servers expose tools
+*to* a client; nothing in the surface Golem uses lets a server invoke the client's
+own tools, so there is no call `coder` could make that starts a Task subagent. Any
+design that assumes otherwise is assuming a callback that does not exist.
+
+What IS available splits cleanly in two, and naming the split is the useful part:
+
+| | can Golem do it? |
+|---|---|
+| run a subagent on a different model | **no** — only the harness can |
+| generate the artifact that makes it native | **yes** — `golem init` already owns `.claude/` wiring |
+| be honest at the point of use | **yes** — `coder` declines and names the subagent |
+
+So R13.12 owns the wiring and the honesty, and never pretends to own the spawn.
+Recorded because the same shape will recur for every future "can Golem make Claude
+Code do X" question: **own the artifact, not the action.**
+
+### Subagent frontmatter: plain model id, not the virtual one
+
+§114 already quotes the frontmatter table (`model` accepts "a full model ID (for
+example, `claude-opus-5`)"), so a plain id is documented. R9.2 shipped the proxy
+half of `golem/<target>` too, but **§114 caveat 5 remains open** — the slash was
+never confirmed Claude Code-side, and R9.2 closed with that check outstanding. The
+generator therefore emits a plain id and a test asserts `not.toContain("golem/")`,
+so this stays a decision rather than drifting into an assumption.
+
+### The near-miss worth recording
+
+`default_coder` accepts a target id or a model id, so it must decide which a bare
+word is. The intended rule was "whatever the registry resolves", and the
+convenient assumption was that `resolveTarget` handles a bare GATEWAY id the way
+`default_target` does.
+
+**It does not.** `resolveTarget` matches target ids only; the gateway-to-first-target
+rule lives in `resolveDefaultTargetId`, one layer up, and only fires when
+`settings.default_target` is set. So `default_coder = "openrouter"` would have been
+read as a *model* called `openrouter` and produced an agent definition naming a
+model that does not exist.
+
+Caught by a test that asserted the intended behaviour and failed. Lesson: **when
+two adjacent settings accept the same shape, verify they resolve it through the
+same code, not through the same-sounding function.** A resolver named
+`resolveTarget` not resolving everything the target syntax allows is exactly the
+kind of thing a reader assumes rather than checks.
+
+### Deliberately NOT verified here — gates R13.14
+
+R13.12 proves the definition is written, its frontmatter matches the documented
+shape, and `coder` declines and names it. It does **not** prove:
+
+1. Claude Code honours a generated agent's `model:` (an unknown model surfaces
+   only on the first request — §114 caveat 4);
+2. the delegation is actually served by that model rather than the parent's;
+3. the traffic goes through `ANTHROPIC_BASE_URL`, so Golem still sees it.
+
+(3) is the load-bearing one: it is the entire difference between the subagent route
+and the `claude-cli` spawn it supersedes, which scrubs `ANTHROPIC_*` precisely so
+the child does NOT come back through Golem. No in-repo test can establish it — it
+needs one real delegation in a live session.
+
+That is why the `claude-cli` removal was split out to **R13.14** rather than
+shipped alongside. Deleting a working mechanism on the strength of an unverified
+replacement inverts the safe order, and the repo's own rule is verify, don't
+assume.
+
+### A trap for whoever does R13.14
+
+The settings schema validates `proxy.gateways[].provider` against a Zod enum.
+Dropping `claude-cli` from that enum makes an existing settings file containing one
+fail to **parse** — which breaks `golem status` and every other command, not just
+the coder. A targeted migration error is what is wanted, so the enum probably has
+to keep the value as a deprecated-and-rejected case rather than lose the member.
+Work that out before deleting anything.
+
