@@ -8004,3 +8004,86 @@ the coder. A targeted migration error is what is wanted, so the enum probably ha
 to keep the value as a deprecated-and-rejected case rather than lose the member.
 Work that out before deleting anything.
 
+## §146 — R13.4: passkeys cannot be the user factor on a LAN origin, and the reason is naming, not transport (2026-08-29)
+
+R13.4's gate says **"what the user factor can actually be on this platform is
+MEASURED, not assumed."** This is that measurement. It matters because a previous
+attempt at this task shipped a code comment asserting the same conclusion from a
+citation (`verification-notes §143`) that pointed at R13.2's conversation store —
+the finding did not exist. The conclusion happens to be right; the reason given
+for it was wrong, and the difference decides whether the blocker is fixable.
+
+**Source**: `developer.mozilla.org/en-US/docs/Web/API/PublicKeyCredentialCreationOptions`,
+fetched 2026-08-29 (raw page, not a summary). Cross-checked against
+`w3.org/TR/webauthn-3/` — the spec page truncated before §4 Terminology, so the
+normative RP-ID definition was NOT read first-hand and MDN is the source quoted
+below. That is a real limit on this note and is stated rather than papered over.
+
+### The reason that is usually given, and why it is not the blocker
+
+WebAuthn is gated on a secure context — **[DOCUMENTED]**, MDN, verbatim:
+
+> Secure context: This feature is available only in secure contexts (HTTPS), in
+> some or all supporting browsers.
+
+That one is **solvable, in principle**. Golem already runs its own CA
+(`src/proxy/loopback-cert.ts`, §121→§124), and an `https://` origin whose chain
+the device trusts is a secure context. It would need the CA installed and trusted
+on the phone — awkward on iOS, which needs a profile plus a separate full-trust
+toggle — but it is a configuration problem, not a wall.
+
+So "no passkeys because no secure context" is the wrong reason. If it were the
+only obstacle, the answer would be "install the CA", not "use a passcode".
+
+### The actual blocker: the Relying Party ID must be a domain
+
+**[DOCUMENTED]**, MDN, on `rp.id`, verbatim:
+
+> The `id` cannot include a port or scheme like a standard origin, but the domain
+> scheme must be https scheme. The `id` needs to equal the origin's effective
+> domain, or a domain suffix thereof. So for example if the relying party's
+> origin is `https://login.example.com:1337`, the following ids are valid:
+> `login.example.com`, `example.com`. But not: `m.login.example.com`, `com`
+
+and:
+
+> If omitted, `id` defaults to the document origin — which would be
+> `login.example.com` in the above example.
+
+The companion app's origin is `https://192.168.0.20:4655` (R12.5 measured the
+real LAN address live; R13.4's write surface sits beside it on 4655). Its
+effective domain is an **IP literal**. An IP literal is not a domain, so:
+
+- there is no valid `rp.id` to supply — an IP is not a domain and cannot be a
+  domain suffix of one;
+- omitting `rp.id` does not help, because the default is that same non-domain
+  origin.
+
+**No amount of CA trust changes this.** It is a naming rule, not a
+transport-security rule, and the two are independent. A passkey would need a real
+registrable domain, which a LAN-only design does not have and — per ADR-0007 §7,
+which scopes phase 1 to the LAN — is not going to acquire before R13.10.
+
+### Verdict
+
+**The passcode is the MECHANISM, not the fallback**, for as long as the companion
+app is reached by IP. Shipped as such in `src/security/user-factor.ts`: scrypt
+verifier at rest, an absolute unlock window, an idle relock, and a separate
+step-up freshness check for high-risk acts.
+
+### What is still UNESTABLISHED
+
+- **The device-side half.** Whether a phone that HAS trusted Golem's CA reports
+  `window.isSecureContext === true` for an IP-literal `https://` origin was not
+  run — no phone was involved in this measurement. It does not change the verdict
+  (the RP-ID rule bites either way) but it would matter to any future feature
+  needing a secure context for something other than WebAuthn — Web Crypto's
+  `subtle`, service workers, clipboard. Worth measuring when R12.14's device pass
+  happens.
+- **The normative text.** MDN is a faithful secondary source and is what is quoted
+  here; the W3C §4 Terminology definition of Relying Party Identifier was not read
+  directly because the spec page truncated. If a future task depends on an edge of
+  this rule rather than its centre, read the spec.
+- **What changes at R13.10.** An internet relay with a real domain would remove
+  the blocker entirely. That is the point at which the passkey question should be
+  re-asked rather than assumed still closed.

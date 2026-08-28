@@ -62,6 +62,30 @@ function renderDial(kind: string, dial: DialStatus, effectiveValue?: string): st
 }
 
 /** One-line rendering of the usage-limit prediction + freshness. */
+/**
+ * R13.4 — one line for the write surface: where it is reachable from and how
+ * many devices are paired, which is exactly what gate item 6 asks for.
+ *
+ * The two "cannot actually send" states are called out rather than left to be
+ * inferred from a count: a paired device with no passcode, and a locked window,
+ * both look like a working setup right up until someone tries to send.
+ */
+export function renderDevices(devices: NonNullable<StatusReport["devices"]>): string {
+  const reach = devices.write_lan
+    ? `port ${devices.write_port}, REACHABLE FROM YOUR NETWORK`
+    : `port ${devices.write_port}, loopback only`;
+  const paired = `${devices.active} active device${devices.active === 1 ? "" : "s"}`;
+  const retired =
+    devices.total > devices.active ? ` (${devices.total - devices.active} revoked/expired)` : "";
+  const gate = !devices.passcode_set
+    ? " · NO PASSCODE — paired devices cannot send"
+    : devices.unlocked
+      ? " · unlocked"
+      : " · locked";
+  const pairing = devices.pairing_open ? " · PAIRING WINDOW OPEN" : "";
+  return `Write surface: ${reach} · ${paired}${retired}${gate}${pairing}`;
+}
+
 export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
   const pct = Math.round(limits.five_hour_utilization * 100);
   const park = limits.enforced ? "enforced" : "advisory";
@@ -320,6 +344,9 @@ export function renderStatus(report: StatusReport): string {
   }
   if (report.limits !== undefined) {
     lines.push(renderLimits(report.limits));
+  }
+  if (report.devices !== undefined) {
+    lines.push(renderDevices(report.devices));
   }
   lines.push("");
 
