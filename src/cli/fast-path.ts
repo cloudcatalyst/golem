@@ -27,6 +27,7 @@ const stdio = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: pro
  */
 export const FAST_HOOK_EVENTS: readonly string[] = [
   "pre-tool-use",
+  "permission-request",
   "post-tool-use",
   "prompt-submit",
   "notification",
@@ -161,6 +162,19 @@ async function runHook(argv: readonly string[]): Promise<void> {
       try {
         const { runPreToolUseHook } = await import("../hooks/pre-tool-use.js");
         process.exitCode = await runPreToolUseHook(stdio());
+      } catch {
+        process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
+      return;
+    }
+    case "permission-request": {
+      // R12.12 — fires only when a permission decision is pending, i.e. with a
+      // human already waiting. Commander's ~725ms module graph is the difference
+      // between resolving the request and losing the race to the dialog it
+      // exists to pre-empt.
+      try {
+        const { runPermissionRequestHook } = await import("../hooks/permission-request.js");
+        process.exitCode = await runPermissionRequestHook(stdio());
       } catch {
         process.exitCode = 0; // fail-safe → native prompt, never auto-allow
       }

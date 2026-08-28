@@ -65,6 +65,15 @@ import type { InitAction } from "./init.js";
  */
 const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
 /**
+ * R12.12 — the second, EARLIER half of the autonomy gate. `PreToolUse`'s `ask`
+ * for a destructive/outward step only guarantees a dialog opens; this one
+ * answers the request with a real `deny` before it can. Same `golem autonomy
+ * enable/disable` toggle, same matcher-less wiring (the handler self-filters),
+ * and wired/unwired in the same breath as its sibling — see
+ * `src/hooks/permission-request.ts`.
+ */
+const PERMISSION_REQUEST_HOOK_COMMAND = "golem hook permission-request";
+/**
  * Golem's guidance lives in Claude Code project rules — `.claude/rules/golem-*.md`
  * (user decision 2026-07-16). Committed, team-wide, auto-loaded every session;
  * Golem never edits the user's CLAUDE.md. See src/hooks/guidance.ts.
@@ -141,6 +150,9 @@ export async function wireHooks(
   // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
   // default `manual` level). See PRE_TOOL_USE_HOOK_COMMAND.
   actions.push(await addEventHook(options, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND));
+  // PermissionRequest: the same gate, one event earlier, where a decision can
+  // actually resolve the request instead of deferring it (R12.12).
+  actions.push(await addEventHook(options, "PermissionRequest", PERMISSION_REQUEST_HOOK_COMMAND));
 
   // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
   // capture every fetch into the KB (non-blocking post-capture) — §44.
@@ -234,6 +246,7 @@ async function removeHookSettings(options: HookSettingsOptions): Promise<InitAct
     await removeEventHook(options, "Notification", NOTIFICATION_COMMAND),
     await removeEventHook(options, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
     await removeEventHook(options, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
+    await removeEventHook(options, "PermissionRequest", PERMISSION_REQUEST_HOOK_COMMAND),
     await removeMatcherHook(options, "PreToolUse", WEB_FETCH_PRE_COMMAND),
     await removeMatcherHook(options, "PostToolUse", WEB_FETCH_POST_COMMAND),
     await removeMatcherHook(options, "SessionStart", SESSION_START_COMMAND),

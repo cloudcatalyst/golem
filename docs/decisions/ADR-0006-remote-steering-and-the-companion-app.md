@@ -148,15 +148,30 @@ the opposite — read this paragraph together with the block below.]**
 > Golem already owns, not a new pairing/relay/account stack.
 >
 > **What does not change:** the class line itself (§2) is unamended; this
-> re-verification is about which layer enforces it. **What is not yet true:**
-> the `PermissionRequest` fix has not been built, and whether it actually
-> pre-empts a connected channel's relay has not been observed live — headless
+> re-verification is about which layer enforces it.
+>
+> **SHIPPED 2026-08-28 (R12.12) — the fix half.** Golem now registers a
+> `PermissionRequest` hook (`src/hooks/permission-request.ts`, wired by `golem
+> init` and `golem autonomy wire` alongside its `PreToolUse` sibling) that
+> returns `hookSpecificOutput.decision.behavior: "deny"` for `destructive` and
+> `outward`, at every autonomy level, with the same reason text the `ask`
+> carries. `PreToolUse`'s `ask` is deliberately **kept** as a redundant second
+> layer — it is what keeps the audit log and pending-call record working, and
+> what still stands if the earlier hook is unwired or beaten by a foreign one.
+> `unknown` is deliberately NOT denied here: fail-closed means make the human
+> decide, not decide for them one event earlier. Every failure path emits no
+> decision object, which is byte-for-byte the behaviour of having no
+> `PermissionRequest` hook at all.
+>
+> **What is STILL not true:** whether that `deny` actually pre-empts a connected
+> channel's `permission_request` relay has not been observed live — headless
 > `-p` sessions cannot open a dialog at all (confirmed: `ask` resolves to a
 > synchronous denial with no dialog and no channel notification in four live
 > runs), so the live interactive case remains unconfirmed for lack of a way to
-> drive one safely from this repo. **Until that fix ships and is confirmed, treat
-> the class line as at-risk — not safe — for a user running both Golem's current
-> build and a connected permission-relay channel.**
+> drive one safely from this repo. That confirmation is `R12.13` (`owner: user`).
+> **Until it is confirmed, treat the class line as documented-and-enforced but
+> not observed, for a user running both Golem and a connected permission-relay
+> channel.**
 >
 > **Disposition:** recommend cancelling R12.3/R12.4/R12.8/R12.9 (the pairing,
 > hook-timing, relay, and hosted-account stack built to carry capability 2
@@ -166,7 +181,8 @@ the opposite — read this paragraph together with the block below.]**
 > only, since its would-be novel value (a phone-shaped approve/deny surface) is
 > subsumed by Anthropic's first-party relay once a channel is connected. A new
 > task, `R12.12`, carries the `PermissionRequest` fix plus the live
-> confirmation this block says is still owed.
+> confirmation this block says is still owed. (R12.12 shipped the fix
+> 2026-08-28; the live confirmation moved to `R12.13`.)
 >
 > Full evidence, quotes and URLs: `docs/plan/verification-notes.md` §141.
 
