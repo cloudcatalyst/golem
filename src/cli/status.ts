@@ -263,6 +263,37 @@ export interface StatusReport {
    * the active account doesn't emit them), which is exactly when the snooze
    * auto-park goes blind, so it's surfaced as a warning too.
    */
+  /**
+   * R13.4 — the WRITE surface: who can reach it and who may use it.
+   *
+   * Gate item 6 asks `golem status` to say where the write surface is reachable
+   * from and how many devices are paired. Both halves matter and they fail
+   * differently: `write_lan` is about who can knock, `active` is about who gets in.
+   *
+   * Absent when this project has never paired a device (no device CA exists),
+   * because a line reading "0 devices" for a feature the user has not adopted is
+   * noise, while the same line after a revocation is the point.
+   */
+  readonly devices?: {
+    /** Devices that could authenticate right now: enrolled, unrevoked, unexpired. */
+    readonly active: number;
+    /** Every device ever enrolled, including revoked and expired ones. */
+    readonly total: number;
+    /** Is a passcode set? Without one, a paired device still cannot send. */
+    readonly passcode_set: boolean;
+    /** Is an unlock window open right now? */
+    readonly unlocked: boolean;
+    /** Port the write surface listens on. */
+    readonly write_port: number;
+    /**
+     * Bound to every interface rather than loopback. Invariant 9: if the
+     * developer has put it on a VPN, Golem neither prevents that nor pretends it
+     * has not happened — so this is reported, never quietly corrected.
+     */
+    readonly write_lan: boolean;
+    /** A local pairing window is OPEN — short-lived, and worth seeing. */
+    readonly pairing_open: boolean;
+  };
   readonly limits?: {
     readonly five_hour_utilization: number;
     readonly seven_day_utilization?: number;
@@ -342,6 +373,6 @@ export {
   probeProxy,
   REDACTION_OFF_WARNING,
 } from "./status-collect.js";
-export { renderLimits, renderStatus } from "./status-render.js";
+export { renderDevices, renderLimits, renderStatus } from "./status-render.js";
 // Re-exported for the callers that have always imported them from here.
 export { renderUpstream, upstreamLabel } from "./upstream-display.js";

@@ -25,6 +25,7 @@
  */
 
 import {
+  createPrivateKey,
   createSign,
   randomBytes as cryptoRandomBytes,
   generateKeyPair,
@@ -140,6 +141,7 @@ const OID_EXT_SUBJECT_ALT_NAME = "2.5.29.17";
 const OID_EXT_EXTENDED_KEY_USAGE = "2.5.29.37";
 const OID_EXT_NAME_CONSTRAINTS = "2.5.29.30";
 const OID_KP_SERVER_AUTH = "1.3.6.1.5.5.7.3.1";
+const OID_KP_CLIENT_AUTH = "1.3.6.1.5.5.7.3.2";
 
 /** Context-specific primitive tags inside GeneralName (SAN). */
 const SAN_TAG_DNS_NAME = 0x82; // [2] IA5String
@@ -590,4 +592,229 @@ export async function ensureLoopbackCert(
     notAfter: pair.notAfter,
     regenerated: true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// R13.4 — device client certificates (mTLS)
+//
+// The device CA is a SEPARATE anchor from the loopback CA above, deliberately.
+// They answer different questions: the loopback CA exists so a client trusts
+// Golem's server, and its certificate is installed in a trust store
+// (`NODE_EXTRA_CA_CERTS`). The device CA exists so Golem's server can identify a
+// client, and it is installed nowhere — it is only ever passed as the `ca` of
+// Golem's own write server. Sharing one key would mean a device credential and
+// the proxy's TLS identity could not be rotated or revoked independently, and it
+// would put a key that signs client identities into a file the user is told to
+// trust for server identities.
+//
+// It carries NO `nameConstraints`, and that is a considered choice rather than
+// an omission. The constraint form that bounds the loopback CA is `dNSName`, and
+// a device certificate has no `dNSName` — it has no SAN at all, because a client
+// certificate is not matched against a hostname. A dNSName constraint over a
+// certificate with no dNSName constrains nothing, and OpenSSL falls back to
+// checking the subject CN against it, which would reject our own device CNs.
+// What bounds this CA instead is that it is never a trust anchor for anything
+// except Golem's write server, its leaves carry `clientAuth` and nothing else,
+// and `verifyDeviceCert` checks that EKU explicitly rather than assuming a
+// chain implies a purpose.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extensions for a DEVICE client certificate: `CA:FALSE`, `digitalSignature`
+ * only, `clientAuth` only, and no SAN.
+ *
+ * `keyUsage` is `digitalSignature` alone (bit 0 gives `0b1000_0000`, 7 unused
+ * bits) — narrower than the server leaf's `digitalSignature + keyEncipherment`,
+ * because signing the TLS handshake is the entire job of a client certificate.
+ */
+function deviceCertExtensions(): Buffer {
+  return derSequence([
+    extension(OID_EXT_BASIC_CONSTRAINTS, true, derSequence([])),
+    extension(OID_EXT_KEY_USAGE, true, derBitString(Buffer.from([0x80]), 7)),
+    extension(OID_EXT_EXTENDED_KEY_USAGE, false, derSequence([derOid(OID_KP_CLIENT_AUTH)])),
+  ]);
+}
+
+/** Extensions for the device-issuing CA: `CA:TRUE, pathlen:0`, cert/CRL signing only. */
+function deviceCaExtensions(): Buffer {
+  return derSequence([
+    extension(
+      OID_EXT_BASIC_CONSTRAINTS,
+      true,
+      derSequence([derBoolean(true), derInteger(Buffer.from([0]))]),
+    ),
+    extension(OID_EXT_KEY_USAGE, true, derBitString(Buffer.from([0x06]), 1)),
+  ]);
+}
+
+/** The CN prefix every device certificate carries; the suffix is the device id. */
+export const DEVICE_CN_PREFIX = "golem-device:";
+
+/** The device-issuing CA's own CN. */
+export const DEVICE_CA_CN = "Golem device CA";
+
+export interface DeviceCa {
+  readonly caPem: string;
+  readonly caKeyPem: string;
+  readonly notBefore: Date;
+  readonly notAfter: Date;
+}
+
+/**
+ * Generate the device-issuing CA. Long-lived (10 years by default): rotating it
+ * invalidates every enrolled device at once, which is a bigger event than any
+ * single revocation and should be a deliberate act, not an expiry.
+ */
+export async function generateDeviceCa(
+  options: { readonly days?: number; readonly nowMs?: number } & Pick<
+    SelfSignedLeafOptions,
+    "randomBytes"
+  > = {},
+): Promise<DeviceCa> {
+  const { days = 3650, nowMs = Date.now(), randomBytes = cryptoRandomBytes } = options;
+  const notBefore = new Date(nowMs - CLOCK_SKEW_MS);
+  const notAfter = new Date(nowMs + days * 24 * 60 * 60 * 1000);
+  const ca = await generateEcKeyPair();
+
+  const der = buildCertificate({
+    subjectCn: DEVICE_CA_CN,
+    issuerCn: DEVICE_CA_CN,
+    subjectPublicKey: ca.publicKey,
+    issuerPrivateKey: ca.privateKey,
+    extensions: deviceCaExtensions(),
+    notBefore,
+    notAfter,
+    serial: randomSerial(randomBytes),
+  });
+
+  return {
+    caPem: toPem("CERTIFICATE", der),
+    caKeyPem: ca.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    notBefore,
+    notAfter,
+  };
+}
+
+export interface DeviceCertOptions {
+  /** The device-issuing CA, from {@link generateDeviceCa}. */
+  readonly ca: Pick<DeviceCa, "caPem" | "caKeyPem">;
+  /** Device id — becomes the CN as `golem-device:<id>`. */
+  readonly deviceId: string;
+  /** Lifetime in days. Short by design: an unrevoked lost device still expires. */
+  readonly days?: number;
+  readonly nowMs?: number;
+  readonly randomBytes?: (size: number) => Buffer;
+}
+
+export interface DeviceCert {
+  readonly certPem: string;
+  readonly keyPem: string;
+  /** SHA-256 fingerprint, colon-separated uppercase hex — the catalog's key. */
+  readonly fingerprint: string;
+  readonly notBefore: Date;
+  readonly notAfter: Date;
+}
+
+/**
+ * Issue one device client certificate from the device CA.
+ *
+ * The private key is generated HERE and returned once, to be handed to the
+ * device during local enrolment and never stored by Golem. Golem keeps the
+ * fingerprint, which is all it needs to recognise the device again and all an
+ * attacker reading `.golem/devices/` would get.
+ */
+export async function issueDeviceCert(options: DeviceCertOptions): Promise<DeviceCert> {
+  const { ca, deviceId, days = 90, nowMs = Date.now(), randomBytes = cryptoRandomBytes } = options;
+  const notBefore = new Date(nowMs - CLOCK_SKEW_MS);
+  const notAfter = new Date(nowMs + days * 24 * 60 * 60 * 1000);
+  const device = await generateEcKeyPair();
+  const caKey = createPrivateKey(ca.caKeyPem);
+
+  const der = buildCertificate({
+    subjectCn: `${DEVICE_CN_PREFIX}${deviceId}`,
+    issuerCn: DEVICE_CA_CN,
+    subjectPublicKey: device.publicKey,
+    issuerPrivateKey: caKey,
+    extensions: deviceCertExtensions(),
+    notBefore,
+    notAfter,
+    serial: randomSerial(randomBytes),
+  });
+
+  const certPem = toPem("CERTIFICATE", der);
+  return {
+    certPem,
+    keyPem: device.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+    fingerprint: new X509Certificate(certPem).fingerprint256,
+    notBefore,
+    notAfter,
+  };
+}
+
+/** Why a presented certificate was not accepted. */
+export type DeviceCertRejection =
+  | "not-signed-by-device-ca"
+  | "expired"
+  | "not-yet-valid"
+  | "wrong-subject"
+  | "not-client-auth";
+
+export type DeviceCertVerdict =
+  | { readonly ok: true; readonly deviceId: string; readonly fingerprint: string }
+  | { readonly ok: false; readonly reason: DeviceCertRejection };
+
+/**
+ * Verify a presented client certificate against the device CA, structurally.
+ *
+ * Node's TLS layer already checks the chain when `rejectUnauthorized` is on —
+ * but R13.4's write server deliberately runs with `requestCert: true` and
+ * `rejectUnauthorized: false`, so a bad certificate produces a 401 naming what
+ * was wrong instead of a TLS alert the phone renders as "cannot connect". That
+ * choice moves the check here, so it is written out rather than assumed:
+ * signature, validity window, subject shape, and the `clientAuth` EKU.
+ */
+export function verifyDeviceCert(
+  certPem: string,
+  caPem: string,
+  nowMs: number = Date.now(),
+): DeviceCertVerdict {
+  let cert: X509Certificate;
+  let ca: X509Certificate;
+  try {
+    cert = new X509Certificate(certPem);
+    ca = new X509Certificate(caPem);
+  } catch {
+    return { ok: false, reason: "not-signed-by-device-ca" };
+  }
+  if (!cert.verify(ca.publicKey)) return { ok: false, reason: "not-signed-by-device-ca" };
+  if (nowMs < Date.parse(cert.validFrom)) return { ok: false, reason: "not-yet-valid" };
+  if (nowMs > Date.parse(cert.validTo)) return { ok: false, reason: "expired" };
+
+  // The EKU is checked explicitly: a chain proves who signed a key, not what the
+  // key is allowed to do, and a certificate this CA issued for some other
+  // purpose must not authenticate a device by accident.
+  if (!hasClientAuthEku(cert)) return { ok: false, reason: "not-client-auth" };
+
+  const cn = /CN=(.+)$/m.exec(cert.subject)?.[1]?.trim();
+  if (cn === undefined || !cn.startsWith(DEVICE_CN_PREFIX)) {
+    return { ok: false, reason: "wrong-subject" };
+  }
+  const deviceId = cn.slice(DEVICE_CN_PREFIX.length);
+  if (deviceId.length === 0) return { ok: false, reason: "wrong-subject" };
+
+  return { ok: true, deviceId, fingerprint: cert.fingerprint256 };
+}
+
+/**
+ * Does the certificate carry the `clientAuth` EKU?
+ *
+ * `X509Certificate` exposes `keyUsage` as the EXTENDED key usage OIDs (the
+ * plain `keyUsage` bit string has no accessor), so this reads that array. A
+ * certificate with no EKU extension at all reports `undefined`, which is
+ * unconstrained in RFC 5280 terms — and treated here as a rejection, because
+ * "the issuer did not say what this is for" is not the same as "the issuer said
+ * it is for this", and only the second should authenticate a device.
+ */
+function hasClientAuthEku(cert: X509Certificate): boolean {
+  return (cert.keyUsage ?? []).includes(OID_KP_CLIENT_AUTH);
 }

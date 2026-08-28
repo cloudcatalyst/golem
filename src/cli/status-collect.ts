@@ -267,6 +267,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // R9.2: name the target this reading came from, and every target it says
   // nothing about. Without that, one target's utilization reads as coverage for
   // all of them — and the auto-park is blind for the rest without saying so.
+  // R13.4 — the write surface. Absent unless this project has paired at least
+  // once: the device CA is created by the first `golem device enrol`, so its
+  // absence is the honest signal that the feature is unused here.
+  const devices = await collectDeviceStatus(projectDir);
   const limits =
     baseLimits === undefined
       ? undefined
@@ -378,6 +382,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
         }
       : {}),
     ...(limits !== undefined ? { limits } : {}),
+    ...(devices !== undefined ? { devices } : {}),
     // R12.2: the blocked read model, in the SAME shape the dashboard serves at
     // `/api/state`. Always emitted — `status: "unknown"` (no readable state) is
     // an answer, and it is not the same answer as `clear`.
@@ -435,6 +440,47 @@ function buildLimits(
     spawn_blocked:
       spawn.gate && ageMs <= STALE_AFTER_MS && pred.fiveHour.utilization + spawn.costFraction > 1,
   };
+}
+
+/**
+ * R13.4 — the write-surface summary for `golem status`.
+ *
+ * Returns `undefined` when no device CA exists, i.e. the project has never
+ * paired a device. Every read is best-effort: a status command that throws
+ * because a device catalog is unreadable is worse than one that omits a line.
+ */
+async function collectDeviceStatus(projectDir: string): Promise<StatusReport["devices"]> {
+  try {
+    const {
+      activeDeviceCount,
+      checkFactor,
+      isPasscodeSet,
+      listDevices,
+      pendingEnrolmentInfo,
+      readDeviceCa,
+    } = await import("../security/index.js");
+    const ca = await readDeviceCa(projectDir);
+    if (ca === null) return undefined;
+    const { settings } = await loadConfig({ projectDir });
+    const [active, all, passcodeSet, factor, pending] = await Promise.all([
+      activeDeviceCount(projectDir),
+      listDevices(projectDir),
+      isPasscodeSet(projectDir),
+      checkFactor(projectDir, { idleMinutes: settings.security.idle_relock_minutes }),
+      pendingEnrolmentInfo(projectDir),
+    ]);
+    return {
+      active,
+      total: all.length,
+      passcode_set: passcodeSet,
+      unlocked: factor.live,
+      write_port: settings.security.write_port,
+      write_lan: settings.security.write_lan,
+      pairing_open: pending !== null,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /** Warning shown when the rate-limit feed has gone cold (auto-park is blind). */

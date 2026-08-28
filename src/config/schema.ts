@@ -548,6 +548,41 @@ export const SETTINGS_LEAVES = {
      */
     webcache_fetch_raw: z.boolean(),
   },
+  security: {
+    /**
+     * R13.4 — port for the mutual-TLS WRITE surface. Separate from the observe
+     * dashboard on purpose: read and write are different servers, so "read-only"
+     * is a property of the server rather than of a route table that can grow.
+     */
+    write_port: portSchema,
+    /**
+     * Bind the write surface to every interface rather than loopback.
+     *
+     * OFF by default. Unlike the dashboard's LAN opt-in this exposes a surface
+     * that can ACT, so it is bounded by two independent claims rather than by
+     * the bind: a client certificate this project's device CA issued, and a live
+     * unlock window. Neither can be obtained over the network — enrolment is
+     * local-only, forever (ADR-0006 section 3c-1, invariant 8).
+     */
+    write_lan: z.boolean(),
+    /**
+     * How long an unlock window lasts before the passcode is required again,
+     * however active the session was. Short by default: this is the window in
+     * which a picked-up unlocked phone can send.
+     */
+    unlock_window_minutes: z.number().int().positive(),
+    /** Idle timeout — no authorised request for this long relocks, sooner than above. */
+    idle_relock_minutes: z.number().int().positive(),
+    /**
+     * How recently the passcode must have been TYPED for a high-risk act (gate-map
+     * item 5 — originating a session). Deliberately far shorter than the unlock
+     * window: continuing to read a stream and starting a new agent session in a
+     * repository are not the same authority.
+     */
+    step_up_max_age_minutes: z.number().int().positive(),
+    /** Lifetime of an issued device certificate. An unrevoked lost device still expires. */
+    device_cert_days: z.number().int().positive(),
+  },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
     enabled: z.boolean(),
@@ -787,6 +822,9 @@ export type BrevitySettings = GolemSettings["brevity"];
 /** Vector KB, wiki, local-answer (Decision 33), repo map / LSP (R8.5/R8.6), web cache. */
 export type KnowledgeSettings = GolemSettings["knowledge"];
 
+/** R13.4 — device + user authentication for the write surface (ADR-0007 §7). */
+export type SecuritySettings = GolemSettings["security"];
+
 /** Local telemetry collection and the savings dashboard (spec §5). */
 export type TelemetrySettings = GolemSettings["telemetry"];
 
@@ -860,6 +898,16 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     memory_federation_enabled: false,
     webcache_revalidate: false,
     webcache_fetch_raw: true,
+  },
+  security: {
+    // 4655 — the dashboard's 4654 plus one; write sits beside read, never on it.
+    write_port: 4655,
+    // Loopback. A surface that can ACT is never exposed by default.
+    write_lan: false,
+    unlock_window_minutes: 15,
+    idle_relock_minutes: 5,
+    step_up_max_age_minutes: 2,
+    device_cert_days: 90,
   },
   telemetry: {
     enabled: true,
