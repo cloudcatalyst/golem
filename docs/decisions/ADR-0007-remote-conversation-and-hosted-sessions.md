@@ -342,6 +342,20 @@ verifies what is actually available to a browser on a LAN origin served with a
 private CA's certificate — a secure-context question that must be *measured*, not
 assumed, before the passkey path is promised.
 
+> **MEASURED 2026-08-29 (R13.4, verification-notes §146): the passcode is the
+> MECHANISM, not the fallback, for as long as the app is reached by IP.** The
+> secure-context question above turns out not to be the blocker — that one is
+> solvable, since an `https://` origin whose chain the device trusts *is* a
+> secure context, and Golem already runs a CA. The blocker is the **Relying Party
+> ID**, which per MDN "needs to equal the origin's effective domain, or a domain
+> suffix thereof". A LAN origin's effective domain is an IP literal, which is not
+> a domain, so there is no valid `rp.id` and omitting it does not help. **No
+> amount of CA trust changes this** — it is a naming rule, not a
+> transport-security rule. A passkey needs a real registrable domain, which phase
+> 1 deliberately does not have. Re-ask this at §7d/R13.10, where a domain exists;
+> until then this paragraph's "where the platform supports it" is answered "not
+> here, and not for a fixable reason".
+
 Failure is denial, never degradation: no factor, no send. The read-only observe
 tier is unchanged and requires none of this (ADR-0006 shipped it without pairing).
 

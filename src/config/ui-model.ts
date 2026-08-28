@@ -523,6 +523,45 @@ export const SETTING_META = {
     label: "Local telemetry",
     summary: "Record savings attribution locally (never leaves the machine)",
   },
+  "security.write_port": {
+    label: "Write surface port",
+    summary: "Port for the mutual-TLS write surface (separate server from the dashboard)",
+    advanced: true,
+  },
+  "security.write_lan": {
+    label: "Write surface reachable from your network",
+    summary: "Bind the write surface to every interface rather than loopback",
+    detail:
+      "Off by default. Unlike the read-only dashboard, this surface can ACT — so it is bounded by two independent claims rather than by the bind: a client certificate this project's device CA issued, and a live unlock window opened by your passcode. Neither can be obtained over the network; enrolment is local-only, forever. Turning this on does not grant anything to an unpaired device.",
+    danger:
+      "Makes a surface that can act on your machine reachable from your network. It still requires a paired device AND your passcode.",
+    advanced: true,
+  },
+  "security.unlock_window_minutes": {
+    label: "Unlock window (minutes)",
+    summary: "How long sending stays unlocked before the passcode is needed again",
+    detail:
+      "Counts from when the passcode was entered, however active the session is. This is the window in which a picked-up unlocked phone could send.",
+    advanced: true,
+  },
+  "security.idle_relock_minutes": {
+    label: "Idle relock (minutes)",
+    summary: "Relock after this long with no authorised request",
+    advanced: true,
+  },
+  "security.step_up_max_age_minutes": {
+    label: "Step-up freshness (minutes)",
+    summary: "How recently the passcode must have been typed for a high-risk act",
+    detail:
+      "High-risk means originating a session (gate-map item 5). Deliberately far shorter than the unlock window: continuing to read a stream and starting a new agent session in a repository are not the same authority.",
+    advanced: true,
+  },
+  "security.device_cert_days": {
+    label: "Device certificate lifetime (days)",
+    summary: "How long an issued device credential stays valid",
+    detail: "An unrevoked lost device still stops working when its certificate expires.",
+    advanced: true,
+  },
   "telemetry.dashboard_port": {
     label: "Dashboard port",
     summary: "Port for the local savings dashboard",
@@ -683,6 +722,11 @@ export const SECTION_META = {
     order: 35,
   },
   proxy: { title: "Proxy & upstream", summary: "Port, upstream, and timeouts", order: 40 },
+  security: {
+    title: "Devices & passcode",
+    summary: "Who may send: paired devices (mutual TLS) and the unlock window (R13.4)",
+    order: 45,
+  },
   telemetry: { title: "Telemetry", summary: "Local savings attribution and dashboard", order: 50 },
   snooze: { title: "Usage limits", summary: "Parking behaviour at the session limit", order: 60 },
   models: {
