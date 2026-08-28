@@ -7,6 +7,7 @@ import { resolveEffectiveCompression } from "../../compression/effective-level.j
 import { findProjectDir, type GolemSettings, loadConfig } from "../../config/index.js";
 import { DEFAULT_KEY_ENV } from "../../credentials/backends.js";
 import { createClaudeCliDrafter } from "../../inference/claude-cli.js";
+import { coderRouteConflict, resolveCoderRoute } from "../../inference/coder-route.js";
 import {
   createProbeRunner,
   detectCapability,
@@ -201,6 +202,35 @@ export default function register(program: Command): void {
         }
         const telemetry = openTelemetryStore(opts.dir);
         const { serveStdio } = await import("../../mcp/index.js");
+        // R13.12 — resolve `inference.default_coder` once. A model id means the work
+        // belongs to the generated `golem-coder` subagent, which this process cannot
+        // start; `coder` says so rather than drafting somewhere the user did not pick.
+        let harnessCoderModel: string | undefined;
+        try {
+          const route = resolveCoderRoute({
+            settings: withDefaultTarget(settings),
+            workerTargets: settings.inference.worker_targets,
+            ...(settings.inference.default_coder === undefined
+              ? {}
+              : { defaultCoder: settings.inference.default_coder }),
+          });
+          if (route.kind === "harness") harnessCoderModel = route.model;
+          const conflict = coderRouteConflict({
+            settings: withDefaultTarget(settings),
+            workerTargets: settings.inference.worker_targets,
+            ...(settings.inference.default_coder === undefined
+              ? {}
+              : { defaultCoder: settings.inference.default_coder }),
+          });
+          if (conflict !== undefined)
+            process.stderr.write(`golem coder: ${conflict}
+`);
+        } catch (err) {
+          process.stderr.write(
+            `golem coder: ${err instanceof Error ? err.message : String(err)}
+`,
+          );
+        }
         const lspBridge =
           settings.knowledge.repo_map_enabled && settings.knowledge.lsp_enabled
             ? await (async () => {
@@ -290,6 +320,15 @@ export default function register(program: Command): void {
             ? { targetDispatcher: createCoderDispatcher(settings, inference, opts.dir) }
             : {}),
           ...(settings.inference.local_editor_enabled ? { localEditor: true } : {}),
+          // R13.12 — the coder framing, and the harness-subagent model when
+          // `default_coder` names a model rather than a registry target. A
+          // malformed `default_coder` must not stop the MCP server from starting:
+          // every other tool still works, and `golem init`/`golem status` are
+          // where a config error belongs. Warn on stderr and carry on.
+          ...(settings.inference.coder_prompt === undefined
+            ? {}
+            : { coderPrompt: settings.inference.coder_prompt }),
+          ...(harnessCoderModel === undefined ? {} : { harnessCoderModel }),
           ...(settings.knowledge.repo_map_enabled ? { codeRoot: opts.dir } : {}),
           ...(lspBridge !== undefined ? { lsp: lspBridge } : {}),
           ...(inference !== undefined && settings.knowledge.rerank_enabled

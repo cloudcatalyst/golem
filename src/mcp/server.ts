@@ -264,6 +264,12 @@ function registerTools(server: McpServer, deps: import("./deps.js").GolemMcpServ
         defaultProjectId: deps.defaultProjectId ?? "default",
         ...(deps.projectRootDir === undefined ? {} : { projectRootDir: deps.projectRootDir }),
         editEnabled: deps.localEditor === true,
+        // R13.12 — one prompt for both mechanisms, and the model the harness
+        // subagent is meant to run on (when `default_coder` names a model).
+        ...(deps.coderPrompt === undefined ? {} : { coderPrompt: deps.coderPrompt }),
+        ...(deps.harnessCoderModel === undefined
+          ? {}
+          : { harnessCoderModel: deps.harnessCoderModel }),
       },
       tel,
       deps.targetDispatcher,
