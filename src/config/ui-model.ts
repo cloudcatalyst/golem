@@ -528,6 +528,15 @@ export const SETTING_META = {
     summary: "Port for the local savings dashboard",
     advanced: true,
   },
+  "telemetry.dashboard_lan": {
+    label: "Dashboard reachable from your network",
+    summary: "Bind every interface so a phone on the same Wi-Fi can read the dashboard",
+    detail:
+      "Off by default, and the dashboard binds loopback. On, the read-only companion view is reachable from any device on the same network: open the printed http://<lan-ip>:<port>/ on a phone and Add to Home Screen. There is no write route and every method but GET/HEAD is refused, so nothing on the network can steer or answer the agent — but the project path, the tool call being waited on, and your savings figures become readable by anything on that LAN. `golem dashboard --lan` does the same for one run.",
+    danger:
+      "Exposes the project path, the pending tool call and its argument, and telemetry to every device on your network.",
+    advanced: true,
+  },
 
   // --- ui -------------------------------------------------------------------
   "ui.pet": {
