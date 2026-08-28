@@ -9,7 +9,7 @@ created: 2026-08-23
 
 # Hosted multi-turn claude CLI spike (R13.1)
 
-Client `2.1.235`. This page records what R13.1 measured before building on [[ADR-0007]] section 3a.
+Client `2.1.235`. This page records what R13.1 measured before building on `docs/decisions/ADR-0007-remote-conversation-and-hosted-sessions.md` section 3a.
 
 ## What was established
 
@@ -26,4 +26,6 @@ Client `2.1.235`. This page records what R13.1 measured before building on [[ADR
 
 ## Verdict
 
-The `claude` CLI qualifies as the runner for ADR-0007 section 3a. Two documented gaps, neither a viability failure: Windows SIGINT gap (item 3) and park semantics (item 8). See [[Verification Notes]].
+The `claude` CLI qualifies as the runner for ADR-0007 section 3a. Two documented gaps, neither a viability failure: Windows SIGINT gap (item 3) and park semantics (item 8). See `docs/plan/verification-notes.md` §142.
+
+Full close-out: [[R13.1 -- Spike: hosted multi-turn claude CLI viability]]. The dissenting second close-out written the same day: [[Debrief: R13.1 Claude CLI hosted session spike]]. Downstream: [[Conversation Store]].
