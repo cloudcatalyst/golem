@@ -7699,43 +7699,32 @@ itself the item-8 finding about cost-visibility on an interrupted turn).
 
 ---
 
-### 143. R13.1 — Claude CLI hosted session spike results — 2026-08-23
+### 143. — WITHDRAWN 2026-08-29 (was: a second R13.1 spike result contradicting §142)
 
-**Verdict**: `[UNESTABLISHED]` for multi-turn stdin; `[OBSERVED]` for separate-invocation chaining.
-The `claude` CLI can be driven as a hosted session ONLY via separate-invocation chaining
-(one `-p` process per turn, chained via `--continue` / `--resume <session-id>`). This is
-exactly what `src/tasks/resume.ts` already implements. A single long-lived process accepting
-multi-turn stdin (`--input-format stream-json --output-format stream-json`) could NOT be
-reproduced under standalone conditions despite claims in §142.
+A second, independently-run R13.1 spike was appended here on 2026-08-23 as
+`### 143.` — inside §142's own section, which is also how it collided with the
+real `## §143` (R13.2's conversation store) and why three wiki pages ended up
+citing "§143" for an R13.1 finding.
 
-**Items**:
+It reported multi-turn stdin as `[UNESTABLISHED]` — "could NOT be reproduced
+under standalone conditions despite claims in §142" — and recommended building
+R13.3 as chained `-p` invocations rather than a long-lived process.
 
-| # | Topic | Label | Key finding |
-|---|---|---|---|
-| 1 | Single-turn exit (-p) | [OBSERVED] | `-p` always exits after 1 turn. `num_turns:1`, proper JSON output. |
-| 2 | Stream-json structured output | [OBSERVED] | Requires `--verbose`. Emits ~40 JSONL lines/turn. Same API cost as text mode. |
-| 3 | Interruption (SIGINT/KILL) | [OBSERVED, caveats] | SIGINT unreliable on Windows (turns resolve before signal lands). Exit 130 on kill. |
-| 4 | Resume/identity (--continue/--resume) | [OBSERVED] | Session ID stable across invocations. History preserved cumulatively. |
-| 5 | Working directory + project scope | [OBSERVED] | Golem hooks fire in non-bare `-p` (`num_turns=2`). Invariant 2 ENFORCEABLE. |
-| 6 | Permission modes | [OBSERVED] | default/bypassPermissions work in `-p`; auto timed out. PreToolUse can block. |
-| 7 | Proxy interposition | [UNESTABLISHED] | Direct proxy connection hung >30s. Normal repo-root runs go through proxy. |
-| 8 | Cost and lifetime | [OBSERVED] | $0.15/base, $0.34 with hooks. `--bare`=$0.00 trivial prompts. |
+**Ruled superseded (USER decision, 2026-08-29): §142 stands.** §142 carries the
+live probe with the numbers — `resultCount: 2`, `sessionIds` one id across both
+turns, `exitCode: 0` after `stdin.end()`, no timeout — and the withdrawn record
+offered no counter-measurement, only a failure to reproduce. A failure to
+reproduce is not a refutation of a recorded observation, and the withdrawn
+record's own citation pointed at another task's section. Its two wiki pages
+(`R13.1-claude-cli-hosted-spike.md` and its debrief) were deleted with this
+ruling; `concepts/Hosted-multi-turn-claude-CLI-spike.md` was kept because its
+findings table always agreed with §142.
 
-**Fallback pricing** (not built):
-
-- **Option A: Claude Agent SDK** — Adds `@anthropic-ai/sdk` + `@anthropic-ai/agent-sdk`.
-  Breaks five-dep pin. Full programmatic control. ~2-5 MB install impact. Maintenance burden.
-- **Option B: Golem's own loop** via `src/providers/` — No new deps but 30-50 person-hours
-  minimum for full agentic loop. Massive surface area increase. Duplicate effort.
-- **Recommendation**: Neither without explicit USER DECISION. Option B worse on engineering cost
-  despite dep advantage. Separate-invocation chaining via existing `claude` CLI runner is preferred.
-
-**Overall recommendation**: Build R13.3 as a pipeline of fork/exec processes matching existing
-`src/tasks/resume.ts` pattern rather than a persistent daemon or multi-turn stdin approach.
-
-**Sources** (client v2.1.235): live `claude -p` tests, `code.claude.com/docs/en/hooks`,
-`/headless`, `/channels`, `/sessions`, `src/tasks/resume.ts`, `src/inference/claude-cli.ts`,
-`.claude/settings.local.json`. Real first-party billing (~$2 total across live runs).
+Kept as a tombstone rather than removed outright: this file is the dated record,
+and "a claim was made, contradicted a measurement, and was withdrawn" belongs in
+it. The one finding worth carrying forward is procedural, not technical — **two
+agents closed the same task independently and neither noticed the other**, which
+is what produced the collision. See the R13.1 note in `docs/plan/SHIPPED.md`.
 
 ## §143 — R13.2: the conversation store — what is retained, the bounds chosen, and a Commander.js option-collision worth recording for the sibling tasks that will add subcommands here (2026-08-22)
 
