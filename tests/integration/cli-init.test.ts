@@ -129,6 +129,10 @@ describe("golem init", () => {
     expect(cmds("SessionStart")).toContain("golem hook session-start");
     // PreToolUse: snooze document-and-hold nudge + autonomy gate (snooze P2b).
     expect(cmds("PreToolUse")).toContain("golem hook pre-tool-use");
+    // PermissionRequest: the gate's second, earlier half — R12.12. Wired by the
+    // same init step as its PreToolUse sibling, so a project can never end up
+    // with the `ask` and not the `deny`.
+    expect(cmds("PermissionRequest")).toContain("golem hook permission-request");
   });
 
   it("uninit removes the status line and blocked-state hooks", async () => {

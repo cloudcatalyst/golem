@@ -16,7 +16,16 @@ import { findProjectDir } from "../../config/index.js";
 import { addEventHook, removeEventHook } from "../../hooks/index.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
-const PRE_TOOL_USE_HOOK_COMMAND = "golem hook pre-tool-use";
+/**
+ * The gate is TWO hooks, wired and unwired together (R12.12): `PreToolUse`
+ * classifies and asks, `PermissionRequest` answers a destructive/outward request
+ * outright before a dialog can open. Wiring one without the other is a
+ * half-installed gate, so `wire`/`unwire` always act on both.
+ */
+const GATE_HOOKS: readonly (readonly [event: string, command: string])[] = [
+  ["PreToolUse", "golem hook pre-tool-use"],
+  ["PermissionRequest", "golem hook permission-request"],
+];
 
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -54,7 +63,7 @@ export default function register(program: Command): void {
             `⚠ Golem is auto-approving some steps at level "${level}". Destructive/outward actions still require your approval (ADR-0002). Set 'manual' to disable.\n`,
           );
         process.stdout.write(
-          "the gate needs the PreToolUse hook wired (`golem init` does this by default; `golem autonomy wire`/`unwire` toggle it). Turn the gate off without unwiring: `golem autonomy disable`.\n",
+          "the gate needs the PreToolUse + PermissionRequest hooks wired (`golem init` does this by default; `golem autonomy wire`/`unwire` toggle them together). Turn the gate off without unwiring: `golem autonomy disable`.\n",
         );
       } catch (err) {
         _fail(err);
@@ -112,16 +121,16 @@ export default function register(program: Command): void {
 
   autonomyCmd
     .command("wire")
-    .description("Install the PreToolUse gate hook in the project's .claude settings")
+    .description(
+      "Install the PreToolUse + PermissionRequest gate hooks in the project's .claude settings",
+    )
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .action(async (opts: { dir: string }) => {
       try {
-        const action = await addEventHook(
-          { projectDir: opts.dir },
-          "PreToolUse",
-          PRE_TOOL_USE_HOOK_COMMAND,
-        );
-        process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+        for (const [event, command] of GATE_HOOKS) {
+          const action = await addEventHook({ projectDir: opts.dir }, event, command);
+          process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+        }
         process.stdout.write("autonomy gate wired. Restart Claude Code to activate.\n");
       } catch (err) {
         _fail(err);
@@ -130,16 +139,14 @@ export default function register(program: Command): void {
 
   autonomyCmd
     .command("unwire")
-    .description("Remove the PreToolUse gate hook")
+    .description("Remove the PreToolUse + PermissionRequest gate hooks")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .action(async (opts: { dir: string }) => {
       try {
-        const action = await removeEventHook(
-          { projectDir: opts.dir },
-          "PreToolUse",
-          PRE_TOOL_USE_HOOK_COMMAND,
-        );
-        process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+        for (const [event, command] of GATE_HOOKS) {
+          const action = await removeEventHook({ projectDir: opts.dir }, event, command);
+          process.stdout.write(`${action.kind}: ${action.path} — ${action.detail}\n`);
+        }
       } catch (err) {
         _fail(err);
       }

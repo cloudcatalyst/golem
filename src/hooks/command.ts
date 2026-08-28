@@ -14,6 +14,7 @@
 import process from "node:process";
 import { Command } from "commander";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
+import { runPermissionRequestHook } from "./permission-request.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
 import { runPreToolUseHook } from "./pre-tool-use.js";
 import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
@@ -103,6 +104,19 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
     .action(async () => {
       try {
         process.exitCode = await runPreToolUseHook(stdio());
+      } catch {
+        process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
+    });
+
+  hook
+    .command("permission-request")
+    .description(
+      "PermissionRequest handler: R12.12 — deny destructive/outward before a dialog can open",
+    )
+    .action(async () => {
+      try {
+        process.exitCode = await runPermissionRequestHook(stdio());
       } catch {
         process.exitCode = 0; // fail-safe → native prompt, never auto-allow
       }

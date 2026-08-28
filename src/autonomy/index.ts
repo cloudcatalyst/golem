@@ -4,7 +4,13 @@
  */
 
 export { type ActionClass, classifyAction, classifyBash } from "./classify.js";
-export { decideGate, type GateDecision, type GateEmission } from "./gate.js";
+export {
+  decideGate,
+  decidePermissionRequest,
+  type GateDecision,
+  type GateEmission,
+  type PermissionRequestDecision,
+} from "./gate.js";
 export {
   type ActionLogEntry,
   actionLogPath,
