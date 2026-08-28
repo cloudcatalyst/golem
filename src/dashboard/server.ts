@@ -20,6 +20,7 @@ import type { AddressInfo } from "node:net";
 import type { BlockedView } from "../cli/blocked-view.js";
 import type { SessionStateReport } from "../cli/session-report.js";
 import type { StatsReport } from "../cli/stats.js";
+import { ICON_SIZES, iconPng, iconSizeForPath } from "./icon.js";
 
 /** Everything the page shows, snake_case (it is also the JSON API shape). */
 export interface DashboardSnapshot {
@@ -42,9 +43,30 @@ export interface DashboardSnapshot {
   readonly blocked?: BlockedView;
 }
 
+/**
+ * The loopback bind this server has always used, and still defaults to. Named
+ * rather than inlined so the one place that widens it (R12.5's opt-in LAN bind)
+ * is visibly a departure from the default rather than a different literal.
+ */
+export const LOOPBACK_HOST = "127.0.0.1";
+
+/** Bind every interface — R12.5's opt-in, so a phone on the same network can reach it. */
+export const LAN_HOST = "0.0.0.0";
+
 export interface DashboardOptions {
-  /** Port to bind on 127.0.0.1; 0 picks an ephemeral port (tests). */
+  /** Port to bind; 0 picks an ephemeral port (tests). */
   readonly port: number;
+  /**
+   * R12.5 — the interface to bind. Defaults to {@link LOOPBACK_HOST}, which is
+   * what every caller before the companion app wanted and what an omitted field
+   * must therefore keep meaning. {@link LAN_HOST} is the companion app's opt-in.
+   *
+   * Widening the bind does NOT widen what the server can do: there is no write
+   * route to reach, and the method guard below refuses everything but GET/HEAD.
+   * That is the whole security argument for a LAN-exposed read surface, and it
+   * is structural rather than a policy check that could be forgotten.
+   */
+  readonly host?: string;
   /** Fresh data for each page render / API poll. */
   readonly snapshot: () => Promise<DashboardSnapshot>;
   /**
@@ -59,21 +81,70 @@ export interface DashboardOptions {
 export interface DashboardHandle {
   readonly port: number;
   readonly url: string;
+  /** The interface actually bound — so a caller can report what it did, not what it asked for. */
+  readonly host: string;
   close(): Promise<void>;
 }
 
 /** Page poll interval (ms); embedded into the served page. */
 export const REFRESH_MS = 2_000;
 
+/**
+ * R12.5 — how long a page may go without a successful poll before it stops
+ * claiming to be live. Three missed polls: long enough that one dropped request
+ * on a phone's flaky Wi-Fi does not flash a scary banner, short enough that
+ * walking out of range is visible before the numbers mean anything else.
+ *
+ * The gate this serves: "pulling the network shows a disconnected state rather
+ * than stale data." Showing the last good numbers under a live-looking header IS
+ * stale data, so going stale must visibly change the page, not just log.
+ */
+export const STALE_AFTER_MS = REFRESH_MS * 3;
+
+/** The web-app manifest route — referenced by the page and served as a real route. */
+export const MANIFEST_PATH = "/manifest.webmanifest";
+
+/**
+ * The web app manifest. `display: standalone` is what makes an installed icon
+ * open without browser chrome; `start_url: "/"` keeps a home-screen launch on
+ * the same origin it was installed from, whatever LAN address that was.
+ */
+export function manifestJson(): string {
+  return `${JSON.stringify(
+    {
+      name: "Golem — session state",
+      short_name: "Golem",
+      description:
+        "Read-only view of a locally-hosted Golem project: what is blocked, limits, and savings.",
+      start_url: "/",
+      scope: "/",
+      display: "standalone",
+      orientation: "portrait",
+      background_color: "#161614",
+      theme_color: "#161614",
+      icons: ICON_SIZES.map((size) => ({
+        src: `/icon-${size}.png`,
+        sizes: `${size}x${size}`,
+        type: "image/png",
+        purpose: "any",
+      })),
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 export async function startDashboard(options: DashboardOptions): Promise<DashboardHandle> {
   const server = http.createServer((req, res) => {
     void handle(options, req, res);
   });
 
+  const host = options.host ?? LOOPBACK_HOST;
+
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    // Loopback bind only (hard requirement for the local dashboard).
-    server.listen(options.port, "127.0.0.1", () => {
+    // Loopback unless the caller explicitly opted into the LAN bind (R12.5).
+    server.listen(options.port, host, () => {
       server.removeListener("error", reject);
       resolve();
     });
@@ -82,7 +153,10 @@ export async function startDashboard(options: DashboardOptions): Promise<Dashboa
   const port = (server.address() as AddressInfo).port;
   return {
     port,
-    url: `http://127.0.0.1:${port}/`,
+    host,
+    // `0.0.0.0` is a bind target, not somewhere to browse — report loopback as
+    // the URL and let the caller print the reachable LAN addresses separately.
+    url: `http://${host === LAN_HOST ? LOOPBACK_HOST : host}:${port}/`,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));
@@ -119,6 +193,29 @@ async function handle(
         "cache-control": "no-store",
       });
       res.end(req.method === "HEAD" ? undefined : `${JSON.stringify(snapshot)}\n`);
+      return;
+    }
+    // R12.5 — the two static assets that make the page installable to a home
+    // screen. Both are pure functions of nothing, so they are the only routes
+    // here that may be cached; everything with state stays `no-store`.
+    if (url.pathname === MANIFEST_PATH) {
+      const body = manifestJson();
+      res.writeHead(200, {
+        "content-type": "application/manifest+json; charset=utf-8",
+        "cache-control": "public, max-age=86400",
+      });
+      res.end(req.method === "HEAD" ? undefined : body);
+      return;
+    }
+    const iconSize = iconSizeForPath(url.pathname);
+    if (iconSize !== null) {
+      const png = iconPng(iconSize);
+      res.writeHead(200, {
+        "content-type": "image/png",
+        "content-length": String(png.length),
+        "cache-control": "public, max-age=86400",
+      });
+      res.end(req.method === "HEAD" ? undefined : png);
       return;
     }
     if (url.pathname === "/api/state" && options.sessionState !== undefined) {
@@ -202,8 +299,17 @@ export function renderPage(snapshot: DashboardSnapshot): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Golem dashboard</title>
+<!-- R12.5 — installable to a home screen. Android reads the manifest; iOS
+     ignores it and reads these three meta/link tags, which is why both exist. -->
+<link rel="manifest" href="${MANIFEST_PATH}">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Golem">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#161614">
 <style>
   :root { color-scheme: light dark;
     --fg: #1a1a1a; --bg: #fafaf7; --muted: #6b6b66; --line: #e2e2dc;
@@ -212,13 +318,27 @@ export function renderPage(snapshot: DashboardSnapshot): string {
     --fg: #e8e8e3; --bg: #161614; --muted: #99998f; --line: #33332e;
     --card: #1f1f1c; --accent: #7fc9a2; } }
   * { box-sizing: border-box; margin: 0; }
+  /* R12.5 — phone-first. The desktop layout is the wide branch of this, not the
+     other way round: 2rem of padding and a 60rem column is a fine dashboard and
+     an unusable phone screen. env(safe-area-inset-*) keeps content clear of a
+     notch when the app is launched standalone from a home screen. */
   body { font: 15px/1.5 system-ui, sans-serif; color: var(--fg);
-    background: var(--bg); padding: 2rem; max-width: 60rem; margin: 0 auto; }
+    background: var(--bg); max-width: 60rem; margin: 0 auto;
+    padding: 1rem calc(0.9rem + env(safe-area-inset-right))
+             calc(1.5rem + env(safe-area-inset-bottom))
+             calc(0.9rem + env(safe-area-inset-left));
+    padding-top: calc(1rem + env(safe-area-inset-top)); }
+  @media (min-width: 40rem) { body { padding: 2rem; } }
   header { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
   h1 { font-size: 1.3rem; }
   .dir { color: var(--muted); font-size: 0.85rem; word-break: break-all; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
-    gap: 0.75rem; margin: 1.25rem 0; }
+  /* Two tiles across on a phone, auto-fit from 40rem up. minmax(0, 1fr) (not
+     auto) is what stops a long number forcing a horizontal scroll. */
+  .tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem; margin: 1rem 0; }
+  @media (min-width: 40rem) { .tiles {
+    grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+    gap: 0.75rem; margin: 1.25rem 0; } }
   .tile { background: var(--card); border: 1px solid var(--line);
     border-radius: 8px; padding: 0.75rem 1rem; }
   .tile .label { color: var(--muted); font-size: 0.78rem;
@@ -227,8 +347,13 @@ export function renderPage(snapshot: DashboardSnapshot): string {
   .tile .value small { font-size: 0.9rem; color: var(--muted); }
   #tokens-saved { color: var(--accent); }
   h2 { font-size: 0.95rem; margin: 1.5rem 0 0.5rem; }
-  table { width: 100%; border-collapse: collapse; background: var(--card);
-    border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  /* The stage table is the one genuinely wide thing on the page. It scrolls
+     inside its own box rather than making the BODY scroll sideways, which on a
+     phone reads as a broken layout. */
+  .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; min-width: 22rem; border-collapse: collapse;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden; }
   th, td { text-align: left; padding: 0.45rem 0.8rem;
     border-top: 1px solid var(--line); }
   thead th { border-top: none; color: var(--muted); font-size: 0.78rem;
@@ -243,6 +368,19 @@ export function renderPage(snapshot: DashboardSnapshot): string {
   .blocked-head { font-weight: 600; }
   .blocked code { display: block; margin-top: 0.4rem; font-size: 0.85rem;
     white-space: pre-wrap; word-break: break-all; }
+  /* R12.5 — connection state. The .stale class greys the whole readout so nothing on a
+     disconnected screen can be mistaken for a live number. */
+  #link { display: none; margin: 0.75rem 0; padding: 0.7rem 0.9rem;
+    border-radius: 8px; border: 1px solid #c05c4a; border-left-width: 4px;
+    background: var(--card); font-weight: 600; }
+  #link small { display: block; font-weight: 400; color: var(--muted);
+    margin-top: 0.2rem; }
+  body.stale #link { display: block; }
+  body.stale .tiles, body.stale .scroll-x, body.stale #blocked-slot {
+    opacity: 0.42; filter: grayscale(1); }
+  /* R12.5 — the read-only notice. Sits where a control would be, on purpose. */
+  .readonly { margin: 1rem 0 0; padding: 0.6rem 0.8rem; border-radius: 8px;
+    border: 1px dashed var(--line); color: var(--muted); font-size: 0.85rem; }
 </style>
 </head>
 <body>
@@ -250,6 +388,9 @@ export function renderPage(snapshot: DashboardSnapshot): string {
     <h1>Golem savings</h1>
     <span class="dir" id="project-dir">${escapeHtml(snapshot.project_dir)}</span>
   </header>
+<div id="link">⚠ Not connected — this screen is not updating.
+  <small>Showing nothing rather than the last numbers, which would look live and
+  would not be. Reconnect to the network Golem is running on.</small></div>
 <div id="blocked-slot">${blockedBanner(snapshot.blocked)}</div>
 
   <div class="tiles">
@@ -269,6 +410,7 @@ export function renderPage(snapshot: DashboardSnapshot): string {
   </div>
 
   <h2>Stage attribution</h2>
+  <div class="scroll-x">
   <table>
     <thead><tr><th>Stage</th><th class="num">Tokens before</th>
       <th class="num">Tokens after</th><th class="num">Saved</th></tr></thead>
@@ -276,6 +418,10 @@ export function renderPage(snapshot: DashboardSnapshot): string {
           ${stageRows(snapshot)}
     </tbody>
   </table>
+  </div>
+
+  <p class="readonly">This screen is read-only. There is no prompt box and no
+  approve button — nothing here can answer the agent or start a turn.</p>
 
   <footer>
     <span id="note">${escapeHtml(s.note)}</span><br>
@@ -368,13 +514,41 @@ export function renderPage(snapshot: DashboardSnapshot): string {
       tbody.appendChild(tr);
     });
   }
-  function poll() {
-    fetch("/api/stats")
-      .then(function (res) { return res.ok ? res.json() : null; })
-      .then(function (snap) { if (snap) render(snap); })
-      .catch(function () { /* proxy between polls; try again next tick */ });
+  // R12.5 — connection state, never optimism. A failed poll does NOT leave the
+  // last good numbers sitting under a live-looking header: after STALE_AFTER_MS
+  // without a success the page marks itself stale, which greys the readout and
+  // shows the "not connected" banner. The gate is "pulling the network shows a
+  // disconnected state rather than stale data", and quietly retrying is exactly
+  // the failure that phrasing is aimed at.
+  var STALE_AFTER_MS = ${STALE_AFTER_MS};
+  var lastOkAt = Date.now();
+  function setStale(stale) {
+    if (document.body.classList.contains("stale") === stale) return;
+    document.body.classList.toggle("stale", stale);
   }
-  setInterval(poll, REFRESH_MS);
+  function poll() {
+    fetch("/api/stats", { cache: "no-store" })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (snap) {
+        if (!snap) return;           // reachable but unhealthy: let the clock run out
+        lastOkAt = Date.now();
+        setStale(false);
+        render(snap);
+      })
+      .catch(function () { /* offline or Golem stopped; the clock below decides */ });
+  }
+  function tick() {
+    poll();
+    setStale(Date.now() - lastOkAt > STALE_AFTER_MS);
+  }
+  setInterval(tick, REFRESH_MS);
+  // An installed app resumed from the background has been asleep, not connected.
+  // Without this it shows however old the last render was until the next tick.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) tick();
+  });
+  window.addEventListener("offline", function () { setStale(true); });
+  window.addEventListener("online", tick);
 })();
 </script>
 </body>
