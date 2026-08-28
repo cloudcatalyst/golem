@@ -15,14 +15,9 @@ import type { Command } from "commander";
 import { findProjectDir } from "../../config/index.js";
 import { loopbackCaKeyPath, loopbackCaPath } from "../../proxy/loopback-cert.js";
 import { devicesDir } from "../../security/device-catalog.js";
-import { DEVICE_CN_PREFIX } from "../../security/device-cert-builder.js";
 import {
-  ExpiryError,
   enroll,
-  getClientCertAndKey,
-  isDeviceRevoked,
   listDevices,
-  loadDevice,
   type PairingCodeResult,
   RevocationError,
 } from "../../security/device-credentials.js";
