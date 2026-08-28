@@ -139,6 +139,61 @@ describe("collectTargets", () => {
     expect(renderTargets(report)).not.toContain("golem gateway login llama");
   });
 
+  it("R13.13 — does not RENDER `key MISSING` for a keyless provider either", async () => {
+    // The warning list and the rendered table were asking different questions:
+    // the warning asked about the provider (and exempted a self-hosted model
+    // server), the renderer asked only whether an account id was present. So a
+    // correctly configured llamacpp target came out as `key MISSING` while the
+    // warning list — correctly — said nothing. Two surfaces, two answers, one of
+    // them wrong about the same target.
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "llama",
+          provider: "llamacpp",
+          base_url: "http://127.0.0.1:8080/v1",
+          models: ["qwen3-coder-30b"],
+        },
+      ],
+      { projectDir: dir },
+    );
+    const report = await collectTargets(dir, {}, { store_backend: store });
+    const row = report.targets.find((t) => t.id === "llama:qwen3-coder-30b");
+
+    // The fact is carried on the row, computed where the provider is still typed.
+    expect(row?.keyless).toBe(true);
+    expect(row?.key_set).toBe(false);
+
+    const rendered = renderTargets(report);
+    expect(rendered).not.toContain("key MISSING");
+    expect(rendered).toContain("no key needed");
+  });
+
+  it("R13.13 — still renders `key MISSING` where a key really is missing", async () => {
+    // Guard against the new branch swallowing a genuine fault: openai needs a
+    // credential, so its absence must still read as one.
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "oai",
+          provider: "openai",
+          base_url: "https://api.openai.com/v1",
+          models: ["gpt-5"],
+        },
+      ],
+      { projectDir: dir },
+    );
+    const report = await collectTargets(dir, {}, { store_backend: store });
+    const row = report.targets.find((t) => t.id === "oai:gpt-5");
+
+    expect(row?.keyless).toBe(false);
+    expect(renderTargets(report)).toContain("key MISSING");
+  });
+
   it("still warns about a keyed provider with no credential (the check is not disabled)", async () => {
     // Guard against the exemption being too broad: `openai` needs a key, and a
     // missing one is still a defect worth naming.

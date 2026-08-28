@@ -58,6 +58,18 @@ export interface TargetRow {
   readonly account: string | null;
   /** Whether a credential resolves for this target's account (never the value). */
   readonly key_set: boolean;
+  /**
+   * R13.13 — whether a credential is part of how you reach this provider at all.
+   *
+   * Carried on the row rather than re-derived in the renderer, because the two
+   * places that asked about credentials were keying off *different* facts: the
+   * warning below asks about the PROVIDER (and correctly exempts a model server
+   * the user runs themselves), while the renderer asked only whether an account
+   * id was present — so a perfectly configured `ollama` or `llamacpp` gateway
+   * target reported `key MISSING`. One field, computed once, where the provider
+   * is still strongly typed.
+   */
+  readonly keyless: boolean;
   readonly key_location?: string;
   readonly key_faults?: readonly CredentialFault[];
   readonly is_default: boolean;
@@ -151,6 +163,9 @@ export async function collectTargets(
         origin: t.origin,
         account: t.accountId,
         key_set: status.present,
+        // R13.13: the same question the warning above asks, recorded so the
+        // renderer cannot answer it differently.
+        keyless: isKeylessProvider(t.provider),
         ...(status.location !== undefined ? { key_location: status.location.label } : {}),
         ...(status.faults.length > 0 ? { key_faults: status.faults } : {}),
         is_default: t.id === defaultId,
@@ -326,11 +341,19 @@ export function renderTargets(report: TargetsReport): string {
     const mark = t.is_default ? "*" : " ";
     const model = t.model !== null ? ` model=${t.model}` : "";
     lines.push(`  ${mark} ${t.id.padEnd(28)} ${t.provider} ${t.base_url}${model}`);
+    // R13.13 — `keyless` is asked BEFORE the account id, because "this provider
+    // needs no credential" outranks "this target names an account". A model
+    // server the user runs themselves (`ollama`, `llamacpp`) is reached without
+    // one, so reporting `key MISSING` there described a correctly configured
+    // target as broken — while the warning list, which asks the same question of
+    // the provider, stayed silent. Two surfaces, two answers, one of them wrong.
     const key = t.key_set
       ? `key set — ${t.key_location ?? "stored"}`
-      : t.account === null
-        ? "no stored key (inherits the client's auth)"
-        : "key MISSING";
+      : t.keyless
+        ? "no key needed (this provider is reached without one)"
+        : t.account === null
+          ? "no stored key (inherits the client's auth)"
+          : "key MISSING";
     lines.push(
       `        trust=${t.trust} account=${t.account ?? "(inherit)"} ${key}${ORIGIN_TAG[t.origin]}`,
     );
