@@ -21,6 +21,12 @@ export const STREAM_PREFIX = "/session/";
 export const STREAM_SUFFIX = "/stream";
 /** `POST /session/:id/message` — the upstream. */
 export const MESSAGE_SUFFIX = "/message";
+/** `GET /session/:id/chat` — R13.6's conversation view. */
+export const CHAT_SUFFIX = "/chat";
+/** `GET /session/:id/history` — scrollback from R13.2's store. */
+export const HISTORY_SUFFIX = "/history";
+/** `POST /session/:id/interrupt` — stop the turn. */
+export const INTERRUPT_SUFFIX = "/interrupt";
 
 /**
  * Heartbeat interval. SSE comment lines that keep the connection warm through
@@ -45,6 +51,20 @@ export interface TransportSession {
    */
   readonly deliver: (text: string) => Promise<void>;
   readonly projectDir: string;
+  /**
+   * Stop the turn.
+   *
+   * §142 measured that `SIGINT` does not interrupt a running turn on Windows —
+   * only a process kill does. So this is deliberately NOT called `cancel`: the
+   * UI copy says the session ends, because that is what happens, and a control
+   * labelled "stop the turn" that actually stops the session would be the same
+   * class of lie as an optimistic acknowledgement.
+   */
+  readonly interrupt?: () => void;
+  /** Scrollback, oldest first — already redacted by the store that holds it. */
+  readonly history?: () => Promise<readonly { role: string; content: string }[]>;
+  /** `hosted` (R13.3) or `joined` (R13.7). Shown in the chat header. */
+  readonly kind?: "hosted" | "joined";
 }
 
 export interface TransportOptions {
@@ -72,18 +92,26 @@ export function resetLedgers(): void {
 }
 
 /** Parse `/session/<id>/stream` or `/session/<id>/message`. */
+export type SessionRoute = "stream" | "message" | "chat" | "history" | "interrupt";
+
+const ROUTES: readonly (readonly [suffix: string, route: SessionRoute])[] = [
+  [STREAM_SUFFIX, "stream"],
+  [MESSAGE_SUFFIX, "message"],
+  [CHAT_SUFFIX, "chat"],
+  [HISTORY_SUFFIX, "history"],
+  [INTERRUPT_SUFFIX, "interrupt"],
+];
+
 export function parseSessionPath(
   pathname: string,
-): { readonly sessionId: string; readonly route: "stream" | "message" } | null {
+): { readonly sessionId: string; readonly route: SessionRoute } | null {
   if (!pathname.startsWith(STREAM_PREFIX)) return null;
   const rest = pathname.slice(STREAM_PREFIX.length);
-  if (rest.endsWith(STREAM_SUFFIX)) {
-    const id = rest.slice(0, -STREAM_SUFFIX.length);
-    return id === "" ? null : { sessionId: id, route: "stream" };
-  }
-  if (rest.endsWith(MESSAGE_SUFFIX)) {
-    const id = rest.slice(0, -MESSAGE_SUFFIX.length);
-    return id === "" ? null : { sessionId: id, route: "message" };
+  for (const [suffix, route] of ROUTES) {
+    if (!rest.endsWith(suffix)) continue;
+    const id = rest.slice(0, -suffix.length);
+    if (id === "") return null;
+    return { sessionId: id, route };
   }
   return null;
 }
@@ -299,6 +327,46 @@ export function sessionTransportHandler(options: TransportOptions) {
         error: "no such hosted session",
         message: "It may have ended. `golem session host list` shows what is running.",
       });
+      return;
+    }
+    if (route.route === "chat") {
+      if (request.req.method !== "GET") {
+        json(request.res, 405, { error: "method not allowed" });
+        return;
+      }
+      const { renderChatPage } = await import("./chat-page.js");
+      const html = renderChatPage({
+        sessionId: route.sessionId,
+        projectDir: session.projectDir,
+        kind: session.kind ?? "hosted",
+      });
+      request.res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+      });
+      request.res.end(html);
+      return;
+    }
+    if (route.route === "history") {
+      if (request.req.method !== "GET") {
+        json(request.res, 405, { error: "method not allowed" });
+        return;
+      }
+      const turns = session.history === undefined ? [] : await session.history();
+      json(request.res, 200, { turns });
+      return;
+    }
+    if (route.route === "interrupt") {
+      if (request.req.method !== "POST") {
+        json(request.res, 405, { error: "method not allowed" });
+        return;
+      }
+      if (session.interrupt === undefined) {
+        json(request.res, 501, { error: "this session cannot be interrupted" });
+        return;
+      }
+      session.interrupt();
+      json(request.res, 200, { stopped: true });
       return;
     }
     if (route.route === "stream") {

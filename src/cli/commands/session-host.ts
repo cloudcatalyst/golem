@@ -325,6 +325,8 @@ export default function register(session: Command): void {
         hosted.start();
         out(
           `hosted session ${id}\n  project:   ${dir}\n  proxy:     ${baseUrl}\n` +
+            `  chat:      ${server.url}session/${id}/chat
+` +
             `  stream:    ${server.url}session/${id}/stream\n` +
             `  send to:   ${server.url}session/${id}/message\n\n`,
         );
@@ -335,7 +337,7 @@ export default function register(session: Command): void {
               "  still both required, and enrolment can only be started here.\n",
           );
           for (const url of lanUrls(server.port)) {
-            out(`    ${url.replace("http://", "https://")}session/${id}/stream\n`);
+            out(`    ${url.replace("http://", "https://")}session/${id}/chat\n`);
           }
           out("\n");
         }

@@ -126,7 +126,16 @@ describe("LocalConversationStore — bounded by count", () => {
 
 describe("LocalConversationStore — bounded by age", () => {
   it("evicts a conversation whose lastTurnAt is older than maxAgeMs", async () => {
-    const store = new LocalConversationStore(dir, { maxAgeMs: 1000 });
+    // Ten minutes, not one second.
+    //
+    // The window has to be wider than any delay that can occur BETWEEN stamping
+    // `fresh` and the eviction pass reading it back, or `fresh` ages out too and
+    // the test fails claiming both were evicted. At 1000ms that was reachable:
+    // observed 2026-08-29 under a full parallel run on Windows, where a second
+    // is easily lost between two filesystem operations. The assertion is
+    // unchanged — stale goes, fresh stays — it just no longer races the clock it
+    // is not trying to test.
+    const store = new LocalConversationStore(dir, { maxAgeMs: 10 * 60 * 1000 });
     // Far enough in the past that it is stale under ANY real Date.now() this
     // test could run at, without needing to fake the clock.
     await store.appendTurn("stale", {
