@@ -78,6 +78,8 @@ export {
 } from "./write-guard.js";
 export {
   type AuthenticatedRequest,
+  BodyTooLargeError,
+  DEFAULT_MAX_BODY_BYTES,
   ENROL_CLAIM_PATH,
   peerCertificatePem,
   startWriteServer,
