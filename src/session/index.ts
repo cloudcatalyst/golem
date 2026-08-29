@@ -6,6 +6,7 @@
  * is neither store — it is the thing that runs a session Golem owns.
  */
 
+export { type ChatPageOptions, renderChatPage } from "./chat-page.js";
 export {
   conversationIdFor,
   conversationStoreDir,
@@ -76,12 +77,16 @@ export {
 } from "./session-bus.js";
 export { readSessionTree, renderSessionTree, sessionTreePath } from "./session-tree.js";
 export {
+  CHAT_SUFFIX,
   HEARTBEAT_MS,
+  HISTORY_SUFFIX,
+  INTERRUPT_SUFFIX,
   MAX_MESSAGE_CHARS,
   MESSAGE_SUFFIX,
   parseSessionPath,
   resetLedgers,
   resumeCursor,
+  type SessionRoute,
   STREAM_PREFIX,
   STREAM_SUFFIX,
   sessionTransportHandler,
