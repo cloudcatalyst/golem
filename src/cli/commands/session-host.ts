@@ -198,6 +198,184 @@ export default function register(session: Command): void {
     });
 
   host
+    .command("serve")
+    .description(
+      "Start a hosted session AND serve it to paired devices over mTLS (R13.5 transport)",
+    )
+    .argument("[message...]", "an optional first turn")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--lan", "bind every interface so a paired phone can reach it")
+    .action(async (message: string[], opts: { dir: string; lan?: boolean }, command: Command) => {
+      try {
+        const dir = resolveDir(command, opts.dir);
+        const { settings } = await loadConfig({ projectDir: dir });
+        const { readDeviceCa, startWriteServer } = await import("../../security/index.js");
+        const deviceCa = await readDeviceCa(dir);
+        if (deviceCa === null) {
+          // Same refusal as `golem device serve`: a trust root must never
+          // appear as a side effect of starting a server.
+          throw new InitError(
+            "no device CA for this project — run `golem device enrol <label>` first",
+          );
+        }
+
+        const port = settings.proxy.port ?? defaultProjectPort(dir);
+        const baseUrl = proxyBaseUrl(port);
+        const id = randomUUID();
+
+        const { SessionBus, sessionTransportHandler } = await import("../../session/index.js");
+        const bus = new SessionBus(id);
+        const hosted = new HostedSession({
+          projectDir: dir,
+          proxyBaseUrl: baseUrl,
+          settingsJson: hostSettingsArg({ sessionId: id }),
+        });
+
+        // R13.3's events become R13.5's wire events. The mapping lives here,
+        // at the seam, rather than in either module: the host does not know
+        // about a device, and the transport does not know about a runner.
+        hosted.on("event", (event: { type: string; [k: string]: unknown }) => {
+          switch (event.type) {
+            case "text":
+              bus.publish({ type: "text", text: String(event.text) });
+              break;
+            case "tool_use":
+              bus.publish({
+                type: "tool_call",
+                id: String(event.id),
+                name: String(event.name),
+                input: event.input,
+              });
+              break;
+            case "tool_result":
+              bus.publish({
+                type: "tool_result",
+                toolCallId: String(event.toolUseId),
+                isError: event.isError === true,
+                content: String(event.content),
+              });
+              break;
+            case "permission_denied":
+              bus.publish({
+                type: "refused",
+                tool: String(event.tool),
+                message: String(event.message),
+                by: "runner",
+              });
+              break;
+            case "rate_limit":
+              bus.publish({ type: "parked", detail: "rate-limit pressure reported by the runner" });
+              break;
+            case "result":
+              bus.publish({
+                type: "turn_end",
+                ...(typeof event.costUsd === "number" ? { costUsd: event.costUsd } : {}),
+              });
+              break;
+          }
+        });
+        hosted.on("exit", (info: { code: number | null; error?: string }) => {
+          bus.publish({
+            type: "ended",
+            reason: info.error ?? `the runner exited (code ${String(info.code)})`,
+          });
+        });
+
+        const { ensureLoopbackCert } = await import("../../proxy/loopback-cert.js");
+        const tls = await ensureLoopbackCert(dir);
+        const lan = opts.lan === true || settings.security.write_lan;
+        const server = await startWriteServer({
+          projectDir: dir,
+          port: settings.security.write_port,
+          ...(lan ? { host: "0.0.0.0" } : {}),
+          serverKeyPem: tls.leafKeyPem,
+          serverCertPem: tls.chainPem,
+          deviceCa,
+          handler: sessionTransportHandler({
+            lookup: (wanted) =>
+              wanted === id
+                ? {
+                    bus,
+                    projectDir: dir,
+                    // The acknowledgement means DELIVERED. `send` writes to
+                    // the runner's stdin; resolving before that would make the
+                    // POST's promise a lie.
+                    deliver: async (text: string) => {
+                      hosted.send(text);
+                    },
+                  }
+                : null,
+          }),
+        });
+
+        await registerHostSession(dir, {
+          id,
+          projectDir: dir,
+          startedAt: new Date().toISOString(),
+          pid: process.pid,
+        });
+        await appendHostLog(dir, {
+          kind: "lifecycle",
+          ts: new Date().toISOString(),
+          sessionId: id,
+          event: "started",
+          detail: `runner through ${baseUrl}; transport on ${server.url}`,
+        });
+
+        hosted.start();
+        out(
+          `hosted session ${id}\n  project:   ${dir}\n  proxy:     ${baseUrl}\n` +
+            `  stream:    ${server.url}session/${id}/stream\n` +
+            `  send to:   ${server.url}session/${id}/message\n\n`,
+        );
+        if (lan) {
+          const { lanUrls } = await import("../../dashboard/index.js");
+          out(
+            "⚠ LAN mode: reachable from your network. A paired device AND your passcode are\n" +
+              "  still both required, and enrolment can only be started here.\n",
+          );
+          for (const url of lanUrls(server.port)) {
+            out(`    ${url.replace("http://", "https://")}session/${id}/stream\n`);
+          }
+          out("\n");
+        }
+
+        if (message.length > 0) {
+          const text = message.join(" ");
+          await appendHostLog(dir, {
+            kind: "turn",
+            ts: new Date().toISOString(),
+            sessionId: id,
+            origin: "local",
+            text,
+          });
+          hosted.send(text);
+        }
+        out("serving (Ctrl+C to stop)\n");
+
+        const shutdown = (): void => {
+          bus.closeAll("the session host is shutting down");
+          hosted.kill();
+          void Promise.all([
+            updateHostSession(dir, id, { stoppedAt: new Date().toISOString() }),
+            appendHostLog(dir, {
+              kind: "lifecycle",
+              ts: new Date().toISOString(),
+              sessionId: id,
+              event: "stopped",
+              detail: "serve stopped",
+            }),
+            server.close(),
+          ]).finally(() => process.exit(0));
+        };
+        process.on("SIGINT", shutdown);
+        process.on("SIGTERM", shutdown);
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  host
     .command("list")
     .description("Hosted sessions for this project, with liveness actually checked")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
