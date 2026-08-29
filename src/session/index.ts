@@ -66,4 +66,26 @@ export {
   hostSettings,
   hostSettingsArg,
 } from "./host-settings.js";
+export {
+  type AttachResult,
+  MessageLedger,
+  RING_CAPACITY,
+  SessionBus,
+  SUBSCRIBER_QUEUE_LIMIT,
+  type Subscriber,
+} from "./session-bus.js";
 export { readSessionTree, renderSessionTree, sessionTreePath } from "./session-tree.js";
+export {
+  HEARTBEAT_MS,
+  MAX_MESSAGE_CHARS,
+  MESSAGE_SUFFIX,
+  parseSessionPath,
+  resetLedgers,
+  resumeCursor,
+  STREAM_PREFIX,
+  STREAM_SUFFIX,
+  sessionTransportHandler,
+  sseFrame,
+  type TransportOptions,
+  type TransportSession,
+} from "./transport.js";

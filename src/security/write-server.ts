@@ -40,8 +40,18 @@ export const ENROL_CLAIM_PATH = "/enrol/claim";
 /** Identity echo — the smallest possible authenticated route, and a real one. */
 export const WHOAMI_PATH = "/api/whoami";
 
-/** Largest body this server will read. An enrolment claim is a few dozen bytes. */
-const MAX_BODY_BYTES = 8 * 1024;
+/**
+ * Largest body this server will read, by default.
+ *
+ * An enrolment claim is a few dozen bytes, which is what the original 8 KiB was
+ * sized for — but this server also carries whatever is mounted behind it, and
+ * R13.5's message transport allows a 32,000-character turn. Two limits that
+ * disagree are worse than either: the smaller one wins silently, and the caller
+ * is refused by the layer that never announced a limit. So the default here is
+ * comfortably above the largest thing a mounted handler is allowed to accept,
+ * and the handler's own limit is the one that speaks.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 128 * 1024;
 
 /** A request that has already passed the guard. */
 export interface AuthenticatedRequest {
@@ -70,6 +80,8 @@ export interface WriteServerOptions {
   readonly handler?: (request: AuthenticatedRequest) => Promise<void> | void;
   /** Routes needing a freshly-entered passcode (gate-map item 5). */
   readonly stepUpPaths?: readonly string[];
+  /** Override the body cap; see {@link DEFAULT_MAX_BODY_BYTES}. */
+  readonly maxBodyBytes?: number;
   readonly nowMs?: () => number;
 }
 
@@ -80,15 +92,31 @@ export interface WriteServerHandle {
   close(): Promise<void>;
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
+/** Thrown when a body exceeds the cap, so the caller can answer 413 rather than hang up. */
+export class BodyTooLargeError extends Error {
+  override name = "BodyTooLargeError";
+  constructor(readonly limit: number) {
+    super(`request body exceeds ${limit} bytes`);
+  }
+}
+
+/**
+ * Drain the body, bounded.
+ *
+ * On overflow this REJECTS rather than destroying the socket. Destroying it was
+ * the original behaviour and it is indistinguishable, at the client, from the
+ * server crashing or the network dropping — so an oversized message looked like
+ * a connectivity fault instead of a refusal with a stated limit.
+ */
+function readBody(req: IncomingMessage, limit: number): Promise<string> {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error("body too large"));
-        req.destroy();
+      if (size > limit) {
+        reject(new BodyTooLargeError(limit));
+        req.resume(); // drain, so the connection can carry the response
         return;
       }
       chunks.push(chunk);
@@ -127,6 +155,7 @@ export async function startWriteServer(options: WriteServerOptions): Promise<Wri
   const host = options.host ?? "127.0.0.1";
   const now = options.nowMs ?? Date.now;
   const stepUpPaths = options.stepUpPaths ?? [];
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   const server = https.createServer(
     {
@@ -139,8 +168,15 @@ export async function startWriteServer(options: WriteServerOptions): Promise<Wri
       rejectUnauthorized: false,
     },
     (req, res) => {
-      void handle(req, res).catch(() => {
-        if (!res.headersSent) json(res, 500, { error: "internal error" });
+      void handle(req, res).catch((err: unknown) => {
+        if (res.headersSent) return;
+        // An oversized body is a REFUSAL with a stated limit, not a crash and
+        // not a dropped connection — see readBody.
+        if (err instanceof BodyTooLargeError) {
+          json(res, 413, { error: "request body too large", limit: err.limit });
+          return;
+        }
+        json(res, 500, { error: "internal error" });
       });
     },
   );
@@ -160,7 +196,7 @@ export async function startWriteServer(options: WriteServerOptions): Promise<Wri
       }
       let code = "";
       try {
-        const parsed: unknown = JSON.parse(await readBody(req));
+        const parsed: unknown = JSON.parse(await readBody(req, maxBodyBytes));
         if (typeof parsed === "object" && parsed !== null && "code" in parsed) {
           code = normaliseCode(String((parsed as { code: unknown }).code));
         }
@@ -227,7 +263,12 @@ export async function startWriteServer(options: WriteServerOptions): Promise<Wri
       json(res, 404, { error: "not found" });
       return;
     }
-    await options.handler({ req, res, device: auth.device, body: await readBody(req) });
+    await options.handler({
+      req,
+      res,
+      device: auth.device,
+      body: await readBody(req, maxBodyBytes),
+    });
   }
 
   await new Promise<void>((resolve, reject) => {

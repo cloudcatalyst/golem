@@ -20,8 +20,24 @@ import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { useTempDirs } from "../helpers/tmp.js";
+
+// R13.5 — a LOCAL ceiling, with the measurement that justifies it, following the
+// same reasoning (and the same targeted approach) as `cli-init.test.ts`.
+//
+// Every test in this file walks the WHOLE of `src/` and reads each `.ts` file,
+// and two of them do it twice. That is real work whose cost grows with the
+// codebase: measured 2026-08-29, ~500ms alone and **6.1s** inside a full
+// parallel run, which put it close enough to the 5s default to fail about half
+// the time — as a timeout, never as a wrong answer. The cause is environmental
+// (≈15 vitest workers doing filesystem work on Windows, where every read is a
+// virus-scanner event), not a slow code path.
+//
+// Raised here only, so the default still guards everything else. If this file
+// ever fails on CONTENT rather than time, that is a real drift finding and the
+// message will say so.
+vi.setConfig({ testTimeout: 60_000 });
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const srcDir = path.join(repoRoot, "src");
