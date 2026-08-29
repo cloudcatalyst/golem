@@ -8087,3 +8087,158 @@ step-up freshness check for high-risk acts.
 - **What changes at R13.10.** An internet relay with a real domain would remove
   the blocker entirely. That is the point at which the passkey question should be
   re-asked rather than assumed still closed.
+
+## §147 — R13.3: the host enforces at `PreToolUse`, not `PermissionRequest` — and `--settings` is what makes the enforcement the host's own (2026-08-29)
+
+**Client version for every finding below: `2.1.246` (`claude --version`).** §142
+measured `2.1.235`; this re-confirms its central finding on a newer client and
+adds three that changed R13.3's design.
+
+Task: `docs/plan/tasks/R13.3.md`. Decision base: ADR-0007 §3a (the runner), §3c
+(the rule that permits a hosted loop) and invariants 2, 3, 4, 8.
+
+### 1. Multi-turn stdin still works — **[OBSERVED]**
+
+One process, `-p --input-format stream-json --output-format stream-json
+--verbose --permission-mode default`, two messages written to the same still-open
+stdin. Outcome: `results: 2`, **one** `session_id`
+(`be85d92c-57db-4b41-b33b-9abd0fa68ca7`) across both turns, `exitCode: 0` after
+`stdin.end()`, no timeout. §142's verdict holds on `2.1.246`.
+
+Event kinds seen across the run: `system/init`, `rate_limit_event`, `assistant`,
+`user`, `result/success`, `system/thinking_tokens`, `system/permission_denied`.
+Two are new since §142 and both are useful: `rate_limit_event` is a park signal
+the host can surface (invariant 8), and `system/thinking_tokens` is noise the
+normaliser must ignore rather than choke on.
+
+### 2. `--settings <inline JSON>` wires hooks for a project that has none — **[OBSERVED]**
+
+`claude --help` on `2.1.246`: *"--settings <file-or-json>  Path to a settings
+JSON file or a JSON string"*. Passing a JSON string containing a `hooks` block
+**does** install those hooks for the session, in a scratch project directory with
+no `.claude/settings.json` at all.
+
+This is the finding R13.3's enforcement rests on. §142 item 5 had established
+that a hosted session picks up the *project's* hooks via cwd — but that makes the
+host's enforcement conditional on guest wiring that `golem autonomy unwire` can
+remove. With `--settings`, the host supplies the gate itself and does not care
+what the project's settings say.
+
+### 3. `PermissionRequest` is the WRONG enforcement point for a hosted session — **[OBSERVED]**
+
+This one inverts R12.12's conclusion, for a reason that is specific and worth
+stating.
+
+A `PermissionRequest` hook returning `behavior:"deny"` was installed via
+`--settings`, and the session was asked to run `echo golem-hook-probe` inside its
+own cwd. **The command ran, and the hook never fired at all** — proven by having
+the hook append to a file before deciding: the file was never created.
+
+The docs already say why: `PermissionRequest` "Runs when Claude Code is about to
+ask you for permission." In `--permission-mode default`, an ordinary in-cwd
+command never asks. So enforcing there is enforcement that silently does nothing
+for the common case.
+
+R12.12 was still right for the *guest* path — its problem was a dialog opening
+and a connected channel answering it, and dialogs are exactly what
+`PermissionRequest` precedes. The two tasks need different events because they
+are solving different problems, not because one of them is wrong.
+
+### 4. `PreToolUse` + `permissionDecision: "deny"` DOES stop the call — **[OBSERVED]**
+
+Same probe, same `--settings` mechanism, hook switched to `PreToolUse`:
+
+- the hook fired (`{"event":"PreToolUse","tool":"Bash","input":{"command":"echo golem-hook-probe",…}}`);
+- the call was refused;
+- **the reason text reached the model as the tool result**: `is_error=true`,
+  content `GOLEM-HOST-DENY: refused by the session host.`;
+- the model reported it accurately: *"Command blocked — host refused it."*
+
+Note the shapes are not interchangeable, and the wrong one is a silent no-op:
+`PreToolUse` takes a FLAT `permissionDecision` + `permissionDecisionReason`;
+`PermissionRequest` nests `decision.behavior` + `message`.
+
+### 5. Claude Code's own guards are separate, and still run — **[OBSERVED]**
+
+In run 1, `rm -rf /tmp/golem-r133-victim` (outside the session's cwd) was refused
+by Claude Code itself: *"rm in '/tmp/golem-r133-victim' was blocked. For security,
+Claude Code may only remove files from the allowed working directories for this
+session."* It arrived as a `system/permission_denied` event — a different shape
+from a hook denial, which surfaces as an errored `tool_result`.
+
+Consequence for the host: these are two distinct facts and the UI must not report
+one as the other. `normaliseEvent` gives them separate event types.
+
+### 6. End-to-end, with the real runner — **[OBSERVED]**
+
+The gate line demonstrated against the shipped code. Commands:
+
+```
+node dist/cli/main.js session host start --dir "$T" \
+  "Delete the directory ./victim by running exactly: rm -rf ./victim   Then report what happened."
+```
+
+Output (abridged):
+
+```
+  ⏸ rate-limit pressure reported by the runner
+  ← REFUSED/ERROR: Refused by the Golem session host: destructive step. A hosted
+    session never performs it, at any autonomy level — do a dry run, or ask the
+    developer to run it themselves.
+[turn complete · $0.2984]
+```
+
+The session's own summary: *"Not deleted — the command was blocked… I did not
+attempt any workaround (`del`, `Remove-Item`, PowerShell tool, subagent) — that
+would just be routing around the host's block."* `./victim/file.txt` survived,
+confirmed by `ls` after the run.
+
+The audit trail (`golem session host log`) for that session, in order:
+
+```
+STARTED  runner through http://localhost:4930
+TURN     local      Delete the directory ./victim by running exactly: rm -rf ./victim …
+ALLOW    Bash       read         … no restriction added (read action) …
+DENY     Bash       destructive  Refused by the Golem session host: destructive step …
+STOPPED
+```
+
+That covers, in one run: attribution written **before** the relay (invariant 4),
+a `read` proceeding, a `destructive` refused **outright rather than asked**, the
+session running through the proxy (invariant 8 — the run against a project whose
+configured port did not match a live proxy failed with `Connection refused` and
+did nothing, which is the invariant holding rather than a bug), and visible tool
+calls (ADR-0007 §2).
+
+### 7. A commander collision that silently hosted a session in the WRONG project — **[OBSERVED]**
+
+`golem session host start --dir <path>` initially ignored `--dir` and hosted in
+the repo the CLI was invoked from. Cause: `session` already declares `--dir` for
+its tree view, and commander's option scanning let the parent's parser capture
+the value before the leaf subcommand's did.
+
+This is the SAME quirk R13.2 documented for `session forget` (§143), resurfacing
+one level deeper. The fix there was reading `command.parent.opts()`; here the
+chain is three deep (`session` → `host` → `start`), so the resolver walks up and
+prefers the first *explicitly typed* value — distinguishing "typed" from "set"
+matters, because every level defaults to the same directory.
+
+Worth generalising: **any `golem` subcommand that adds a level under a command
+already declaring `--dir` inherits this bug**, and its symptom is silent and
+severe — acting on the wrong project.
+
+### What is UNESTABLISHED
+
+- **A hosted session outliving its CLI invocation.** R13.3 ships the registry,
+  liveness checking and reaping, but a session runs under the process that
+  started it; detaching it into a daemon like `proxy-daemon.ts` is not built.
+  `golem session host list` reports honestly (`stopped`, or reaped with a reason)
+  rather than pretending.
+- **The `ask` path with somebody attached.** There is no answerer until R13.5's
+  transport and R13.6's chat surface, so every `ask` currently resolves to a
+  refusal. The `HostAttachment` seam exists and is tested on both branches, but
+  the attached branch has never run against a real device.
+- **POSIX interruption.** §142 measured that `child.kill("SIGINT")` does not
+  interrupt a running turn on Windows. Not re-tested here, and not tested on
+  POSIX at all; `HostedSession.kill()` therefore does not pretend to be a
+  graceful interrupt.

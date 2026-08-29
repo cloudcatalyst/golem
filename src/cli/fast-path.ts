@@ -28,6 +28,7 @@ const stdio = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: pro
 export const FAST_HOOK_EVENTS: readonly string[] = [
   "pre-tool-use",
   "permission-request",
+  "host-gate",
   "post-tool-use",
   "prompt-submit",
   "notification",
@@ -67,8 +68,13 @@ export function fastPathFor(argv: readonly string[]): "hook" | "statusline" | "s
   if (first === "hook" && second !== undefined && FAST_HOOK_EVENTS.includes(second)) {
     const rest = args.slice(2);
     if (rest.length === 0) return "hook";
-    // `post-tool-use --max-inline-chars <n>` is the only flag any of these take.
+    // Two of these take exactly one flag; nothing else does.
     if (second === "post-tool-use" && rest.length === 2 && rest[0] === "--max-inline-chars") {
+      return "hook";
+    }
+    // R13.3: `host-gate --session <id>` runs on EVERY tool call of a hosted
+    // session, so it earns the fast path for the same reason pre-tool-use does.
+    if (second === "host-gate" && rest.length === 2 && rest[0] === "--session") {
       return "hook";
     }
     return null;
@@ -177,6 +183,34 @@ async function runHook(argv: readonly string[]): Promise<void> {
         process.exitCode = await runPermissionRequestHook(stdio());
       } catch {
         process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
+      return;
+    }
+    case "host-gate": {
+      // R13.3 — fail CLOSED, the opposite of the guest hooks below: a hosted
+      // session has no human permission flow to fall back to, so a crash here
+      // must refuse the call rather than let it run unsupervised.
+      const at = args.indexOf("--session");
+      const sessionId = at === -1 ? undefined : args[at + 1];
+      try {
+        const { runHostGateHook } = await import("../hooks/host-gate.js");
+        process.exitCode = await runHostGateHook(
+          stdio(),
+          sessionId !== undefined ? { sessionId } : {},
+        );
+      } catch {
+        process.stdout.write(
+          `${JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason:
+                "Refused by the Golem session host: the host gate crashed, so the call was denied rather than run unsupervised.",
+            },
+          })}
+`,
+        );
+        process.exitCode = 0;
       }
       return;
     }

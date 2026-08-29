@@ -46,6 +46,8 @@ export {
   seedDefaultGuidance,
   writeGuidanceRule,
 } from "./guidance.js";
+export type { HostGateHookOptions } from "./host-gate.js";
+export { runHostGateHook } from "./host-gate.js";
 export type { PermissionRequestOptions } from "./permission-request.js";
 export { PERMISSION_REQUEST_EVENT, runPermissionRequestHook } from "./permission-request.js";
 export type { HookIo, PostToolUseOptions, PostToolUsePayload } from "./post-tool-use.js";

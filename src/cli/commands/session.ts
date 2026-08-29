@@ -12,6 +12,7 @@ import type { Command } from "commander";
 import { findProjectDir } from "../../config/index.js";
 import { LocalConversationStore } from "../../session/conversation-store.js";
 import { readSessionTree, renderSessionTree, sessionTreePath } from "../../session/session-tree.js";
+import register_session_host from "./session-host.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -49,6 +50,9 @@ export default function register(program: Command): void {
         process.exitCode = 1;
       }
     });
+
+  // R13.3 — `golem session host …`
+  register_session_host(session);
 
   session
     .command("forget [id]")

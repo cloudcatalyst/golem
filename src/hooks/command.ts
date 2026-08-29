@@ -14,6 +14,7 @@
 import process from "node:process";
 import { Command } from "commander";
 import type { KnowledgeBase } from "../interfaces/knowledge.js";
+import { runHostGateHook } from "./host-gate.js";
 import { runPermissionRequestHook } from "./permission-request.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
 import { runPreToolUseHook } from "./pre-tool-use.js";
@@ -106,6 +107,37 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
         process.exitCode = await runPreToolUseHook(stdio());
       } catch {
         process.exitCode = 0; // fail-safe → native prompt, never auto-allow
+      }
+    });
+
+  hook
+    .command("host-gate")
+    .description(
+      "PreToolUse handler for a HOSTED session (R13.3): refuses destructive/outward outright",
+    )
+    .option("--session <id>", "the hosted session id, for attributable log lines")
+    .action(async (opts: { session?: string }) => {
+      try {
+        process.exitCode = await runHostGateHook(
+          stdio(),
+          opts.session !== undefined ? { sessionId: opts.session } : {},
+        );
+      } catch {
+        // Fail-CLOSED, unlike the guest hooks: there is no human permission flow
+        // to fall back to in a hosted session. runHostGateHook already emits a
+        // deny envelope on its own error path; this is the last resort.
+        process.stdout.write(
+          `${JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason:
+                "Refused by the Golem session host: the host gate crashed, so the call was denied rather than run unsupervised.",
+            },
+          })}
+`,
+        );
+        process.exitCode = 0;
       }
     });
 
