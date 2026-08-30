@@ -7,6 +7,14 @@ import path from "node:path";
 import type { Command } from "commander";
 import { findProjectDir, loadConfig } from "../../config/index.js";
 import {
+  markReviewed,
+  readDelegationLedger,
+  unreviewedDelegations,
+  unreviewedRefusal,
+  waiveReview,
+  writeDelegationLedger,
+} from "../../hooks/delegation-ledger.js";
+import {
   createProbeRunner,
   detectCapability,
   OllamaClient,
@@ -293,6 +301,15 @@ export default function register(program: Command): void {
         if (found === "none") throw new InitError(`no task matching "${id}"`);
         if (found === "ambiguous") throw new InitError(`"${id}" matches more than one task`);
         const { task, scope } = found;
+
+        // R14.6 — the manager's gate. A delegated model is good at the shape of
+        // the work and unreliable on its specifics (three runs, seven factual
+        // errors), so close-out refuses while any dispatched run is unreviewed.
+        // A task with nothing delegated closes exactly as it always did.
+        const outstanding = unreviewedDelegations(await readDelegationLedger(opts.dir));
+        if (outstanding.length > 0) {
+          throw new InitError(unreviewedRefusal(outstanding));
+        }
         const prompt =
           opts.note === undefined ? task.prompt : `${task.prompt}\n\n## Outcome\n\n${opts.note}`;
         await storeForScope(scope, opts.dir).put({ ...task, state: "done", prompt });
@@ -300,6 +317,58 @@ export default function register(program: Command): void {
           scope === "plan"
             ? `marked plan task ${task.id} done — run "golem task index --write" to refresh the roadmap\n`
             : `marked task ${task.id} done\n`,
+        );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  taskCmd
+    .command("review")
+    .description(
+      "Record that a delegated run's output has been reviewed (R14.6) — close-out refuses until it is",
+    )
+    .argument("[id]", "a delegation id from the refusal, or omit with --all")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--all", "mark every outstanding delegated run reviewed", false)
+    .option(
+      "--waive <reason>",
+      "close WITHOUT reviewing, recording the reason — deliberate, never a default",
+    )
+    .action(async (id: string | undefined, opts: { dir: string; all: boolean; waive?: string }) => {
+      try {
+        const ledger = await readDelegationLedger(opts.dir);
+        const outstanding = unreviewedDelegations(ledger);
+        if (outstanding.length === 0) {
+          process.stdout.write("no delegated runs are awaiting review\n");
+          return;
+        }
+        if (id === undefined && !opts.all && opts.waive === undefined) {
+          throw new InitError(
+            `${outstanding.length} delegated run(s) awaiting review. ` +
+              "Name one by id, or use --all. Ids:\n" +
+              outstanding.map((d) => `  ${d.id}  ${d.agentType}`).join("\n"),
+          );
+        }
+        const nowIso = new Date().toISOString();
+        const result =
+          opts.waive !== undefined
+            ? waiveReview(ledger, nowIso, opts.waive, id)
+            : markReviewed(ledger, nowIso, id);
+        if (result.changed === 0) {
+          // Reporting success for a no-op is the dishonest-signal class this
+          // repo keeps closing.
+          throw new InitError(
+            id === undefined
+              ? "nothing changed — no outstanding delegated runs"
+              : `no outstanding delegated run with id "${id}"`,
+          );
+        }
+        await writeDelegationLedger(opts.dir, result.ledger);
+        process.stdout.write(
+          opts.waive !== undefined
+            ? `waived review for ${result.changed} delegated run(s): ${opts.waive}\n`
+            : `marked ${result.changed} delegated run(s) reviewed\n`,
         );
       } catch (err) {
         _fail(err);
