@@ -128,6 +128,26 @@ describe("renderPlanIndex", () => {
     const out = renderPlanIndex([task("A", {}, "queued", "a | b")]);
     expect(out).toContain("a \\| b");
   });
+
+  it("renders a task's discipline in its own column", () => {
+    const out = renderPlanIndex([task("A", { discipline: "code" })]);
+    expect(out).toContain("| discipline |");
+    const row = out.split("\n").find((l) => l.startsWith("| [A]"));
+    expect(row).toContain("code");
+  });
+
+  it("renders an unrecognised discipline exactly like any other free-form string — no error, no warning", () => {
+    const out = renderPlanIndex([task("A", { discipline: "astrology" })]);
+    expect(out).toContain("astrology");
+  });
+
+  it("renders '—' for a task with no discipline, same as any other empty column", () => {
+    const out = renderPlanIndex([task("A")]);
+    const row = out.split("\n").find((l) => l.startsWith("| [A]"));
+    // owner | size | discipline | depends on — two "—" placeholders back to back
+    // when neither discipline nor deps is set.
+    expect(row).toMatch(/\| — \| — \|/);
+  });
 });
 
 describe("splicePlanIndex", () => {
@@ -175,5 +195,18 @@ describe("renderPlanSummary", () => {
     const out = renderPlanSummary([task("A")]);
     expect(out).toContain("ready:");
     expect(out).not.toContain("blocked:");
+  });
+
+  it("names the discipline when one is set, and says nothing when it is not", () => {
+    const withDiscipline = renderPlanSummary([task("A", { discipline: "review" })]);
+    expect(withDiscipline).toContain("[discipline: review]");
+
+    const without = renderPlanSummary([task("B")]);
+    expect(without).not.toContain("[discipline:");
+  });
+
+  it("an unrecognised discipline renders unchanged — free-form, not validated", () => {
+    const out = renderPlanSummary([task("A", { discipline: "astrology" })]);
+    expect(out).toContain("[discipline: astrology]");
   });
 });

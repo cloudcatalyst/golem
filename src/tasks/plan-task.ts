@@ -99,6 +99,9 @@ export function parsePlanTask(raw: string): Task {
   const plan = planMetaSchema.parse({
     ...(typeof values.owner === "string" ? { owner: values.owner } : {}),
     ...(typeof values.size === "string" ? { size: values.size } : {}),
+    ...(typeof values.discipline === "string" && values.discipline !== ""
+      ? { discipline: values.discipline }
+      : {}),
     ...(typeof values.design === "string" && values.design !== "" ? { design: values.design } : {}),
     ...(typeof values.gate === "string" && values.gate !== "" ? { gate: values.gate } : {}),
     ...(typeof values.blocked === "string" && values.blocked !== ""
@@ -132,6 +135,7 @@ export function serializePlanTask(task: Task): string {
     `state: ${task.state}`,
     `owner: ${plan.owner}`,
     `size: ${plan.size}`,
+    ...(plan.discipline !== undefined ? [`discipline: ${plan.discipline}`] : []),
     ...(plan.design !== undefined ? [`design: ${plan.design}`] : []),
     ...(plan.gate !== undefined ? [`gate: ${plan.gate}`] : []),
     ...(plan.blocked !== undefined ? [`blocked: ${plan.blocked}`] : []),

@@ -35,6 +35,7 @@ golem task done R8.5 --note …  # close it; re-run `index --write`
 | `state` | `queued` · `running` · `blocked` · `paused` · `done` · `failed` · `cancelled`. |
 | `owner` | `agent` (an agent can do it) or `user` (an outward or credentialed act an agent must not take). |
 | `size` | `S` · `M` · `L` — rough effort, for picking work, not for scheduling. |
+| `discipline` | optional, free-form — which *kind* of worker should staff this (`code`, `review`, `write`, whatever a project decides). The routing axis, distinct from `owner` (the permission axis: may an agent do this at all). **Inert on an unrecognised value, and inert when absent**: no validation, no warning, no staffing lookup — a task naming a discipline nobody staffs behaves exactly as one naming none. That is deliberate (USER, 2026-08-30), not a gap to "fix" into a closed set; staffing becomes visible on demand via `golem personas` (R14.1), not by a warning here. |
 | `design` | where the design already lives, so the brief does not restate it. |
 | `gate` | the one-line definition of done / what decides it. |
 | `blocked` | why it cannot start *now*, when that is a fact about the world (no hardware, no keys, needs a decision). Keeps it visible rather than lost. |
