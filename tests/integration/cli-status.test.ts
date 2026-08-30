@@ -450,7 +450,27 @@ describe("renderStatus", () => {
     expect(output).toContain("Inference: chat ");
   });
 
-  it("shows the coder model on the Inference line when a local model is reachable", () => {
+  // R14.2: the roster is `inference.personas`, so a worker line comes from a
+  // ROW the report carries rather than a compile-time list. `status-collect`
+  // builds one per declared persona, so real `golem status` is unchanged; a
+  // hand-built report with no rows now renders no worker lines, which is the
+  // honest reading of a report that never claimed any.
+  it("shows the coder model on the Inference line when it is routed to a local target", () => {
+    const output = renderStatus({
+      ...healthyReport,
+      local_model: {
+        reachable: true,
+        model: "qwen2.5-coder:7b",
+        base_url: "http://localhost:11434",
+      },
+      workers: [
+        { worker: "coder", target: "local-ollama", model: "qwen2.5-coder:7b", local: true },
+      ],
+    });
+    expect(output).toContain("qwen2.5-coder:7b");
+  });
+
+  it("renders no worker line for a report carrying no worker rows", () => {
     const output = renderStatus({
       ...healthyReport,
       local_model: {
@@ -459,7 +479,7 @@ describe("renderStatus", () => {
         base_url: "http://localhost:11434",
       },
     });
-    expect(output).toContain("  coder: qwen2.5-coder:7b (local)");
+    expect(output).not.toMatch(/^ {2}coder:/m);
   });
 
   it("names a configured coder target and flags one that resolves to nothing (R9.4)", () => {
@@ -495,7 +515,7 @@ describe("renderStatus", () => {
     expect(output).not.toContain("coder qwen2.5-coder:7b");
   });
 
-  it("shows coder on the local model when reachable with no worker targets", () => {
+  it("shows coder on a reachable local target without calling anything unavailable", () => {
     const output = renderStatus({
       ...healthyReport,
       local_model: {
@@ -503,8 +523,11 @@ describe("renderStatus", () => {
         model: "qwen2.5-coder:7b",
         base_url: "http://localhost:11434",
       },
+      workers: [
+        { worker: "coder", target: "local-ollama", model: "qwen2.5-coder:7b", local: true },
+      ],
     });
-    expect(output).toContain("coder: qwen2.5-coder:7b (local)");
+    expect(output).toContain("coder: qwen2.5-coder:7b");
     expect(output).not.toContain("unavailable");
   });
 

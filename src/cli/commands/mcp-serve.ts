@@ -115,6 +115,7 @@ export function createCoderDispatcher(
     // NOT `settings.proxy` — see above.
     settings: withDefaultTarget(settings),
     workerTargets: settings.inference.worker_targets,
+    personas: settings.inference.personas,
     resolveKey: resolveTargetCredential(projectDir),
     // R9.15: a `claude-cli` target drafts by spawning the user's own Claude
     // Code. Wired here, guarded in the dispatcher.
@@ -214,6 +215,7 @@ export default function register(program: Command): void {
           const routeInput = {
             settings: withDefaultTarget(settings),
             workerTargets: settings.inference.worker_targets,
+            personas: settings.inference.personas,
             ...(coderModel === undefined ? {} : { defaultCoder: coderModel }),
           };
           const route = resolveCoderRoute(routeInput);

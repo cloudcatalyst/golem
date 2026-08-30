@@ -18,15 +18,29 @@ import path from "node:path";
 import { loadConfig } from "../config/index.js";
 import type { LayerName } from "../config/loader.js";
 import {
+  type PersonaLane,
+  personaLaneConflict,
+  resolvePersonaLane,
+} from "../inference/persona-lane.js";
+import {
   type EffectivePersona,
   effectivePersonas,
   type PromptSource,
   personaPromptPath,
   resolvePersonaPrompt,
 } from "../inference/personas.js";
+import { withDefaultTarget } from "../providers/target-settings.js";
 
 export interface PersonaRow {
   readonly persona: EffectivePersona;
+  /**
+   * R14.2: which lane staffs it, or the error that stopped resolution. A
+   * malformed model must not take the whole listing down — seeing WHICH persona
+   * is misconfigured is the reason you ran this.
+   */
+  readonly lane: PersonaLane | { readonly kind: "error"; readonly message: string };
+  /** Both `worker_targets` and the persona naming different destinations. */
+  readonly conflict?: string;
   /** Which layer supplied each field that is set, keyed by field name. */
   readonly fieldLayers: Readonly<Record<string, LayerName>>;
   readonly promptSource: PromptSource;
@@ -55,6 +69,7 @@ export async function collectPersonas(
 ): Promise<PersonasReport> {
   const { settings, provenance, warnings } = await loadConfig({ projectDir, env });
   const personas = settings.inference.personas;
+  const registry = withDefaultTarget(settings);
 
   const rows: PersonaRow[] = [];
   for (const persona of effectivePersonas(personas)) {
@@ -78,8 +93,28 @@ export async function collectPersonas(
       promptPath = `${config.prompt_file} (UNREADABLE: ${err instanceof Error ? err.message : String(err)})`;
     }
 
+    let lane: PersonaRow["lane"];
+    try {
+      lane = resolvePersonaLane({
+        settings: registry,
+        personas,
+        personaId: persona.id,
+        workerTargets: settings.inference.worker_targets,
+      });
+    } catch (err) {
+      lane = { kind: "error", message: err instanceof Error ? err.message : String(err) };
+    }
+    const conflict = personaLaneConflict({
+      settings: registry,
+      personas,
+      personaId: persona.id,
+      workerTargets: settings.inference.worker_targets,
+    });
+
     rows.push({
       persona,
+      lane,
+      ...(conflict === undefined ? {} : { conflict }),
       fieldLayers,
       promptSource,
       ...(promptPath === undefined ? {} : { promptPath }),
@@ -87,6 +122,28 @@ export async function collectPersonas(
   }
 
   return { rows, projectDir, warnings };
+}
+
+/**
+ * One line for a lane. `agent` and `worker` are not cosmetic variants of each
+ * other — one means the harness runs an agent loop Golem cannot start, the other
+ * means Golem dispatches a bounded single-shot itself — so the report says which,
+ * and says plainly that Golem does not spawn.
+ */
+function describeLane(lane: PersonaRow["lane"]): string {
+  switch (lane.kind) {
+    case "agent":
+      return (
+        `agent — the harness runs a subagent on ${lane.model}. ` +
+        "Golem generates the definition (R14.3); it cannot spawn one itself."
+      );
+    case "worker":
+      return `worker — Golem dispatches to target ${lane.targetId} (via ${lane.via})`;
+    case "unstaffed":
+      return `unstaffed (${lane.reason})`;
+    default:
+      return `UNRESOLVED — ${lane.message}`;
+  }
 }
 
 function layerNote(row: PersonaRow, field: string): string {
@@ -115,6 +172,7 @@ export function renderPersonas(report: PersonasReport): string {
 
     if (p.staffed) {
       lines.push(`        model=${p.model}${layerNote(row, "model")}`);
+      lines.push(`        lane: ${describeLane(row.lane)}`);
     } else {
       lines.push(
         "        UNSTAFFED — no model, so it declines rather than guessing. " +
@@ -134,6 +192,10 @@ export function renderPersonas(report: PersonasReport): string {
       lines.push("        tools inherited from the session (no allow-list set)");
     }
 
+    if (row.conflict !== undefined) {
+      lines.push(`        ⚠ ${row.conflict}`);
+    }
+
     const where = row.promptPath === undefined ? "" : ` — ${row.promptPath}`;
     lines.push(`        prompt: ${row.promptSource}${where}`);
 
@@ -143,10 +205,7 @@ export function renderPersonas(report: PersonasReport): string {
   }
 
   lines.push("");
-  lines.push(
-    `${report.rows.length} persona(s), ${staffed} staffed. ` +
-      "Staffing lane (subagent vs dispatched worker) arrives with R14.2.",
-  );
+  lines.push(`${report.rows.length} persona(s), ${staffed} staffed.`);
   lines.push("Edit a prompt with: golem personas eject <id>");
 
   for (const warning of report.warnings) {

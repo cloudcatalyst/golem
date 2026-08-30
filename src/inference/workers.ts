@@ -1,76 +1,113 @@
 /**
- * R9.4 — the tool-worker registry.
+ * R9.4 / R14.2 — the tool-worker registry, now sourced from config.
  *
- * A **worker** is an MCP tool that delegates a job to a model of its own:
- * `coder` today, and the shape is built for more (a `writer` for documents, a
- * reviewer, …). Each worker may default to its own target from the R9.1
- * registry, configured under one `inference.worker_targets` map rather than a
- * separate settings leaf per worker.
+ * A **worker** is a persona staffed in the `worker` lane: Golem dispatches the
+ * job to a model of its own, as a bounded single-shot, rather than the harness
+ * running an agent loop. `coder` was the only one for a long time.
  *
- * The map is the whole point. A scalar-per-worker (`coder_target`,
- * `writer_target`, …) grows a schema leaf, a UI-model entry, a status field and
- * two status-surface branches for every worker added; a map keyed by worker name
- * grows by one line of config and nothing else, and lets every surface render N
- * workers generically.
+ * ## What R14.2 changed
  *
- * What the map gives up is per-key schema documentation and per-key env
- * overrides, and — more importantly — a typo'd key would otherwise be silently
- * ignored. {@link unknownWorkerWarnings} buys that back: keys are validated
- * against {@link KNOWN_WORKERS} and reported loudly, in the same spirit as every
- * other unresolvable reference in the target registry.
+ * R9.4 chose a MAP (`inference.worker_targets`) over a scalar per worker so that
+ * adding a worker cost one line of config rather than a schema leaf, a UI-model
+ * entry, a status field and two status-surface branches. Its header then told
+ * the next contributor to *"add its name here"* — to `KNOWN_WORKERS`, a
+ * `const` of length one.
  *
- * **Adding a worker: add its name here, give it a glyph in the two `ROLE_MARKS`
- * copies, and nothing else in the config or status layers needs to change.**
+ * That was the remaining half of the problem: the map was open, the **roster**
+ * was not, so a project could not add a worker without a Golem release. The
+ * roster now comes from `inference.personas` (R14.1), and adding a worker is a
+ * config edit. `KNOWN_WORKERS` is gone; nothing should reintroduce a
+ * compile-time list of who may exist.
+ *
+ * ## What did NOT change
+ *
+ * The property that made the map safe. R9.4's header put it plainly: what a map
+ * gives up is that *"a typo'd key would otherwise be silently ignored"*, and
+ * {@link unknownWorkerWarnings} buys it back. A `worker_targets` key naming no
+ * declared persona still does nothing and is still reported loudly — the source
+ * of "what exists" moved, the honesty did not.
  */
 
-/** Workers that can be given their own default target. */
-export const KNOWN_WORKERS = ["coder"] as const;
+import { effectivePersonas, type PersonaConfig } from "./personas.js";
 
-export type WorkerName = (typeof KNOWN_WORKERS)[number];
+/**
+ * A worker name is a persona id. No longer a closed union: the roster is config,
+ * so the type cannot enumerate it.
+ */
+export type WorkerName = string;
 
-/** Whether `name` is a worker Golem actually has. */
-export function isKnownWorker(name: string): name is WorkerName {
-  return (KNOWN_WORKERS as readonly string[]).includes(name);
+/** Every declared persona id, in stable order — the live replacement for `KNOWN_WORKERS`. */
+export function declaredWorkers(
+  personas: Readonly<Record<string, PersonaConfig>> | undefined,
+): readonly string[] {
+  if (personas === undefined) return [];
+  return effectivePersonas(personas).map((p) => p.id);
 }
 
 /**
- * The target id a worker defaults to, or undefined for "use the local tiered
- * model" — the pre-R9.4 behaviour, and still the default.
+ * Whether `name` names a persona this project actually declares.
  *
- * An unknown *worker* key resolves to nothing here rather than throwing: it is a
- * config typo, not a routing decision, and it must not stop the tool that IS
+ * **An absent roster means "cannot judge", not "no".** A caller that has no
+ * `personas` to hand gets `true`, so routing it already had keeps working.
+ *
+ * That asymmetry is deliberate and it is the safer direction. The guard exists
+ * to stop a TYPO from routing; treating a missing roster as a rejection would
+ * instead make every worker route silently disappear for any caller that forgot
+ * to thread the roster through — turning a reporting nicety into a routing
+ * regression, which is far worse than the failure it prevents. Callers that DO
+ * supply a roster still get the full guard.
+ */
+export function isKnownWorker(
+  name: string,
+  personas: Readonly<Record<string, PersonaConfig>> | undefined,
+): boolean {
+  if (personas === undefined) return true;
+  return Object.hasOwn(personas, name);
+}
+
+/**
+ * The target id a worker defaults to, or undefined for "not routed here".
+ *
+ * An unknown *worker* key resolves to nothing rather than throwing: it is a
+ * config typo, not a routing decision, and it must not stop the worker that IS
  * configured correctly from working. It is surfaced by
  * {@link unknownWorkerWarnings} instead. (An unknown *target* is a different
  * matter entirely — that fails closed at dispatch, because it would otherwise
- * send work somewhere the user did not choose.)
+ * send context somewhere the user did not choose.)
  */
 export function workerTarget(
   workerTargets: Readonly<Record<string, string>> | undefined,
   worker: string,
+  personas: Readonly<Record<string, PersonaConfig>> | undefined,
 ): string | undefined {
   if (workerTargets === undefined) return undefined;
-  if (!isKnownWorker(worker)) return undefined;
+  if (!isKnownWorker(worker, personas)) return undefined;
   const id = workerTargets[worker];
   return id !== undefined && id !== "" ? id : undefined;
 }
 
 /**
- * Keys in `inference.worker_targets` that name no worker Golem has.
+ * Keys in `inference.worker_targets` that name no persona this project declares.
  *
  * Silently ignoring these is the failure mode the map shape would otherwise
- * introduce: the user writes `writer = "…"` before the writer exists (or
+ * introduce: the user writes `writer = "…"` before the persona exists (or
  * misspells `codr`), sees no error, and reasonably believes it took effect.
  */
 export function unknownWorkerWarnings(
   workerTargets: Readonly<Record<string, string>> | undefined,
+  personas: Readonly<Record<string, PersonaConfig>> | undefined,
 ): readonly string[] {
   if (workerTargets === undefined) return [];
-  const known = KNOWN_WORKERS.join(", ");
+  // No roster supplied — nothing to judge against, so say nothing rather than
+  // reporting every key as unknown. Same rule as `isKnownWorker`.
+  if (personas === undefined) return [];
+  const known = declaredWorkers(personas).join(", ");
   return Object.keys(workerTargets)
-    .filter((key) => !isKnownWorker(key))
+    .filter((key) => !isKnownWorker(key, personas))
     .map(
       (key) =>
-        `inference.worker_targets."${key}" names no worker Golem has, so it does nothing. ` +
-        `Known workers: ${known}.`,
+        `inference.worker_targets."${key}" names no persona this project declares, so it does ` +
+        `nothing. Declared personas: ${known || "(none)"}. ` +
+        `Add it under inference.personas.${key} first.`,
     );
 }

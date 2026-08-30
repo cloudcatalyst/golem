@@ -138,7 +138,9 @@ export async function collectLocalModel(opts: LocalModelOptions): Promise<LocalM
   // Unknown worker names are ignored here — `unknownWorkerWarnings` already
   // reports those, and repeating it would be a second voice for one fact.
   const nonLocalWorkers = Object.entries(settings.inference.worker_targets)
-    .filter(([worker, target]) => isKnownWorker(worker) && target !== "")
+    .filter(
+      ([worker, target]) => isKnownWorker(worker, settings.inference.personas) && target !== "",
+    )
     .map(([worker, target]) => ({ worker, target }));
 
   const probe = opts.probe ?? ((url: string) => probeLocalModel(url, URL_PROBE_TIMEOUT_MS));

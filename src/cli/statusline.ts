@@ -27,7 +27,7 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { type BlockKind, readSessionState, resolveBlock } from "../hooks/session-state.js";
-import { isKnownWorker, KNOWN_WORKERS } from "../inference/workers.js";
+import { declaredWorkers, isKnownWorker } from "../inference/workers.js";
 import {
   type CompressionLevel,
   coerceCompressionLevel,
@@ -492,6 +492,7 @@ export async function collectGolemState(
   let provider: UpstreamProvider | undefined;
   let model: string | undefined;
   let workerTargetModels: readonly { worker: string; model?: string }[] = [];
+  let roster: readonly string[] = [];
   let activeAccount: string | null = null;
   let effectiveLevel: CompressionLevel | undefined;
   let proxyPort: number | undefined;
@@ -514,9 +515,10 @@ export async function collectGolemState(
     // Resolved from settings already in hand — no extra I/O on a per-prompt
     // surface. A target that does not resolve yields no model, so the worker is
     // omitted from the line rather than advertised.
+    roster = declaredWorkers(settings.inference.personas);
     const configured = settings.inference.worker_targets;
     workerTargetModels = Object.keys(configured)
-      .filter((worker) => isKnownWorker(worker))
+      .filter((worker) => isKnownWorker(worker, settings.inference.personas))
       .map((worker) => {
         const hit = listTargets(settings.proxy).find((t) => t.id === configured[worker]);
         return {
@@ -648,7 +650,7 @@ export async function collectGolemState(
   // R9.4: assemble the per-worker models AFTER the local probe, since a worker
   // with no configured target falls back to the local model — which has to
   // actually be reachable to be worth naming.
-  state = { ...state, workers: resolveWorkerModels(state, workerTargetModels) };
+  state = { ...state, workers: resolveWorkerModels(state, workerTargetModels, roster) };
 
   try {
     const agg = await openTelemetryStore(dir).aggregate();
@@ -670,6 +672,7 @@ export async function collectGolemState(
 function resolveWorkerModels(
   state: GolemState,
   configured: readonly { worker: string; model?: string }[],
+  roster: readonly string[],
 ): readonly { worker: string; model?: string }[] {
   const localModel =
     state.localModelReachable === true
@@ -677,7 +680,10 @@ function resolveWorkerModels(
         ? state.coderModel
         : "local"
       : undefined;
-  return KNOWN_WORKERS.map((worker) => {
+  // R14.2: the roster is config (`inference.personas`), not a compile-time list.
+  // It must NOT be derived from `worker_targets` — a persona with no target is
+  // exactly the row this function exists to fill in from the local model.
+  return roster.map((worker) => {
     // Only `coder` has an enable flag today; a future worker without one is
     // simply always offered.
     if (worker === "coder" && state.coderEnabled === false) return { worker };
