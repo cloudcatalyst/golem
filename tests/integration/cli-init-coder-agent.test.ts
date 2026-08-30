@@ -70,7 +70,10 @@ describe("golem init — the golem-coder subagent", () => {
     // Code-side) is still open, and a plain id sidesteps it entirely.
     expect(content).toContain("name: golem-coder");
     expect(content).toContain("model: claude-sonnet-5");
-    expect(content).not.toContain("golem/");
+    // R14.3: scoped to the FRONTMATTER. The body legitimately mentions
+    // `.golem/personas/<id>.md` now that a persona's prompt can be ejected
+    // there; what must never appear is a `golem/<target>` selector as the model.
+    expect((content ?? "").split("---")[1] ?? "").not.toContain("golem/");
     // The default prompt is the body, so the subagent and the `coder` MCP tool
     // are framed by the same text.
     expect(content).toContain("first draft for another engineer to review");

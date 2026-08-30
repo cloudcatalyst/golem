@@ -30,12 +30,12 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
-import { type CoderRoute, resolveCoderRoute } from "../inference/coder-route.js";
-import { personaModel } from "../inference/personas.js";
+import { resolveCoderPrompt } from "../inference/coder-prompt.js";
+import { resolvePersonaLane } from "../inference/persona-lane.js";
+import { effectivePersonas, resolvePersonaPrompt } from "../inference/personas.js";
 import type { CompressionLevel } from "../interfaces/index.js";
 import { withDefaultTarget } from "../providers/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
-import { coderAgentPath, installCoderAgent, removeCoderAgent } from "./init-agents.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
 // because the permission rules are built from it at module scope.
@@ -46,6 +46,12 @@ import {
 } from "./init-claude-settings.js";
 import { InitError } from "./init-error.js";
 import { unwireHooks, wireHooks } from "./init-hooks.js";
+import {
+  type DesiredAgent,
+  installPersonaAgents,
+  personaAgentPath,
+  removePersonaAgents,
+} from "./init-personas.js";
 import { installSkills, pruneRetiredSkills, removeSkills } from "./init-skills.js";
 import {
   ensureVscodeWatcherExclude,
@@ -291,34 +297,78 @@ export async function golemInitStatus(
  * cure being worse than the disease. It comes back as a `conflict` action, which
  * is how init already reports "this needs a human".
  */
-async function installCoderAgentStep(projectDir: string, dryRun: boolean): Promise<InitAction[]> {
-  let route: CoderRoute;
-  let coderPrompt: string | undefined;
+async function installPersonaAgentsStep(
+  projectDir: string,
+  dryRun: boolean,
+): Promise<InitAction[]> {
+  let settings: Awaited<ReturnType<typeof loadConfig>>["settings"];
   try {
-    const { settings } = await loadConfig({ projectDir });
-    coderPrompt = settings.inference.coder_prompt;
-    const coderModel = personaModel(settings.inference.personas, "coder");
-    route = resolveCoderRoute({
-      settings: withDefaultTarget(settings),
-      workerTargets: settings.inference.worker_targets,
-      personas: settings.inference.personas,
-      ...(coderModel === undefined ? {} : { defaultCoder: coderModel }),
-    });
+    ({ settings } = await loadConfig({ projectDir }));
   } catch (err) {
+    // Config itself is unreadable — nothing can be resolved, so report once at
+    // the directory. Init still wires everything else: refusing to repair a
+    // project because one optional section is malformed would be the cure being
+    // worse than the disease.
     return [
       {
         kind: "conflict",
-        path: rel(projectDir, coderAgentPath(projectDir)),
-        detail: `not written — ${err instanceof Error ? err.message : String(err)}`,
+        path: rel(projectDir, path.join(projectDir, ".claude", "agents")),
+        detail: `no agent definitions written — ${err instanceof Error ? err.message : String(err)}`,
       },
     ];
   }
-  return await installCoderAgent(projectDir, dryRun, {
-    // Only the harness route produces a definition. A registry target is
-    // dispatched to by Golem itself and needs no agent.
-    ...(route.kind === "harness" ? { model: route.model } : {}),
-    ...(coderPrompt === undefined ? {} : { coderPrompt }),
-  });
+
+  const personas = settings.inference.personas;
+  const registry = withDefaultTarget(settings);
+  const desired: DesiredAgent[] = [];
+  const problems: InitAction[] = [];
+
+  for (const persona of effectivePersonas(personas)) {
+    const config = personas[persona.id] ?? {};
+    try {
+      const lane = resolvePersonaLane({
+        settings: registry,
+        personas,
+        personaId: persona.id,
+        workerTargets: settings.inference.worker_targets,
+      });
+      // Only the AGENT lane produces a definition. A worker-lane persona is
+      // dispatched to by Golem itself; an unstaffed or `owner: user` one is not
+      // dispatched at all. Each of those must also REMOVE an existing file,
+      // which `installPersonaAgents` does by pruning everything not listed here.
+      if (lane.kind !== "agent") continue;
+
+      // R13.12's `inference.coder_prompt` still frames the coder. Both
+      // mechanisms that deliver a coder task — the `coder` MCP tool and this
+      // definition — must read the SAME prompt, which is the entire reason
+      // `coder-prompt.ts` exists. An explicit per-persona prompt wins over it.
+      const prompt =
+        persona.id === "coder" &&
+        config.prompt === undefined &&
+        config.prompt_file === undefined &&
+        settings.inference.coder_prompt !== undefined
+          ? resolveCoderPrompt(settings.inference.coder_prompt)
+          : (await resolvePersonaPrompt(persona.id, config, projectDir)).text;
+
+      desired.push({
+        id: persona.id,
+        model: lane.model,
+        prompt,
+        ...(persona.description === undefined ? {} : { description: persona.description }),
+        ...(persona.tools === undefined ? {} : { tools: persona.tools }),
+      });
+    } catch (err) {
+      // One malformed persona must not stop the ones configured correctly —
+      // the same discipline `workerTarget` applies to a typo'd worker key.
+      problems.push({
+        kind: "conflict",
+        path: rel(projectDir, personaAgentPath(projectDir, persona.id)),
+        detail: `not written — ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  }
+
+  return [...(await installPersonaAgents(projectDir, dryRun, desired)), ...problems];
 }
 
 export async function golemInit(options: InitOptions): Promise<InitReport> {
@@ -423,7 +473,7 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // Also REMOVES a stale definition when `default_coder` changes to a target or
   // is unset. An install-only step would leave a file naming a model the config
   // no longer selects, and nothing about that file would say so.
-  actions.push(...(await installCoderAgentStep(projectDir, dryRun)));
+  actions.push(...(await installPersonaAgentsStep(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
   // (gitignored). The compression level and per-project proxy port are personal /
@@ -547,7 +597,7 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   actions.push(...(await removeSkills(projectDir, dryRun)));
   // 3c. And Golem's generated subagent. Only that one basename: `.claude/agents/`
   // is a SHARED namespace, unlike `.claude/skills/golem/`.
-  actions.push(...(await removeCoderAgent(projectDir, dryRun)));
+  actions.push(...(await removePersonaAgents(projectDir, dryRun)));
 
   // 4 / 5 / 5b. Every hook init installed: the PostToolUse CCR hook + the seeded
   // guidance rules, the status line and blocked-state event hooks, the WebFetch

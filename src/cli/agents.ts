@@ -37,56 +37,82 @@
  * file rather than living only here.
  */
 
-import { resolveCoderPrompt } from "../inference/coder-prompt.js";
 import { CODER_AGENT_NAME } from "../inference/coder-route.js";
 
 export { CODER_AGENT_NAME };
 
-export interface CoderAgentInput {
-  /** The model id for the frontmatter — a plain id, see the header. */
+/** The `.claude/agents/` basename Golem owns for a persona. */
+export function personaAgentName(id: string): string {
+  return `golem-${id}`;
+}
+
+export interface PersonaAgentInput {
+  /** Persona id — schema-restricted to lowercase alphanumerics and hyphens (R14.1). */
+  readonly id: string;
+  /** A plain model id for the frontmatter. Never a `golem/<target>` selector. */
   readonly model: string;
-  /** `inference.coder_prompt`, or undefined for Golem's default. */
-  readonly coderPrompt?: string | undefined;
+  /** The resolved system prompt (inline, prompt_file, conventional file, or built-in). */
+  readonly prompt: string;
+  /** What a dispatcher reads to pick this persona. */
+  readonly description?: string | undefined;
+  /** Tool allow-list. Omitted means inherit the session's — said out loud in the body. */
+  readonly tools?: readonly string[] | undefined;
 }
 
 /**
- * Render `.claude/agents/golem-coder.md`.
+ * Render `.claude/agents/golem-<id>.md` for one staffed, agent-lane persona.
  *
  * Deterministic in its inputs — no timestamps, no machine paths — because the
  * managed-file provenance record (R9.5) compares content to decide whether the
  * user has edited it. A generated file that changed on every `init` would report
  * a conflict against itself forever.
  */
-export function coderAgentDefinition(input: CoderAgentInput): string {
-  const prompt = resolveCoderPrompt(input.coderPrompt);
-  return `---
-name: ${CODER_AGENT_NAME}
-description: Golem's delegated coder. Use for a self-contained coding task — a first implementation, a test, a focused refactor — that you want done on a different model from this session, with its own context. Returns the work for you to review.
-model: ${input.model}
----
+export function personaAgentDefinition(input: PersonaAgentInput): string {
+  const name = personaAgentName(input.id);
+  const description =
+    input.description ??
+    `Golem's delegated ${input.id}. Dispatched for work suited to this persona, on its own context, and returned for review.`;
+  const toolsLine = input.tools === undefined ? "" : `tools: ${input.tools.join(", ")}\n`;
+  const toolsNote =
+    input.tools === undefined
+      ? `Tools are inherited from the session rather than narrowed, because a worker that
+cannot read the codebase is no better than a one-shot completion. To narrow it, set
+\`inference.personas.${input.id}.tools\` and re-run \`golem init\`.`
+      : `Tools are narrowed to the allow-list in \`inference.personas.${input.id}.tools\`.`;
 
-${prompt}
+  return `---
+name: ${name}
+description: ${description}
+model: ${input.model}
+${toolsLine}---
+
+${input.prompt}
 
 ## How this file got here
 
-\`golem init\` generated it from \`inference.personas.coder.model = "${input.model}"\`. Edit
-it freely — Golem records what it wrote and will report a conflict rather than
-overwrite your changes. To change the model, set \`inference.personas.coder.model\` and
-re-run \`golem init\`; to change the prose above, set \`inference.coder_prompt\` so
-the \`coder\` MCP tool is framed identically.
+\`golem init\` generated it from \`inference.personas.${input.id}\`. Edit it freely — Golem
+records what it wrote and will report a conflict rather than overwrite your changes.
+To change the model, set \`inference.personas.${input.id}.model\` and re-run \`golem init\`;
+to change the prose above, run \`golem personas eject ${input.id}\` and edit
+\`.golem/personas/${input.id}.md\`, so the same prompt frames every mechanism that runs
+this persona.
+
+Unstaffing the persona (clearing its \`model\`) removes this file again.
+
+**A definition Golem has just written is not dispatchable in the session that wrote
+it until that session picks it up.** Observed 2026-08-30: a freshly written
+definition failed with "Agent type not found" and became available later. If a
+dispatch cannot find this agent, that is why.
 
 ## What you have here
 
 Your traffic goes through Golem's proxy like the parent session's, so redaction,
 compression and telemetry all still apply — you are not outside the pipeline.
 
-Tools are inherited from the session rather than narrowed, because a coder that
-cannot read the codebase is no better than a one-shot completion. If you want this
-agent read-only, add a \`tools:\` line to the frontmatter naming only what it may
-use.
+${toolsNote}
 
-Report what you changed and why. Do not commit, push, or open a PR unless the
-task explicitly asked for it — the session that delegated to you is reviewing your
-work.
+Report what you changed and why. Do not commit, push, or open a PR unless the task
+explicitly asked for it — the session that delegated to you is reviewing your work,
+and \`golem task done\` will refuse to close until it has (R14.6).
 `;
 }
