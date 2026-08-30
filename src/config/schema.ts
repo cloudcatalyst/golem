@@ -42,6 +42,50 @@ const hexColorSchema = z
   .regex(/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/, "expected a hex colour like #a78bfa");
 
 /**
+ * A persona id. Narrow on purpose: it becomes the basename of a generated agent
+ * definition (`.claude/agents/golem-<id>.md`, R14.3), so anything that could
+ * traverse or escape a path must be unrepresentable HERE rather than stripped
+ * downstream. Lowercase alphanumerics and internal hyphens only.
+ */
+export const personaIdSchema = z
+  .string()
+  .regex(
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/,
+    'a persona id must be lowercase alphanumerics and hyphens, e.g. "scribe" or "api-reviewer"',
+  );
+
+/** `agent` (default) or `user` — a persona only a human fills. */
+export const PERSONA_OWNERS = ["agent", "user"] as const;
+
+/**
+ * One persona AS WRITTEN IN ONE LAYER. Every field optional and **no defaults**:
+ * layers are merged field-by-field, so a default applied here would let a higher
+ * layer that merely mentions a persona silently overwrite a lower layer's
+ * explicit `owner`. Defaults are applied on read, after the merge.
+ *
+ * `.strict()` so a misspelled field is a hard ConfigError naming the file and
+ * key, rather than a silently ignored line the user believes took effect —
+ * the failure `unknownWorkerWarnings` exists to prevent, caught earlier.
+ */
+export const personaLayerSchema = z
+  .object({
+    /** Free-form routing axis (R14.4). NOT `role` — that name is taken by the frozen `Role`. */
+    discipline: z.string().min(1).optional(),
+    /** What a dispatcher reads to pick this persona. */
+    description: z.string().min(1).optional(),
+    /** A plain model id, or a `proxy.targets` id. Unset = unstaffed, and unstaffed declines. */
+    model: z.string().min(1).optional(),
+    /** Inline system prompt; overrides `prompt_file` and the built-in. */
+    prompt: z.string().min(1).optional(),
+    /** Path to the prompt; overrides the built-in. Defaults to `.golem/personas/<id>.md`. */
+    prompt_file: z.string().min(1).optional(),
+    /** Tool allow-list. Omitted means inherit the session's. */
+    tools: z.array(z.string().min(1)).min(1).optional(),
+    owner: z.enum(PERSONA_OWNERS).optional(),
+  })
+  .strict();
+
+/**
  * One zod schema per settings leaf. This table is the single source of truth
  * for which keys exist and how their values validate/coerce.
  */
@@ -232,6 +276,42 @@ export const SETTINGS_LEAVES = {
      * upstream, so leaving this empty is a routing decision like any other.
      */
     worker_targets: z.record(z.string().min(1), z.string().min(1)).default({}),
+
+    /**
+     * R14.1 — the **persona registry**: a named bench, each role staffed by the
+     * model that suits it.
+     *
+     * Keyed by persona id, which is also the generated agent basename
+     * (`golem-<id>.md`, R14.3) — hence {@link personaIdSchema}'s narrow charset.
+     * That is a safety property, not tidiness: the id reaches a filesystem path,
+     * so `../` must be unrepresentable at the schema boundary rather than
+     * sanitised later.
+     *
+     * **Why a leaf under `inference` and not a top-level `personas` section.**
+     * Every section in this table is a FLAT map of known `section.key` leaves,
+     * and `GolemSettings`, the `GOLEM_<SECTION>_<KEY>` env mapping, `writeSetting`
+     * and the UI model are all derived from it. A section whose keys are
+     * user-defined ids has no leaf table to derive from, so it would need a
+     * parallel mechanism in each of those. `worker_targets` already established
+     * that a map belongs in a leaf; this follows it.
+     *
+     * **Merged per persona id, then per field** — see `MERGE_PER_KEY_LEAVES` in
+     * `loader.ts`. Ordinary leaves replace wholesale, which for this one would
+     * mean a project bench silently erasing the user's, and would make the
+     * common case ("this repo's bench, but downgrade the reviewer on my
+     * machine") require restating every persona in `settings.local.json`.
+     *
+     * Each layer is parsed with {@link personaLayerSchema}, which applies NO
+     * defaults: a default applied per layer would overwrite a lower layer's
+     * explicit value with a higher layer's implicit one. Defaults belong to the
+     * read side (`src/inference/personas.ts`), after the merge.
+     *
+     * A persona holds no credential and no `base_url` — it names a model or a
+     * target, the target names a gateway, and the gateway holds the keychain
+     * reference. That is what keeps ADR-0003's threat model intact without
+     * amendment, and it is why there is deliberately no `key`/`api_key` field.
+     */
+    personas: z.record(personaIdSchema, personaLayerSchema).default({}),
     /**
      * R9.23: moved from `proxy.default_target` to `inference.default_target`.
      *
@@ -863,6 +943,34 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     ollama_base_url: "http://localhost:11434",
     request_timeout_ms: 600_000,
     worker_targets: {},
+    // R14.1 — the starter bench, deliberately UNSTAFFED (no `model`). It is a
+    // template, not a team: nothing generates and nothing spawns until a model
+    // is set, so an unconfigured repo behaves exactly as it did before and
+    // `golem init` writes no agent file. Staffing one persona produces one
+    // staffed persona and nothing else.
+    //
+    // Composition follows one rule: staff the PHASES, not the hierarchy. There
+    // is no `manager` — the interactive session is the only thing that can spawn
+    // a subagent, so a persona whose job is to dispatch is a fiction — and no
+    // `planner`, because planning is already a skill surface (`/golem:plan`,
+    // `/golem:grill`) and R9.11's rule is that skills orchestrate.
+    personas: {
+      coder: {
+        discipline: "code",
+        description:
+          "A self-contained coding task — a first implementation, a test, a focused refactor — done on its own context and returned for review.",
+      },
+      reviewer: {
+        discipline: "review",
+        description:
+          "Reads code as code and reports defects, without the authoring session's assumptions.",
+      },
+      scribe: {
+        discipline: "write",
+        description:
+          "Turns landed work into prose: wiki debriefs, task documents, README and docs updates.",
+      },
+    },
     local_editor_enabled: false,
     providers: [],
   },

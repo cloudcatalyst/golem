@@ -320,6 +320,21 @@ export const SETTING_META = {
     kind: "opaque",
     restart: "mcp",
   },
+  "inference.personas": {
+    label: "Personas",
+    summary: "The bench — a named worker per discipline, each on the model that suits it",
+    detail:
+      "R14.1. Keyed by persona id, which is also the generated agent basename " +
+      "(`golem-<id>.md`). Merged per persona id and then per field, unlike every other " +
+      "setting, so a project bench does not erase the user's and `settings.local.json` can " +
+      "restaff one persona without restating the rest. A persona with no `model` is " +
+      "UNSTAFFED: it declines, generates nothing, and spawns nothing — which is how the " +
+      "three shipped by default (coder, reviewer, scribe) leave an unconfigured repo " +
+      "behaving exactly as before. A persona holds no credential: it names a model or a " +
+      "target, and the gateway behind that target holds the key. See `golem personas`.",
+    kind: "opaque",
+    restart: "mcp",
+  },
   "inference.local_editor_enabled": {
     label: "Local editor mode",
     summary: 'Offer `coder`\'s `mode: "edit"` — a validated local rewrite of one small file',
