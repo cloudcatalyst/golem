@@ -20,8 +20,8 @@ import type { LayerName } from "../config/loader.js";
 import {
   type EffectivePersona,
   effectivePersonas,
-  personaPromptPath,
   type PromptSource,
+  personaPromptPath,
   resolvePersonaPrompt,
 } from "../inference/personas.js";
 
