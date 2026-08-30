@@ -185,3 +185,38 @@ describe("fail-closed validation", () => {
     expect(settings.inference.personas["api-reviewer"]?.discipline).toBe("review");
   });
 });
+
+describe("retiring inference.default_coder", () => {
+  it("RAISES rather than warning, naming the file, the key and the replacement", async () => {
+    // A warning would reproduce the exact failure migrations.ts exists to stop:
+    // the file still says `default_coder`, the user still believes a model is
+    // selected, and every surface reports success.
+    await writeJson(projectFile(), { inference: { default_coder: "claude-sonnet-5" } });
+    await expect(loadConfig({ projectDir, userDir, env: {} })).rejects.toThrow(
+      /default_coder.*retired in R14\.1.*inference\.personas\.coder\.model/s,
+    );
+  });
+
+  it("raises from whichever layer still carries it", async () => {
+    await writeJson(localFile(), { inference: { default_coder: "sonnet" } });
+    await expect(loadConfig({ projectDir, userDir, env: {} })).rejects.toThrow(
+      /settings\.local\.json/,
+    );
+  });
+
+  it("is not merely 'unknown setting' — that would only warn", async () => {
+    await writeJson(projectFile(), { inference: { default_coder: "sonnet" } });
+    const result = await loadConfig({ projectDir, userDir, env: {} }).catch((e: unknown) => e);
+    expect(result).toBeInstanceOf(Error);
+    expect((result as Error).message).not.toMatch(/unknown setting/);
+  });
+
+  it("loads cleanly once migrated to the persona", async () => {
+    await writeJson(projectFile(), {
+      inference: { personas: { coder: { model: "claude-sonnet-5" } } },
+    });
+    const { settings, warnings } = await loadConfig({ projectDir, userDir, env: {} });
+    expect(settings.inference.personas.coder?.model).toBe("claude-sonnet-5");
+    expect(warnings).toEqual([]);
+  });
+});

@@ -143,6 +143,25 @@ export function personasForDiscipline(
   return effectivePersonas(personas).filter((p) => p.discipline?.toLowerCase() === wanted);
 }
 
+/**
+ * The model a persona is staffed with, or undefined when nothing should dispatch
+ * it — R14.1's replacement for reading `inference.default_coder` directly.
+ *
+ * Returns undefined for a persona that is undeclared, unstaffed, **or**
+ * `owner: user`. Folding the permission axis in here rather than at each call
+ * site is the point: six places used to read `default_coder`, and six places
+ * each remembering to check `owner` separately is five chances to forget.
+ */
+export function personaModel(
+  personas: Readonly<Record<string, PersonaConfig>>,
+  id: string,
+): string | undefined {
+  const config = personas[id];
+  if (config === undefined) return undefined;
+  const persona = effectivePersona(id, config);
+  return persona.dispatchable ? persona.model : undefined;
+}
+
 /** Where a persona's prompt came from — reported by `golem personas`. */
 export type PromptSource = "inline" | "prompt_file" | "convention" | "built-in" | "generic";
 

@@ -330,34 +330,6 @@ export const SETTINGS_LEAVES = {
      */
     default_target: z.string().min(1).optional(),
     /**
-     * R13.12 — the one key users are told about for "who does the coding work".
-     *
-     * Accepts either shape, and which one it is decides the MECHANISM:
-     *
-     *  - a **target id** from the registry (`openrouter:qwen/qwen3.7-flash`) →
-     *    the existing dispatch path, unchanged. Golem calls the model itself.
-     *  - a **model id** (`claude-sonnet-5`, `sonnet`) → the harness runs a
-     *    subagent on that model. `golem init` writes
-     *    `.claude/agents/golem-coder.md` carrying it, so the delegation is native:
-     *    a full agentic loop with tools and its own context, and — because a
-     *    subagent's traffic still goes through `ANTHROPIC_BASE_URL` — redaction,
-     *    compression and telemetry all still apply.
-     *  - **unset** → `coder` declines and the work stays in the current session
-     *    (R13.11). That is the settled default, not a gap.
-     *
-     * A target id wins when the value resolves to one, because a declared target
-     * is a deliberate act and silently reading it as a model name would send work
-     * somewhere the user did not choose. A value that resolves to neither raises,
-     * naming both sets — the same fail-closed discipline as every other target
-     * reference here.
-     *
-     * `worker_targets.coder` still takes precedence: it is the low-level, generic
-     * per-worker map (R9.4) and this is the friendly alias for the one worker that
-     * exists today. Setting both to different destinations is reported rather than
-     * silently resolved.
-     */
-    default_coder: z.string().min(1).optional(),
-    /**
      * R13.12 — the instruction prompt that frames EVERY coder task, whichever
      * mechanism runs it: the `system` field of a `coder` dispatch, and the body of
      * the generated subagent definition.

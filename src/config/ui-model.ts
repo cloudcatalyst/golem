@@ -253,21 +253,6 @@ export const SETTING_META = {
     advanced: true,
     restart: "proxy",
   },
-  "inference.default_coder": {
-    label: "Default coder",
-    summary: "Who does a delegated coding task — a model id, a target id, or nobody",
-    detail:
-      "R13.12. A MODEL id (`claude-sonnet-5`) means the harness runs a subagent on that " +
-      "model: `golem init` writes `.claude/agents/golem-coder.md`, so the delegation is " +
-      "native — a full agentic loop with tools, and traffic still through the proxy, so " +
-      "redaction and telemetry still apply. A TARGET id from the registry means Golem calls " +
-      "that model itself, as it always has. A target id wins when the value resolves to one; " +
-      "a value that resolves to neither fails closed naming both sets. Unset means `coder` " +
-      "declines and the work stays in this session, which is the settled default rather than " +
-      "a gap. `worker_targets.coder` still takes precedence over this.",
-    advanced: true,
-    restart: "mcp",
-  },
   "inference.coder_prompt": {
     label: "Coder instruction prompt",
     summary: "One framing applied to every coder task, whichever mechanism runs it",

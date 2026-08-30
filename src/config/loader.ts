@@ -29,7 +29,13 @@ import { readFile } from "node:fs/promises";
 import { readEnvLayer } from "./env.js";
 import { ConfigError } from "./errors.js";
 import { isPlainObject, splitDotted } from "./file-io.js";
-import { migrationFrom, migrationShadowedWarning, migrationWarning } from "./migrations.js";
+import {
+  migrationFrom,
+  migrationShadowedWarning,
+  migrationWarning,
+  retirementFor,
+  retirementMessage,
+} from "./migrations.js";
 import { type SettingsFilePaths, settingsFilePaths } from "./paths.js";
 import {
   DEFAULT_SETTINGS,
@@ -278,6 +284,16 @@ function applyObjectLayer(
       let fromKey: string | undefined;
 
       if (leaf === undefined) {
+        // A RETIRED key raises before anything else. It is not unknown (we know
+        // exactly what it was) and it is not renamed (there is no destination
+        // leaf), so neither of the branches below would tell the truth about it.
+        const retired = retirementFor(dotted);
+        if (retired !== undefined) {
+          throw new ConfigError(retirementMessage(retired, label), {
+            key: dotted,
+            ...(sourceFile !== undefined && { source: sourceFile }),
+          });
+        }
         const migration = migrationFrom(dotted);
         if (migration === undefined) {
           warnings.push(`${label}: unknown setting "${dotted}" ignored`);
