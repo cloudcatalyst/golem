@@ -33,6 +33,7 @@ import {
 } from "../compression/index.js";
 import type { SemanticCompressor } from "../compression/semantic.js";
 import type { CompressionService, TokenDelta } from "../interfaces/compression.js";
+import type { JoinQueue, JoinQueueMessage } from "../interfaces/join-queue.js";
 import type { LocalAnswerService } from "../interfaces/local-answer.js";
 import { type BrevityLevel, compressionRank, type PipelinePolicy } from "../interfaces/policy.js";
 import type { PluginPipelineStage } from "../plugins/types.js";
@@ -40,12 +41,14 @@ import {
   type CacheBustComponent,
   CachePrefixObserver,
   type CachePrefixVerdict,
+  conversationKeyOf,
 } from "../proxy/cache-prefix.js";
 import { buildContextLedger, type ContextLedgerCore } from "../proxy/context-ledger.js";
 import type { ProxyRequest, RequestPipeline } from "../proxy/types.js";
 import { isRecord } from "../shared/json.js";
 import { proxyLog } from "../shared/proxy-log.js";
 import { applyBrevity } from "./brevity.js";
+import { applyJoinMessages, canInject } from "./join-injection.js";
 import { eligibleLocalAnswerText, synthesizeLocalAnswerResponse } from "./local-answer-response.js";
 import { redactRequestBody } from "./redaction.js";
 
@@ -144,6 +147,12 @@ export interface PipelineEvent {
    * savings and usage events.
    */
   readonly contextLedger?: ContextLedgerCore;
+  /**
+   * R13.7: how many messages authored on a paired device this request carried
+   * (ADR-0007 section 3b). Absent or 0 on every request that carried none, which
+   * is every request until the user turns injection on.
+   */
+  readonly remoteMessagesInjected?: number;
 }
 
 export interface GolemPipelineOptions {
@@ -167,6 +176,35 @@ export interface GolemPipelineOptions {
   readonly sessionRecorder?: {
     observe(body: Readonly<Record<string, unknown>>): void;
   };
+  /**
+   * R13.7 — which conversations are live, and which of them can be addressed.
+   *
+   * Observe-only and always wired, like `sessionRecorder`: knowing what exists
+   * is not the same act as writing into it, and a device must be able to see a
+   * conversation (and be told injection is off) rather than see nothing.
+   */
+  readonly liveConversations?: {
+    observe(body: Readonly<Record<string, unknown>>): void;
+    addressable(
+      conversationId: string,
+    ): { readonly ok: true } | { readonly ok: false; readonly reason: string };
+  };
+  /**
+   * R13.7 — the queue of messages authored on a paired device (ADR-0007 §3b).
+   *
+   * **Wired ONLY when the user has turned injection on.** That is invariant 6
+   * made structural rather than conditional: with the option absent there is no
+   * branch to reach, no queue to read, and a request with nothing queued is
+   * byte-identical to today at compression ≤ 1 because no code ran at all.
+   */
+  readonly joinQueue?: JoinQueue;
+  /**
+   * Called with the messages this request delivered, before it is forwarded.
+   *
+   * Invariant 4's local half: the developer at the keyboard sees what their own
+   * device said into their session. Never throws into the request path.
+   */
+  readonly onJoinInjected?: (messages: readonly JoinQueueMessage[], conversationId: string) => void;
   /**
    * OPTIONAL semantic compressor (slider ≥3). When present and the policy's
    * `semanticCompression` is not "off", it runs after lossless compression.
@@ -367,6 +405,18 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
         }
       }
 
+      // R13.7 — observe for the live-conversation registry, on the ORIGINAL body
+      // (before any injection), so conversation identity is what the CLIENT sent.
+      // Observe-only and always on: knowing a conversation exists is not the same
+      // act as writing into it.
+      if (options.liveConversations !== undefined) {
+        try {
+          options.liveConversations.observe(parsed);
+        } catch {
+          // observe-only — never fail a request over a registry write
+        }
+      }
+
       const policy = await options.policy();
       const stages = policy.stages;
       const stageSavings: Record<string, TokenDelta> = {};
@@ -375,6 +425,54 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       let ccrRefsStored = 0;
       let avoidedUpstreamInputTokens = 0;
       let brevityDirectiveTokens = 0;
+
+      // Stage 0.9 — join injection (R13.7, ADR-0007 section 3b).
+      //
+      // Placed BEFORE redaction on purpose. The queue already redacts on the way
+      // in (its contract's binding note), and running the redaction stage over
+      // the injected block as well means there is no path by which text reaches
+      // the upstream without passing the stage that CLAUDE.md's hard rule puts
+      // first. Belt and braces, in the one direction where a mistake is
+      // unrecoverable.
+      //
+      // Nothing here runs unless the user turned injection on: `joinQueue` is
+      // wired only then, so with it off a request with nothing queued is
+      // byte-identical because no code ran at all (invariant 6).
+      let injectedRemote: readonly JoinQueueMessage[] = [];
+      if (options.joinQueue !== undefined && canInject(body)) {
+        const joinAt = performance.now();
+        try {
+          const conversationId = conversationKeyOf(body);
+          const verdict = options.liveConversations?.addressable(conversationId) ?? { ok: true };
+          if (conversationId !== "" && verdict.ok) {
+            // `claim` is exactly-once ACROSS PROCESSES, and `canInject` was
+            // checked above, so a claimed message is one this request will carry.
+            const claimed = await options.joinQueue.claim(conversationId);
+            if (claimed.length > 0) {
+              const applied = applyJoinMessages(body, claimed);
+              if (applied.injected.length > 0) {
+                body = applied.body;
+                changed = true;
+                injectedRemote = applied.injected;
+                // Invariant 4's local half — the developer at the keyboard sees
+                // what their own device said into their session.
+                try {
+                  options.onJoinInjected?.(applied.injected, conversationId);
+                } catch {
+                  // Visibility must not be able to fail a request; the queue's
+                  // delivered record and the host log already hold the fact.
+                }
+              }
+            }
+          }
+        } catch (err) {
+          // Fail-open, like every optional stage here: a queue that cannot be
+          // read leaves the request exactly as the client sent it.
+          proxyLog(`join injection skipped (${err instanceof Error ? err.message : String(err)})`);
+        } finally {
+          stageMs["join-injection"] = performance.now() - joinAt;
+        }
+      }
 
       // Stage 1 — redaction (always first; runs at every level per the table).
       if (stages.redaction) {
@@ -392,7 +490,12 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
       // requests eligibleLocalAnswerText() accepts; a confident result
       // short-circuits the whole request, so no compression stage below has
       // anything left to do.
-      if (options.localAnswer !== undefined) {
+      //
+      // R13.7: skipped outright when this request just carried a remote message.
+      // A local answer short-circuits the request, so answering here would
+      // consume a message that was already claimed and never let it reach the
+      // session it was addressed to.
+      if (options.localAnswer !== undefined && injectedRemote.length === 0) {
         const queryText = eligibleLocalAnswerText(body);
         if (queryText !== undefined) {
           const localAnswerAt = performance.now();
@@ -677,6 +780,7 @@ export function createGolemPipeline(options: GolemPipelineOptions): RequestPipel
           cacheBustMessageIndex: cacheObservation.firstChangedMessage,
         }),
         cacheMessageCount: cacheObservation.messageCount,
+        ...(injectedRemote.length > 0 && { remoteMessagesInjected: injectedRemote.length }),
       });
       reportHeldRequest(startedAt, stageMs, "forwarded rewritten");
       return { ...request, body: Buffer.from(finalJson, "utf8") };

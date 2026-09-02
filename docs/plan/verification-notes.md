@@ -8242,3 +8242,81 @@ severe — acting on the wrong project.
   interrupt a running turn on Windows. Not re-tested here, and not tested on
   POSIX at all; `HostedSession.kill()` therefore does not pretend to be a
   graceful interrupt.
+
+## §148 — R13.7: two measured facts the join-injection design turns on — consecutive `user` messages are legal, and `fs.rename` is NOT an exclusive claim on Windows (2026-09-03)
+
+Both were checked because the alternative was building on a guess, and in each
+case the guess would have been wrong in a way tests would only catch by luck.
+
+### (a) Consecutive same-role messages are combined, not rejected — so injection appends a turn
+
+**Source:** the bundled `claude-api` skill's TypeScript reference, "Multi-Turn
+Conversations → Rules": *"Consecutive same-role messages are allowed - the API
+combines them into a single turn."* Checked 2026-09-03 against the skill
+shipped with client `2.1.258`.
+
+Why it decided the shape of `src/pipeline/join-injection.ts`. A device's message
+could be injected either by **appending a new `user` message** or by **appending
+a text block into the last existing message**. The second needs no assumption
+about consecutive roles, so it was the safe-looking option — and it is the worse
+one on both axes that matter here:
+
+| | append a new `user` turn | append into the last message |
+|---|---|---|
+| earlier messages | untouched, byte-for-byte | the last message is rewritten |
+| cache divergence | at index N+1 (the new tail) | at index N (one message earlier) |
+| who is speaking | a turn of its own, attributable | blended into a turn the client composed |
+
+With consecutive user messages confirmed legal, the first column is available
+and is strictly better, so that is what ships. The injected turn also sits after
+any `tool_result` message rather than inside it, which keeps the
+tool_use → tool_result adjacency the API requires.
+
+**Not established:** whether a *mid-conversation `system` message* (`{role:
+"system"}` in `messages[]`, supported on Opus 5 / Opus 4.8 / Fable 5 / 5.1 and
+NOT on Sonnet 5) would be a better carrier. It would preserve the cached prefix
+equally well, but it is the **operator** channel, and ADR-0007 §3b wants the
+opposite of operator authority: a human's words, marked as a human's words. It
+is also model-gated, and Golem proxies for whatever model the client chose — a
+carrier that 400s on Sonnet 5 is not a carrier. Recorded so the next person does
+not have to re-derive the rejection.
+
+### (b) Two concurrent `fs.rename` calls on the same source BOTH succeed on Windows
+
+**Measured 2026-09-03**, Node 24.13.1, Windows 11 26200, NTFS temp dir:
+
+```js
+await writeFile(src, "1");
+const r = await Promise.allSettled([rename(src, dst), rename(src, dst)]);
+// → [ 'fulfilled', 'fulfilled' ]
+```
+
+Sequentially, the second rename fails as expected (`ENOENT`). It is only the
+**concurrent** pair that both resolve — which is exactly the shape a claim race
+takes when two processes read the same queue directory and then act.
+
+This mattered because the join queue's exactly-once guarantee was built on the
+usual reasoning: *a rename is atomic, so the loser of a race gets ENOENT.* The
+first implementation did precisely that, and the two-claimer test delivered
+**every message twice** (`['m1','m2','m3']` returned to *both* claimers). A
+duplicated instruction to an agent is not a duplicated packet, so this was the
+one failure mode the design had promised to make impossible.
+
+**The primitive that does hold** is exclusive create — `writeFile(path, data,
+{ flag: "wx" })`, i.e. `O_EXCL` / `CREATE_NEW`. Measured on the same platform:
+
+```js
+await Promise.allSettled([wx(dst,"a"), wx(dst,"b"), wx(dst,"c")]);
+// → [ 'fulfilled', 'rejected:EEXIST', 'rejected:EEXIST' ]
+```
+
+Exactly one winner, concurrently, with the losers refused. `FileJoinQueue.claim`
+now claims by creating the message's `delivered/` record with `wx` and only then
+removes the `pending/` copy; a claimer that sees `EEXIST` also clears the pending
+copy, so a process that died between claiming and unlinking cannot leave a
+message that is unclaimable forever.
+
+**Generalise this:** anywhere in this repo that reaches for a rename as a
+cross-process mutex is suspect on Windows. Atomic *replacement* of a file's
+contents (write temp → rename over the target) is unaffected and remains
+correct — that is a different property from *exclusive acquisition*.

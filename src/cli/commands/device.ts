@@ -226,6 +226,18 @@ export default function register(program: Command): void {
         const { ensureLoopbackCert } = await import("../../proxy/loopback-cert.js");
         const tls = await ensureLoopbackCert(opts.dir);
         const { startWriteServer } = await import("../../security/index.js");
+        // R13.7 — the sessions this surface can address are the ones the PROXY
+        // has seen, read from its snapshot: this process observes no requests of
+        // its own. Mounted whether or not injection is enabled, because a device
+        // that cannot see a conversation cannot be told why it may not write to
+        // it — the listing carries `injectionEnabled` and the refusal says so.
+        const { createJoinedTransport, sessionTransportHandler } = await import(
+          "../../session/index.js"
+        );
+        const joined = await createJoinedTransport({
+          projectDir: opts.dir,
+          injectionEnabled: settings.security.join_injection,
+        });
         const handle = await startWriteServer({
           projectDir: opts.dir,
           port,
@@ -233,6 +245,10 @@ export default function register(program: Command): void {
           serverKeyPem: tls.leafKeyPem,
           serverCertPem: tls.chainPem,
           deviceCa,
+          handler: sessionTransportHandler({
+            lookup: (id) => joined.lookup(id),
+            listSessions: () => joined.listSessions(),
+          }),
         });
         out(`golem write surface on ${handle.url} (Ctrl+C to stop)\n`);
         if (!(await isPasscodeSet(opts.dir))) {

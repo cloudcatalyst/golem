@@ -12,6 +12,11 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type {
+  JoinEnqueueResult,
+  JoinQueueMessage,
+  LiveConversation,
+} from "../interfaces/join-queue.js";
 import type { SessionEvent, SessionMessageResponse } from "../interfaces/session-events.js";
 import { appendHostLog } from "./host-log.js";
 import { MessageLedger, type SessionBus } from "./session-bus.js";
@@ -27,6 +32,10 @@ export const CHAT_SUFFIX = "/chat";
 export const HISTORY_SUFFIX = "/history";
 /** `POST /session/:id/interrupt` — stop the turn. */
 export const INTERRUPT_SUFFIX = "/interrupt";
+/** `GET /session/:id/queue` — R13.7's waiting messages, and why they are waiting. */
+export const QUEUE_SUFFIX = "/queue";
+/** `GET /sessions` — every session a device may address, hosted and joined. */
+export const SESSIONS_PATH = "/sessions";
 
 /**
  * Heartbeat interval. SSE comment lines that keep the connection warm through
@@ -65,11 +74,52 @@ export interface TransportSession {
   readonly history?: () => Promise<readonly { role: string; content: string }[]>;
   /** `hosted` (R13.3) or `joined` (R13.7). Shown in the chat header. */
   readonly kind?: "hosted" | "joined";
+  /**
+   * R13.7 — take a message for a JOINED session by queueing it.
+   *
+   * Present instead of (not as well as) a meaningful `deliver` on a joined
+   * session, and the difference is the honesty this task is about: `deliver`
+   * resolves when the text has reached the session, which for a session the
+   * proxy merely observes can only happen on its next request. So this returns
+   * `queued` plus the CONDITION under which it will land, and the transport
+   * answers the POST with that rather than with a delivery it cannot vouch for.
+   */
+  readonly enqueue?: (input: {
+    readonly messageId: string;
+    readonly text: string;
+    readonly deviceId: string;
+  }) => Promise<JoinAcceptance>;
+  /** Messages still waiting for this session, oldest first. */
+  readonly pending?: () => Promise<readonly JoinQueueMessage[]>;
+  /** The delivery condition right now, in the words a UI shows. */
+  readonly condition?: () => Promise<string>;
+}
+
+/** What a joined session's queue did with a message, and what to tell the user. */
+export interface JoinAcceptance {
+  readonly result: JoinEnqueueResult;
+  /**
+   * When this will land, or why it never will — e.g. "this session is idle;
+   * nothing will be delivered until it runs again". Rendered verbatim, so it is
+   * written for a person rather than for a log.
+   */
+  readonly condition: string;
 }
 
 export interface TransportOptions {
   /** Look up a session by id. `null` when the device asked for one that is not here. */
   readonly lookup: (sessionId: string) => TransportSession | null;
+  /**
+   * R13.7 — every session a device may address: the hosted ones plus the live
+   * conversations the proxy has seen. Optional; without it `GET /sessions` 404s,
+   * which is what a server that hosts exactly one session should say.
+   */
+  readonly listSessions?: () => Promise<{
+    readonly hosted: readonly { readonly sessionId: string; readonly projectDir: string }[];
+    readonly joined: readonly LiveConversation[];
+    /** False when `security.join_injection` is off — a device must be told, not left guessing. */
+    readonly injectionEnabled: boolean;
+  }>;
   readonly heartbeatMs?: number;
   readonly nowIso?: () => string;
 }
@@ -92,7 +142,7 @@ export function resetLedgers(): void {
 }
 
 /** Parse `/session/<id>/stream` or `/session/<id>/message`. */
-export type SessionRoute = "stream" | "message" | "chat" | "history" | "interrupt";
+export type SessionRoute = "stream" | "message" | "chat" | "history" | "interrupt" | "queue";
 
 const ROUTES: readonly (readonly [suffix: string, route: SessionRoute])[] = [
   [STREAM_SUFFIX, "stream"],
@@ -100,6 +150,7 @@ const ROUTES: readonly (readonly [suffix: string, route: SessionRoute])[] = [
   [CHAT_SUFFIX, "chat"],
   [HISTORY_SUFFIX, "history"],
   [INTERRUPT_SUFFIX, "interrupt"],
+  [QUEUE_SUFFIX, "queue"],
 ];
 
 export function parseSessionPath(
@@ -289,6 +340,39 @@ export async function handleMessage(
     return;
   }
 
+  // R13.7 — a JOINED session cannot be delivered to synchronously; it is queued
+  // for its next request. Answer `queued` with the condition, never `delivered`.
+  // Note the queue keeps its own idempotency by `messageId`, across processes,
+  // which is the guarantee that matters here: the ledger above is per-process,
+  // and the proxy that finally delivers is a different process entirely.
+  if (session.enqueue !== undefined) {
+    let acceptance: JoinAcceptance;
+    try {
+      acceptance = await session.enqueue({ messageId, text, deviceId });
+    } catch (err) {
+      json(res, 502, {
+        error: "the queue did not accept the message",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    if (acceptance.result.status === "refused") {
+      // Silence denies (invariant 3): an unaddressable target is a refusal the
+      // user reads, not a message that sits somewhere hoping.
+      json(res, 409, { error: acceptance.result.reason, messageId });
+      return;
+    }
+    const seq = session.bus.cursor;
+    ledger.record(messageId, seq);
+    json(res, 200, {
+      messageId,
+      status: acceptance.result.status === "duplicate" ? "duplicate" : "queued",
+      seq,
+      condition: acceptance.condition,
+    } satisfies SessionMessageResponse);
+    return;
+  }
+
   try {
     await session.deliver(text);
   } catch (err) {
@@ -316,6 +400,18 @@ export function sessionTransportHandler(options: TransportOptions) {
     body: string;
   }): Promise<void> => {
     const url = new URL(request.req.url ?? "/", "https://localhost");
+    if (url.pathname === SESSIONS_PATH) {
+      if (request.req.method !== "GET") {
+        json(request.res, 405, { error: "method not allowed" });
+        return;
+      }
+      if (options.listSessions === undefined) {
+        json(request.res, 404, { error: "this server does not list sessions" });
+        return;
+      }
+      json(request.res, 200, await options.listSessions());
+      return;
+    }
     const route = parseSessionPath(url.pathname);
     if (route === null) {
       json(request.res, 404, { error: "not found" });
@@ -324,8 +420,9 @@ export function sessionTransportHandler(options: TransportOptions) {
     const session = options.lookup(route.sessionId);
     if (session === null) {
       json(request.res, 404, {
-        error: "no such hosted session",
-        message: "It may have ended. `golem session host list` shows what is running.",
+        error: "no such session",
+        message:
+          "It may have ended, or the proxy may not have seen this conversation recently. `GET /sessions` lists what can be addressed; `golem session host list` shows the hosted ones.",
       });
       return;
     }
@@ -354,6 +451,21 @@ export function sessionTransportHandler(options: TransportOptions) {
       }
       const turns = session.history === undefined ? [] : await session.history();
       json(request.res, 200, { turns });
+      return;
+    }
+    if (route.route === "queue") {
+      if (request.req.method !== "GET") {
+        json(request.res, 405, { error: "method not allowed" });
+        return;
+      }
+      const pending = session.pending === undefined ? [] : await session.pending();
+      const condition = session.condition === undefined ? undefined : await session.condition();
+      json(request.res, 200, {
+        sessionId: route.sessionId,
+        kind: session.kind ?? "hosted",
+        pending,
+        ...(condition !== undefined && { condition }),
+      });
       return;
     }
     if (route.route === "interrupt") {
