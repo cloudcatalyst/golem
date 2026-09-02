@@ -75,6 +75,21 @@ describe("parsePlanTask", () => {
     expect(task.plan?.blocked).toBe("needs credentials");
   });
 
+  it("reads a free-form `discipline`", () => {
+    const task = parsePlanTask("---\ntask: R14.4\ndiscipline: code\n---\n\nbody\n");
+    expect(task.plan?.discipline).toBe("code");
+  });
+
+  it("accepts a discipline nobody staffs — free-form, not a closed set", () => {
+    const task = parsePlanTask("---\ntask: R14.4\ndiscipline: astrology\n---\n\nbody\n");
+    expect(task.plan?.discipline).toBe("astrology");
+  });
+
+  it("leaves discipline undefined when absent, same as any other optional key", () => {
+    const plan = parsePlanTask(DOC).plan;
+    expect(plan?.discipline).toBeUndefined();
+  });
+
   it("accepts a bare scalar where a list is expected (these files are hand-edited)", () => {
     const plan = parsePlanTask("---\ntask: X\ndepends_on: R8.5\n---\n\nbody\n").plan;
     expect(plan?.dependsOn).toStrictEqual(["R8.5"]);
@@ -109,6 +124,14 @@ describe("serializePlanTask", () => {
     expect(twice).toStrictEqual(once);
   });
 
+  it("round-trips a free-form discipline, including one nobody staffs", () => {
+    const once = parsePlanTask("---\ntask: R14.4\ntitle: X\ndiscipline: astrology\n---\n\nbody\n");
+    const twice = parsePlanTask(serializePlanTask(once));
+    expect(twice).toStrictEqual(once);
+    expect(twice.plan?.discipline).toBe("astrology");
+    expect(serializePlanTask(once)).toContain("discipline: astrology");
+  });
+
   it("re-serializing is stable, so a no-op write produces no diff", () => {
     const first = serializePlanTask(parsePlanTask(DOC));
     expect(serializePlanTask(parsePlanTask(first))).toBe(first);
@@ -116,6 +139,7 @@ describe("serializePlanTask", () => {
 
   it("omits absent optional keys instead of writing empty values", () => {
     const text = serializePlanTask(parsePlanTask("---\ntask: X\n---\n\nbody\n"));
+    expect(text).not.toContain("discipline:");
     expect(text).not.toContain("design:");
     expect(text).not.toContain("gate:");
     expect(text).not.toContain("blocked:");

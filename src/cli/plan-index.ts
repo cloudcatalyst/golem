@@ -74,6 +74,9 @@ function row(task: Task): string {
     escapeCell(task.title ?? task.id),
     plan?.owner ?? "agent",
     plan?.size ?? "M",
+    // Free-form routing axis (R14.4) — no value staffs nothing here, so an absent
+    // or unrecognised discipline renders the same "—" as any other empty column.
+    escapeCell(plan?.discipline ?? "—"),
     deps.length > 0 ? deps.join(", ") : "—",
     escapeCell(plan?.blocked ?? plan?.gate ?? "—"),
   ];
@@ -81,8 +84,8 @@ function row(task: Task): string {
 }
 
 const HEADER = [
-  "| task | goal | owner | size | depends on | gate / blocker |",
-  "|---|---|---|---|---|---|",
+  "| task | goal | owner | size | discipline | depends on | gate / blocker |",
+  "|---|---|---|---|---|---|---|",
 ];
 
 /**
@@ -154,10 +157,11 @@ export function renderPlanSummary(tasks: readonly Task[]): string {
     lines.push(`${label}:`);
     for (const task of group) {
       const plan = task.plan;
+      const disc = plan?.discipline !== undefined ? `  [discipline: ${plan.discipline}]` : "";
       const note = plan?.blocked !== undefined ? `  [blocked: ${plan.blocked}]` : "";
       lines.push(
         `  ${task.id.padEnd(10)} ${(plan?.owner ?? "agent").padEnd(5)} ${(plan?.size ?? "M").padEnd(2)} ` +
-          `${task.title ?? task.id}${note}`,
+          `${task.title ?? task.id}${disc}${note}`,
       );
     }
     lines.push("");

@@ -67,6 +67,21 @@ describe("renderTask", () => {
     expect(out).toContain("line one");
     expect(out).toContain("line two");
   });
+
+  it("shows a plan task's discipline when it has one", () => {
+    const t = parsePlanTask("---\ntask: R14.4\ndiscipline: code\n---\n\nbody\n");
+    expect(renderTask(t)).toContain("discipline: code");
+  });
+
+  it("omits the discipline line entirely when none is set — inert, not a placeholder", () => {
+    const t = parsePlanTask("---\ntask: R8.5\n---\n\nbody\n");
+    expect(renderTask(t)).not.toContain("discipline:");
+  });
+
+  it("shows an unrecognised discipline exactly as given — free-form, not validated", () => {
+    const t = parsePlanTask("---\ntask: R14.4\ndiscipline: astrology\n---\n\nbody\n");
+    expect(renderTask(t)).toContain("discipline: astrology");
+  });
 });
 
 /**

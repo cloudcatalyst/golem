@@ -54,6 +54,15 @@ export const planMetaSchema = z.object({
   /** `user` = an outward or credentialed act an agent must not take on its own. */
   owner: z.enum(PLAN_TASK_OWNERS).default("agent"),
   size: z.enum(PLAN_TASK_SIZES).default("M"),
+  /**
+   * Which kind of worker should staff this — the *routing* axis, free-form on
+   * purpose (`code`, `review`, `write`, whatever a project decides). Distinct from
+   * `owner`, the *permission* axis (may an agent do this at all). An unrecognised
+   * or absent value changes nothing: no validation, no closed set, no staffing
+   * lookup here — that is R14.1's job, not this field's (spec proposal
+   * persona-teams.md §6; USER decision 2026-08-30).
+   */
+  discipline: z.string().optional(),
   /** Where the design lives (memo, spec Decision, verification-notes §). */
   design: z.string().optional(),
   /** Task ids that must land first. */

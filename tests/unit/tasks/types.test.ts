@@ -3,7 +3,13 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { createTask, isResumable, type Task, taskSchema } from "../../../src/tasks/index.js";
+import {
+  createTask,
+  isResumable,
+  planMetaSchema,
+  type Task,
+  taskSchema,
+} from "../../../src/tasks/index.js";
 
 describe("createTask", () => {
   it("builds a queued task with timestamps and defaults", () => {
@@ -36,6 +42,26 @@ describe("createTask", () => {
   it("produces a task that round-trips through the schema", () => {
     const t = createTask({ prompt: "p" });
     expect(() => taskSchema.parse(t)).not.toThrow();
+  });
+});
+
+describe("planMetaSchema discipline", () => {
+  it("is optional — a plan with no discipline parses fine", () => {
+    const plan = planMetaSchema.parse({});
+    expect(plan.discipline).toBeUndefined();
+  });
+
+  it("is free-form — any string is accepted, not a closed set", () => {
+    expect(planMetaSchema.parse({ discipline: "code" }).discipline).toBe("code");
+    expect(planMetaSchema.parse({ discipline: "astrology" }).discipline).toBe("astrology");
+  });
+
+  it("an unrecognised discipline changes nothing else about the parsed plan", () => {
+    const withUnknown = planMetaSchema.parse({ discipline: "astrology" });
+    const withNone = planMetaSchema.parse({});
+    const { discipline: _d1, ...restWithUnknown } = withUnknown;
+    const { discipline: _d2, ...restWithNone } = withNone;
+    expect(restWithUnknown).toStrictEqual(restWithNone);
   });
 });
 
