@@ -32,6 +32,11 @@ import {
   readCoderFirstNudgeState,
   writeCoderFirstNudgeState,
 } from "./coder-first-nudge.js";
+import {
+  appendDelegation,
+  readDelegationLedger,
+  writeDelegationLedger,
+} from "./delegation-ledger.js";
 import { guidanceEnabled } from "./guidance.js";
 import { type HookIo, readAll } from "./hook-io.js";
 import { writePendingToolCall } from "./session-state.js";
@@ -124,6 +129,44 @@ export const PARK_EXEMPT_TOOLS: readonly string[] = [
   "ToolSearch",
   "mcp__golem__expand",
 ];
+
+/**
+ * Append one dispatched subagent to the delegation ledger (R14.6).
+ *
+ * Never throws. This sits on the critical path of every spawn, and failing a
+ * dispatch because a bookkeeping file could not be written would be a far worse
+ * bug than a missing review record.
+ */
+async function recordDelegationSpawn(
+  projectDir: string,
+  nowIso: string,
+  toolInput: unknown,
+  sessionId: string | undefined,
+): Promise<void> {
+  try {
+    const input = (toolInput ?? {}) as {
+      readonly subagent_type?: unknown;
+      readonly description?: unknown;
+    };
+    const agentType =
+      typeof input.subagent_type === "string" && input.subagent_type !== ""
+        ? input.subagent_type
+        : "agent";
+    const description = typeof input.description === "string" ? input.description : undefined;
+    const ledger = await readDelegationLedger(projectDir);
+    await writeDelegationLedger(
+      projectDir,
+      appendDelegation(ledger, {
+        at: nowIso,
+        agentType,
+        ...(description === undefined ? {} : { description }),
+        ...(sessionId === undefined ? {} : { sessionId }),
+      }),
+    );
+  } catch {
+    // Bookkeeping only — never block a dispatch on it.
+  }
+}
 
 interface PreToolUsePayload {
   readonly cwd?: string;
@@ -234,6 +277,10 @@ export async function runPreToolUseHook(
     // at/above the park threshold a spawn is denied by the park like everything
     // else, and being told to park is the more useful instruction.
     if (isSpawnTool(toolName)) {
+      // Hoisted above the headroom branch: the delegation record below is written
+      // whether or not that gate is enabled.
+      const spawnNowMs = options.now?.() ?? Date.now();
+      const spawnNowIso = options.nowIso ?? new Date(spawnNowMs).toISOString();
       const spawnSettings = await (options.readSpawnGateSettings ?? readSpawnGateSettings)(
         projectDir,
       );
@@ -277,6 +324,15 @@ export async function runPreToolUseHook(
         // for even though this reading predates its spend.
         await writeSpawnGateState(projectDir, recordSpawn(state, nowMs, nowIso));
       }
+
+      // R14.6 — record the DELEGATION itself, separately from the headroom
+      // ledger, which prunes on a 6h TTL. A review obligation must not expire
+      // because time passed; a gate that can be waited out is not a gate.
+      //
+      // This runs whether or not the headroom gate is enabled: the obligation to
+      // review delegated output has nothing to do with whether the window could
+      // afford the spawn.
+      await recordDelegationSpawn(projectDir, spawnNowIso, payload.tool_input, payload.session_id);
     }
 
     // Coder-first enforcement (Decision 39): when the `coder-first` guidance is
