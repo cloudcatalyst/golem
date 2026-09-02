@@ -114,7 +114,7 @@ export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
   if (configured.includes(":") || !looksLikeModelId(configured)) {
     const declared = listTargets(input.settings).map((t) => t.id);
     throw new CoderRouteError(
-      `inference.default_coder = "${configured}" names neither a configured target nor a ` +
+      `inference.personas.coder.model = "${configured}" names neither a configured target nor a ` +
         "usable model id. Configured targets: " +
         (declared.length > 0 ? declared.join(", ") : "(none)") +
         ". For a model, give a plain id like `claude-sonnet-5` or `sonnet` and the harness " +
@@ -139,8 +139,8 @@ export function coderRouteConflict(input: CoderRouteInput): string | undefined {
   if (fromWorker === undefined || configured === undefined || configured === "") return undefined;
   if (fromWorker === configured) return undefined;
   return (
-    `inference.worker_targets.coder = "${fromWorker}" and inference.default_coder = ` +
+    `inference.worker_targets.coder = "${fromWorker}" and inference.personas.coder.model = ` +
     `"${configured}" name different destinations. worker_targets wins; unset it to use ` +
-    "default_coder."
+    "the persona's model."
   );
 }

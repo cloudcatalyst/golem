@@ -14,6 +14,7 @@ import {
   OllamaClient,
   OllamaInferenceService,
 } from "../../inference/index.js";
+import { personaModel } from "../../inference/personas.js";
 import {
   createTargetDispatcher,
   type TargetDispatcher,
@@ -202,26 +203,22 @@ export default function register(program: Command): void {
         }
         const telemetry = openTelemetryStore(opts.dir);
         const { serveStdio } = await import("../../mcp/index.js");
-        // R13.12 — resolve `inference.default_coder` once. A model id means the work
-        // belongs to the generated `golem-coder` subagent, which this process cannot
-        // start; `coder` says so rather than drafting somewhere the user did not pick.
+        // R13.12/R14.1 — resolve the `coder` persona's model once. A model id means
+        // the work belongs to the generated `golem-coder` subagent, which this process
+        // cannot start; `coder` says so rather than drafting somewhere the user did not
+        // pick. `personaModel` returns undefined for an unstaffed OR `owner: user`
+        // persona, so both mean "leave the work in the calling session".
         let harnessCoderModel: string | undefined;
         try {
-          const route = resolveCoderRoute({
+          const coderModel = personaModel(settings.inference.personas, "coder");
+          const routeInput = {
             settings: withDefaultTarget(settings),
             workerTargets: settings.inference.worker_targets,
-            ...(settings.inference.default_coder === undefined
-              ? {}
-              : { defaultCoder: settings.inference.default_coder }),
-          });
+            ...(coderModel === undefined ? {} : { defaultCoder: coderModel }),
+          };
+          const route = resolveCoderRoute(routeInput);
           if (route.kind === "harness") harnessCoderModel = route.model;
-          const conflict = coderRouteConflict({
-            settings: withDefaultTarget(settings),
-            workerTargets: settings.inference.worker_targets,
-            ...(settings.inference.default_coder === undefined
-              ? {}
-              : { defaultCoder: settings.inference.default_coder }),
-          });
+          const conflict = coderRouteConflict(routeInput);
           if (conflict !== undefined)
             process.stderr.write(`golem coder: ${conflict}
 `);

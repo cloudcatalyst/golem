@@ -69,9 +69,9 @@ ${prompt}
 
 ## How this file got here
 
-\`golem init\` generated it from \`inference.default_coder = "${input.model}"\`. Edit
+\`golem init\` generated it from \`inference.personas.coder.model = "${input.model}"\`. Edit
 it freely — Golem records what it wrote and will report a conflict rather than
-overwrite your changes. To change the model, set \`inference.default_coder\` and
+overwrite your changes. To change the model, set \`inference.personas.coder.model\` and
 re-run \`golem init\`; to change the prose above, set \`inference.coder_prompt\` so
 the \`coder\` MCP tool is framed identically.
 

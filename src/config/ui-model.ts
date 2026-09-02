@@ -253,21 +253,6 @@ export const SETTING_META = {
     advanced: true,
     restart: "proxy",
   },
-  "inference.default_coder": {
-    label: "Default coder",
-    summary: "Who does a delegated coding task — a model id, a target id, or nobody",
-    detail:
-      "R13.12. A MODEL id (`claude-sonnet-5`) means the harness runs a subagent on that " +
-      "model: `golem init` writes `.claude/agents/golem-coder.md`, so the delegation is " +
-      "native — a full agentic loop with tools, and traffic still through the proxy, so " +
-      "redaction and telemetry still apply. A TARGET id from the registry means Golem calls " +
-      "that model itself, as it always has. A target id wins when the value resolves to one; " +
-      "a value that resolves to neither fails closed naming both sets. Unset means `coder` " +
-      "declines and the work stays in this session, which is the settled default rather than " +
-      "a gap. `worker_targets.coder` still takes precedence over this.",
-    advanced: true,
-    restart: "mcp",
-  },
   "inference.coder_prompt": {
     label: "Coder instruction prompt",
     summary: "One framing applied to every coder task, whichever mechanism runs it",
@@ -317,6 +302,21 @@ export const SETTING_META = {
       "`inference.default_target` and then to the harness's own upstream — no longer to the " +
       "local model. A non-local target is redacted at its trust floor on every dispatch, and " +
       "an unknown target id fails closed. See `golem target list`.",
+    kind: "opaque",
+    restart: "mcp",
+  },
+  "inference.personas": {
+    label: "Personas",
+    summary: "The bench — a named worker per discipline, each on the model that suits it",
+    detail:
+      "R14.1. Keyed by persona id, which is also the generated agent basename " +
+      "(`golem-<id>.md`). Merged per persona id and then per field, unlike every other " +
+      "setting, so a project bench does not erase the user's and `settings.local.json` can " +
+      "restaff one persona without restating the rest. A persona with no `model` is " +
+      "UNSTAFFED: it declines, generates nothing, and spawns nothing — which is how the " +
+      "three shipped by default (coder, reviewer, scribe) leave an unconfigured repo " +
+      "behaving exactly as before. A persona holds no credential: it names a model or a " +
+      "target, and the gateway behind that target holds the key. See `golem personas`.",
     kind: "opaque",
     restart: "mcp",
   },
