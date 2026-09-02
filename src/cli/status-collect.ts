@@ -22,7 +22,7 @@ import { loadConfig } from "../config/index.js";
 import { readSessionState, resolveBlock } from "../hooks/session-state.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { selectTarget } from "../inference/target-dispatcher.js";
-import { KNOWN_WORKERS, unknownWorkerWarnings } from "../inference/workers.js";
+import { declaredWorkers, unknownWorkerWarnings } from "../inference/workers.js";
 import {
   listTargets,
   resolveDefaultTargetId,
@@ -216,9 +216,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // one that used to have no row at all. Asked through the dispatcher's own
   // `selectTarget`, so status cannot predict one destination while dispatch
   // picks another.
-  const workerRows = KNOWN_WORKERS.map((worker) => {
+  const workerRows = declaredWorkers(settings.inference.personas).map((worker: string) => {
     const { id, route } = selectTarget(
-      { settings: proxyWithDefault, workerTargets: settings.inference.worker_targets },
+      {
+        settings: proxyWithDefault,
+        workerTargets: settings.inference.worker_targets,
+        personas: settings.inference.personas,
+      },
       { worker },
     );
     const row = targetRows.find((t) => t.id === id);
@@ -398,7 +402,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       ...(limits?.stale ? [LIMIT_STALE_WARNING] : []),
       // R9.4: a `worker_targets` key naming no worker would otherwise be silently
       // ignored — the failure mode the map shape trades per-key schema docs for.
-      ...unknownWorkerWarnings(settings.inference.worker_targets),
+      ...unknownWorkerWarnings(settings.inference.worker_targets, settings.inference.personas),
       // R9.16: a deployed extension older than the one we ship renders stale
       // facts — it named the coder's model as the local one long after the coder
       // had moved. Status names it; only `golem init` fixes it (a read-only

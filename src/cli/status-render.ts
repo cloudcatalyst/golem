@@ -10,7 +10,6 @@
  */
 
 import type { EffectiveCompression } from "../compression/effective-level.js";
-import { KNOWN_WORKERS } from "../inference/workers.js";
 import {
   type CompressionLevel,
   coerceCompressionLevel,
@@ -278,20 +277,11 @@ export function renderStatus(report: StatusReport): string {
   // Rendered generically over N workers so a new one needs no change here.
   lines.push(`Inference: chat ${chatModel ?? report.upstream.provider}`);
   const workers = report.workers ?? [];
-  const localModel = report.local_model.model ?? "local";
-  for (const worker of KNOWN_WORKERS) {
-    const configured = workers.find((w) => w.worker === worker);
-    if (configured === undefined) {
-      // A report from before R10.8 (or a caller that built one by hand) has no
-      // row for an unconfigured worker. Keep the old reading for those rather
-      // than claiming a route this report cannot vouch for.
-      lines.push(
-        report.local_model.reachable
-          ? `  ${worker}: ${localModel} (local)`
-          : `  ${worker}: unavailable — no target configured and the local model is not reachable`,
-      );
-      continue;
-    }
+  // R14.2: the roster is config, so it is read off the report rather than a
+  // compile-time list. A report with no worker rows prints no worker lines —
+  // honest for a project that declares none.
+  for (const configured of workers) {
+    const worker = configured.worker;
     // A target that resolves to nothing means the worker throws on EVERY
     // dispatch. Naming its model would advertise something that can never run.
     if (configured.target_unknown === true) {

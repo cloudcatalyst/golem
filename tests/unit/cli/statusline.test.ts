@@ -631,9 +631,11 @@ describe("collectGolemState", () => {
       proxyRunning: false,
       coderEnabled: true,
       localModelReachable: false,
-      // R9.4: one row per known worker. Unreachable local model and no
-      // configured target → no model, so the line names no worker at all.
-      workers: [{ worker: "coder" }],
+      // R9.4/R14.2: one row per DECLARED persona — the roster is
+      // `inference.personas`, so a corrupt-state run still reports the shipped
+      // bench. Unreachable local model and no configured target → no model, so
+      // the line names no worker at all.
+      workers: [{ worker: "coder" }, { worker: "reviewer" }, { worker: "scribe" }],
     });
   });
 });

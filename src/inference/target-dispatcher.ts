@@ -103,6 +103,7 @@ import {
   type TargetTrust,
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
+import type { PersonaConfig } from "./personas.js";
 import { workerTarget } from "./workers.js";
 
 /** Hosts for which `trust: "local"` is believable — context never leaves the machine. */
@@ -438,6 +439,8 @@ export interface TargetDispatcherOptions {
    * request always wins.
    */
   readonly workerTargets?: Readonly<Record<string, string>> | undefined;
+  /** R14.2: `inference.personas` — the roster `workerTargets` keys are checked against. */
+  readonly personas?: Readonly<Record<string, PersonaConfig>> | undefined;
   /**
    * Resolve a target's credential without it ever entering the environment.
    *
@@ -672,14 +675,16 @@ function sessionUpstreamProvider(settings: TargetRegistrySettings): string {
  * the list of what does exist.
  */
 export function selectTarget(
-  options: Pick<TargetDispatcherOptions, "settings" | "workerTargets">,
+  options: Pick<TargetDispatcherOptions, "settings" | "workerTargets" | "personas">,
   request: Pick<DispatchRequest, "targetId" | "worker">,
 ): { readonly id: string; readonly route: DispatchRoute } {
   if (request.targetId !== undefined && request.targetId !== "") {
     return { id: request.targetId, route: "explicit" };
   }
   const fromWorker =
-    request.worker !== undefined ? workerTarget(options.workerTargets, request.worker) : undefined;
+    request.worker !== undefined
+      ? workerTarget(options.workerTargets, request.worker, options.personas)
+      : undefined;
   if (fromWorker !== undefined) return { id: fromWorker, route: "worker" };
 
   const configured = options.settings.default_target;

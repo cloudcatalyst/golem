@@ -84,10 +84,24 @@ describe("golem status", () => {
     expect(out).toContain("claude-sonnet-5");
   });
 
-  it("still reports the local model for a worker with no target", () => {
+  // R14.2: the roster is config, not a compile-time list, so a report carrying
+  // NO worker rows renders no worker lines. That is the honest reading — the old
+  // fallback invented a `coder` line for a report that never claimed one. A
+  // worker with no usable target is now a row that says so.
+  it("renders no worker line for a report that carries no worker rows", () => {
     const out = renderStatus(BASE);
+    expect(out).not.toMatch(/^ {2}coder:/m);
+  });
+
+  it("names a local target's model for a worker routed to it", () => {
+    const out = renderStatus({
+      ...BASE,
+      workers: [
+        { worker: "coder", target: "local-ollama", model: "qwen2.5-coder:7b", local: true },
+      ],
+    });
     expect(out).toContain("qwen2.5-coder:7b");
-    expect(out).toContain("(local)");
+    expect(out).toContain("local-ollama");
   });
 });
 
