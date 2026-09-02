@@ -47,6 +47,21 @@ describe("brevityDirective", () => {
     }
   });
 
+  it("carves one progress line back out of the no-narration ban, at every level", () => {
+    // Every profile bans self-narration, which on a long agentic turn produces
+    // turns of pure tool calls with no sign that anything is happening. The
+    // carve-out lives in the shared tail so it cannot be dropped from one level
+    // or drift between three copies of it.
+    for (const level of ACTIVE_LEVELS) {
+      const directive = brevityDirective(level);
+      expect(directive).toContain("silence is not brevity");
+      expect(directive).toContain("ONE short line");
+      expect(directive).toContain("no prose at all is a defect");
+      // Still a signal, not licence for the preamble the profiles removed.
+      expect(directive).toContain("must not restate the request");
+    }
+  });
+
   it("covers every non-off level in BREVITY_LEVELS", () => {
     expect([...BREVITY_LEVELS].filter((l) => l !== "off")).toEqual([...ACTIVE_LEVELS]);
   });

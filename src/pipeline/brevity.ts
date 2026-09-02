@@ -50,6 +50,14 @@ const MARKER_CLOSE = "</golem-brevity>";
  * clauses that keep the directive safe: they protect verbatim payloads, protect
  * the response language, and scope the instruction to PROSE STYLE so it cannot
  * talk the model out of doing the work or calling tools.
+ *
+ * The last clause is that same guard from the other side: a level may not talk
+ * the model into SILENCE either. Every profile below bans self-narration
+ * outright, which is right for prose and wrong for a long agentic turn — it
+ * produces turns of pure tool calls where the user cannot tell whether anything
+ * is happening. So one short progress line is carved back out. It lives HERE
+ * rather than in the three profiles because a rule repeated three times drifts,
+ * and because it is a safety clause, not a style choice.
  */
 const SAFETY_TAIL = [
   "Never abbreviate, paraphrase, translate or reformat code, commands, file paths,",
@@ -59,6 +67,12 @@ const SAFETY_TAIL = [
   "thoroughly you do it, which tools you call, or how many steps you take. Omit",
   "words, never substance — if brevity would cost the reader information they need,",
   "keep the information.",
+  "One carve-out from the no-narration rules above, because silence is not brevity:",
+  "when you are about to call a tool, or would otherwise end a turn having produced",
+  "only tool calls, first write ONE short line naming what you are doing or what you",
+  "just found. A fragment is enough, such as: Reading the config loader. That line is",
+  "a progress signal, not preamble — it must not restate the request, recap finished",
+  "work, or offer further help. A turn with tool calls and no prose at all is a defect.",
 ].join("\n");
 
 /** The directive body for each active level, weakest first. */
