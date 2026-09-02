@@ -301,6 +301,7 @@ async function installCoderAgentStep(projectDir: string, dryRun: boolean): Promi
     route = resolveCoderRoute({
       settings: withDefaultTarget(settings),
       workerTargets: settings.inference.worker_targets,
+      personas: settings.inference.personas,
       ...(coderModel === undefined ? {} : { defaultCoder: coderModel }),
     });
   } catch (err) {

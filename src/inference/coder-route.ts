@@ -33,6 +33,7 @@
  */
 
 import { listTargets, resolveTarget, type TargetRegistrySettings } from "../providers/index.js";
+import type { PersonaConfig } from "./personas.js";
 import { workerTarget } from "./workers.js";
 
 /**
@@ -66,8 +67,10 @@ export interface CoderRouteInput {
   readonly settings: TargetRegistrySettings;
   /** `inference.worker_targets` — takes precedence, being the explicit low-level map. */
   readonly workerTargets?: Readonly<Record<string, string>> | undefined;
-  /** `inference.default_coder`. */
+  /** The `coder` persona's model (`inference.personas.coder.model`). */
   readonly defaultCoder?: string | undefined;
+  /** R14.2: `inference.personas` — the roster `workerTargets` keys are checked against. */
+  readonly personas?: Readonly<Record<string, PersonaConfig>> | undefined;
 }
 
 /**
@@ -87,7 +90,7 @@ function looksLikeModelId(value: string): boolean {
  * cannot mean anything.
  */
 export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
-  const fromWorker = workerTarget(input.workerTargets, "coder");
+  const fromWorker = workerTarget(input.workerTargets, "coder", input.personas);
   if (fromWorker !== undefined) {
     return { kind: "target", targetId: fromWorker, via: "worker" };
   }
@@ -134,7 +137,7 @@ export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
  * would be the wrong kind of correct.
  */
 export function coderRouteConflict(input: CoderRouteInput): string | undefined {
-  const fromWorker = workerTarget(input.workerTargets, "coder");
+  const fromWorker = workerTarget(input.workerTargets, "coder", input.personas);
   const configured = input.defaultCoder?.trim();
   if (fromWorker === undefined || configured === undefined || configured === "") return undefined;
   if (fromWorker === configured) return undefined;
