@@ -1,6 +1,6 @@
 {
   "name": "golem-run",
-  "version": "0.44.0",
+  "version": "0.45.0",
   "description": "Golem (golem.run) — local-first proxy + unified MCP server that cuts Claude token spend and gives Claude local tools",
   "license": "Apache-2.0",
   "author": "Golem <paul@golem.run>",
