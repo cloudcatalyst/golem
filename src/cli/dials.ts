@@ -187,7 +187,9 @@ export function brevityEffectNote(effective: BrevityLevel): string {
         ? "telegraphic — fragments, no preamble or recap"
         : "maximum compression — fragments only, minimum function words";
   return (
-    `replies will be ${effective}: ${shape}. Code, commands, paths and errors stay verbatim. ` +
+    `replies will be ${effective}: ${shape}. Code, commands, paths and errors stay verbatim, ` +
+    "and one short progress line before a tool call is kept at every level, so a long " +
+    "agentic turn still shows that work is happening. " +
     "This changes OUTPUT tokens only — run `golem stats --brevity` to see whether it pays here."
   );
 }
