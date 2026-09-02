@@ -54,6 +54,9 @@ import { proxyBaseUrl, readWiringState } from "./proxy-wiring.js";
 // Shared with status.ts and the control-panel header; lives in its own module so
 // rendering a label costs nothing to import (see upstream-display.ts).
 import { upstreamLabel } from "./upstream-display.js";
+// ./verify-progress.js, NOT ./verify.js: the runner pulls node:child_process and
+// the check table, and this line runs every two seconds (verification-notes §86).
+import { readVerifyProgress, renderVerifySegment } from "./verify-progress.js";
 
 /** Fields we pull from Claude Code's status-line stdin JSON (all optional). */
 export interface SessionInput {
@@ -155,6 +158,14 @@ export interface GolemState {
   }[];
   /** A newer Golem is known available (from the cached update check), if known. */
   readonly updateAvailable?: boolean;
+  /**
+   * A `golem verify` run IN FLIGHT, already rendered (long-run-visibility).
+   *
+   * Pre-rendered rather than raw progress because the staleness rule belongs
+   * to the read model, not to this renderer — the same reasoning that moved
+   * the blocked-state rule out in R12.2.
+   */
+  readonly verifySegment?: string | null;
 }
 
 /**
@@ -464,6 +475,12 @@ export function renderStatusLine(
     parts.push(`${dim("🗜")} ${compLabel}`);
     parts.push(`${dim("✂")} ${golem.brevity ?? "off"}`);
   }
+  // A long run in flight, shown BEFORE the blocked label: both are transient,
+  // and this is the one the user is waiting on. Claude Code's
+  // statusLine.refreshInterval (2s, set by init) is what makes it tick while
+  // the session is IDLE — the case a detached gate run leaves the harness
+  // showing nothing happening at all.
+  if (golem.verifySegment) parts.push(yellow(golem.verifySegment));
   const waiting = blockedLabel(golem);
   if (waiting !== "") parts.push(yellow(waiting));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
@@ -573,6 +590,13 @@ export async function collectGolemState(
   // localhost round-trip and create a `.golem/` folder in repos that never
   // opted into Golem (reported 2026-07-22).
   if (await golemDirExists(dir)) {
+    // A gate run in flight (long-run-visibility). One small read of a
+    // machine-local file, inside the same golem-project guard as the probe
+    // below: a global status line must not touch non-Golem repos. The reader
+    // never throws and applies the staleness rule itself, so an abandoned run
+    // renders as nothing rather than a phantom.
+    const verifySegment = renderVerifySegment(await readVerifyProgress(dir), Date.now());
+    if (verifySegment) state = { ...state, verifySegment };
     try {
       const probe = opts.localReachable ?? localModelInfoCached;
       const info = await probe(dir, ollamaBaseUrl, providers);
