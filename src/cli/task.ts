@@ -156,6 +156,7 @@ export function renderTask(task: Task): string {
     lines.push(`  scope:      plan (committed document)`);
     lines.push(`  owner:      ${plan.owner}`);
     lines.push(`  size:       ${plan.size}`);
+    if (plan.discipline !== undefined) lines.push(`  discipline: ${plan.discipline}`);
     if (plan.design !== undefined) lines.push(`  design:     ${plan.design}`);
     if (plan.gate !== undefined) lines.push(`  gate:       ${plan.gate}`);
     if (plan.blocked !== undefined) lines.push(`  BLOCKED:    ${plan.blocked}`);
