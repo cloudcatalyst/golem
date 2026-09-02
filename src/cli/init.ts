@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
 import { type CoderRoute, resolveCoderRoute } from "../inference/coder-route.js";
+import { personaModel } from "../inference/personas.js";
 import type { CompressionLevel } from "../interfaces/index.js";
 import { withDefaultTarget } from "../providers/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
@@ -296,12 +297,11 @@ async function installCoderAgentStep(projectDir: string, dryRun: boolean): Promi
   try {
     const { settings } = await loadConfig({ projectDir });
     coderPrompt = settings.inference.coder_prompt;
+    const coderModel = personaModel(settings.inference.personas, "coder");
     route = resolveCoderRoute({
       settings: withDefaultTarget(settings),
       workerTargets: settings.inference.worker_targets,
-      ...(settings.inference.default_coder === undefined
-        ? {}
-        : { defaultCoder: settings.inference.default_coder }),
+      ...(coderModel === undefined ? {} : { defaultCoder: coderModel }),
     });
   } catch (err) {
     return [

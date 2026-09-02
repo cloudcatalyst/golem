@@ -52,15 +52,15 @@ async function readAgent(): Promise<string | null> {
 }
 
 describe("golem init — the golem-coder subagent", () => {
-  it("writes no agent when default_coder is unset", async () => {
+  it("writes no agent when the coder persona is unstaffed", async () => {
     // R13.11's settled default: the work stays in the calling session, so there
     // is nothing to delegate to and no file to write.
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).toBeNull();
   });
 
-  it("writes the agent when default_coder names a MODEL", async () => {
-    await writeGolemSettings({ inference: { default_coder: "claude-sonnet-5" } });
+  it("writes the agent when the coder persona names a MODEL", async () => {
+    await writeGolemSettings({ inference: { personas: { coder: { model: "claude-sonnet-5" } } } });
     const report = await golemInit({ projectDir, probe: okProbe });
 
     const content = await readAgent();
@@ -81,7 +81,7 @@ describe("golem init — the golem-coder subagent", () => {
     ).toBe(true);
   });
 
-  it("writes NO agent when default_coder names a registry TARGET", async () => {
+  it("writes NO agent when the coder persona names a registry TARGET", async () => {
     // A target is dispatched to by Golem itself — there is no subagent involved,
     // so a definition would be a lie about where the work goes.
     await writeGolemSettings({
@@ -95,7 +95,7 @@ describe("golem init — the golem-coder subagent", () => {
           },
         ],
       },
-      inference: { default_coder: "openrouter:qwen/qwen3.7-flash" },
+      inference: { personas: { coder: { model: "openrouter:qwen/qwen3.7-flash" } } },
     });
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).toBeNull();
@@ -103,7 +103,10 @@ describe("golem init — the golem-coder subagent", () => {
 
   it("carries a configured coder_prompt into the body", async () => {
     await writeGolemSettings({
-      inference: { default_coder: "sonnet", coder_prompt: "Be terse. Return only a unified diff." },
+      inference: {
+        personas: { coder: { model: "sonnet" } },
+        coder_prompt: "Be terse. Return only a unified diff.",
+      },
     });
     await golemInit({ projectDir, probe: okProbe });
 
@@ -114,7 +117,7 @@ describe("golem init — the golem-coder subagent", () => {
   });
 
   it("is idempotent — a second init reports `skip`, not a rewrite", async () => {
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
     const first = await readAgent();
 
@@ -126,20 +129,20 @@ describe("golem init — the golem-coder subagent", () => {
     expect(action?.kind).toBe("skip");
   });
 
-  it("REFRESHES the model when default_coder changes and the file is untouched", async () => {
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+  it("REFRESHES the model when the persona's model changes and the file is untouched", async () => {
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).toContain("model: sonnet");
 
-    await writeGolemSettings({ inference: { default_coder: "claude-opus-5" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "claude-opus-5" } } } });
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).toContain("model: claude-opus-5");
   });
 
-  it("REMOVES a stale agent when default_coder stops naming a model", async () => {
+  it("REMOVES a stale agent when the persona stops naming a model", async () => {
     // The case a pure install step would miss: the file would survive naming a
     // model the config no longer selects, and nothing in it would say so.
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).not.toBeNull();
 
@@ -157,13 +160,13 @@ describe("golem init — the golem-coder subagent", () => {
     // This file is a prompt someone is expected to tune, and `golem init` runs on
     // every version bump — silently overwriting an edit would be the worst
     // possible behaviour for it.
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
 
     const edited = `${await readAgent()}\n\nMy own house rule: never touch generated files.\n`;
     await writeFile(path.join(projectDir, AGENT_REL), edited, "utf8");
 
-    await writeGolemSettings({ inference: { default_coder: "claude-opus-5" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "claude-opus-5" } } } });
     const report = await golemInit({ projectDir, probe: okProbe });
 
     expect(await readAgent()).toBe(edited); // untouched
@@ -173,8 +176,8 @@ describe("golem init — the golem-coder subagent", () => {
     expect(action?.kind).toBe("conflict");
   });
 
-  it("does NOT delete a user-edited agent when default_coder is unset either", async () => {
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+  it("does NOT delete a user-edited agent when the coder persona is unstaffed either", async () => {
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
     const edited = `${await readAgent()}\n\nEdited.\n`;
     await writeFile(path.join(projectDir, AGENT_REL), edited, "utf8");
@@ -188,10 +191,12 @@ describe("golem init — the golem-coder subagent", () => {
     expect(action?.kind).toBe("conflict");
   });
 
-  it("reports a conflict rather than aborting init on a malformed default_coder", async () => {
+  it("reports a conflict rather than aborting init on a malformed persona model", async () => {
     // The cure must not be worse than the disease: init exists to repair project
     // wiring, so one bad optional setting cannot stop the proxy being wired.
-    await writeGolemSettings({ inference: { default_coder: "openrouter:nope/typo" } });
+    await writeGolemSettings({
+      inference: { personas: { coder: { model: "openrouter:nope/typo" } } },
+    });
     const report = await golemInit({ projectDir, probe: okProbe });
 
     expect(await readAgent()).toBeNull();
@@ -205,7 +210,7 @@ describe("golem init — the golem-coder subagent", () => {
   });
 
   it("uninit removes it", async () => {
-    await writeGolemSettings({ inference: { default_coder: "sonnet" } });
+    await writeGolemSettings({ inference: { personas: { coder: { model: "sonnet" } } } });
     await golemInit({ projectDir, probe: okProbe });
     expect(await readAgent()).not.toBeNull();
 

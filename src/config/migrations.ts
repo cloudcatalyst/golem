@@ -53,6 +53,54 @@ export const SETTING_MIGRATIONS: readonly SettingMigration[] = [
   },
 ];
 
+/**
+ * A setting that is GONE, with no leaf to migrate to.
+ *
+ * Distinct from {@link SETTING_MIGRATIONS} on purpose. A rename has a
+ * destination leaf, so the old key can keep working while warning. A retirement
+ * has no destination the loader can write to — `inference.default_coder`'s
+ * replacement is `inference.personas.coder.model`, a FIELD inside a record, and
+ * `assertLeafRename` rightly refuses to call that a leaf rename.
+ *
+ * So a retired key **raises** rather than warning. That is the harsher choice
+ * and the correct one here: this module exists because "the setting silently
+ * stops taking effect while every surface reports success" is the failure class
+ * this project keeps rediscovering. A warning nobody reads would reproduce it
+ * exactly — the file would still say `default_coder` and the user would still
+ * believe a model was selected.
+ */
+export interface RetiredSetting {
+  /** The dotted path that no longer exists. */
+  readonly path: string;
+  /** What to write instead — prose, because the replacement may not be a leaf. */
+  readonly replacement: string;
+  /** Task that retired it, quoted in the error so it is traceable. */
+  readonly since: string;
+}
+
+export const RETIRED_SETTINGS: readonly RetiredSetting[] = [
+  {
+    path: "inference.default_coder",
+    replacement:
+      'inference.personas.coder.model (e.g. { "personas": { "coder": { "model": "…" } } })',
+    since: "R14.1",
+  },
+];
+
+/** The retirement record for a dotted path, or undefined if it is not retired. */
+export function retirementFor(dotted: string): RetiredSetting | undefined {
+  return RETIRED_SETTINGS.find((r) => r.path === dotted);
+}
+
+/** The message a retired key raises — names the file, the key, and the replacement. */
+export function retirementMessage(retired: RetiredSetting, label: string): string {
+  return (
+    `${label}: "${retired.path}" was retired in ${retired.since} and no longer does anything. ` +
+    `Use ${retired.replacement} instead. ` +
+    "Golem raises rather than ignoring it, so the setting cannot silently stop taking effect."
+  );
+}
+
 /** Section of a dotted path, or the whole string when it has no dot. */
 function sectionOf(dotted: string): string {
   const i = dotted.indexOf(".");

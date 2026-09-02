@@ -29,7 +29,13 @@ import { readFile } from "node:fs/promises";
 import { readEnvLayer } from "./env.js";
 import { ConfigError } from "./errors.js";
 import { isPlainObject, splitDotted } from "./file-io.js";
-import { migrationFrom, migrationShadowedWarning, migrationWarning } from "./migrations.js";
+import {
+  migrationFrom,
+  migrationShadowedWarning,
+  migrationWarning,
+  retirementFor,
+  retirementMessage,
+} from "./migrations.js";
 import { type SettingsFilePaths, settingsFilePaths } from "./paths.js";
 import {
   DEFAULT_SETTINGS,
@@ -182,6 +188,63 @@ async function readSettingsFile(file: string): Promise<unknown> {
 }
 
 /**
+ * Leaves that merge PER KEY across layers instead of replacing wholesale.
+ *
+ * The default — a whole leaf replaced by the highest layer that sets it — is
+ * right for a scalar and for a list. It is wrong for a registry keyed by
+ * user-chosen ids: a project that declares a bench would silently erase the
+ * user's, and restaffing one persona in `settings.local.json` would mean
+ * restating every other persona to avoid losing them.
+ *
+ * Membership is deliberately a short, explicit list rather than "any
+ * `z.record` leaf". `inference.worker_targets` is also a record and is NOT
+ * here: replacing a target map wholesale is the long-standing behaviour, and
+ * changing it silently would be a routing change disguised as a refactor.
+ */
+const MERGE_PER_KEY_LEAVES: ReadonlySet<string> = new Set(["inference.personas"]);
+
+/**
+ * Merge one layer's record-of-objects onto what lower layers built: per key,
+ * then per field within a key.
+ *
+ * Two levels, not a general deep merge. One level would make
+ * `{ "reviewer": { "model": "..." } }` in `settings.local.json` drop the
+ * project's `discipline` and `description` for that persona, which is exactly
+ * the case this exists to serve. Going deeper than two has no meaning here —
+ * a persona's fields are scalars and one string array, and `tools` REPLACES
+ * (an allow-list you can only add to is not an allow-list).
+ *
+ * Provenance is recorded per `<leaf>.<id>.<field>` so `golem personas` can say
+ * which layer supplied each field, not merely which layer last touched the
+ * bench.
+ */
+function mergePerKey(
+  previous: unknown,
+  incoming: Record<string, unknown>,
+  dotted: string,
+  provenance: Record<string, ProvenanceEntry>,
+  layer: LayerName,
+  sourceFile: string | undefined,
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = isPlainObject(previous) ? { ...previous } : {};
+  for (const [id, value] of Object.entries(incoming)) {
+    if (!isPlainObject(value)) {
+      merged[id] = value;
+      continue;
+    }
+    const prior = merged[id];
+    merged[id] = isPlainObject(prior) ? { ...prior, ...value } : { ...value };
+    for (const field of Object.keys(value)) {
+      provenance[`${dotted}.${id}.${field}`] = {
+        layer,
+        ...(sourceFile !== undefined && { source: sourceFile }),
+      };
+    }
+  }
+  return merged;
+}
+
+/**
  * Apply one object-shaped layer (file contents or per-request overrides) to
  * the merge tree, recording provenance and collecting unknown-key warnings.
  */
@@ -221,6 +284,16 @@ function applyObjectLayer(
       let fromKey: string | undefined;
 
       if (leaf === undefined) {
+        // A RETIRED key raises before anything else. It is not unknown (we know
+        // exactly what it was) and it is not renamed (there is no destination
+        // leaf), so neither of the branches below would tell the truth about it.
+        const retired = retirementFor(dotted);
+        if (retired !== undefined) {
+          throw new ConfigError(retirementMessage(retired, label), {
+            key: dotted,
+            ...(sourceFile !== undefined && { source: sourceFile }),
+          });
+        }
         const migration = migrationFrom(dotted);
         if (migration === undefined) {
           warnings.push(`${label}: unknown setting "${dotted}" ignored`);
@@ -254,7 +327,16 @@ function applyObjectLayer(
       }
       const section = tree[sectionName];
       if (section !== undefined) {
-        section[targetKey] = parsed.data;
+        section[targetKey] = MERGE_PER_KEY_LEAVES.has(dotted)
+          ? mergePerKey(
+              section[targetKey],
+              parsed.data as Record<string, unknown>,
+              dotted,
+              provenance,
+              layer,
+              sourceFile,
+            )
+          : parsed.data;
         provenance[`${sectionName}.${targetKey}`] = {
           layer,
           ...(sourceFile !== undefined && { source: sourceFile }),
