@@ -1,8 +1,8 @@
 ---
 title: Portal Install Contract
 type: concept
-tags: [distribution, install, portal, vercel, nginx, golem.run, alignment]
-sources: [install/install.sh, install/install.ps1, deploy/nginx/golem-run.conf, docs/plan/verification-notes.md#149, docs/plan/tasks/R7.6-infra.md, docs/plan/tasks/release-portal-assets.md]
+tags: [distribution, install, portal, vercel, golem.run, alignment]
+sources: [install/install.sh, install/install.ps1, docs/plan/verification-notes.md#149, docs/plan/verification-notes.md#153, docs/plan/tasks/R7.6-infra.md, docs/plan/tasks/release-portal-assets.md]
 created: 2026-09-04
 updated: 2026-09-04
 ---
@@ -15,8 +15,11 @@ portal is a Next.js app on Vercel, and the routing this page describes moved out
 of nginx into `next.config.ts` `redirects()` without any of the behaviour
 changing.
 
-`deploy/nginx/golem-run.conf` is therefore a **reference implementation**, not
-the deployment. This page is the thing both repos read.
+This page is the thing both repos read. The nginx reference config that used to
+sit beside it was **removed on 2026-09-04** — it described a box that does not
+exist, and a second dialect of these rules is a second place for them to drift.
+It is in git history if the User-Agent matching is ever wanted in that form
+again.
 
 Related pages: [[Team Layer]] · [[Architecture]] · [[Dogfooding Golem]].
 

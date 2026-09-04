@@ -229,7 +229,7 @@ export async function buildReadSkeleton(
  * Build the replacement digest. Pure function of its inputs (no clock, no
  * store state) — the same output always produces the same digest.
  * Contains A2's CCR marker (`hash=<64-hex>` — CCR_MARKER_RE) so the model can
- * expand it with the `expand` MCP tool / `/golem/expand`.
+ * expand it with the `expand` MCP tool / `/golem-expand`.
  */
 export function buildDigest(
   toolName: string | undefined,
@@ -279,11 +279,11 @@ export function buildDigest(
     skeletonSection.length > 0 ? "the skeleton above names every definition and its line, so " : "";
   const recovery = complete
     ? `--- end of excerpt: full output above. Retrieve original: expand MCP tool with ` +
-      `ref_id "${refId}" (or /golem/expand ${refId}) ---`
+      `ref_id "${refId}" (or /golem-expand ${refId}) ---`
     : `--- ${elided}. PREFER a narrower re-read of just what you need (${viaSkeleton}Read with ` +
       `offset/limit, or grep the file) — expanding re-enters the FULL original and costs ` +
       `back the tokens this swap saved. To expand anyway: expand MCP tool with ` +
-      `ref_id "${refId}" (or /golem/expand ${refId}) ---`;
+      `ref_id "${refId}" (or /golem-expand ${refId}) ---`;
 
   return (
     `[Golem: oversized ${toolName ?? "tool"} output (${bytes} bytes, ${lines} lines, ` +

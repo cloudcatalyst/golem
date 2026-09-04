@@ -13,10 +13,26 @@ created: 2026-09-04
 updated: 2026-09-04
 ---
 
+## RESOLVED 2026-09-04 — no marketplace; this design stands
+
+The question this section used to hold is answered. A Claude Code marketplace
+CAN carry team skills, remotely and authenticated (verification-notes §151), but
+plugins and marketplaces are Claude Code's alone while `SKILL.md` is an Agent
+Skills spec artifact (§152).
+
+**USER decision, 2026-09-04: harness-agnostic wins.** Golem's own skills moved to
+flat `.claude/skills/golem-<cmd>/` for that reason, and team skills follow the
+same shape — `.claude/skills/golem-team-<cmd>/SKILL.md`, invoked
+`/golem-team-<cmd>`. The `golem:team:<cmd>` form is not reachable without a
+plugin and is therefore not on the table.
+
+`init-skills.ts` already excludes `golem-team-*` from both prune and uninit, so
+Golem will never delete a team's file. What remains is this task: fetching them.
+
 ## Its own namespace
 
-`.claude/skills/golem-team/<name>/SKILL.md` — deliberately **not** under
-`.claude/skills/golem/`:
+`.claude/skills/golem-team-<name>/SKILL.md` — a flat sibling of Golem's own
+`golem-<cmd>` directories, never nested:
 
 - a team skill can never overwrite one of Golem's own, or a personal one
 - when a skill misbehaves, which system owns the file is obvious from its path

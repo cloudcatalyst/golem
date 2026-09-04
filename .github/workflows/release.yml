@@ -168,6 +168,13 @@ jobs:
           # a runner that ever ran `golem` would otherwise fold its own settings
           # into the published schema. With both isolated, every value is a
           # built-in default.
+          #
+          # This job runs on ubuntu-latest, which is what makes HOME sufficient:
+          # the user dir comes from os.homedir() (src/config/paths.ts), and that
+          # reads $HOME on POSIX but USERPROFILE on Windows. So reproducing this
+          # render on a Windows dev box needs USERPROFILE isolated as well, or a
+          # real `user` layer leaks in — observed 2026-09-04, verification-notes
+          # §153. The assertion below is what catches it, and it only runs here.
           HOME="$EMPTY" node dist/cli/main.js config schema --json --no-header --dir "$EMPTY" \
             > dist-assets/config-schema.json
           node -e '

@@ -48,7 +48,7 @@ CCR-refs rule). Your job is to use that discipline deliberately:
    re-run a tighter command (grep the file, limit the line range) instead of
    expanding the whole thing back into context.
 2. **Expand only on demand.** When you genuinely need the full original, call the
-   \`expand\` MCP tool with the \`ref_id\` from the marker (or \`/golem/expand <id>\`)
+   \`expand\` MCP tool with the \`ref_id\` from the marker (or \`/golem-expand <id>\`)
    — and only then. Each expand re-spends the tokens the swap saved.
 3. **Don't re-read.** If a file/page is already in context or in the KB, use
    \`search\`/\`fetch\` for the relevant chunk rather than re-reading the whole
@@ -86,7 +86,7 @@ From the code alone, write down:
    this ordering, an apparent foot-gun).
 
 ## Pass 2 — reveal comments + documentation, then compare
-Now read the comments, docstrings, and related docs (use \`/golem/research\` for
+Now read the comments, docstrings, and related docs (use \`/golem-research\` for
 the module: its wiki page, a spec Decision, a CLAUDE.md rule, a frozen-interface
 contract). Diff your Pass-1 reading against what they claim, and sort every gap
 into one of three buckets:
@@ -110,8 +110,8 @@ repo forbids silent caps). Respect the hard rules while judging: frozen
 interfaces (\`src/interfaces/\`), redaction-first, byte-fidelity — a
 "simplification" that breaks one of those is not an improvement.
 
-This skill writes nothing. To act on findings: code fixes via \`/golem/develop\`,
-doc/comment fixes inline, and durable drift worth tracking via \`/golem/plan\`
+This skill writes nothing. To act on findings: code fixes via \`/golem-develop\`,
+doc/comment fixes inline, and durable drift worth tracking via \`/golem-plan\`
 into the backlog. It complements \`/code-review\` (bug hunting) and \`/simplify\`
 (cleanup) — fresh-eyes is specifically about whether the code and its
 documentation agree.
@@ -136,8 +136,8 @@ what "the project" is, confirm the target before starting.
 
 This skill writes nothing by itself. Its job is a decision-edged review: sort
 everything it examines into "keep" vs "scrap", and propose concrete actions. To
-act on the fixes, use \`/golem/develop\`; to record durable follow-ups use
-\`/golem/plan\`.
+act on the fixes, use \`/golem-develop\`; to record durable follow-ups use
+\`/golem-plan\`.
 
 ## Pass 1 — settle what the recipe actually is (the keep list)
 Decide what belongs to a good pancake and will carry forward UNCHANGED. These are
@@ -187,13 +187,13 @@ nothing of the first release should change, say so plainly rather than inventing
 churn — a first release that is already buildable is a result.
 
 This complements \`/code-review\` (bug hunting), \`/simplify\` (cleanup), and
-\`/golem/fresh-eyes\` (code-vs-docs drift). First pancake is the strategic pass:
+\`/golem-fresh-eyes\` (code-vs-docs drift). First pancake is the strategic pass:
 what to keep, what to scrap, and what to harden before the first RELEASE, rather
 than a line-level audit. Respect the hard rules while judging — a "cleanup" that
 breaks a frozen interface or weakens redaction is not an improvement.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const HYGIENE_SKILLS: Readonly<Record<string, string>> = {
   "cache-health": cacheHealth,
   "context-hygiene": contextHygiene,

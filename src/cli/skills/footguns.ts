@@ -106,7 +106,7 @@ paid model's tokens are for judgment the local model can't make. Route the work:
 
 1. **Classify it.** Is it retrieval-shaped (a fact/lookup), code-drafting, or
    genuinely-hard reasoning?
-   - **Lookup?** Use \`/golem/research\` — the wiki/KB may answer it with no
+   - **Lookup?** Use \`/golem-research\` — the wiki/KB may answer it with no
      model call at all.
    - **Code/tests?** Draft with the \`coder\` MCP tool first (it grounds on the
      local KB automatically); pass \`refine: true\` for non-trivial logic. Then
@@ -123,7 +123,7 @@ If no local model is available (the \`devices\` MCP tool reports none pulled), s
 so and proceed normally — the practice degrades, it doesn't block.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const FOOTGUN_SKILLS: Readonly<Record<string, string>> = {
   upstream,
   park,

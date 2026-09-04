@@ -52,7 +52,12 @@ import {
   personaAgentPath,
   removePersonaAgents,
 } from "./init-personas.js";
-import { installSkills, pruneRetiredSkills, removeSkills } from "./init-skills.js";
+import {
+  installSkills,
+  migrateNestedSkills,
+  pruneRetiredSkills,
+  removeSkills,
+} from "./init-skills.js";
 import {
   ensureVscodeWatcherExclude,
   installVscodeExtension,
@@ -267,7 +272,7 @@ export async function golemInitStatus(
   let skillsInstalled = true;
   for (const name of Object.keys(P0_SKILLS)) {
     try {
-      await access(path.join(projectDir, ".claude", "skills", "golem", name, "SKILL.md"));
+      await access(path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"));
     } catch {
       skillsInstalled = false;
       break;
@@ -457,11 +462,17 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     if (!dryRun) await writeJsonObject(mcpPath, mcp);
   }
 
-  // 3. Skills: .claude/skills/golem/<cmd>/SKILL.md -> /golem/<cmd>.
+  // 3. Skills: .claude/skills/golem-<cmd>/SKILL.md -> /golem-<cmd>.
   actions.push(...(await installSkills(projectDir, dryRun)));
+  // 3a. Retire the pre-2026-09-04 nested `.claude/skills/golem/<cmd>/` layout.
+  // Those files were never DISCOVERABLE — Claude Code reads one level, so
+  // `golem/` was checked for a SKILL.md that was not there and the namespace was
+  // silently absent (verification-notes §150). Leaving them would look like the
+  // flat ones are duplicates. Provenance-guarded, like every other removal.
+  actions.push(...(await migrateNestedSkills(projectDir, dryRun)));
   // 3b. And drop the ones Golem has RETIRED. Without this a skill dropped from
   // the table lingers forever, naming a command that no longer exists
-  // (`/golem/slider` outlived R11.1 by a release). Provenance-guarded: an
+  // (`/golem-slider` outlived R11.1 by a release). Provenance-guarded: an
   // edited skill is reported, never deleted.
   actions.push(...(await pruneRetiredSkills(projectDir, dryRun)));
   // 3c. R13.12 — the `golem-coder` subagent, when `inference.default_coder` names

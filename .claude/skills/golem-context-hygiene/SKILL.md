@@ -16,7 +16,7 @@ CCR-refs rule). Your job is to use that discipline deliberately:
    re-run a tighter command (grep the file, limit the line range) instead of
    expanding the whole thing back into context.
 2. **Expand only on demand.** When you genuinely need the full original, call the
-   `expand` MCP tool with the `ref_id` from the marker (or `/golem/expand <id>`)
+   `expand` MCP tool with the `ref_id` from the marker (or `/golem-expand <id>`)
    — and only then. Each expand re-spends the tokens the swap saved.
 3. **Don't re-read.** If a file/page is already in context or in the KB, use
    `search`/`fetch` for the relevant chunk rather than re-reading the whole

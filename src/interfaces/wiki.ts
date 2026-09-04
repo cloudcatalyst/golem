@@ -10,7 +10,7 @@
  * This interface performs no approval gating itself — it is the mechanical
  * read/write + graph primitive. Plan-gating ("propose a plan, get approval,
  * then write") is enforced at the prompt/tool-description layer (the
- * `wiki_upsert` MCP tool, `/golem/wiki-ingest`), the same convention every
+ * `wiki_upsert` MCP tool, `/golem-wiki-ingest`), the same convention every
  * other Golem tool already uses (Decision 29) — there is no in-protocol
  * confirmation step here.
  *

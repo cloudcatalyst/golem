@@ -17,8 +17,8 @@ what "the project" is, confirm the target before starting.
 
 This skill writes nothing by itself. Its job is a decision-edged review: sort
 everything it examines into "keep" vs "scrap", and propose concrete actions. To
-act on the fixes, use `/golem/develop`; to record durable follow-ups use
-`/golem/plan`.
+act on the fixes, use `/golem-develop`; to record durable follow-ups use
+`/golem-plan`.
 
 ## Pass 1 — settle what the recipe actually is (the keep list)
 Decide what belongs to a good pancake and will carry forward UNCHANGED. These are
@@ -68,7 +68,7 @@ nothing of the first release should change, say so plainly rather than inventing
 churn — a first release that is already buildable is a result.
 
 This complements `/code-review` (bug hunting), `/simplify` (cleanup), and
-`/golem/fresh-eyes` (code-vs-docs drift). First pancake is the strategic pass:
+`/golem-fresh-eyes` (code-vs-docs drift). First pancake is the strategic pass:
 what to keep, what to scrap, and what to harden before the first RELEASE, rather
 than a line-level audit. Respect the hard rules while judging — a "cleanup" that
 breaks a frozen interface or weakens redaction is not an improvement.
