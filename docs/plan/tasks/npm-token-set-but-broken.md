@@ -7,12 +7,25 @@ size: S
 discipline: code
 design: "Observed 2026-09-04 on run 33855109816 (the old Release workflow, re-triggered by the `v0.1.1` tag force-push during the history rewrite). The step named *\"Publish (skipped without NPM_TOKEN)\"* did not skip — it ran and failed, which is only possible if `env.NODE_AUTH_TOKEN` was non-empty."
 gate: "Either `npm view golem-run version` resolves after a release, or the publish step genuinely skips and the release run is green end to end."
-blocked: "changing or removing a repository secret is a credentialed act only the account owner can take"
+blocked: "MITIGATED 2026-09-04 — releases are green again; publishing now needs `vars.NPM_PUBLISH == 'true'`. Closing it fully still needs the account owner to either delete the broken secret or replace it with a working token."
 depends_on: []
 touches: [.github/workflows/release.yml]
 created: 2026-09-04
 updated: 2026-09-04
 ---
+
+> **MITIGATED 2026-09-04 (USER: "bypass that for now").** The publish step no
+> longer fires on the presence of a secret. It requires the repository variable
+> `vars.NPM_PUBLISH` to equal `'true'` **as well as** a non-empty `NPM_TOKEN`, so
+> a broken or leftover token cannot redden a release. Setting the variable with
+> no token fails loudly, because that combination can only be a mistake.
+>
+> Deliberately not `continue-on-error` — that hides a real publish failure in the
+> one workflow whose whole job is to be trustworthy.
+>
+> **To actually publish**: set a working `NPM_TOKEN` and set the repo variable
+> `NPM_PUBLISH=true`. `R7.5` owns the first real publish; it is `owner: user`
+> because it is an outward, credentialed act.
 
 ## What the evidence says
 

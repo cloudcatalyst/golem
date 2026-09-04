@@ -112,9 +112,26 @@ Every one of these is load-bearing for `golem.run`, which redirects to
 | `config-schema.json` | the portal, to validate team settings |
 
 The release job **asserts** every required asset is present after uploading,
-rather than trusting the upload. npm publish and the VS Code publish stay
-optional — skipped unless `NPM_TOKEN` / `VSCE_PAT` are set — so the release is
-complete either way, and turning on npm is setting one secret.
+rather than trusting the upload.
+
+**Publishing to npm is an explicit opt-in**, not a consequence of a secret
+existing. The gate is `vars.NPM_PUBLISH == 'true'` **and** a non-empty
+`NPM_TOKEN`. That distinction was learned the hard way: the job originally fired
+whenever the token was non-empty, treating *a secret is configured* as a proxy
+for *we intend to publish*. A token was present but did not authenticate, so
+v0.50.0 and v0.51.0 each produced a complete, correct release and then reported
+FAILURE — and a run that is expected to be red is not a signal, it is training.
+(Same predicate-as-proxy mistake R13.11 recorded for `inherit` auth.)
+
+Setting the variable while the token is empty fails loudly rather than skipping
+silently, because that combination can only mean someone meant to publish.
+
+Not `continue-on-error`: hiding a real publish failure in the one workflow whose
+job is to be trustworthy would be worse than the failure. The VS Code publish
+remains gated on `VSCE_PAT` alone — it has never mis-fired.
+
+Either way the release is complete: `golem-run-<version>.tgz` is attached to the
+Release, so nothing is lost by not publishing.
 
 ## `config-schema.json` must not describe the build machine
 
