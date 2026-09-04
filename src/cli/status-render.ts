@@ -159,7 +159,7 @@ export function renderStatus(report: StatusReport): string {
   lines.push(`Project wiring ${init.overall ? "(initialized)" : "(run `golem init`)"}`);
   lines.push(`  ${checkbox(init.claude_settings)} .claude settings -> proxy base URL`);
   lines.push(`  ${checkbox(init.mcp_registered)} .mcp.json -> golem MCP server`);
-  lines.push(`  ${checkbox(init.skills)} /golem/* skills installed`);
+  lines.push(`  ${checkbox(init.skills)} /golem-* skills installed`);
   lines.push(`  ${checkbox(init.golem_settings)} .golem/settings.json present`);
   lines.push(
     `  ${checkbox(report.webfetch_green?.trusted === true)} ${renderWebFetchGreen(report)}`,

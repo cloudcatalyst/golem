@@ -3,7 +3,7 @@
  *
  * The point is aimed pruning. "182k tokens in context" tells a reader nothing;
  * "61k of it is one Read result and 28k is 14 Greps" tells them what to drop, and
- * is what the `/golem/context-hygiene` skill needs in order to stop guessing.
+ * is what the `/golem-context-hygiene` skill needs in order to stop guessing.
  */
 
 import type {

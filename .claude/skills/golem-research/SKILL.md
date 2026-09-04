@@ -29,6 +29,6 @@ already has.
    general knowledge silently.
 5. **Capture what's worth keeping.** A fetched page is searchable but orphaned
    until it's a wiki page. If the finding is durable, propose a wiki
-   source-note (run `/golem/wiki-ingest <url>`) with real `[[wikilinks]]`,
+   source-note (run `/golem-wiki-ingest <url>`) with real `[[wikilinks]]`,
    citing the source. Author wiki pages freely (spec Decision 44) — no prior
    approval needed; every write is committed to git and reviewable.

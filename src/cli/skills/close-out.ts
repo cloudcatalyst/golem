@@ -40,7 +40,7 @@ The user wants to close out a batch of work (the CLAUDE.md "Batch close-out"
 checklist). Invoking this skill authorizes committing and opening a PR for this
 batch. Do these in order; stop and surface any failure rather than pressing on.
 
-1. **Verify green.** Run the \`/golem/verify\` steps (\`npm run check\` +
+1. **Verify green.** Run the \`/golem-verify\` steps (\`npm run check\` +
    \`golem wiki check\`), judged by exit code. Do not proceed until green.
 2. **Deploy locally** so the *running* processes pick up the change:
    \`npm run build\` → \`golem proxy restart\`. Tell the user any live
@@ -55,7 +55,7 @@ batch. Do these in order; stop and surface any failure rather than pressing on.
    between the \`golem:task-index\` markers). Then update any living-doc
    references (CLAUDE.md, IMPLEMENTATION_PLAN, spec) to point at git history /
    shipped artifacts.
-4. **Write the debrief.** Run \`/golem/debrief\` to author the dated
+4. **Write the debrief.** Run \`/golem-debrief\` to author the dated
    \`docs/wiki/debriefs/\` page (wiki writes are un-gated, Decision 44). The
    debrief is required — without it the knowledge base stays blind to the task.
    Include: verdict, problem, fix/approach, key lessons/numbers, sources, tags.
@@ -87,7 +87,7 @@ Optional filter: $ARGUMENTS
    \`upsertPage\` semantics (union-merge frontmatter, dated separator, never a
    wholesale rewrite) and removes the consumed draft.
 4. **Report** which drafts were promoted, to which pages, and which were left or
-   dropped. If there are no pending drafts, say so and suggest \`/golem/research\`
+   dropped. If there are no pending drafts, say so and suggest \`/golem-research\`
    or \`golem note\` to capture something first.
 `;
 
@@ -117,7 +117,7 @@ close-out step). Optional slug/topic: $ARGUMENTS
    wikilinks resolve.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const CLOSE_OUT_SKILLS: Readonly<Record<string, string>> = {
   verify,
   ship,

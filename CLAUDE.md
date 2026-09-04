@@ -5,7 +5,7 @@ Guidance for Claude Code agents working in this repository.
 ## What this project is
 A local-first TypeScript pre-LLM processing layer (proxy + MCP server): redaction, compression, local tools, routing, honest observability. Claude Code is the flagship integration — byte-faithful proxying, native MCP tools, agentic developer-assistant with local tools (vector KB, tiered Ollama inference, CCR expansion, telemetry). The pipeline extends to other gateways (R6.1). npm **`golem-run`**, CLI **`golem`**.
 
-Previously the project had a different working title — dated wiki records still show it, read as Golem. The MCP tools use short verb names: `search`, `fetch`, `expand`, `stats`, `ingest`, `coder` (Decisions 27/35). `level` was retired with the slider (ADR-0004): no tool call can change how much of the pipeline runs. Skills/prompts/env/config/header use `/golem/<cmd>` and `GOLEM_*`.
+Previously the project had a different working title — dated wiki records still show it, read as Golem. The MCP tools use short verb names: `search`, `fetch`, `expand`, `stats`, `ingest`, `coder` (Decisions 27/35). `level` was retired with the slider (ADR-0004): no tool call can change how much of the pipeline runs. Skills/prompts/env/config/header use `/golem-<cmd>` and `GOLEM_*`.
 
 ## Source of truth
 1. `docs/golem-spec.md` — architecture, decisions, ADR log
@@ -66,7 +66,7 @@ Two things are already settled, don't re-derive them: **`vitest.config.ts` pool/
 Claim tasks by ID in PR title. Don't modify files owned by another workstream. Blocked? Write the question in verification-notes and pick up another task.
 
 ## Batch close-out
-Run `/golem/ship` after the last task in a batch. Checklist:
+Run `/golem-ship` after the last task in a batch. Checklist:
 
 - [ ] Verify green: `tsc --noEmit`, `biome check`, `npm run verify:deps`, `vitest run`
 - [ ] Rebuild + restart proxy/CLI

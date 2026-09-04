@@ -5,7 +5,7 @@ invocationMode: auto
 
 The user (or Claude's own judgment) has identified development work to do: $ARGUMENTS
 
-1. **Research first.** Run the `/golem/research` skill (or its steps
+1. **Research first.** Run the `/golem-research` skill (or its steps
    directly: `wiki_read` the likely page, else `search` + `fetch`) for the
    feature area so you understand existing patterns, prior decisions, and
    frozen interfaces before writing anything.
@@ -33,7 +33,7 @@ The user (or Claude's own judgment) has identified development work to do: $ARGU
 Before a **wide or speculative** change (a refactor across several files, a
 migration, a "let's see if this works"), take a checkpoint first: `golem
 checkpoint create --note "<the attempt>"`. If it fails, propose discarding it
-(`/golem/checkpoint`) instead of spending a repair cycle — the repair also
+(`/golem-checkpoint`) instead of spending a repair cycle — the repair also
 leaves its wreckage in context for every later turn.
 
 If `coder`/`research` are unavailable, say the Golem MCP server isn't

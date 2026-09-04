@@ -28,7 +28,7 @@ Nothing could answer that. The client sees its own tool calls; the API sees toke
 Only the proxy sees the whole `messages` array on every request. So the ledger is
 the one thing in the stack positioned to say "61k of your context is one `Read` of
 `dist/`" instead of "182k tokens in context" — the difference between aimed pruning
-and guessing. It is what the `/golem/context-hygiene` skill reasons from; before it,
+and guessing. It is what the `/golem-context-hygiene` skill reasons from; before it,
 that skill reasoned blind.
 
 ## What it reports

@@ -1,8 +1,10 @@
 /**
  * WS-E E2 — the P0 skill files `golem init` installs.
  *
- * Directory-namespaced per verification-notes §11:
- * `.claude/skills/golem/<name>/SKILL.md` surfaces as `/golem/<name>`.
+ * Installed FLAT as `.claude/skills/golem-<name>/SKILL.md`, surfacing as
+ * `/golem-<name>`. The old nested `.claude/skills/golem/<name>/` layout
+ * (verification-notes §11) was never discoverable — Claude Code reads one level
+ * only, so the whole namespace was silently absent (§150, §152).
  * Each skill delegates to the frozen MCP tool names (plan §2.5); the
  * `/mcp__golem__*` prompt twins come from the MCP server directly.
  *
@@ -20,7 +22,7 @@ import { FOOTGUN_SKILLS } from "./skills/footguns.js";
 import { HYGIENE_SKILLS } from "./skills/hygiene.js";
 import { RESEARCH_SKILLS } from "./skills/research.js";
 
-/** name -> SKILL.md content; installed under .claude/skills/golem/<name>/. */
+/** command -> SKILL.md content; installed under .claude/skills/golem-<command>/. */
 export const P0_SKILLS: Readonly<Record<string, string>> = {
   ...BASICS_SKILLS,
   ...RESEARCH_SKILLS,

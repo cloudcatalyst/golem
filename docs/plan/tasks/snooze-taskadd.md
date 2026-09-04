@@ -77,4 +77,4 @@ advisory. Any change to how the reset time is read from the rate-limit headers.
 
 ## Outcome
 
-snooze gained a `note` param that files the durable local task itself, before the wait — the ordering problem is structurally impossible rather than exempted. Reproduced the deny first (95% util scratch project, real hook), verified end-to-end through a real `golem mcp serve`, and confirmed `golem task add` is STILL denied under enforcement. Guidance rule + generator, /golem/park skill, CLAUDE.md, both deny reasons and the snooze proposal all updated.
+snooze gained a `note` param that files the durable local task itself, before the wait — the ordering problem is structurally impossible rather than exempted. Reproduced the deny first (95% util scratch project, real hook), verified end-to-end through a real `golem mcp serve`, and confirmed `golem task add` is STILL denied under enforcement. Guidance rule + generator, /golem-park skill, CLAUDE.md, both deny reasons and the snooze proposal all updated.

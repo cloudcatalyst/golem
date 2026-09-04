@@ -8,7 +8,7 @@ which also covers ingested trees, other `.md` docs and every WebFetch — is a
 derived cache over it. Skim `WIKI.md`'s Index once per session before searching.
 
 1. **Check the wiki first** — start from `WIKI.md`
-2. **No page?** → `search` MCP tool or `/golem/research` (exact wiki-title /
+2. **No page?** → `search` MCP tool or `/golem-research` (exact wiki-title /
    one-hop-wikilink match before vector; `fetch` for a hit's full text)
 3. **Still nothing?** Then WebFetch or external docs. An already-fetched URL is
    served from cache — free and offline, as are `ingest` files and `golem note`

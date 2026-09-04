@@ -87,10 +87,10 @@ re-enable savings when done, and \`golem on\` if they used option 3 — every st
 surface shows the bypass while it is on, so it is not a state to leave behind.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const BASICS_SKILLS: Readonly<Record<string, string>> = {
   // R11.1: was `slider`. `golem init` prunes a managed skill that is no longer
-  // in this table, so the old /golem/slider directory is removed on the next
+  // in this table, so the old /golem-slider directory is removed on the next
   // init rather than lingering as a command that names a retired control.
   compression,
   stats,

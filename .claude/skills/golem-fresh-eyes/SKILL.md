@@ -26,7 +26,7 @@ From the code alone, write down:
    this ordering, an apparent foot-gun).
 
 ## Pass 2 — reveal comments + documentation, then compare
-Now read the comments, docstrings, and related docs (use `/golem/research` for
+Now read the comments, docstrings, and related docs (use `/golem-research` for
 the module: its wiki page, a spec Decision, a CLAUDE.md rule, a frozen-interface
 contract). Diff your Pass-1 reading against what they claim, and sort every gap
 into one of three buckets:
@@ -50,8 +50,8 @@ repo forbids silent caps). Respect the hard rules while judging: frozen
 interfaces (`src/interfaces/`), redaction-first, byte-fidelity — a
 "simplification" that breaks one of those is not an improvement.
 
-This skill writes nothing. To act on findings: code fixes via `/golem/develop`,
-doc/comment fixes inline, and durable drift worth tracking via `/golem/plan`
+This skill writes nothing. To act on findings: code fixes via `/golem-develop`,
+doc/comment fixes inline, and durable drift worth tracking via `/golem-plan`
 into the backlog. It complements `/code-review` (bug hunting) and `/simplify`
 (cleanup) — fresh-eyes is specifically about whether the code and its
 documentation agree.

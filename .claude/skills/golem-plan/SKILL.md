@@ -47,7 +47,7 @@ co-pilot here: the human decides what becomes a task.
    Append rows; don't rewrite or delete another entry's wording. **Never
    hand-edit the roadmap's index table** — it is generated between the
    `golem:task-index` markers; change the task document and regenerate.
-6. **The planning contract** (mirrors the `/golem/research` query contract):
+6. **The planning contract** (mirrors the `/golem-research` query contract):
    cite a source for every proposed task, clearly flag what is your inference
    versus what the user actually stated, and admit gaps rather than inventing
    work to fill the page.

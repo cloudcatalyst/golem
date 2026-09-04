@@ -94,7 +94,7 @@ describe("golem init", () => {
 
     for (const name of Object.keys(P0_SKILLS)) {
       const skill = await readFile(
-        path.join(projectDir, ".claude", "skills", "golem", name, "SKILL.md"),
+        path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"),
         "utf8",
       );
       expect(skill).toBe(P0_SKILLS[name]);
@@ -672,13 +672,13 @@ describe("golem init — VS Code extension install", () => {
 
 describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
   const retiredPath = (dir: string): string =>
-    path.join(dir, ".claude", "skills", "golem", "slider", "SKILL.md");
+    path.join(dir, ".claude", "skills", "golem-slider", "SKILL.md");
 
   it("removes a retired skill Golem itself wrote, and forgets its record", async () => {
     await golemInit({ projectDir, probe: okProbe });
     // Simulate a skill Golem shipped in an earlier release and has since dropped
     // from the table: write it AND record it as Golem-written, which is exactly
-    // the state `/golem/slider` was in after R11.1 retired the slider.
+    // the state `/golem-slider` was in after R11.1 retired the slider.
     const retired = retiredPath(projectDir);
     await mkdir(path.dirname(retired), { recursive: true });
     await writeFile(retired, "run `golem slider 3`\n", "utf8");
@@ -687,7 +687,7 @@ describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
     const report = await golemInit({ projectDir, probe: okProbe });
 
     await expect(readFile(retired, "utf8")).rejects.toThrow();
-    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem/slider"))).toBe(
+    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem-slider"))).toBe(
       true,
     );
     // The provenance record goes with it, so a later re-install is a clean create.
@@ -695,7 +695,7 @@ describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
     // The skills Golem still ships are untouched.
     for (const name of Object.keys(P0_SKILLS)) {
       await expect(
-        readFile(path.join(projectDir, ".claude", "skills", "golem", name, "SKILL.md"), "utf8"),
+        readFile(path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"), "utf8"),
       ).resolves.toContain("");
     }
   });
@@ -712,20 +712,20 @@ describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
 
     expect(await readFile(retired, "utf8")).toBe("my own notes\n");
     expect(
-      report.actions.some((a) => a.kind === "conflict" && a.path.includes("golem/slider")),
+      report.actions.some((a) => a.kind === "conflict" && a.path.includes("golem-slider")),
     ).toBe(true);
   });
 
   it("leaves a skill Golem has no record of writing (the user's own)", async () => {
     await golemInit({ projectDir, probe: okProbe });
-    const mine = path.join(projectDir, ".claude", "skills", "golem", "mine", "SKILL.md");
+    const mine = path.join(projectDir, ".claude", "skills", "golem-mine", "SKILL.md");
     await mkdir(path.dirname(mine), { recursive: true });
     await writeFile(mine, "my own skill\n", "utf8");
 
     const report = await golemInit({ projectDir, probe: okProbe });
 
     expect(await readFile(mine, "utf8")).toBe("my own skill\n");
-    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem/mine"))).toBe(
+    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem-mine"))).toBe(
       false,
     );
   });
@@ -740,7 +740,7 @@ describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
     const report = await golemInit({ projectDir, probe: okProbe, dryRun: true });
 
     expect(await readFile(retired, "utf8")).toBe("stale\n");
-    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem/slider"))).toBe(
+    expect(report.actions.some((a) => a.kind === "remove" && a.path.includes("golem-slider"))).toBe(
       true,
     );
   });
@@ -768,7 +768,7 @@ describe("golem uninit", () => {
     const mcp = await readJson(".mcp.json");
     expect(mcp.mcpServers).toStrictEqual({ other: { type: "http", url: "http://x/mcp" } });
     const files = await snapshot(projectDir);
-    expect([...files.keys()].some((f) => f.includes(path.join("skills", "golem")))).toBe(false);
+    expect([...files.keys()].some((f) => f.includes(path.join("skills", "golem-")))).toBe(false);
     expect(files.has(path.join(".golem", "settings.json"))).toBe(true);
   });
 

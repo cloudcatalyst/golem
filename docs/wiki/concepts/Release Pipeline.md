@@ -160,7 +160,7 @@ replayed later. Body:
 }
 ```
 
-Three properties worth keeping when the portal side is built:
+Three properties worth keeping, and kept when the portal side was built:
 
 - **It runs after the release is published**, in its own job. A webhook failure
   cannot unpublish anything — it goes red, visibly, instead of the portal
@@ -173,6 +173,47 @@ Three properties worth keeping when the portal side is built:
 
 The portal verifies the signature, then fetches `config_schema.url` and checks it
 against `sha256` before caching it by `version`.
+
+### The receiving half (built 2026-09-04)
+
+`POST /api/webhooks/golem-build` in the portal repo. It was already written
+before this contract existed, against an **earlier and incompatible** design —
+so "both halves exist" was not the same as "the loop is closed". Three
+mismatches, each of which would have failed the first release cut with the
+secrets set:
+
+| | this repo sends | the portal expected | result |
+|---|---|---|---|
+| signature | `sha256=<hex>` over `"<ts>.<body>"`, with `x-golem-timestamp` | bare `<hex>` over the body, no timestamp | 400 |
+| body | an envelope naming `config_schema: {url, sha256}` | the schema **inline**, as `{version, schema}` | 422 |
+| document | `{version, groups[].controls[].id/kind}` | `{version, sections[].settings[].key/type}` | 422 |
+
+The third was the expensive one: it also broke the **GitHub fallback**, so the
+portal's Settings page would have stayed read-only even with the webhook
+switched off entirely. A contract that only one side has ever executed is
+untested by construction, and the third mismatch shows the cost is not confined
+to the path the contract describes.
+
+Resolved on the portal side, because the direction of truth says so — this repo
+owns the contract, the portal owns its implementation (see
+[[Portal Install Contract]]), and the sender had already shipped.
+
+Two details worth knowing before editing either half:
+
+- **The 4xx/5xx split is an instruction to the sender.** 4xx means retrying
+  cannot fix it (bad signature, stale timestamp, a document that will never
+  parse); 5xx means try again (the asset is not readable yet, the database
+  blipped). A release asset can take a moment to become readable, so an
+  unfetchable `config_schema.url` is deliberately a 502, not a 422.
+- **The portal parses leniently and refuses a header.** It is strict only about
+  `id`, `family` and `kind`, so a future release that adds a widget kind cannot
+  make every team's Settings page read-only; and it refuses a document carrying
+  the machine-specific `header` block, which is the same thing this workflow
+  asserts on the way out.
+
+What is left is credentialed, not code: `PORTAL_WEBHOOK_URL` and
+`PORTAL_WEBHOOK_SECRET` on this repo's Actions secrets, the latter matching the
+portal's `GOLEM_BUILD_WEBHOOK_SECRET`. See `portal-release-webhook`.
 
 ## Repository settings
 

@@ -11,7 +11,7 @@ invocationMode: auto
 
 The user (or Claude's own judgment) has identified development work to do: $ARGUMENTS
 
-1. **Research first.** Run the \`/golem/research\` skill (or its steps
+1. **Research first.** Run the \`/golem-research\` skill (or its steps
    directly: \`wiki_read\` the likely page, else \`search\` + \`fetch\`) for the
    feature area so you understand existing patterns, prior decisions, and
    frozen interfaces before writing anything.
@@ -39,7 +39,7 @@ The user (or Claude's own judgment) has identified development work to do: $ARGU
 Before a **wide or speculative** change (a refactor across several files, a
 migration, a "let's see if this works"), take a checkpoint first: \`golem
 checkpoint create --note "<the attempt>"\`. If it fails, propose discarding it
-(\`/golem/checkpoint\`) instead of spending a repair cycle — the repair also
+(\`/golem-checkpoint\`) instead of spending a repair cycle — the repair also
 leaves its wreckage in context for every later turn.
 
 If \`coder\`/\`research\` are unavailable, say the Golem MCP server isn't
@@ -95,7 +95,7 @@ co-pilot here: the human decides what becomes a task.
    Append rows; don't rewrite or delete another entry's wording. **Never
    hand-edit the roadmap's index table** — it is generated between the
    \`golem:task-index\` markers; change the task document and regenerate.
-6. **The planning contract** (mirrors the \`/golem/research\` query contract):
+6. **The planning contract** (mirrors the \`/golem-research\` query contract):
    cite a source for every proposed task, clearly flag what is your inference
    versus what the user actually stated, and admit gaps rather than inventing
    work to fill the page.
@@ -104,7 +104,7 @@ If the Golem MCP tools or CLI are unavailable, say the Golem MCP server isn't
 connected and suggest \`golem init\` and restarting Claude Code.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const DEVELOP_SKILLS: Readonly<Record<string, string>> = {
   develop,
   plan,
