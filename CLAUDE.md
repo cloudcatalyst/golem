@@ -47,7 +47,7 @@ TypeScript strict, ESM, Node ≥ 22. npm, Biome lint + format. Zod at external b
 working branch → PR → development → "Prepare release" → PR → main → release published
 ```
 - **PRs target `development`, never `main`.** `main` receives release PRs only, so every merge into it IS a release (tag, GitHub Release, binaries, npm tarball, `install.sh`, `install.ps1`, `config-schema.json`, portal webhook).
-- **CI runs at the release boundary only** (USER, 2026-09-04) — nothing runs on `development`. So `golem verify` green, by exit code, is a hard requirement before every merge into `development`: a red release PR otherwise indicts the whole batch merged since the last release, not one diff.
+- **CI gates every PR** — into `development` and into `main`. Ubuntu + Windows are blocking; macOS is advisory until it has been green a few times. `golem verify` green by **exit code** stays the local bar before you push (don't pipe it — the pipe's exit code is not the gate's).
 - Cut a release with the **Prepare release** workflow on `development` — it bumps the version and opens the release PR. Never hand-edit a version; `scripts/release.mjs` moves `package.json`, `vscode-extension/package.json` and the compiled-in `VERSION` together.
 - **Merge the release PR with a merge commit, not squash** — a squash rewrites the history `development` is built on.
 - Full design: `docs/wiki/concepts/Release Pipeline.md`.

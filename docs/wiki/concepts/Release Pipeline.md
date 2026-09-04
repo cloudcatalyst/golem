@@ -35,24 +35,48 @@ Related pages: [[Portal Install Contract]] · [[Team Layer]] · [[Dogfooding Gol
 checks would drift, and the first anyone would know is a release that passed
 checks `development` would have failed.
 
-## CI runs at the release boundary only
+## Where CI runs, and why that changed twice in a day
 
-**USER DECISION, 2026-09-04.** Nothing runs on `development`: no PR check, no
-push check. CI runs on the release PR into `main`, and again inside `release.yml`
-after that PR merges.
+CI gates **both** boundaries: every PR into `development`, and the release PR into
+`main` (plus `release.yml`, which calls it).
 
-The trade is roughly half the Actions minutes, and the cost lands on whoever cuts
-the release: **a red release PR indicts everything merged since the last one**,
-not one diff. The recovery is `git bisect` over `development`, not a glance at a
-changed file.
+It briefly did not. While the repo was private, Actions minutes were billed and CI
+was narrowed to the release boundary only — nothing on `development`. The cost of
+that was concentrated on whoever cut the release: **a red release PR indicts every
+change merged since the last one**, and the recovery is `git bisect`, not a glance
+at a diff. The repo went public on 2026-09-04, standard-runner minutes became free,
+and the reason for the trade evaporated, so the `development` gate came back.
 
-What keeps that rare is the local gate. `golem verify` before every merge into
-`development` runs the same seven checks the workflow does, judged by exit code —
-that is now the only thing standing between a bad merge and a release PR that
-cannot say which change broke it.
+Worth keeping as a pattern: a constraint-driven decision should name the
+constraint, so that when the constraint lifts the decision can be revisited
+rather than inherited.
 
-There is deliberately **no `push:` trigger at all**: a push to `main` runs the
-release, and the release calls CI itself.
+### The matrix
+
+| job | where | blocking |
+|---|---|---|
+| `quality` | ubuntu (node 22, 24), windows (node 24) | yes |
+| `test` | ubuntu × 2 nodes × 10 shards, windows × node 24 × 10 shards | yes |
+| `test-macos` | macos × 4 shards, node 24 | **no — advisory** |
+| `CI gate` | ubuntu | the one required check |
+
+**Windows is blocking** because it is the platform this project is developed and
+most used on, and its defects have never been theoretical: `npm.cmd` with
+`shell: false` is `EINVAL` since Node's CVE-2024-27980 change, and two concurrent
+`fs.rename` calls on one source **both succeed** on Windows (§148) — a broken
+exclusive-claim that shipped and was caught by a human, not by CI.
+
+**macOS is advisory on purpose.** The suite has never run there, so making it a
+gate before it has ever been green would block every merge on unknown, unrelated
+failures. It reports and blocks nobody, and it is deliberately not in `ci-gate`'s
+`needs`. Promote it once it has been green for a few runs; if it is still red
+weeks from now, that is a finding about macOS support worth a task, not a reason
+to delete the job. `R1.6` and `R7.3` are both blocked for want of non-Windows
+hardware — this is the first thing in the project that has any.
+
+There is deliberately **no `push:` trigger**: `development` is only reached through
+a PR that was already gated, and a push to `main` runs the release, which calls CI
+itself.
 
 ## Why the version is decided before the PR, not after the merge
 
