@@ -123,9 +123,10 @@ failure mode is someone later assuming a merge *was* blocked when it was merely
 discouraged. Default branch was set to `development`, which is what stops a
 `gh pr create` with no `--base` silently targeting a release.
 
-The user then moved to make the repository public, which resolves it. A history
-audit ran first, because going public is irreversible for anything ever
-committed:
+The repository was then made public, and the identical protection call
+succeeded — `main` now requires `CI gate`, with force-pushes and deletions
+blocked. A history audit ran before the switch, because going public is
+irreversible for anything ever committed:
 
 - **No credential file ever committed** — no `.env`, `.pem`, `.key`, no npm
   token. `.npmrc` is tracked but holds only `save-exact` and `min-release-age`.
@@ -156,3 +157,45 @@ committed:
 - **Check whether the blocker is still true before designing around it.** Two
   documents were written that morning asserting a billing block that had ended
   days earlier; both had to be corrected the same day.
+
+## 6. The rewrite, and what it could and could not do
+
+With the repo public and the audit showing no secrets, history was rewritten
+anyway — junk paths, the personal email, and stale local paths — on the grounds
+that with **0 forks, 0 stars and no releases**, it was the cheapest this would
+ever be.
+
+Done on a `--mirror` clone with a backup bundle taken first, verified before
+pushing rather than after:
+
+| | before | after |
+|---|---|---|
+| `.claude/worktrees/**` file entries | 13 | 0 |
+| `src/compression/__pycache__/**` | 1 | 0 |
+| personal-domain author occurrences | 145 | 0 |
+| distinct author emails | 3 | 2 |
+| commits | 524 | 518 |
+
+The 6 dropped commits were **entirely** worktree duplicates — their whole
+content was `.claude/worktrees/agent-*/…` copies of files that also landed at
+their real paths. The check that made force-pushing defensible was comparing the
+branch *trees* before and after: no file disappeared from any branch tip, and the
+only content differences were the two task documents whose local paths were
+replaced.
+
+Two operational facts worth carrying:
+
+- **`refs/pull/*` must be deleted from a mirror before rewriting.** GitHub serves
+  156 of them here and they are read-only; a `push --mirror` that tries to update
+  them fails.
+- **A rewrite does not unpublish.** GitHub keeps the old objects reachable by SHA
+  until a garbage collection that must be requested from Support, and any clone or
+  fork keeps everything. "Rewritten" is not "unreachable" — which is why the
+  audit, not the rewrite, was the part that mattered.
+
+And one limit found by hitting it: **Golem's own redaction made the address
+un-typeable.** Asked to set an email, the agent could not write it — the value
+arrives redacted and placeholders are not restored into tool arguments. It had to
+be passed through a file and used without ever being displayed. The pipeline
+working exactly as designed, and a real constraint on what an agent can do with
+data it is not allowed to see.

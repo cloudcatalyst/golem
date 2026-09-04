@@ -150,14 +150,19 @@ Three properties worth keeping when the portal side is built:
 The portal verifies the signature, then fetches `config_schema.url` and checks it
 against `sha256` before caching it by `version`.
 
-## Repository settings, and the one that could not be set
+## Repository settings
 
-**Default branch is `development`** (set 2026-09-04), so `gh pr create` and the
-web UI base on it. Without that, a PR raised with no explicit `--base` targets
-`main`, which now means "release".
+Set 2026-09-04:
 
-**Nothing enforces the `CI gate` server-side, and nothing can.** Both APIs refuse
-on this repository:
+- **Default branch: `development`**, so `gh pr create` and the web UI base on it.
+  Without that, a PR raised with no explicit `--base` targets `main`, which now
+  means "release".
+- **`main` requires the `CI gate` check**, with force-pushes and deletions
+  blocked. `development` requires nothing, matching the decision that CI runs
+  only at the release boundary.
+
+That protection took two attempts and is worth recording, because the first one
+failed for a reason no amount of retrying would fix:
 
 ```
 PUT  repos/cloudcatalyst/golem/branches/main/protection  → 403
@@ -165,21 +170,15 @@ POST repos/cloudcatalyst/golem/rulesets                  → 403
 "Upgrade to GitHub Pro or make this repository public to enable this feature."
 ```
 
-Branch protection and rulesets are paid features for private repositories. So
-**`main` is protected by convention only** — the close-out checklist's "`gh pr
-checks <n>` must show `CI gate` green" is a human/agent rule, not a wall. That is
-the same condition the repo has always been in; it is written here so nobody
-later assumes a merge was blocked when it was merely discouraged.
+Branch protection and rulesets are paid features **for private repositories**.
+The repo was made public the same day, and the identical call then succeeded. So
+between the release model landing and the repo going public, `main` was protected
+by convention only — a gap that existed and is now closed.
 
-Three ways out, none of them an agent's call: upgrade the org to a paid plan,
-make the repository public (the portal's README already describes the harness as
-the open-source half — but that needs a secrets and history audit first), or keep
-the convention.
-
-The single `CI gate` job still exists for the day protection becomes available:
-protection would then need one check name however the shard matrix is tuned.
-Pinning the 22 individual job names would break every merge the moment the shard
-count changed, and it is explicitly a tuning dial.
+The single `CI gate` job is what makes this workable: protection names one check,
+however the shard matrix is tuned. Pinning the 22 individual job names would break
+every merge the moment the shard count changed, and it is explicitly a tuning
+dial.
 
 ## When Actions stops for a reason that is not your code
 

@@ -1,17 +1,33 @@
 ---
 task: main-branch-enforcement
 title: "`main` is protected by convention only — GitHub refuses both protection APIs on a private repo"
-state: queued
+state: done
 owner: user
 size: S
 design: "Measured 2026-09-04 while wiring the release pipeline (`docs/wiki/concepts/Release Pipeline.md`). Both `PUT branches/main/protection` and `POST rulesets` answer 403 *\"Upgrade to GitHub Pro or make this repository public to enable this feature.\"*"
 gate: "A PR into `main` with a red `CI gate` cannot be merged by clicking the button — not merely should not be."
-blocked: "needs a plan change or a visibility change on the repository, both of which are the account owner's to make. An agent must not upgrade a plan or publish a private repository."
+blocked: ""
 depends_on: []
 touches: [CLAUDE.md, docs/wiki/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-04T08:58:54.204Z
 ---
+
+> **RESOLVED 2026-09-04.** The user made the repository public, and the same
+> call that had returned 403 succeeded:
+>
+> ```
+> PUT repos/cloudcatalyst/golem/branches/main/protection
+>   required checks: ["CI gate"] | force pushes: false | deletions: false
+> ```
+>
+> Option 2 was taken. The history audit this task called for ran first and found
+> no credential ever committed; the rewrite that followed is recorded in
+> `docs/wiki/debriefs/2026-09-04-release-pipeline-and-portal-alignment.md` §6.
+>
+> `main` is now enforced, not merely honoured. The gap below describes the
+> condition that existed between the release model landing and the repo going
+> public.
 
 ## The gap
 
@@ -59,3 +75,7 @@ Do the audit as its own task before flipping the switch, and treat the CI
 posture as re-openable afterwards: several deliberate cost decisions
 (`docs/wiki/concepts/Release Pipeline.md`, and the shard-count comment in
 `.github/workflows/ci.yml`) exist only because minutes are billed.
+
+## Outcome
+
+shipped — repo made public; main now requires CI gate, force-pushes and deletions blocked
