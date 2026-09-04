@@ -24,6 +24,8 @@ import { createGolemPipeline } from "../pipeline/index.js";
 import type { LoadedPlugins } from "../plugins/index.js";
 import { listTargets, type UpstreamProvider } from "../providers/index.js";
 import { GolemProxy } from "../proxy/index.js";
+import { FileJoinQueue } from "../session/join-queue.js";
+import { LiveConversationRegistry } from "../session/live-conversations.js";
 import { SessionTreeRecorder } from "../session/session-tree.js";
 import { proxyLog, renderRequestOutcome } from "../shared/proxy-log.js";
 import type { TelemetryStore } from "../telemetry/types.js";
@@ -230,6 +232,18 @@ export function buildProxyFromSettings(
   const { upstream, proxyWithDefault, assumeCachingUpstream } = resolveProxyUpstream(settings);
   // R8.S3 — session tree recorder. Observe-only, fire-and-forget, never fails.
   const sessionRecorder = new SessionTreeRecorder();
+  // R13.7 — which conversations are live, and which of them a device may
+  // address at all. Observe-only and always on; it also writes the snapshot the
+  // (separate) mTLS write-surface process reads to offer targets.
+  const liveConversations = new LiveConversationRegistry({ projectDir: dir });
+  // The queue is wired ONLY when injection is enabled, so with it off there is
+  // no branch for a request to reach (ADR-0007 invariant 6). See the setting.
+  const joinQueue = settings.security.join_injection
+    ? new FileJoinQueue({
+        projectDir: dir,
+        resolve: async (conversationId) => liveConversations.addressable(conversationId),
+      })
+    : undefined;
   const pipeline = createGolemPipeline({
     compression: NativeLosslessCompression.forProjectDir(dir),
     policy: resolvePolicy,
@@ -238,6 +252,21 @@ export function buildProxyFromSettings(
     forceSemanticOnCaching,
     ...(assumeCachingUpstream !== undefined ? { assumeCachingUpstream } : {}),
     sessionRecorder,
+    liveConversations,
+    ...(joinQueue !== undefined
+      ? {
+          joinQueue,
+          // Invariant 4: the developer at the keyboard sees what their own
+          // device said into their session, at the moment it lands.
+          onJoinInjected: (messages, conversationId) => {
+            for (const message of messages) {
+              proxyLog(
+                `delivered a message from device ${message.deviceId} into conversation ${conversationId}: ${message.text.replace(/\s+/g, " ").slice(0, 120)}`,
+              );
+            }
+          },
+        }
+      : {}),
     contextSubstitution: {
       ccrStore,
       lookup: async () => {

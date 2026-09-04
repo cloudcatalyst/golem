@@ -25,6 +25,14 @@
  *   undo that. An implementation MUST NOT return success until the turn has
  *   actually reached the session.
  *
+ *   R13.7 adds the one honest exception, and it is a distinct STATUS rather than
+ *   a relaxation of that rule: a message addressed to a **joined** session (one
+ *   the developer is running in their own harness, ADR-0007 §3b) cannot be
+ *   delivered synchronously, because the proxy speaks only when the harness
+ *   speaks to it. Such a message is answered `queued`, never `delivered`, and it
+ *   carries the CONDITION under which it will land. A client MUST render that as
+ *   waiting — "sent" is precisely the misunderstanding this feature generates.
+ *
  * - **Local-only.** No field here carries a remote address, an account, or a
  *   token. This is a LAN transport (invariant 9); R13.10 is where that changes,
  *   and it will change this contract deliberately rather than by reinterpretation.
@@ -137,11 +145,21 @@ export interface SessionMessageRequest {
   readonly text: string;
 }
 
-/** The answer to a POST. Returned only once delivery is real. */
+/** The answer to a POST. `delivered` is returned only once delivery is real. */
 export interface SessionMessageResponse {
   readonly messageId: string;
-  /** `delivered` on first delivery; `duplicate` when the id was already seen. */
-  readonly status: "delivered" | "duplicate";
+  /**
+   * `delivered` on first delivery into a hosted session; `queued` when the
+   * message is waiting for a joined session's next request (R13.7); `duplicate`
+   * when the id was already seen, carrying whatever the original outcome was.
+   */
+  readonly status: "delivered" | "duplicate" | "queued";
   /** The seq of the turn record, so a client can correlate with the stream. */
   readonly seq: number;
+  /**
+   * Why the message is not delivered yet, in the words a UI shows the user —
+   * e.g. "this session is idle; nothing will be delivered until it runs again".
+   * Present on `queued`; absent otherwise.
+   */
+  readonly condition?: string;
 }

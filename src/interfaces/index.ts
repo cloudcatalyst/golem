@@ -32,6 +32,12 @@ export type {
 } from "./inference.js";
 export { ALL_ROLES, CapabilityUnavailableError, HardwareTier } from "./inference.js";
 export type {
+  JoinEnqueueResult,
+  JoinQueue,
+  JoinQueueMessage,
+  LiveConversation,
+} from "./join-queue.js";
+export type {
   Chunk,
   FederatedSearch,
   Hit,

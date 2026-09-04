@@ -537,6 +537,15 @@ export const SETTING_META = {
       "Makes a surface that can act on your machine reachable from your network. It still requires a paired device AND your passcode.",
     advanced: true,
   },
+  "security.join_injection": {
+    label: "Deliver device messages into running sessions",
+    summary: "A paired device can send into a conversation you are already running",
+    detail:
+      "Off by default. A message you send from your phone waits for that conversation's NEXT request and is then delivered as a clearly-marked block from you, exactly once. In an agentic loop that is seconds; in an idle session it is never, and the queue says so rather than pretending it was sent. Every tool call the message leads to is gated exactly as if you had typed it here.",
+    danger:
+      "Text authored elsewhere enters a session running on this machine. It is attributed and shown locally before it lands, and it is still only a request — but it is a request the model will act on.",
+    advanced: true,
+  },
   "security.unlock_window_minutes": {
     label: "Unlock window (minutes)",
     summary: "How long sending stays unlocked before the passcode is needed again",

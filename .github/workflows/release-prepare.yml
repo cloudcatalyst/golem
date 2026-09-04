@@ -1,0 +1,111 @@
+name: Prepare release
+
+# Raise the release PR: bump the version on `development`, then open
+# development → main. Merging that PR is what cuts the release (release.yml).
+#
+# Run it from Actions → "Prepare release" → Run workflow, on `development`.
+#
+# Why the bump happens HERE and not on main:
+#
+#   The old auto-bump.yml bumped the minor version on every push to `main`. Under
+#   the new model every push to main IS a release, so bumping afterwards would
+#   leave main's package.json one version ahead of the tag that was just cut, and
+#   the next release would compute its tag from a version no release ever used.
+#   Deciding the version BEFORE the release PR is opened makes the PR itself say
+#   what is being released — which is also what a human reviewing it needs to see.
+#
+# auto-bump.yml is deleted, not disabled: two mechanisms writing the same version
+# is exactly the drift this repo keeps finding the hard way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Version bump"
+        required: true
+        default: minor
+        type: choice
+        options: [patch, minor, major]
+
+permissions:
+  contents: write # push the bump commit
+  pull-requests: write # open the release PR
+
+jobs:
+  prepare:
+    name: Bump and open the release PR
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to run anywhere but development
+        if: ${{ github.ref != 'refs/heads/development' }}
+        run: |
+          echo "::error::run this workflow on 'development' — it opens development → main. Got ${{ github.ref }}."
+          exit 1
+
+      - uses: actions/checkout@v4
+        with:
+          ref: development
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump the version
+        id: bump
+        run: |
+          set -euo pipefail
+          # scripts/release.mjs updates package.json, vscode-extension/package.json
+          # and regenerates the compiled-in VERSION constant, so all three move
+          # together or none do.
+          npm run release -- "${{ inputs.level }}"
+          VERSION="$(node -p "require('./package.json').version")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Prepared v$VERSION"
+
+      - name: Commit and push the bump
+        run: |
+          set -euo pipefail
+          git add -A
+          git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
+          git push origin development
+
+      - name: Open (or update) the release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          set -euo pipefail
+          TITLE="Release v$VERSION"
+          BODY=$(cat <<'EOBODY'
+          Merging this PR cuts the release: `release.yml` runs the full CI gate,
+          tags the merge commit, and publishes the GitHub Release with the
+          binaries, the npm tarball, `install.sh`, `install.ps1` and
+          `config-schema.json` — then notifies the portal.
+
+          **Merge with a merge commit, not squash.** A squash rewrites the
+          history `development` is built on, so the two branches diverge and
+          every later release PR shows the whole delta again.
+
+          Checklist before merging:
+
+          - [ ] The version in `package.json` is the one you mean to publish
+          - [ ] CI is green on this PR
+          EOBODY
+          )
+          if EXISTING=$(gh pr list --base main --head development --state open --json number --jq '.[0].number') && [ -n "$EXISTING" ]; then
+            echo "Release PR #$EXISTING already open — retitling to $TITLE."
+            gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"
+          else
+            gh pr create --base main --head development --title "$TITLE" --body "$BODY"
+          fi

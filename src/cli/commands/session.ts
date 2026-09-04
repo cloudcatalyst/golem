@@ -11,6 +11,8 @@ import { stat } from "node:fs/promises";
 import type { Command } from "commander";
 import { findProjectDir } from "../../config/index.js";
 import { LocalConversationStore } from "../../session/conversation-store.js";
+import { FileJoinQueue } from "../../session/join-queue.js";
+import { readLiveConversations } from "../../session/live-conversations.js";
 import { readSessionTree, renderSessionTree, sessionTreePath } from "../../session/session-tree.js";
 import register_session_host from "./session-host.js";
 
@@ -53,6 +55,110 @@ export default function register(program: Command): void {
 
   // R13.3 — `golem session host …`
   register_session_host(session);
+
+  // R13.7 — invariant 4's local half. The developer at the keyboard can see what
+  // their own device said into their session: what is waiting, what landed, and
+  // which conversations can be addressed at all.
+  session
+    .command("pending")
+    .description(
+      "Show messages a paired device has sent into running conversations — what is " +
+        "waiting, what was delivered, and which conversations can be addressed (R13.7)",
+    )
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--json", "machine-readable output", false)
+    .action(async (opts: { dir: string; json: boolean }, command: Command) => {
+      try {
+        // Same commander `--dir` quirk documented on `forget` below.
+        const dir = command.parent?.opts<{ dir: string }>().dir ?? opts.dir;
+        const { loadConfig } = await import("../../config/index.js");
+        const { settings } = await loadConfig({ projectDir: dir });
+        const queue = new FileJoinQueue({ projectDir: dir });
+        const [messages, conversations] = await Promise.all([
+          queue.list(),
+          readLiveConversations(dir),
+        ]);
+
+        if (opts.json) {
+          const payload = {
+            injectionEnabled: settings.security.join_injection,
+            conversations,
+            messages,
+          };
+          process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+          return;
+        }
+
+        process.stdout.write(
+          settings.security.join_injection
+            ? "Delivery into running sessions: ON (security.join_injection)\n"
+            : "Delivery into running sessions: OFF — messages are refused at the door (security.join_injection)\n",
+        );
+
+        process.stdout.write(`\nAddressable conversations (${conversations.length}):\n`);
+        if (conversations.length === 0) {
+          process.stdout.write("  none — the proxy has seen no recent requests\n");
+        }
+        for (const c of conversations) {
+          // An ambiguous key is SHOWN, not hidden: a user should see why a
+          // conversation they can name cannot be written to (invariant 3).
+          const flag = c.ambiguous ? "  [AMBIGUOUS — not addressable]" : "";
+          process.stdout.write(
+            `  ${c.conversationId}  ${c.messageCount} messages  last ${c.lastRequestAt}${flag}\n`,
+          );
+        }
+
+        const waiting = messages.filter(
+          (m) => m.deliveredAt === undefined && m.expiredAt === undefined,
+        );
+        process.stdout.write(`\nWaiting (${waiting.length}):\n`);
+        if (waiting.length === 0) process.stdout.write("  nothing queued\n");
+        for (const m of waiting) {
+          const excerpt = m.text.replace(/\s+/g, " ").slice(0, 100);
+          process.stdout.write(
+            `  ${m.messageId} → ${m.conversationId}  from ${m.deviceId}  queued ${m.enqueuedAt}\n` +
+              `      ${excerpt}\n`,
+          );
+        }
+
+        const settled = messages.filter(
+          (m) => m.deliveredAt !== undefined || m.expiredAt !== undefined,
+        );
+        process.stdout.write(`\nSettled (${settled.length}):\n`);
+        if (settled.length === 0) process.stdout.write("  nothing yet\n");
+        for (const m of settled) {
+          const what =
+            m.expiredAt !== undefined
+              ? `EXPIRED ${m.expiredAt} (waited too long to be delivered)`
+              : `delivered ${m.deliveredAt}`;
+          process.stdout.write(
+            `  ${m.messageId} → ${m.conversationId}  from ${m.deviceId}  ${what}\n`,
+          );
+        }
+      } catch (err) {
+        process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exitCode = 1;
+      }
+    });
+
+  session
+    .command("drop <messageId>")
+    .description("Drop a still-waiting device message so it is never delivered (R13.7)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .action(async (messageId: string, opts: { dir: string }, command: Command) => {
+      try {
+        const dir = command.parent?.opts<{ dir: string }>().dir ?? opts.dir;
+        const dropped = await new FileJoinQueue({ projectDir: dir }).forget(messageId);
+        process.stdout.write(
+          dropped
+            ? `Dropped ${messageId}; it will never be delivered.\n`
+            : `No waiting message ${messageId} (it may already have been delivered).\n`,
+        );
+      } catch (err) {
+        process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
+        process.exitCode = 1;
+      }
+    });
 
   session
     .command("forget [id]")
