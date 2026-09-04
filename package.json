@@ -3,7 +3,7 @@
   "version": "0.48.0",
   "description": "Golem (golem.run) — local-first proxy + unified MCP server that cuts Claude token spend and gives Claude local tools",
   "license": "Apache-2.0",
-  "author": "Golem <paul@golem.run>",
+  "author": "Golem <paul.clarke@golem.run>",
   "homepage": "https://golem.run",
   "type": "module",
   "engines": {

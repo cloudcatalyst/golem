@@ -8320,3 +8320,162 @@ message that is unclaimable forever.
 cross-process mutex is suspect on Windows. Atomic *replacement* of a file's
 contents (write temp → rename over the target) is unaffected and remains
 correct — that is a different property from *exclusive acquisition*.
+
+---
+
+## §149 — The portal is built and its contract is written down: what the harness now has to match, and two assets it does not ship (2026-09-04)
+
+**Source: the portal's own committed design docs**, read on 2026-09-04 from the
+local working copy of the portal repository (private; Next.js 16
+App Router, Clerk, Stripe, Nango, Supabase, Vercel). Files: `docs/api-contract.md`,
+`docs/team-config.md`, `docs/deploy.md`, `README.md`.
+
+Status of everything below: **[UNESTABLISHED] as deployed behaviour** — these are
+the portal's design documents, not observations of a running service. What IS
+`[OBSERVED]` is the gap in *this* repo (item 2), checked directly against
+`.github/workflows/release.yml`.
+
+The portal's own `docs/team-config.md` §Status closes with: *"Step 3 is the
+harness repo, and none of steps 1 and 2 do anything useful until it lands."*
+That step is now on this roadmap.
+
+### 1. The install endpoint moved off nginx — `deploy/nginx/golem-run.conf` is a reference implementation now
+
+Vercel is serverless and has no nginx, so the User-Agent branching moved into
+`next.config.ts` `redirects()` with `has: [{ type: 'header', key: 'user-agent' }]`.
+The *behaviour* this repo specified survived intact; the implementation did not.
+
+Three facts from that move that this repo did not previously have:
+
+- **On Windows, `curl` is an alias for `Invoke-WebRequest`.** So the
+  PowerShell-before-browser ordering is doing more work than
+  `golem-run.conf`'s comment claims: a Windows user typing either verb must get
+  `install.ps1`. Matching only on the literal `curl` token would hand a Windows
+  user the shell installer.
+- **Vercel compiles `has` values as `^value$`, case-SENSITIVELY**, with no way to
+  pass an `i` flag (`(?i)` is not JavaScript). Character-class patterns are
+  required. nginx's `~*` had made this free.
+- **They must be 307s, not 308s.** The right answer for `/` depends on who is
+  asking, so it must never be cached as the answer for everyone.
+
+Consequences here: `deploy/nginx/golem-run.conf` is no longer *the* deployment,
+and `docs/plan/tasks/R7.6-infra.md` names the wrong artifact in both `design:`
+and `gate:`. `deploy/nginx/landing.html` is superseded by the portal's
+`app/(marketing)/install/page.tsx`.
+
+### 2. The release workflow does not attach the assets every portal path redirects to — **[OBSERVED]**
+
+`.github/workflows/release.yml` uploads `dist-bin/*` and nothing else. The portal
+redirects `/install.sh`, `/install.ps1` and `/bin/<asset>` to
+`releases/latest/download/…`, and `docs/team-config.md` §2 fetches
+`config-schema.json` from the same place to validate team settings.
+
+So today: **`/install.sh` and `/install.ps1` would 404**, and the portal's
+Settings page stays read-only by its own design ("Until a release exists with
+that asset, the Settings page is read-only and says why").
+
+**Corrected later the same day:** this note originally said CI was still
+billing-blocked and therefore no release could publish. That was stale — the
+block cleared between 2026-08-29 (last 1–3s no-step failure) and 2026-09-02
+(Actions running normally, `CI gate` reporting success on both `push` and
+`pull_request`). Nothing prevents a release from being cut now; the assets are
+missing only because no release has been cut since the workflow was fixed.
+
+`golem config schema --json` already exists (`src/cli/commands/config.ts:170`) and
+emits the control surface, so the schema asset is a packaging step, not new code.
+
+### 3. The team settings layer sits in the ladder TWICE
+
+```
+built-in defaults → TEAM (defaults)
+                  → user → project → local
+                  → TEAM (enforced keys only)
+                  → GOLEM_* environment variables
+                  → per-request headers
+```
+
+Each key is in exactly one position, chosen per key by a team admin via an
+`enforced` flag on the API response. A normal team key is a company default
+anyone may override; an enforced key is policy applied after every file layer.
+`GOLEM_*` still wins over an enforced key **deliberately** — carving out an
+exception would mean a setting that cannot be worked around on a machine that is
+on fire.
+
+`LayerName` (`src/config/loader.ts:50`) is
+`"default" | "user" | "project" | "local" | "env" | "override"` — it has neither
+team position, and provenance surfaces (`golem status`, the control panel's
+"locked" rows) are expected to name the team as the source.
+
+### 4. An organization is named in the path, never implied
+
+An OAuth access token identifies a **user**, not an org: Clerk's `oauth_token`
+auth object carries `userId` and `clientId` only. There is no active
+organization for a machine client, so every org-scoped endpoint takes `{orgId}`
+and the server re-verifies membership against Clerk **on every request**, never
+from a claim inside the token — because a token outlives a membership.
+
+`403 not_a_member` is deliberately indistinguishable from an org that does not
+exist, so the endpoint cannot be used to enumerate organization IDs.
+
+### 5. Auth is authorization-code + PKCE over loopback, and there is no headless path
+
+`code_challenge_methods_supported` is `S256` only (plain is refused).
+`grant_types_supported` is `authorization_code` and `refresh_token` — **Clerk
+advertises no device authorization grant (RFC 8628)**, so a headless machine
+cannot complete the flow on its own. That is stated as out of scope for v1, not
+as an oversight.
+
+Details that decide implementation: bind `127.0.0.1`, not `localhost` (the latter
+can resolve to IPv6 `::1` and mismatch the registered redirect URI); register the
+redirect host **without** a port, per RFC 8252, and choose the port at runtime;
+`offline_access` is what yields a refresh token; endpoints come from
+`<Clerk Frontend API URL>/.well-known/oauth-authorization-server` rather than
+being hardcoded. Tokens go to the OS keychain — explicitly not into the config
+directory and never into a file the harness might sync.
+
+### 6. Team skills are a second managed namespace, not an extension of Golem's own
+
+`.claude/skills/golem-team/<name>/SKILL.md`, per project, through the same
+`managed-files.ts` mechanism — separate directory so a team skill can never
+overwrite a personal one. **A skill absent from the API response is deleted
+locally**, which is what makes it managed rather than a one-way copy. Each row
+carries `content_sha256`, and `?manifest=1` returns rows without `content`, so an
+unchanged sync writes nothing and touches no mtimes.
+
+Note the interaction with `skill-provenance-on-clone`: team skills inherit the
+same gitignored-provenance defect, and they arrive on more machines than Golem's
+own skills do.
+
+### 7. The failure rule, which CORRECTS an assumption written here on the same day
+
+`docs/team-config.md`: *"a team link is an enhancement to a local-first tool.
+Nothing about it may stop the proxy from starting."*
+
+| Situation | Required behaviour |
+|---|---|
+| `403 not_a_member` | Name the team the project points at, use local config, **do not fail** |
+| `402 subscription_required` | Same, with the reason named |
+| Portal unreachable | Use cached `~/.golem/team.json`, say how old it is |
+| Token expired | Refresh silently; on failure fall back to cache and prompt at the next interactive command |
+
+An earlier draft of `docs/plan/tasks/project-team-binding.md` (written 2026-09-04,
+before the portal repo was read) required a membership mismatch to **refuse**.
+That is wrong for a local-first tool and the task has been corrected. The half
+worth keeping from it: the failure must be *said out loud*, never a silent
+downgrade — someone believing they are on team policy when they are not is the
+actual hazard.
+
+### 8. The harness stays the single source of truth for the settings schema
+
+The portal carries no copy. It fetches `config-schema.json` from the release and
+validates team settings against it, so a value the portal accepted cannot be
+rejected on a developer's machine. It also **never down-converts** for an older
+client: it serves the layer as written plus the migrations between versions, and
+the client applies what it has (`SETTING_MIGRATIONS`, `RETIRED_SETTINGS`) and
+reports what it did not understand. Clients send `golem_version` and
+`schema_version` on sync; nothing is gated on them — they exist so an admin can
+see who is behind.
+
+Team settings hold **no secrets** — a value whose key looks like a credential is
+refused at write time, keeping ADR-0003's line (an entry names a provider and an
+endpoint; the key lives in the OS keychain).
