@@ -36,7 +36,7 @@ already has.
    general knowledge silently.
 5. **Capture what's worth keeping.** A fetched page is searchable but orphaned
    until it's a wiki page. If the finding is durable, propose a wiki
-   source-note (run \`/golem/wiki-ingest <url>\`) with real \`[[wikilinks]]\`,
+   source-note (run \`/golem-wiki-ingest <url>\`) with real \`[[wikilinks]]\`,
    citing the source. Author wiki pages freely (spec Decision 44) — no prior
    approval needed; every write is committed to git and reviewable.
 `;
@@ -69,7 +69,7 @@ The user wants to add this URL to the project's wiki: $ARGUMENTS
    silently overwriting it.
 `;
 
-/** Skill name -> SKILL.md content, keyed as `/golem/<name>`. */
+/** Skill name -> SKILL.md content, keyed as `/golem-<name>`. */
 export const RESEARCH_SKILLS: Readonly<Record<string, string>> = {
   research,
   "wiki-ingest": wikiIngest,

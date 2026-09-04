@@ -14,7 +14,7 @@
  * tokens in context" is not.
  *
  * Consumed by `golem stats --context` and, through it, the
- * `/golem/context-hygiene` skill — which until now had to reason about context
+ * `/golem-context-hygiene` skill — which until now had to reason about context
  * bloat blind.
  *
  * **R8.S1 extension.** The first capture (§95) made the `tools` block the largest

@@ -85,9 +85,9 @@ npm run build:binary                 # all targets → dist-bin/
 npm run build:binary bun-linux-x64   # a subset
 ```
 
-The install scripts fetch `GOLEM_INSTALL_BASE/bin/golem-<os>-<arch>`; the nginx
-`/bin/` location (`deploy/nginx/golem-run.conf`) redirects that to the Release's
-`latest/download/` assets by default, so no binaries live on the nginx box.
+The install scripts fetch `GOLEM_INSTALL_BASE/bin/golem-<os>-<arch>`; the
+portal's `/bin/<asset>` route redirects that to the Release's
+`latest/download/` assets, so no binaries are hosted anywhere but the release.
 
 > Not yet run end-to-end: no Bun / macOS / Linux hardware was available when this
 > was wired (verification-notes §70). The first tagged release exercises the
@@ -105,7 +105,17 @@ The extension auto-updates via the Marketplace. It surfaces **CLI** updates
 
 ## golem.run hosting
 
-`deploy/nginx/golem-run.conf` content-negotiates the install one-liner by
-User-Agent (Decision 41c). Deploy it on the nginx host alongside
-`install/install.sh`, `install/install.ps1`, `deploy/nginx/landing.html`, and the
-binaries under `bin/`. See the comments at the top of that file.
+Nothing to deploy from this repo. `golem.run` is a Next.js app on Vercel (its
+own repo), and every install path is a **redirect to a release asset** — the
+bare domain content-negotiates by User-Agent (Decision 41c), `/install.sh`,
+`/install.ps1` and `/bin/<asset>` resolve to `releases/latest/download/…`.
+
+So what this repo owes the front door is the *assets*, not a server config: the
+Release workflow attaches `install.sh`, `install.ps1`, `config-schema.json`, the
+npm tarball and the six binaries, and asserts each one is present rather than
+trusting the upload. A missing asset is a 404 on the front door.
+
+The behaviour contract both repos read is
+`docs/wiki/concepts/Portal Install Contract.md`. The retired
+`deploy/nginx/golem-run.conf` reference config is in git history (removed
+2026-09-04) if the User-Agent rules are ever needed in that dialect again.

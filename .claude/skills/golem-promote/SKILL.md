@@ -18,5 +18,5 @@ Optional filter: $ARGUMENTS
    `upsertPage` semantics (union-merge frontmatter, dated separator, never a
    wholesale rewrite) and removes the consumed draft.
 4. **Report** which drafts were promoted, to which pages, and which were left or
-   dropped. If there are no pending drafts, say so and suggest `/golem/research`
+   dropped. If there are no pending drafts, say so and suggest `/golem-research`
    or `golem note` to capture something first.

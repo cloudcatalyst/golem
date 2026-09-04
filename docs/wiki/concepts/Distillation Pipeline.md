@@ -81,7 +81,7 @@ Entry points:
   distill itself. That lookup runs in its own inner `try`/`catch` so a bug in
   it can never regress the hook's existing (and more important) cache-serve
   behavior.
-- The `/golem/wiki-ingest` skill runs `golem wiki distill <url>` as its first
+- The `/golem-wiki-ingest` skill runs `golem wiki distill <url>` as its first
   step, so Claude reviews/refines an existing draft instead of re-distilling
   from scratch.
 

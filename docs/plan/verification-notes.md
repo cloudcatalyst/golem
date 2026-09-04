@@ -8479,3 +8479,378 @@ see who is behind.
 Team settings hold **no secrets** — a value whose key looks like a credential is
 refused at write time, keeping ADR-0003's line (an entry names a provider and an
 endpoint; the key lives in the OS keychain).
+
+---
+
+## §150 — The skills Golem installs are NOT discoverable, R13.16 was right, and a plugin can be scoped to a project (2026-09-04)
+
+**Source: Claude Code's own documentation**, queried via Context7 on 2026-09-04
+against client `2.1.259` (`code.claude.com/docs` — agent-sdk/skills,
+slash-commands, plugins, plugins-reference, plugin-marketplaces,
+settings-reference). Status: **[OBSERVED]** for the on-disk facts about this
+machine; **[DOCUMENTED]** for the tool's rules, which come from the vendor's
+current docs rather than from a live experiment.
+
+### 1. Skill discovery is ONE level deep
+
+The documented layout, stated twice and confirmed by the docs' own verification
+snippet:
+
+```
+.claude/skills/<skill-name>/SKILL.md
+
+ls .claude/skills/*/SKILL.md     # "Check project skills"
+ls ~/.claude/skills/*/SKILL.md   # "Check personal skills"
+```
+
+`src/cli/init-skills.ts` writes **two** levels —
+`.claude/skills/golem/<cmd>/SKILL.md` — so `.claude/skills/golem/` is examined
+for a `SKILL.md` that is not there. It is not an error; the entry is simply not
+a skill, and the whole namespace is absent from the listing.
+
+This is exactly what the archived R13.16 branch reported on 2026-08-29
+(`docs/plan/tasks/skills-project-scope-reachability.md`). **Its diagnosis is
+confirmed.** The layout dates from verification-notes §11 (2026-07-03), when
+directory nesting was how a command got namespaced; the tool moved and this repo
+did not.
+
+Nested `.claude/skills/` directories DO exist as a feature, but they mean
+something else: a `.claude/skills/` folder **deeper in the repo** (`apps/web/`),
+for monorepos, which yields a directory-qualified name like `apps/web:deploy`.
+That is not a subdirectory *inside* `.claude/skills/`.
+
+### 2. What is actually surfacing the skills on this machine — **[OBSERVED]**
+
+`~/.claude/skills/golem/` exists: `.claude-plugin/plugin.json` (`"name":
+"golem"`, `"version": "0.42.0"`, `golem.run`), plus `skills/<cmd>/SKILL.md` for
+21 commands. Directory mtime 2026-08-29 — the day R13.16 was committed. It is a
+**user-scope plugin**, installed by that branch, and the `golem:<cmd>` names in
+a session's skill listing match plugin naming (`plugin:skill`).
+
+The project copy has no `.claude-plugin` marker.
+
+So the repo looks correct, the skills appear to work, and **the two facts are
+unrelated**. Reading `init-skills.ts` alone — as happened earlier the same day,
+producing the claim that skills were already project-scoped with no cross-project
+bleed — gets the code right and the machine wrong. The user-scope install is also
+precisely the leak the project wants to avoid: those skills are offered in every
+project on the machine.
+
+### 3. A plugin CAN be project-scoped — the naming does not force user scope
+
+This is the part that makes R13.16's *fix* separable from its *diagnosis*.
+
+```
+claude plugin install <plugin>@<marketplace> --scope project
+```
+
+`--scope` takes `user` (default), `project`, or `local`. Project scope is
+recorded in `.claude/settings.json`:
+
+```json
+{ "enabledPlugins": { "golem@<marketplace-name>": true } }
+```
+
+`enabledPlugins` is a documented settings key across user / project / local /
+managed scopes, and **project settings take precedence over user settings**,
+with local able to override project on one machine.
+
+The marketplace may be a **local directory in the repository**:
+
+```
+.claude-plugin/marketplace.json          # at the repo root
+{
+  "name": "<marketplace-name>",
+  "owner": { "name": "..." },
+  "plugins": [
+    { "name": "golem", "source": "./<path>", "description": "..." }
+  ]
+}
+```
+
+and the plugin itself is `<source>/.claude-plugin/plugin.json` plus
+`<source>/skills/<cmd>/SKILL.md` — the nesting that IS legal, because a plugin
+declares its own skills directory rather than relying on `.claude/skills/`
+discovery.
+
+`claude --plugin-dir <path>` also loads a plugin directly, but it is
+**session-only** and therefore not a wiring mechanism.
+
+### 4. What this means for the decision already taken
+
+USER, 2026-09-04: Golem skills belong in Golem projects only. That rules out
+R13.16's user-scope install and nothing else. The route above keeps the
+`/golem:<cmd>` naming, keeps the files inside the repo, is committed with the
+project, and never applies to another project — which is the requirement.
+
+The alternative, a flat `.claude/skills/golem-<cmd>/SKILL.md`, also works and is
+far simpler, but changes every invocation to `/golem-<cmd>` and contradicts
+CLAUDE.md's `/golem/<cmd>` convention plus every skill reference in the wiki.
+
+**Sequencing matters:** removing `~/.claude/skills/golem/` before the project
+route works leaves the machine with no Golem skills at all. Backed up meanwhile
+to `D:\Personal\Backups\golem-archive\user-scope-skills-golem-2026-09-04.tar.gz`.
+
+---
+
+## §151 — A marketplace can be a remote, authenticated URL, so ONE mechanism can carry both Golem's skills and a team's (2026-09-04)
+
+**Source: Claude Code documentation** (`code.claude.com/docs` —
+plugin-marketplaces, settings-reference), queried via Context7 on 2026-09-04,
+client `2.1.259`. **[DOCUMENTED]**, not yet exercised against a real portal.
+
+Follows §150, and answers the question it left open: if project-scoped plugins are
+how Golem's own skills reach a project, can **team** skills use the same road
+instead of the bespoke sync in `team-skills-sync`?
+
+### The facts that make it possible
+
+A marketplace source may be a **URL**, with headers:
+
+```json
+{ "source": "url",
+  "url": "https://plugins.example.com/marketplace.json",
+  "headers": { "Authorization": "Bearer ${TOKEN}" } }
+```
+
+Also available: `{ "source": "git", "url": "...", "ref": "..." }`, GitHub sources,
+and `{ "source": "archive", "url": "...zip" }` for the plugin itself.
+
+Authentication is a first-class feature, and the interesting half is dynamic:
+
+- **`headersHelper`** — a command run before fetches whose output is used as
+  headers and **reused for up to 60 seconds**. Marketplace-level headers apply to
+  every archive download on that origin; plugin-level headers apply to that plugin
+  only and **take precedence** over marketplace-level ones.
+- A plugin entry using `headersHelper` with an archive source needs
+  **`strict: false`**, so the entry defines the plugin before the user accepts the
+  command.
+
+One constraint worth carrying: **plugins in URL marketplaces cannot use relative
+paths** — a remote marketplace must name absolute URLs or archive sources. A local
+directory marketplace (Golem's own) may use `./relative` paths.
+
+### Why this fits the team tier unusually well
+
+`headersHelper` is the piece that matters. The portal's tokens live in the OS
+keychain (ADR-0003, `team-portal-auth`), and a helper command is exactly how a
+short-lived bearer gets minted **without a credential in any settings file** —
+`golem` itself can be the helper. The 60-second reuse means it is called rarely.
+
+It also disposes of the part of `team-skills-sync` that carried the most risk:
+deletion propagation ("a skill absent from this list is removed locally") becomes
+the plugin system's job rather than a prune loop this repo has to get right, and
+with it goes the whole interaction with `skill-provenance-on-clone` — Claude Code
+owns those files, so Golem's managed-file provenance never touches them.
+
+And it collapses two mechanisms into one shape:
+
+| | marketplace | scope |
+|---|---|---|
+| Golem's own skills | local directory in the repo | `enabledPlugins` at project scope |
+| A team's skills | `source: "url"` at the portal, `headersHelper` mints the bearer | `enabledPlugins` at project scope |
+
+Both committed in `.claude/settings.json`, both invisible to other projects.
+
+### The objection that has to be answered first
+
+**It is harness-specific.** Plugins and marketplaces are Claude Code's, and the
+pipeline is meant to extend to other gateways (R6.1). The portal's existing
+`GET /api/v1/orgs/{orgId}/skills` is a plain JSON contract any client can consume;
+a marketplace endpoint serves Claude Code and nothing else.
+
+That is not fatal — it argues for the marketplace being an **additional**
+representation of the same data rather than a replacement, which portal API v1
+explicitly permits ("we may add response fields, add endpoints"). But it is the
+decision to take before building, not after.
+
+Two smaller points: the portal would serve plugin archives as well as a
+marketplace document, which is more surface than a JSON list; and `${TOKEN}`
+interpolation in static `headers` is worse than `headersHelper` for the same
+reason a token in a file is worse than one in a keychain.
+
+---
+
+## §152 — A project skill's command name comes from its DIRECTORY; only plugins get `:` namespacing (2026-09-04)
+
+**Source: Claude Code documentation** (`code.claude.com/docs` — skills,
+slash-commands), via Context7, 2026-09-04, client `2.1.259`. **[DOCUMENTED]**.
+
+The rule, which decides the layout question left open by §150 and §151:
+
+> In personal or project skills, the **directory or file name defines the
+> command** while the **frontmatter `name` only sets the display label**, with
+> nested paths appended to resolve name clashes. In plugin skills, the frontmatter
+> `name` defines the final command segment **namespaced by the plugin prefix**.
+
+Consequences, stated plainly because each was assumed otherwise at some point
+today:
+
+| layout | command |
+|---|---|
+| `.claude/skills/golem-bypass/SKILL.md` | `/golem-bypass` |
+| `.claude/skills/golem-team-review/SKILL.md` | `/golem-team-review` |
+| plugin `golem`, skill `bypass` | `/golem:bypass` |
+
+**The colon is not available to project skills at all.** It cannot be bought with
+frontmatter — `name` is a display label there, nothing more. So `golem:<cmd>` and
+`golem:team:<cmd>` require the plugin/marketplace machinery of §151; a flat layout
+necessarily renames every command to `/golem-<cmd>`.
+
+Nested paths are appended only **to resolve clashes**, so the monorepo-style
+`apps/web:deploy` form cannot be relied on to produce a stable `golem:` prefix
+either — it appears when names collide, not on demand.
+
+The frontmatter key set is closed and validated: `allowed-tools`, `compatibility`,
+`description`, `license`, `metadata`, `name`. An unknown key is a hard error
+("Unexpected key(s) in SKILL.md frontmatter"), which is worth knowing before
+inventing one.
+
+### The portability argument, which is the real trade
+
+`SKILL.md` is an **Agent Skills spec** artifact — the validation error above cites
+the spec by name. `plugin.json` and `marketplace.json` are Claude Code's alone. So
+the flat layout is the portable unit and the manifests are the lock-in, which is
+the opposite of how §151 framed the choice (it weighed naming, not portability).
+
+Flat costs the `golem:` namespace and buys portability. That is the decision, and
+it is not primarily about aesthetics.
+
+
+---
+
+## §153 — The release→portal schema loop had BOTH halves built and still did not connect: three contract mismatches, one of which also broke the fallback (2026-09-04)
+
+**Source: the portal repository's working copy** (private; Next.js 16 + Supabase
++ Clerk), read on 2026-09-04, and this repo's own
+`.github/workflows/release.yml`. Both are code, not design docs — the mismatches
+below are **[OBSERVED]** in the two implementations, not inferred from prose.
+
+Context: §149 read the portal's *design docs*. This entry read the portal's
+*code*, and the code disagreed with both its own docs and this repo's contract.
+
+### The finding
+
+`portal-release-webhook` was tracked as "the harness half is written, the portal
+half is not". That was wrong in a way worth recording: the portal half **was**
+written (`app/api/webhooks/golem-build/route.ts`, committed as "Take the schema
+from the build instead of waiting for it"), but against an earlier design. Two
+implementations existed, neither had ever executed against the other, and they
+did not agree:
+
+| | this repo sends | the portal expected | on first release |
+|---|---|---|---|
+| signature | `x-golem-signature: sha256=<hex>` over `"<ts>.<body>"`, plus `x-golem-timestamp` | bare `<hex>` over the raw body, no timestamp at all | **400** |
+| body | envelope naming `config_schema: {url, sha256}` — schema by *reference* | `{version, schema: {…}}` — schema *inline* | **422** |
+| document | `{version, groups[].controls[].id/kind/options}` | `{version, sections[].settings[].key/type}` | **422** |
+
+The sender treats 4xx as fatal and does not retry, so the first release cut with
+`PORTAL_WEBHOOK_URL` set would have gone red on attempt one.
+
+### The part that mattered more than the webhook
+
+The third row is not a webhook bug. `parseSchemaDocument` is also what the
+portal's **GitHub fallback** runs on the release asset it pulls, so the same
+mismatch meant `config-schema.json` — correctly rendered, correctly attached,
+correctly asserted by this repo since §149 item 2 — **would not parse on
+arrival**. The Settings page would have stayed read-only with the webhook
+switched off entirely, and the honest error (`did not parse`) would have looked
+like a bad asset rather than a portal-side shape assumption.
+
+`golem config schema --json --no-header` emits the harness **control surface**,
+which was never a settings list:
+
+```
+{ version, groups: [ { id, title, tab, controls: [ { id, family, kind, … } ] } ] }
+```
+
+A control's `id` is `setting:<section>.<key>`, `guidance:<feature>` or
+`runtime:<name>` (`src/config/control-surface-types.ts`, which calls those ids
+stable across releases). Only the `setting:` family is a team setting; `kind` is
+the widget and is as close to a type as the document carries; an enum's values
+are `options[].value` and a number's bounds are `range`.
+
+### Resolved on the portal side, and why that direction
+
+[[Portal Install Contract]]'s direction-of-truth table already answers it: this
+repo owns the contract, the portal owns how it is implemented. The sender had
+also already shipped. So the portal was changed to the contract as documented,
+not the reverse — `lib/golem-schema.ts` reparsed to the control surface,
+`lib/team-settings.ts` validating on `kind`/`range`/`options`, and the route
+verifying `sha256=`-prefixed HMAC over `"<ts>.<raw>"` with a 300s timestamp
+tolerance, then fetching and checksum-checking the asset before storing it.
+Portal `tsc --noEmit` and `next build` both green.
+
+### Three decisions inside the fix worth not re-deriving
+
+1. **Lenient on fields, strict on three.** `id`, `family` and `kind` are
+   required; `kind` and `family` are typed as strings rather than enums. A
+   release that adds a widget kind must not make every team's Settings page
+   read-only, which is the failure mode a strict enum guarantees.
+2. **A `header` block is refused, not stripped.** The header carries absolute
+   paths, the proxy port and the upstream account, and this document is stored
+   and served to every member of every team. This repo's release job already
+   asserts the header is absent, so one arriving means something upstream is
+   broken and should say so.
+3. **An unreadable asset is a 502, not a 422.** The 4xx/5xx split is an
+   instruction to the sender: 4xx means retrying cannot help, 5xx means try
+   again. A release asset can take a moment to become readable, and the sender's
+   three retries are exactly the right response to that.
+
+### What is still open
+
+Nothing in code. `PORTAL_WEBHOOK_URL` (the portal's
+`/api/webhooks/golem-build`) and `PORTAL_WEBHOOK_SECRET` (matching the portal's
+`GOLEM_BUILD_WEBHOOK_SECRET`) on this repo's Actions secrets, then a release —
+both credentialed, both `owner: user`. See `portal-release-webhook`.
+
+### The generalisable lesson
+
+**"Both halves are built" is not "the loop is closed", and a contract only one
+side has ever executed is untested by construction.** The wire format was
+written down in this repo and implemented from an older draft in the other; no
+test could have caught it, because neither repo can run the other's half. The
+cheap check is to read the receiving code against the sending code once, before
+setting the secret that makes the first attempt a live release.
+
+### Bonus, found while proving the fix: `HOME` does not isolate the render on Windows — **[OBSERVED]**
+
+Verifying the fix meant rendering the real asset the way the release does and
+running it through what the portal now requires. Rendered locally with
+`HOME="$EMPTY" … --dir "$EMPTY"`, exactly as `release.yml` does, one control
+came back with a **non-default layer**: `setting:proxy.gateways` at layer
+`user`, i.e. this machine's real gateway config folded into a document that is
+supposed to be pure built-in defaults.
+
+Not a defect in the workflow. The user dir comes from `os.homedir()`
+(`src/config/paths.ts`, §17), and `os.homedir()` reads `$HOME` on POSIX but
+**`USERPROFILE` on Windows** — so `HOME="$EMPTY"` isolates nothing on a Windows
+box. Re-rendered with `USERPROFILE` isolated as well: 79 controls, no
+non-default layer. The published asset is fine because that job runs on
+`ubuntu-latest`.
+
+Two consequences worth keeping:
+
+- **Reproducing the render on Windows needs `USERPROFILE` too.** The assertion
+  that would catch the leak lives in the workflow, so it only ever runs on
+  Linux. A comment now says so at the step.
+- **The portal's `defaultOf()` is load-bearing, not defensive.** It reports a
+  control's `value` as a default only when `layer` is `default`, precisely so a
+  document rendered without full isolation cannot present one machine's state
+  to a whole team as the built-in default. This is what that guard is for, and
+  it took about a minute of real rendering to produce the case.
+
+The rest of the loop verified as intended against the real 0.50.0 document: 14
+groups, 79 controls, 67 dotted setting keys (all matching the portal's
+`SETTING_KEY` regex), all 7 `enum` kinds carrying `options`, the HMAC over
+`"<ts>.<body>"` verifying between the two implementations, a tampered body
+refused, and the asset URL inside the allowlist.
+
+### Related cleanup in the same pass
+
+`deploy/nginx/golem-run.conf` and `deploy/nginx/landing.html` were **removed**.
+§149 item 1 had already demoted the conf to a reference implementation for a box
+that was never stood up; keeping it left a second dialect of the routing rules
+to drift, and left the "two landing pages, no stated winner" question from
+`R7.6-infra` open. The behaviour lives in [[Portal Install Contract]]; git
+history keeps the config.

@@ -19,7 +19,7 @@ describe("wiki skills (T2, W2 leftover)", () => {
     expect(skill.indexOf("search")).toBeLessThan(skill.indexOf("WebFetch"));
     // Re-check the KB before each fetch, and capture durable findings back.
     expect(skill.toLowerCase()).toContain("re-run `search` before each new fetch".toLowerCase());
-    expect(skill).toContain("/golem/wiki-ingest");
+    expect(skill).toContain("/golem-wiki-ingest");
   });
 
   it("wiki-ingest authors the note directly, no prior approval (de-gated per Decision 44)", () => {

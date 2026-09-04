@@ -204,7 +204,7 @@ async function writeServed(
       refId !== null
         ? `${truncated}\n\n[Golem: page truncated for inline display (${content.length} chars total); ` +
           `the full page is stored losslessly. Retrieve original: hash=${refId} — call the expand ` +
-          `MCP tool with ref_id "${refId}" (or /golem/expand ${refId}).]`
+          `MCP tool with ref_id "${refId}" (or /golem-expand ${refId}).]`
         : `${truncated}\n\n[…truncated — full page is in the Golem KB; use search / fetch.]`;
   } else {
     served = content;

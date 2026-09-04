@@ -191,7 +191,7 @@ async function pruneEmptyAgentsDir(projectDir: string): Promise<void> {
  * Init step: bring `.claude/agents/` into line with the persona registry.
  *
  * Owns removal as well as writing, deliberately. Splitting them would let a
- * stale definition survive a config change, which is the failure `/golem/slider`
+ * stale definition survive a config change, which is the failure `/golem-slider`
  * outliving R11.1 is the precedent for.
  */
 export async function installPersonaAgents(

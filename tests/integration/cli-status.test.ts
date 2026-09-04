@@ -401,7 +401,7 @@ describe("renderStatus", () => {
     expect(output).toContain("Project wiring (initialized)");
     expect(output).toContain("[ok] .claude settings -> proxy base URL");
     expect(output).toContain("[ok] .mcp.json -> golem MCP server");
-    expect(output).toContain("[ok] /golem/* skills installed");
+    expect(output).toContain("[ok] /golem-* skills installed");
     expect(output).toContain("[ok] .golem/settings.json present");
     expect(output).toContain("Proxy: http://localhost:4653 — reachable");
     expect(output).toContain("Upstream: kimi (openai) · api.moonshot.ai · model kimi-k3");
@@ -425,7 +425,7 @@ describe("renderStatus", () => {
     expect(output).toContain("[--] .claude settings -> proxy base URL");
     // Mixed state: mcp_registered is true even though the project overall isn't initialized.
     expect(output).toContain("[ok] .mcp.json -> golem MCP server");
-    expect(output).toContain("[--] /golem/* skills installed");
+    expect(output).toContain("[--] /golem-* skills installed");
     expect(output).toContain("[--] .golem/settings.json present");
     expect(output).toContain(
       "Proxy: http://localhost:4653 — not running — the SessionStart hook restarts it on project open",

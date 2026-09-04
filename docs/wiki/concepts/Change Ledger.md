@@ -30,8 +30,8 @@ R8.9 there was no mechanism for discarding, so every dead end was repaired.
 
 That is also why the ledger has **no MCP tool**: a tool definition bills on every
 request (§88/§100), and the model can reach the CLI through `Bash` for free. The
-[[Guidance Rules]] half is a `/golem/checkpoint` skill plus one paragraph in
-`/golem/develop` telling the model to checkpoint *before* a wide or speculative
+[[Guidance Rules]] half is a `/golem-checkpoint` skill plus one paragraph in
+`/golem-develop` telling the model to checkpoint *before* a wide or speculative
 change.
 
 ## What it does and does not touch
