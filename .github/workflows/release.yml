@@ -344,16 +344,33 @@ jobs:
           echo "::error::portal did not accept the release webhook after 3 attempts — the release IS published; the portal may be serving a stale schema."
           exit 1
 
+  # Publishing requires an explicit OPT-IN, not merely a secret that exists.
+  #
+  # This job used to fire whenever `NPM_TOKEN` was non-empty, which treated "a
+  # secret is configured" as a proxy for "we intend to publish". Those came
+  # apart immediately: a token was present but did not authenticate, so v0.50.0
+  # and v0.51.0 both published a complete, correct release and then reported
+  # FAILURE on this job. A run that is expected to be red is not a signal, it is
+  # training — and the same predicate-as-proxy mistake R13.11 recorded for
+  # `inherit` auth.
+  #
+  # So the gate is now a repository VARIABLE (not a secret, because it is not
+  # one): publishing happens when `vars.NPM_PUBLISH == 'true'` AND a token is
+  # present. Set the variable when the token is real. Until then the step skips,
+  # the job succeeds, and the release is still complete — the tarball is
+  # attached to the Release either way, so nothing is lost by not publishing.
+  #
+  # Deliberately NOT `continue-on-error`: that would hide a genuine publish
+  # failure in the one workflow whose whole job is to be trustworthy.
   npm-publish:
-    name: Publish to npm (optional)
+    name: Publish to npm (opt-in)
     needs: [resolve, release]
     runs-on: ubuntu-latest
     # Job-level env so the step `if` below can read it (a step can't reliably
-    # read its own env, and secrets aren't visible in `if`). Empty when the
-    # secret is unset → the publish step is skipped, and the release is still
-    # complete: the tarball is attached either way.
+    # read its own env, and secrets aren't visible in `if`).
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
     steps:
       - uses: actions/checkout@v4
 
@@ -369,8 +386,20 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Publish (skipped without NPM_TOKEN)
-        if: ${{ env.NODE_AUTH_TOKEN != '' }}
+      - name: Report what this job will do
+        run: |
+          if [ "${NPM_PUBLISH:-}" = "true" ] && [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "publishing: vars.NPM_PUBLISH is true and a token is present"
+          elif [ "${NPM_PUBLISH:-}" = "true" ]; then
+            echo "::error::vars.NPM_PUBLISH is true but NPM_TOKEN is empty — set the secret or unset the variable"
+            exit 1
+          else
+            echo "NOT publishing: vars.NPM_PUBLISH is not 'true'. The release is complete regardless —"
+            echo "golem-run-<version>.tgz is attached to the GitHub Release."
+          fi
+
+      - name: Publish (only when vars.NPM_PUBLISH is 'true')
+        if: ${{ env.NPM_PUBLISH == 'true' && env.NODE_AUTH_TOKEN != '' }}
         run: npm publish --access public
 
   vscode-publish:
