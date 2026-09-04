@@ -634,6 +634,23 @@ export const SETTINGS_LEAVES = {
     step_up_max_age_minutes: z.number().int().positive(),
     /** Lifetime of an issued device certificate. An unrevoked lost device still expires. */
     device_cert_days: z.number().int().positive(),
+    /**
+     * R13.7 (ADR-0007 section 3b) — let a message authored on a paired device be
+     * delivered into a conversation the developer is already running, as an
+     * injected block on that conversation's NEXT request.
+     *
+     * OFF by default, and the default is the invariant: with this off the
+     * pipeline is not merely told to skip a stage, it is never given the queue at
+     * all, so a request with nothing queued is byte-identical to today at
+     * compression <= 1 because no injection code ran (ADR-0007 invariant 6).
+     *
+     * Turning it on does not widen who may send: a message still arrives over the
+     * mutual-TLS write surface, from a paired device, inside a live unlock
+     * window. What it changes is whether an accepted message can reach a session
+     * the developer is already typing into, rather than only a session Golem
+     * hosts.
+     */
+    join_injection: z.boolean(),
   },
   telemetry: {
     /** Master toggle for local telemetry collection (savings attribution). */
@@ -988,6 +1005,9 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     idle_relock_minutes: 5,
     step_up_max_age_minutes: 2,
     device_cert_days: 90,
+    // A message from a phone landing in the session you are typing into is an
+    // opt-in, never a default.
+    join_injection: false,
   },
   telemetry: {
     enabled: true,

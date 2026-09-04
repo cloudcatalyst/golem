@@ -1,20 +1,35 @@
 name: Release
 
-# Cuts a release when a vX.Y.Z tag is pushed (spec Decision 41d):
-#   1. resolve       — resolve the tag and check it matches package.json (no CI re-run; ci.yml gates main)
-#   2. binaries      — cross-compile all standalone targets with Bun (one host)
-#   3. release       — create/update the GitHub Release and attach the binaries
-#   4. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
-#   5. vscode-publish— OPTIONAL, skipped unless the VSCE_PAT secret is set
+# A release IS a merge into `main`.
 #
-# The install scripts fetch GOLEM_INSTALL_BASE/bin/golem-<os>-<arch>; point the
-# nginx /bin/ location at this Release's assets (see deploy/nginx/golem-run.conf).
+# Branch model (see docs/wiki/concepts/Release Pipeline.md):
+#
+#   working branch → PR → development → release PR → main → this workflow
+#
+# `main` receives nothing but release PRs, so "merged to main" and "released"
+# are the same event and there is no second thing to remember to do. The version
+# is decided BEFORE the release PR is opened, by release-prepare.yml — by the
+# time a commit lands here, package.json already names the version being cut.
+#
+# Steps:
+#   1. ci            — the SAME checks that gate every PR, reused via workflow_call
+#   2. resolve       — take the version from package.json; refuse if that tag exists
+#   3. binaries      — cross-compile all standalone targets with Bun (one host)
+#   4. assets        — npm tarball + config-schema.json (portable, no machine state)
+#   5. release       — create the tag and the GitHub Release, attach everything
+#   6. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
+#   7. vscode-publish— OPTIONAL, skipped unless the VSCE_PAT secret is set
+#
+# Every asset here is load-bearing for golem.run: the portal redirects
+# /install.sh, /install.ps1 and /bin/<asset> to releases/latest/download/…, and
+# fetches config-schema.json to validate team settings. An asset missing from
+# this list is a 404 on the front door — see docs/wiki/concepts/Portal Install Contract.md.
 #
 # Manual re-run: Actions → Release → "Run workflow" with an existing tag.
 
 on:
   push:
-    tags: ["v*.*.*"]
+    branches: [main]
   workflow_dispatch:
     inputs:
       tag:
@@ -22,35 +37,57 @@ on:
         required: true
 
 permissions:
-  contents: write # create Releases and upload assets
+  contents: write # create Releases, tags, and upload assets
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false # never abandon a half-published release
 
 jobs:
-  # Lean gate: resolve the tag and guard it against package.json — NOT a CI
-  # re-run (lint/typecheck/test already gate `main` in ci.yml). The version
-  # check must precede the binary build so mismatched binaries are never
-  # attached under a tag. `node` is preinstalled on the runner (no setup-node).
+  # The release gate is the PR gate — the same file, not a copy of it. A second
+  # definition would drift, and the first anyone would know is a release that
+  # passed checks `development` would have failed.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   resolve:
-    name: Resolve tag
+    name: Resolve version
+    needs: ci
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve tag + check it matches package.json
+      - name: Resolve the tag from package.json
         id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
+            if [ "$TAG" != "v$VERSION" ]; then
+              echo "::error::dispatch tag $TAG does not match package.json (v$VERSION) — check out the tagged commit or fix the input"
+              exit 1
+            fi
           else
-            TAG="${{ github.ref_name }}"
+            TAG="v$VERSION"
+            # A tag that already exists means the release PR carried a version
+            # that was already cut — i.e. release-prepare.yml was skipped. Fail
+            # here rather than silently re-publishing a different tree under an
+            # existing tag.
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              echo "::error::release $TAG already exists — main was merged without bumping the version. Run the 'Prepare release' workflow on development, then re-open the release PR."
+              exit 1
+            fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          PKG="v$(node -p "require('./package.json').version")"
-          if [ "$PKG" != "$TAG" ]; then
-            echo "::error::tag $TAG does not match package.json version $PKG — run 'npm run release' before tagging"
-            exit 1
-          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Releasing $TAG"
 
   binaries:
@@ -83,15 +120,97 @@ jobs:
           path: dist-bin/*
           if-no-files-found: error
 
-  release:
-    name: GitHub Release
-    needs: [resolve, binaries]
+  # Everything the portal fetches that is NOT a binary: the npm tarball, the two
+  # install scripts, and the settings schema.
+  assets:
+    name: Package + schema
+    needs: resolve
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Pack the npm package
+        run: |
+          set -euo pipefail
+          mkdir -p dist-assets
+          # Build the tarball that `npm publish` would send, and attach it. It is
+          # the proof the package packs, and an install path that works even
+          # before the package is on the registry.
+          npm pack --pack-destination dist-assets
+          ls -l dist-assets
+
+      - name: Render config-schema.json
+        run: |
+          set -euo pipefail
+          # --dir at an EMPTY directory, not the checkout: this repo has its own
+          # committed .golem/settings.json, and rendering there would bake Golem's
+          # own project config into the schema every consumer downloads. An empty
+          # dir yields built-in defaults with layer "default" — the portable
+          # answer.
+          #
+          # --no-header drops the machine-describing block (absolute paths, proxy
+          # port, upstream account). The portal validates team settings against
+          # this file; it must describe the schema and nothing about the runner.
+          EMPTY="$RUNNER_TEMP/empty-project"
+          mkdir -p "$EMPTY"
+          # HOME too, not just --dir: the user layer is ~/.golem/settings.json, so
+          # a runner that ever ran `golem` would otherwise fold its own settings
+          # into the published schema. With both isolated, every value is a
+          # built-in default.
+          HOME="$EMPTY" node dist/cli/main.js config schema --json --no-header --dir "$EMPTY" \
+            > dist-assets/config-schema.json
+          node -e '
+            const s = require("./dist-assets/config-schema.json");
+            if (s.header !== undefined) throw new Error("header leaked into config-schema.json");
+            if (!Array.isArray(s.groups) || s.groups.length === 0) throw new Error("config-schema.json has no groups");
+            const layers = new Set(s.groups.flatMap(g => (g.controls ?? []).map(c => c.layer)));
+            const leaked = [...layers].filter(l => !["default", "runtime"].includes(l));
+            if (leaked.length) throw new Error("machine settings leaked into config-schema.json via layer(s): " + leaked.join(", "));
+            console.log("config-schema.json ok:", s.groups.length, "groups, version", s.version);
+          '
+
+      - name: Stage the install scripts
+        run: |
+          set -euo pipefail
+          # Served verbatim from the release by golem.run. The portal must never
+          # carry a fork of these — two copies drift, and the drift is found by a
+          # user left half-installed.
+          cp install/install.sh install/install.ps1 dist-assets/
+          ls -l dist-assets
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golem-assets
+          path: dist-assets/*
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    needs: [resolve, binaries, assets]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: golem-binaries
           path: dist-bin
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: golem-assets
+          path: dist-assets
 
       - name: Create or update the Release
         env:
@@ -99,21 +218,133 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.resolve.outputs.tag }}
         run: |
+          set -euo pipefail
+          # `gh release create` creates the tag at --target when it does not
+          # exist, so there is no separate git tag push to get wrong.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG exists — uploading assets (clobber)."
-            gh release upload "$TAG" dist-bin/* --clobber
+            gh release upload "$TAG" dist-bin/* dist-assets/* --clobber
           else
-            echo "Creating Release $TAG."
-            gh release create "$TAG" dist-bin/* --title "$TAG" --generate-notes
+            echo "Creating Release $TAG at $GITHUB_SHA."
+            gh release create "$TAG" dist-bin/* dist-assets/* \
+              --target "$GITHUB_SHA" --title "$TAG" --generate-notes
           fi
+
+      - name: Confirm every asset golem.run redirects to is present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # The portal's routes are only as good as this list. Assert rather than
+          # trust the upload: a missing asset here is a 404 on the front door.
+          NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          echo "$NAMES"
+          for required in \
+            install.sh install.ps1 config-schema.json \
+            golem-linux-x64 golem-linux-arm64 \
+            golem-darwin-x64 golem-darwin-arm64 \
+            golem-windows-x64.exe golem-windows-arm64.exe
+          do
+            if ! echo "$NAMES" | grep -qx "$required"; then
+              echo "::error::release $TAG is missing required asset '$required'"
+              exit 1
+            fi
+          done
+          echo "All required release assets present."
+
+  # Tell the portal a new schema is out, rather than making it poll.
+  #
+  # Deliberately a job of its own, AFTER `release`: the release is already
+  # published by the time this runs, so a webhook failure cannot unpublish
+  # anything — it just goes red, visibly, instead of the portal silently serving
+  # a stale schema forever. It retries before it gives up.
+  #
+  # Inert until PORTAL_WEBHOOK_URL is set, exactly like the publish jobs.
+  # Contract (portal side): docs/wiki/concepts/Portal Install Contract.md.
+  notify-portal:
+    name: Notify the portal (optional)
+    needs: [resolve, release]
+    runs-on: ubuntu-latest
+    env:
+      PORTAL_WEBHOOK_URL: ${{ secrets.PORTAL_WEBHOOK_URL }}
+      PORTAL_WEBHOOK_SECRET: ${{ secrets.PORTAL_WEBHOOK_SECRET }}
+    steps:
+      - uses: actions/download-artifact@v4
+        if: ${{ env.PORTAL_WEBHOOK_URL != '' }}
+        with:
+          name: golem-assets
+          path: dist-assets
+
+      - name: POST release.published (skipped without PORTAL_WEBHOOK_URL)
+        if: ${{ env.PORTAL_WEBHOOK_URL != '' }}
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PORTAL_WEBHOOK_SECRET:-}" ]; then
+            echo "::error::PORTAL_WEBHOOK_URL is set but PORTAL_WEBHOOK_SECRET is not — an unsigned webhook is one the portal must refuse."
+            exit 1
+          fi
+
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+          SCHEMA_SHA="$(sha256sum dist-assets/config-schema.json | cut -d' ' -f1)"
+          TIMESTAMP="$(date -u +%s)"
+
+          # Compact JSON on one line: the signature is over these exact bytes, so
+          # the body must not be reformatted between signing and sending.
+          BODY="$(node -e '
+            const [tag, version, sha, base, repo, commit] = process.argv.slice(1);
+            process.stdout.write(JSON.stringify({
+              event: "release.published",
+              tag, version,
+              repository: repo,
+              commit,
+              released_at: new Date().toISOString(),
+              config_schema: { url: base + "/config-schema.json", sha256: sha },
+              assets: {
+                install_sh: base + "/install.sh",
+                install_ps1: base + "/install.ps1",
+              },
+            }));
+          ' "$TAG" "$VERSION" "$SCHEMA_SHA" "$BASE" "$GITHUB_REPOSITORY" "$GITHUB_SHA")"
+
+          # HMAC-SHA256 over "<timestamp>.<body>" — the timestamp is inside the
+          # signed material so a captured POST cannot be replayed later.
+          SIG="$(printf '%s.%s' "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$PORTAL_WEBHOOK_SECRET" -hex | sed 's/^.*= //')"
+
+          for attempt in 1 2 3; do
+            CODE="$(curl -sS -o /tmp/portal-response.txt -w '%{http_code}' \
+              -X POST "$PORTAL_WEBHOOK_URL" \
+              -H 'content-type: application/json' \
+              -H "x-golem-timestamp: $TIMESTAMP" \
+              -H "x-golem-signature: sha256=$SIG" \
+              --data-raw "$BODY" || echo 000)"
+            echo "attempt $attempt → HTTP $CODE"
+            if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
+              echo "Portal notified: $TAG (schema sha256 ${SCHEMA_SHA:0:12}…)"
+              exit 0
+            fi
+            # 4xx is our bug or a rejected signature — retrying cannot fix it.
+            if [ "$CODE" -ge 400 ] && [ "$CODE" -lt 500 ]; then
+              echo "::error::portal rejected the webhook with HTTP $CODE — $(cat /tmp/portal-response.txt)"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::portal did not accept the release webhook after 3 attempts — the release IS published; the portal may be serving a stale schema."
+          exit 1
 
   npm-publish:
     name: Publish to npm (optional)
-    needs: resolve
+    needs: [resolve, release]
     runs-on: ubuntu-latest
     # Job-level env so the step `if` below can read it (a step can't reliably
     # read its own env, and secrets aren't visible in `if`). Empty when the
-    # secret is unset → the publish step is skipped.
+    # secret is unset → the publish step is skipped, and the release is still
+    # complete: the tarball is attached either way.
     env:
       NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
@@ -137,7 +368,7 @@ jobs:
 
   vscode-publish:
     name: Publish VS Code extension (optional)
-    needs: resolve
+    needs: [resolve, release]
     runs-on: ubuntu-latest
     env:
       VSCE_PAT: ${{ secrets.VSCE_PAT }}

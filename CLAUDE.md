@@ -42,6 +42,16 @@ Check live docs for Claude Code (hooks, skills, `claude mcp add`), MCP spec, Hea
 ## Conventions
 TypeScript strict, ESM, Node ≥ 22. npm, Biome lint + format. Zod at external boundaries, trust types internally. Async/streams for I/O, worker_threads for CPU-bound off critical path. Vitest, colocated by kind. Conventional commits, one workstream per PR.
 
+## Branches and releases
+```
+working branch → PR → development → "Prepare release" → PR → main → release published
+```
+- **PRs target `development`, never `main`.** `main` receives release PRs only, so every merge into it IS a release (tag, GitHub Release, binaries, npm tarball, `install.sh`, `install.ps1`, `config-schema.json`, portal webhook).
+- **CI runs at the release boundary only** (USER, 2026-09-04) — nothing runs on `development`. So `golem verify` green, by exit code, is a hard requirement before every merge into `development`: a red release PR otherwise indicts the whole batch merged since the last release, not one diff.
+- Cut a release with the **Prepare release** workflow on `development` — it bumps the version and opens the release PR. Never hand-edit a version; `scripts/release.mjs` moves `package.json`, `vscode-extension/package.json` and the compiled-in `VERSION` together.
+- **Merge the release PR with a merge commit, not squash** — a squash rewrites the history `development` is built on.
+- Full design: `docs/wiki/concepts/Release Pipeline.md`.
+
 ## Multi-agent
 Claim tasks by ID in PR title. Don't modify files owned by another workstream. Blocked? Write the question in verification-notes and pick up another task.
 
@@ -56,6 +66,6 @@ Run `/golem/ship` after the last task in a batch. Checklist:
 - [ ] `golem task done <id> --note "shipped"`
 - [ ] `golem task index --write` → regenerate ROADMAP.md
 - [ ] Retire batch brief, commit + PR
-- [ ] ~~**Before merging: `gh pr checks <n>` must show `CI gate` green.**~~ **SUSPENDED 2026-08-22 (USER DECISION) — GitHub Actions is billing-blocked.** Jobs fail in 1–3s with *"The job was not started because recent account payments have failed or your spending limit needs to be increased"*, which is **not** a code failure: read three fast red jobs as a billing block, not a regression. **The gate does not disappear, it moves local.** Until Actions runs again, before merging you must run and report in the PR:
-  `npx tsc --noEmit` · `npm run lint` · `npm run format:check` · `npx vitest run` · `golem wiki check`
-  — check **exit codes**, not tailed output, and paste the suite totals. That is the same work CI does; merging on a green local run is allowed, merging on an unrun one is not. Reinstate the moment billing clears: task `ci-billing-and-gate`. The original warning still stands and is why this is written down rather than just done — skipping the gate is how CI stayed red for four consecutive merges.
+- [ ] **Before merging: `gh pr checks <n>` must show `CI gate` green.** Skipping it is how CI stayed red for four consecutive merges. **Reinstated 2026-09-04** — the 2026-08-22 billing block cleared (last billing failure 2026-08-29, Actions running normally since 2026-09-02).
+  - **If jobs fail in 1–5s with no steps, that is a BILLING BLOCK, not a regression.** *"The job was not started because recent account payments have failed or your spending limit needs to be increased"*. No code ran, so the red says nothing about the change. Read the run's **annotations** (`gh run view <id>`), not the logs — the logs do not exist, and `gh run view --log` answers `log not found`, which reads like a tooling fault. It cannot be detected from inside a workflow: the workflow never starts.
+  - **When it happens, the gate moves local, it does not disappear.** Run and report in the PR: `golem verify` (or `npx tsc --noEmit` · `npm run lint` · `npm run format:check` · `npx vitest run` · `golem wiki check`) — judged by **exit codes**, not tailed output, pasting the suite totals. Merging on a green local run is allowed; merging on an unrun one is not.

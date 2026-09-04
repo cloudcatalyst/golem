@@ -1,8 +1,22 @@
 name: CI
 
+# Branch model: working branches → PR → `development` → release PR → `main`.
+#
+# CI runs at the RELEASE boundary only (USER DECISION, 2026-09-04): the release
+# PR into `main`, and again inside release.yml after it merges. Nothing runs on
+# `development` — merges into it are gated locally by `golem verify`, and the
+# release PR is where the whole batch is judged together.
+#
+# The trade is deliberate and worth stating plainly, because the cost lands on
+# whoever cuts the release: roughly half the Actions minutes, in exchange for
+# diagnosing a batch rather than a change. If a release PR goes red, the culprit
+# is somewhere in everything merged since the last one — `git bisect` over
+# development, not a glance at one diff. Run `golem verify` before every merge
+# into development and that stays rare.
+#
+# There is deliberately no `push:` trigger at all: a push to `main` runs
+# release.yml, which calls this workflow itself.
 on:
-  push:
-    branches: [main]
   # Gate MERGES, not just record history. Until this trigger existed CI ran only
   # after a merge, so a red run reported a problem that was already on `main` and
   # nothing was ever blocked by it — which is how one environment-dependent test
@@ -11,6 +25,9 @@ on:
   # check nobody reads.
   pull_request:
     branches: [main]
+  # Lets release.yml reuse this exact definition as its gate. A release must not
+  # be judged by a second, drifting copy of the checks.
+  workflow_call:
 
 # One run per ref: a new push cancels the previous run for the same PR instead of
 # paying for both. This repo is deliberately minutes-conscious (see the Ubuntu-only

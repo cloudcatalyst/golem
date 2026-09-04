@@ -4,6 +4,7 @@
 
 import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
+import type { ControlSurface } from "../../config/control-surface.js";
 import { collectControlSurface } from "../../config/control-surface.js";
 import { findProjectDir, renderSweep, sweepSettingsFiles } from "../../config/index.js";
 import type { SettingsScope } from "../../config/write-setting.js";
@@ -26,6 +27,27 @@ const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 function _fail(err: unknown): never {
   process.stderr.write(`golem: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(err instanceof InitError ? 2 : 1);
+}
+
+/**
+ * What `config schema --json` prints.
+ *
+ * With the header, it is the control surface `golem status` and the panel read.
+ * Without it, it is the PUBLISHED artifact: `config-schema.json`, attached to
+ * every release and fetched by the portal to validate team settings before a
+ * developer's machine ever sees them. That artifact must describe the schema and
+ * nothing about the machine that built it, so both machine-shaped fields are
+ * dropped together — `header` (absolute paths, proxy port, upstream account) and
+ * `warnings` (complaints about the local settings files). `version` is carried
+ * explicitly because the portal caches these by version.
+ *
+ * Exported so the boundary is testable without spawning the CLI.
+ */
+export function schemaPayload(
+  surface: ControlSurface,
+  withHeader: boolean,
+): ControlSurface | { version: string; groups: ControlSurface["groups"] } {
+  return withHeader ? surface : { version: VERSION, groups: surface.groups };
 }
 
 function parseConfigScope(raw: string): SettingsScope {
@@ -171,15 +193,23 @@ export default function register(program: Command): void {
     .description("Print every control (settings, guidance, runtime) with labels, kinds, and values")
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--json", "machine-readable output", false)
-    .action(async (opts: { dir: string; json: boolean }) => {
+    // The header describes THIS machine — absolute paths, the proxy port, the
+    // upstream account, when a model was last served. Fine for `golem status`,
+    // wrong for an artifact that leaves the machine: `config-schema.json` is
+    // attached to every release and fetched by the portal to validate team
+    // settings, so it must describe the SCHEMA and nothing about who built it.
+    // `warnings` goes with it — those are complaints about the local settings
+    // files, not properties of the schema.
+    .option("--no-header", "omit the machine-specific header and warnings (portable output)")
+    .action(async (opts: { dir: string; json: boolean; header: boolean }) => {
       try {
         const surface = await collectControlSurface({
           projectDir: opts.dir,
           version: VERSION,
-          withHeader: true,
+          withHeader: opts.header,
         });
         if (opts.json) {
-          process.stdout.write(`${JSON.stringify(surface, null, 2)}\n`);
+          process.stdout.write(`${JSON.stringify(schemaPayload(surface, opts.header), null, 2)}\n`);
           return;
         }
         for (const group of surface.groups) {

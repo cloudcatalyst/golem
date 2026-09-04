@@ -68,6 +68,26 @@ export {
   hostSettingsArg,
 } from "./host-settings.js";
 export {
+  DELIVERED_RETENTION_MS,
+  FileJoinQueue,
+  joinQueueDir,
+  MAX_PENDING_PER_CONVERSATION,
+  PENDING_TTL_MS,
+  resolveFromSnapshot,
+} from "./join-queue.js";
+export {
+  ACTIVE_WITHIN_MS,
+  createJoinedTransport,
+  type JoinedTransport,
+  type JoinedTransportOptions,
+} from "./joined-sessions.js";
+export {
+  IDLE_AFTER_MS,
+  LiveConversationRegistry,
+  liveConversationsPath,
+  readLiveConversations,
+} from "./live-conversations.js";
+export {
   type AttachResult,
   MessageLedger,
   RING_CAPACITY,
@@ -81,11 +101,14 @@ export {
   HEARTBEAT_MS,
   HISTORY_SUFFIX,
   INTERRUPT_SUFFIX,
+  type JoinAcceptance,
   MAX_MESSAGE_CHARS,
   MESSAGE_SUFFIX,
   parseSessionPath,
+  QUEUE_SUFFIX,
   resetLedgers,
   resumeCursor,
+  SESSIONS_PATH,
   type SessionRoute,
   STREAM_PREFIX,
   STREAM_SUFFIX,

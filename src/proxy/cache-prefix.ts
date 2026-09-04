@@ -169,6 +169,21 @@ function hash(value: unknown): string {
     .slice(0, 16);
 }
 
+/**
+ * The conversation key alone — the hash of the first message.
+ *
+ * Identical to {@link cachePrefixFingerprint}'s `conversationKey`, without
+ * hashing every other message to get it. R13.7 needs this identity on every
+ * request (to ask whether a device has queued anything for the conversation),
+ * and paying an O(history) hash for an O(1) fact would put a real cost on a
+ * feature that is usually doing nothing. Empty string when there are no
+ * messages, which every caller must treat as "not addressable".
+ */
+export function conversationKeyOf(body: Readonly<Record<string, unknown>>): string {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  return messages.length > 0 ? hash(messages[0]) : "";
+}
+
 /** Content blocks in one message: the `content` array's length, or 1 for a string. */
 function blockCount(message: unknown): number {
   if (typeof message !== "object" || message === null) return 1;
