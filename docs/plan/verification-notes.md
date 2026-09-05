@@ -9026,3 +9026,83 @@ goes" from "who the request claims to be", and every instinct that treats them a
 one value — set the audience to the tunnel, set it to localhost because the
 server is local — produces a 401 that looks like a signing failure. The audience
 belongs to the *service*, not to the route you reached it by.
+
+## §156 — The release→portal webhook's last gap was two repository VARIABLES, and the sender already matched the receiver point for point (2026-09-06)
+
+`golem.run` resolves now (`216.198.79.1`) and the portal is deployed there —
+Stripe, Nango and Clerk webhooks all reaching it, schema `0.52.1` served from
+the stored table, which is the document the localhost/ngrok run in §155 pushed.
+The only untested leg left is the release webhook, because it needs a release
+from this repo.
+
+Set today, as repository **variables** (`gh variable set`, not secrets — neither
+is one):
+
+```
+PORTAL_WEBHOOK_URL   = https://golem.run/api/webhooks/golem-build   (42 bytes)
+PORTAL_OIDC_AUDIENCE = https://golem.run                            (17 bytes)
+```
+
+The byte counts are the check worth keeping: the portal compares the audience
+**exactly** against `GOLEM_OIDC_AUDIENCE ?? NEXT_PUBLIC_APP_URL`, so a trailing
+slash is the whole failure. `gh variable list` renders values in a way that
+would hide one; `gh api repos/…/actions/variables --jq '.variables[] | "\(.name)=[\(.value)] len=\(.value|length)"'`
+does not.
+
+### Nothing in `release.yml` needed changing
+
+Audited the `notify-portal` job against every check the portal performs, and it
+already matched all of them — `id-token: write` on that job alone, a bearer OIDC
+token minted for the audience, no HMAC header left to send, `aud` and
+`workflow_ref` asserted locally against `<repo>/.github/workflows/release.yml@`
+*before* the POST, a release-asset `config_schema.url` carrying a sha256 the
+portal re-checks, and `config schema --json --no-header` with a header-leak
+assertion in the `assets` job. Retry policy already 5xx-only.
+
+So the gap between "both halves speak the contract" and "the loop is closed" was
+**configuration, not code** — the exact inverse of §153, where both halves were
+built and three code-level mismatches meant they could not connect. Worth
+holding both shapes in mind: a contract can fail because the code disagrees, or
+because nothing is pointed at anything.
+
+### One harmless divergence in how the two halves describe success
+
+The live 200 body in §155 was `{"version":"0.52.1","stored":true,"replaced":false}`,
+whereas the portal's own account of the contract names
+`{version, stored: false, reason: "unchanged"}` for the no-op path. The job reads
+neither field — it tests the status class — so nothing behaves differently. Both
+shapes are now recorded in [[Release Pipeline]] § What the portal answers rather
+than one being picked as canonical. Flagged to the portal side; if the contract
+should say one thing, it gets said here first.
+
+### The verification is the release itself
+
+There is no separate test to run: the merge into `main` IS the release, so
+cutting one is what exercises this leg. Read the `OIDC claims:` line in the
+`notify-portal` log for the `aud` it minted — every release logs it, which is
+what makes a mismatch one line away from diagnosed instead of an opaque 401
+legible only in the portal's log. The portal side logs `authenticated by OIDC`
+then `stored schema`.
+
+### Addendum — `golem task index --write` reads the WORKING TREE, so uncommitted task docs pollute a committed file
+
+Caught by CI on PR #167, after a local `golem verify` went ALL GREEN. Three
+files from unrelated work were sitting untracked in the tree, one of them
+`docs/plan/tasks/settings-cascade-importance.md` — a `queued`, unblocked,
+`owner: agent` task. So:
+
+- **locally**, the generator saw it and wrote `7 ready`, and the roadmap test
+  compared that against a tree that also contained it → **green**;
+- **in CI**, only committed docs exist, so regeneration produced `6 ready` and
+  the committed ROADMAP said `7` → **red on every OS and node version**,
+  deterministic, `test / … / shard 2` four times over.
+
+The generated file is committed; its input is the working tree. That gap is
+invisible to any local run, because the same pollution is on both sides of the
+local comparison — a green local gate is *evidence the pollution is consistent*,
+not evidence it is absent. The tell is a failure that is identical across every
+matrix leg: a flake varies, an input difference does not.
+
+Fix is to regenerate with the untracked docs moved aside, which is what the
+committed state actually describes. Worth knowing before assuming a red shard
+after a green `golem verify` means CI is wrong.
