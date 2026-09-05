@@ -7,11 +7,11 @@ size: S
 discipline: code
 design: "BOTH ends are now built to the same contract, re-authenticated to GitHub Actions OIDC on 2026-09-05 (portal deployed OIDC-only; the sender followed — `docs/plan/verification-notes.md` §154). Sender: `.github/workflows/release.yml` job `notify-portal`. Receiver: the portal's `app/api/webhooks/golem-build/route.ts`, which was already written against an EARLIER, incompatible design and was corrected — three mismatches, one of which also broke the GitHub fallback. Wire contract: `docs/wiki/concepts/Release Pipeline.md` § The portal webhook (+ § The receiving half). Findings: `docs/plan/verification-notes.md` §153."
 gate: "MET against a local portal 2026-09-05 (v0.52.1, `stored:true`; unauthenticated and malformed-bearer POSTs both refused 401). Re-confirm against production once `golem.run` resolves: a release publishes → the portal has the new `config-schema.json` cached under its version WITHOUT anyone poking it."
-blocked: "**`golem.run` has no A record** (observed 2026-09-05: `curl: (6) Could not resolve host`). The code is done on both sides and the loop was RUN end to end against a local portal behind a tunnel — `HTTP 200 {\"version\":\"0.52.1\",\"stored\":true}`. What remains is DNS + a portal deploy, then set `vars.PORTAL_WEBHOOK_URL` (left unset on purpose: it is what keeps the job inert instead of red every release)."
+blocked: "CLEARED 2026-09-06 — `golem.run` resolves (`216.198.79.1`), the portal is deployed there, and both repository variables are set (`PORTAL_WEBHOOK_URL`, `PORTAL_OIDC_AUDIENCE`). Nothing is blocked; what remains is the GATE, which only a release from this repo can meet. Details: §156."
 depends_on: [release-portal-assets]
 touches: []
 created: 2026-09-04
-updated: 2026-09-05
+updated: 2026-09-06
 ---
 
 > **Re-scoped 2026-09-04.** The receiving half turned out to be already written
@@ -32,6 +32,13 @@ updated: 2026-09-05
 > remaining blocker is DNS and a deploy, not code and not a credential.
 > Details: §155. Debrief:
 > `docs/wiki/debriefs/2026-09-05-portal-release-webhook-oidc.md`.
+
+> **Unblocked 2026-09-06.** `golem.run` resolves and the portal is live there,
+> so the two repository *variables* were set and the DNS blocker is gone. The
+> sender was then audited against every check the portal performs and needed
+> **no change** — the gap was configuration, not code, which is the exact
+> inverse of the §153 failure. All that is left is a release: the merge into
+> `main` IS the release, so cutting one is what meets this gate. Details: §156.
 
 ## Why it is tracked in this repo
 
