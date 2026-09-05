@@ -268,11 +268,32 @@ Two details worth knowing before editing either half:
   the machine-specific `header` block, which is the same thing this workflow
   asserts on the way out.
 
-What is left is credentialed, not code, and the OIDC switch made it smaller:
-`PORTAL_WEBHOOK_URL` as a repository **variable** pointing at the portal's
-`/api/webhooks/golem-build`. There is no second half to match any more — no
-secret to generate, copy or rotate. Set `vars.PORTAL_OIDC_AUDIENCE` only if the
-portal's audience is not `https://golem.run`. See `portal-release-webhook`.
+### Proven live, and what is actually left (2026-09-05)
+
+The loop **ran**, in v0.52.1, against a portal on `localhost:3000` behind an
+ngrok tunnel — the first time either half executed against the other:
+
+```
+attempt 1 → HTTP 200
+{"version":"0.52.1","stored":true,"replaced":false}
+```
+
+What is left is neither code nor a secret: **`golem.run` has no A record yet**.
+Once it resolves and the portal is deployed there, one repository **variable** —
+`PORTAL_WEBHOOK_URL` = `https://golem.run/api/webhooks/golem-build` — closes it,
+and `notify_only` re-pushes the latest tag without cutting a release. It is left
+unset until then, which is what keeps the job inert rather than red on every
+release.
+
+**To test against a local portal**, point `PORTAL_WEBHOOK_URL` at a tunnel and
+leave the audience at production. The portal pins `GOLEM_OIDC_AUDIENCE`
+separately from `NEXT_PUBLIC_APP_URL` on purpose, so that tunnelling the webhook
+does not also move its Stripe and Nango callbacks. **A tunnel moves the address,
+not the identity** — the audience is an opaque string and never has to resolve.
+Setting it to `http://localhost:3000` is what earned
+`401 audience must be exactly https://golem.run` on the v0.52.1 release.
+
+See `portal-release-webhook`, and verification-notes §154/§155.
 
 ## Repository settings
 
