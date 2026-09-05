@@ -9083,3 +9083,26 @@ cutting one is what exercises this leg. Read the `OIDC claims:` line in the
 what makes a mismatch one line away from diagnosed instead of an opaque 401
 legible only in the portal's log. The portal side logs `authenticated by OIDC`
 then `stored schema`.
+
+### Addendum — `golem task index --write` reads the WORKING TREE, so uncommitted task docs pollute a committed file
+
+Caught by CI on PR #167, after a local `golem verify` went ALL GREEN. Three
+files from unrelated work were sitting untracked in the tree, one of them
+`docs/plan/tasks/settings-cascade-importance.md` — a `queued`, unblocked,
+`owner: agent` task. So:
+
+- **locally**, the generator saw it and wrote `7 ready`, and the roadmap test
+  compared that against a tree that also contained it → **green**;
+- **in CI**, only committed docs exist, so regeneration produced `6 ready` and
+  the committed ROADMAP said `7` → **red on every OS and node version**,
+  deterministic, `test / … / shard 2` four times over.
+
+The generated file is committed; its input is the working tree. That gap is
+invisible to any local run, because the same pollution is on both sides of the
+local comparison — a green local gate is *evidence the pollution is consistent*,
+not evidence it is absent. The tell is a failure that is identical across every
+matrix leg: a flake varies, an input difference does not.
+
+Fix is to regenerate with the untracked docs moved aside, which is what the
+committed state actually describes. Worth knowing before assuming a red shard
+after a green `golem verify` means CI is wrong.
