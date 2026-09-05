@@ -154,15 +154,15 @@ value carrying layer `project` is proof something local leaked.
 
 The portal is told a new schema exists rather than polling for it.
 
-`POST` to `PORTAL_WEBHOOK_URL`, signed with `PORTAL_WEBHOOK_SECRET`:
+`POST` to `PORTAL_WEBHOOK_URL`, authenticated with a **GitHub Actions OIDC
+token** (since 2026-09-05 — *Authentication: OIDC, not a shared secret*, below):
 
 | header | value |
 |---|---|
-| `x-golem-timestamp` | unix seconds |
-| `x-golem-signature` | `sha256=<hex>` of `HMAC-SHA256(secret, "<timestamp>.<raw body>")` |
+| `Authorization` | `Bearer <GitHub Actions OIDC JWT>`, minted for the portal's audience |
 
-The timestamp is inside the signed material, so a captured POST cannot be
-replayed later. Body:
+The token's own `exp` bounds replay, so there is no signed timestamp window to
+enforce and nothing on either side to rotate. Body — unchanged by the switch:
 
 ```json
 {
@@ -182,16 +182,56 @@ Three properties worth keeping, and kept when the portal side was built:
 - **It runs after the release is published**, in its own job. A webhook failure
   cannot unpublish anything — it goes red, visibly, instead of the portal
   silently serving a stale schema forever.
-- **It retries 5xx and gives up on 4xx.** A rejected signature is a bug, and
-  retrying a bug three times just delays finding it.
-- **It is inert until both secrets are set**, and refuses to send unsigned if the
-  URL is set without the secret — an unsigned webhook is one the portal must
-  refuse anyway.
+- **It retries 5xx and gives up on 4xx.** A refused token is a bug, and retrying
+  a refused token three times just makes three refused tokens.
+- **It is inert until `PORTAL_WEBHOOK_URL` is set.** That is now a repository
+  *variable*, not a secret: a URL is not a secret, and storing it as one makes it
+  invisible in the log exactly when you want to read it.
 
-The portal verifies the signature, then fetches `config_schema.url` and checks it
+The portal verifies the token, then fetches `config_schema.url` and checks it
 against `sha256` before caching it by `version`.
 
+### Authentication: OIDC, not a shared secret
+
+The HMAC scheme below was replaced on 2026-09-05. It is recorded because the
+receiving half's history only makes sense with it, not because either side still
+speaks it: the portal answers **401** to a correctly signed HMAC request, and
+asserts that in its own smoke test rather than assuming it.
+
+The sending job asks for `id-token: write` — **on that job alone**, which is the
+difference between one job being able to speak for the repository and every job
+being able to — mints a token for the portal's audience, and sends it as a
+bearer. What the portal checks, in order, rejecting with a reason in its log:
+
+1. A well-formed **RS256** JWT with a `kid`, screened before any network call.
+2. The signature, against GitHub's JWKS.
+3. `iss` is exactly `https://token.actions.githubusercontent.com`.
+4. `aud` is **exactly** the portal's audience — not a prefix match. It defaults
+   to the portal's public origin (`https://golem.run`); this repo sends
+   `vars.PORTAL_OIDC_AUDIENCE` when set.
+5. `exp` / `nbf` / `iat`, with 60s of clock tolerance.
+6. `repository` is exactly `cloudcatalyst/golem`.
+7. `workflow_ref` starts with
+   `cloudcatalyst/golem/.github/workflows/release.yml@`.
+
+**Point 7 is load-bearing for anything that wants to send this webhook.** Only
+the release workflow may publish a schema, so *moving or renaming `release.yml`
+turns every push into a 401* until the portal's `GOLEM_OIDC_WORKFLOW` is told —
+and a webhook sent from a workflow file of its own would mint a token naming
+*that* file and be refused. That is why the manual re-push is a **`notify_only`
+mode of `release.yml`** rather than the separate small workflow it would
+otherwise obviously be: dispatch Release with `notify_only` ticked and it skips
+ci/binaries/assets/release, sending the webhook for a tag that is already
+published, against the assets that tag already has. The job decodes its own
+token's `aud` and `workflow_ref` and fails on them locally, so the two things
+that actually go wrong say so in this repo's log instead of arriving as an
+opaque 401 legible only in the portal's.
+
 ### The receiving half (built 2026-09-04)
+
+Pre-OIDC history: the signature row below describes the HMAC scheme both sides
+spoke until 2026-09-05. The body and document rows still hold — the switch
+changed authentication and nothing downstream of it.
 
 `POST /api/webhooks/golem-build` in the portal repo. It was already written
 before this contract existed, against an **earlier and incompatible** design —
@@ -228,9 +268,11 @@ Two details worth knowing before editing either half:
   the machine-specific `header` block, which is the same thing this workflow
   asserts on the way out.
 
-What is left is credentialed, not code: `PORTAL_WEBHOOK_URL` and
-`PORTAL_WEBHOOK_SECRET` on this repo's Actions secrets, the latter matching the
-portal's `GOLEM_BUILD_WEBHOOK_SECRET`. See `portal-release-webhook`.
+What is left is credentialed, not code, and the OIDC switch made it smaller:
+`PORTAL_WEBHOOK_URL` as a repository **variable** pointing at the portal's
+`/api/webhooks/golem-build`. There is no second half to match any more — no
+secret to generate, copy or rotate. Set `vars.PORTAL_OIDC_AUDIENCE` only if the
+portal's audience is not `https://golem.run`. See `portal-release-webhook`.
 
 ## Repository settings
 
