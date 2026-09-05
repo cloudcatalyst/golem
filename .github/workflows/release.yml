@@ -17,8 +17,9 @@ name: Release
 #   3. binaries      — cross-compile all standalone targets with Bun (one host)
 #   4. assets        — npm tarball + config-schema.json (portable, no machine state)
 #   5. release       — create the tag and the GitHub Release, attach everything
-#   6. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
-#   7. vscode-publish— OPTIONAL, skipped unless the VSCE_PAT secret is set
+#   6. notify-portal — OIDC-authenticated webhook; inert without PORTAL_WEBHOOK_URL
+#   7. npm-publish   — OPTIONAL, skipped unless the NPM_TOKEN secret is set
+#   8. vscode-publish— OPTIONAL, skipped unless the VSCE_PAT secret is set
 #
 # Every asset here is load-bearing for golem.run: the portal redirects
 # /install.sh, /install.ps1 and /bin/<asset> to releases/latest/download/…, and
@@ -26,6 +27,16 @@ name: Release
 # this list is a 404 on the front door — see docs/wiki/concepts/Portal Install Contract.md.
 #
 # Manual re-run: Actions → Release → "Run workflow" with an existing tag.
+#
+# Re-push the portal webhook WITHOUT re-cutting anything: same dispatch, with
+# `notify_only` ticked. It skips ci/binaries/assets/release and runs only
+# `notify-portal`, against the assets that tag already has published.
+#
+# It lives here rather than in a workflow of its own on purpose. The portal
+# authenticates this webhook by OIDC and requires `workflow_ref` to start with
+# `<repo>/.github/workflows/release.yml@` — a second workflow file would mint a
+# token naming ITSELF and be refused with a 401, so the re-push has to be a mode
+# of this file to be a re-push at all.
 
 on:
   push:
@@ -35,6 +46,10 @@ on:
       tag:
         description: "Existing vX.Y.Z tag to (re)build the release for"
         required: true
+      notify_only:
+        description: "Only re-POST the portal webhook for that tag — no rebuild, no release"
+        type: boolean
+        default: false
 
 permissions:
   contents: write # create Releases, tags, and upload assets
@@ -49,11 +64,19 @@ jobs:
   # passed checks `development` would have failed.
   ci:
     name: CI
+    # A notify_only run publishes nothing, so there is nothing for the gate to
+    # gate. It still cannot skip its way into a release: `release` is skipped in
+    # that mode too.
+    if: ${{ !inputs.notify_only }}
     uses: ./.github/workflows/ci.yml
 
   resolve:
     name: Resolve version
     needs: ci
+    # `needs` alone would skip this the moment `ci` is skipped, so a notify_only
+    # run would have no tag to notify about. Every other path still requires ci
+    # to have gone green.
+    if: ${{ !cancelled() && (needs.ci.result == 'success' || inputs.notify_only) }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
@@ -93,6 +116,7 @@ jobs:
   binaries:
     name: Standalone binaries (Bun)
     needs: resolve
+    if: ${{ !inputs.notify_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +149,7 @@ jobs:
   assets:
     name: Package + schema
     needs: resolve
+    if: ${{ !inputs.notify_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -205,6 +230,8 @@ jobs:
   release:
     name: GitHub Release
     needs: [resolve, binaries, assets]
+    # notify_only re-pushes the webhook for a tag that is ALREADY released.
+    if: ${{ !inputs.notify_only }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -260,7 +287,6 @@ jobs:
             fi
           done
           echo "All required release assets present."
-
   # Tell the portal a new schema is out, rather than making it poll.
   #
   # Deliberately a job of its own, AFTER `release`: the release is already
@@ -268,21 +294,57 @@ jobs:
   # anything — it just goes red, visibly, instead of the portal silently serving
   # a stale schema forever. It retries before it gives up.
   #
-  # Inert until PORTAL_WEBHOOK_URL is set, exactly like the publish jobs.
+  # Authenticated with a GitHub Actions OIDC token since 2026-09-05. The shared
+  # HMAC secret is GONE, not deprecated — the portal answers 401 to a correctly
+  # signed HMAC request, and asserts that in its own smoke test. The token
+  # proves `repository` and `workflow_ref` to the portal with neither side
+  # storing a secret, and its own `exp` bounds replay, so the signed timestamp
+  # window it replaces has nothing left to enforce.
+  #
+  # Inert until PORTAL_WEBHOOK_URL is set, exactly like the publish jobs — but a
+  # repository VARIABLE now, not a secret. A URL is not a secret, and storing it
+  # as one makes it invisible in the log exactly when you want to read it.
   # Contract (portal side): docs/wiki/concepts/Portal Install Contract.md.
   notify-portal:
     name: Notify the portal (optional)
     needs: [resolve, release]
+    # `notify_only` re-pushes the webhook for an already-published tag without
+    # rebuilding anything, so `release` is skipped and its result is not
+    # 'success'. Every other path still requires it.
+    if: ${{ !cancelled() && (needs.release.result == 'success' || inputs.notify_only) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read # read the published assets in notify_only mode
+      # NEW — without this the token cannot be minted. On this job only, not
+      # workflow-wide: that is the difference between one job being able to
+      # speak for the repository and every job being able to.
+      id-token: write
     env:
-      PORTAL_WEBHOOK_URL: ${{ secrets.PORTAL_WEBHOOK_URL }}
-      PORTAL_WEBHOOK_SECRET: ${{ secrets.PORTAL_WEBHOOK_SECRET }}
+      PORTAL_WEBHOOK_URL: ${{ vars.PORTAL_WEBHOOK_URL }}
+      # Must equal the portal's audience EXACTLY — it is not a prefix match.
+      # It defaults to the portal's own public origin (its NEXT_PUBLIC_APP_URL).
+      PORTAL_OIDC_AUDIENCE: ${{ vars.PORTAL_OIDC_AUDIENCE || 'https://golem.run' }}
     steps:
       - uses: actions/download-artifact@v4
-        if: ${{ env.PORTAL_WEBHOOK_URL != '' }}
+        if: ${{ env.PORTAL_WEBHOOK_URL != '' && !inputs.notify_only }}
         with:
           name: golem-assets
           path: dist-assets
+
+      - name: Fetch the published schema (notify_only re-push)
+        if: ${{ env.PORTAL_WEBHOOK_URL != '' && inputs.notify_only }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A re-push must describe the bytes that are ALREADY published, not a
+          # rebuild of them: the sha256 in the body is checked by the portal
+          # against the asset it fetches from this same release a moment later.
+          mkdir -p dist-assets
+          gh release download "$TAG" --pattern config-schema.json --dir dist-assets
+          ls -l dist-assets
 
       - name: POST release.published (skipped without PORTAL_WEBHOOK_URL)
         if: ${{ env.PORTAL_WEBHOOK_URL != '' }}
@@ -291,17 +353,59 @@ jobs:
           VERSION: ${{ needs.resolve.outputs.version }}
         run: |
           set -euo pipefail
-          if [ -z "${PORTAL_WEBHOOK_SECRET:-}" ]; then
-            echo "::error::PORTAL_WEBHOOK_URL is set but PORTAL_WEBHOOK_SECRET is not — an unsigned webhook is one the portal must refuse."
+          # These two appear in the environment ONLY because this job asks for
+          # `id-token: write`. They are per-run values, not secrets to manage —
+          # but `set -u` would report their absence as a bare unbound variable,
+          # which reads like a typo rather than a missing permission.
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]; then
+            echo "::error::ACTIONS_ID_TOKEN_REQUEST_* are not set — this job needs permissions.id-token: write."
             exit 1
           fi
 
+          # The audience must match what the portal expects, exactly.
+          TOKEN="$(curl -sS \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$PORTAL_OIDC_AUDIENCE" \
+            | jq -r .value)"
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "::error::could not mint an OIDC token — is permissions.id-token: write set on this job?"
+            exit 1
+          fi
+
+          # Decoding the payload is NOT verification — the portal verifies the
+          # signature against GitHub's JWKS. It is here so the two claims that
+          # go wrong in practice fail legibly, instead of arriving as an opaque
+          # 401 whose reason is visible only in the portal's log. Only these
+          # four claims are printed; the token itself never is.
+          CLAIMS="$(node -e '
+            const [, payload] = process.argv[1].split(".");
+            const c = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+            process.stdout.write(JSON.stringify({
+              aud: c.aud, repository: c.repository, workflow_ref: c.workflow_ref, exp: c.exp,
+            }));
+          ' "$TOKEN")"
+          echo "OIDC claims: $CLAIMS"
+
+          AUD="$(printf '%s' "$CLAIMS" | jq -r .aud)"
+          WORKFLOW_REF="$(printf '%s' "$CLAIMS" | jq -r .workflow_ref)"
+          if [ "$AUD" != "$PORTAL_OIDC_AUDIENCE" ]; then
+            echo "::error::minted aud '$AUD' is not the portal's audience '$PORTAL_OIDC_AUDIENCE' — the portal compares these exactly, not by prefix."
+            exit 1
+          fi
+          case "$WORKFLOW_REF" in
+            "${GITHUB_REPOSITORY}/.github/workflows/release.yml@"*) ;;
+            *)
+              echo "::error::workflow_ref is '$WORKFLOW_REF' — the portal only trusts ${GITHUB_REPOSITORY}/.github/workflows/release.yml@…. If this workflow moved or was renamed, the portal's GOLEM_OIDC_WORKFLOW needs telling, or every push is a 401."
+              exit 1
+              ;;
+          esac
+
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
           SCHEMA_SHA="$(sha256sum dist-assets/config-schema.json | cut -d' ' -f1)"
-          TIMESTAMP="$(date -u +%s)"
 
-          # Compact JSON on one line: the signature is over these exact bytes, so
-          # the body must not be reformatted between signing and sending.
+          # Compact JSON on one line. Nothing signs these bytes any more, but the
+          # portal still reads the body exactly as sent, so leave it alone.
           BODY="$(node -e '
             const [tag, version, sha, base, repo, commit] = process.argv.slice(1);
             process.stdout.write(JSON.stringify({
@@ -318,23 +422,20 @@ jobs:
             }));
           ' "$TAG" "$VERSION" "$SCHEMA_SHA" "$BASE" "$GITHUB_REPOSITORY" "$GITHUB_SHA")"
 
-          # HMAC-SHA256 over "<timestamp>.<body>" — the timestamp is inside the
-          # signed material so a captured POST cannot be replayed later.
-          SIG="$(printf '%s.%s' "$TIMESTAMP" "$BODY" | openssl dgst -sha256 -hmac "$PORTAL_WEBHOOK_SECRET" -hex | sed 's/^.*= //')"
-
           for attempt in 1 2 3; do
             CODE="$(curl -sS -o /tmp/portal-response.txt -w '%{http_code}' \
               -X POST "$PORTAL_WEBHOOK_URL" \
               -H 'content-type: application/json' \
-              -H "x-golem-timestamp: $TIMESTAMP" \
-              -H "x-golem-signature: sha256=$SIG" \
+              -H "Authorization: Bearer $TOKEN" \
               --data-raw "$BODY" || echo 000)"
             echo "attempt $attempt → HTTP $CODE"
             if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
               echo "Portal notified: $TAG (schema sha256 ${SCHEMA_SHA:0:12}…)"
+              cat /tmp/portal-response.txt
               exit 0
             fi
-            # 4xx is our bug or a rejected signature — retrying cannot fix it.
+            # 4xx is our bug or a refused token — retrying cannot fix it, and
+            # retrying a refused token just makes three of them.
             if [ "$CODE" -ge 400 ] && [ "$CODE" -lt 500 ]; then
               echo "::error::portal rejected the webhook with HTTP $CODE — $(cat /tmp/portal-response.txt)"
               exit 1

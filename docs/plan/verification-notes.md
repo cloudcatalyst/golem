@@ -8854,3 +8854,90 @@ that was never stood up; keeping it left a second dialect of the routing rules
 to drift, and left the "two landing pages, no stated winner" question from
 `R7.6-infra` open. The behaviour lives in [[Portal Install Contract]]; git
 history keeps the config.
+
+---
+
+## §154 — The portal webhook is OIDC-only, and the workflow it trusts is named in the token, so a "small helper workflow" cannot send it (2026-09-05)
+
+**Source: a brief from the portal side** (the portal is already deployed
+OIDC-only), plus GitHub's own docs, read 2026-09-05:
+`https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-cloud-providers`
+— which confirms **[OBSERVED]** that `ACTIONS_ID_TOKEN_REQUEST_URL` and
+`ACTIONS_ID_TOKEN_REQUEST_TOKEN` appear only when the job (or workflow) declares
+`permissions: id-token: write`, and that a provider without an official action
+mints the token by `curl`-ing that URL with that token as a bearer.
+
+### What changed
+
+`POST /api/webhooks/golem-build` now authenticates with a **GitHub Actions OIDC
+token and nothing else**. The shared secret is removed, not deprecated: a
+correctly signed HMAC request is a **401**, and the portal's smoke test asserts
+that rather than assuming it. So §153's `x-golem-signature` / `x-golem-timestamp`
+pair is history, and this repo's sender was switched before the next release
+could go red on it.
+
+The body and everything downstream of authentication are unchanged — the schema
+is still carried **by reference**, still fetched by the portal, still checked
+against the declared `sha256` before a byte of it is trusted, and the 4xx/5xx
+split still means what §153 said it means.
+
+What the portal verifies, in order: RS256 + `kid` (screened before any network
+call) → signature against GitHub's JWKS → `iss` exactly
+`https://token.actions.githubusercontent.com` → `aud` **exactly** the portal's
+audience → `exp`/`nbf`/`iat` with 60s tolerance → `repository` exactly
+`cloudcatalyst/golem` → `workflow_ref` starting
+`cloudcatalyst/golem/.github/workflows/release.yml@`.
+
+### The finding worth recording
+
+The brief proposed a small `notify-portal.yml` with `workflow_dispatch`, so a
+lost webhook could be re-pushed without cutting a release. **That cannot work,
+and the reason is check 7 of the portal's own list.** `workflow_ref` names the
+workflow file the run *entered through*, so a second file mints a token naming
+**itself** — `…/.github/workflows/notify-portal.yml@…` — and is refused with the
+same 401 the change was meant to avoid. Reusable-workflow indirection does not
+help either: the caller is what `workflow_ref` reports (`job_workflow_ref` is the
+claim that names the reusable one).
+
+Confirmed locally before building anything, by decoding synthetic tokens through
+the exact guard the job now runs: a `release.yml@…` ref accepts, a
+`notify-portal.yml@…` ref rejects, and an `aud` of `https://golem.run/api`
+rejects against an audience of `https://golem.run` — which is what "exact, not a
+prefix match" costs if anyone assumes otherwise.
+
+So the re-push shipped as a **`notify_only` input on `release.yml`** instead. It
+skips `ci`/`binaries`/`assets`/`release` and runs only `notify-portal`, fetching
+`config-schema.json` from the tag's *already published* assets with `gh release
+download` rather than rebuilding it — a rebuild would compute a `sha256` for
+bytes the portal is not going to fetch. Cost: `resolve` needs
+`if: !cancelled() && (needs.ci.result == 'success' || inputs.notify_only)`,
+because `needs: ci` alone would skip it the moment `ci` is skipped.
+
+### Two details that will save a debugging session
+
+1. **`aud` is compared exactly.** The workflow decodes its own token and fails
+   on a mismatched `aud` or `workflow_ref` *in this repo's log*. Decoding is not
+   verification — the portal does that — but it turns the two failures that
+   actually happen into a legible error here instead of an opaque 401 whose
+   reason is visible only in the portal's log.
+2. **`set -u` reports a missing permission as an unbound variable.** Without
+   `id-token: write` the two `ACTIONS_ID_TOKEN_REQUEST_*` vars simply are not in
+   the environment, and the failure reads like a typo. The job checks for them
+   by name first and says what is actually wrong.
+
+### What is still open
+
+One repository **variable**: `vars.PORTAL_WEBHOOK_URL`. Not a secret — a URL is
+not one, and storing it as a secret makes it invisible in the log exactly when
+you want to read it. `PORTAL_WEBHOOK_SECRET` should be deleted. `owner: user`,
+see `portal-release-webhook`.
+
+### The generalisable lesson
+
+**OIDC moves the trust from a value both sides hold to a claim about *which
+workflow file ran*, and that turns "add a small helper workflow" from a free
+refactor into a breaking change.** A shared secret does not care which file
+sends the request; a `workflow_ref` check is precisely a statement about the
+file. The identity is the path, so moving or renaming the workflow is a
+contract change and needs telling the other side — the same class of coupling
+[[Portal Install Contract]] already records for asset names.
