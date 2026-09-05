@@ -6,8 +6,8 @@ owner: user
 size: S
 discipline: code
 design: "BOTH ends are now built to the same contract, re-authenticated to GitHub Actions OIDC on 2026-09-05 (portal deployed OIDC-only; the sender followed — `docs/plan/verification-notes.md` §154). Sender: `.github/workflows/release.yml` job `notify-portal`. Receiver: the portal's `app/api/webhooks/golem-build/route.ts`, which was already written against an EARLIER, incompatible design and was corrected — three mismatches, one of which also broke the GitHub fallback. Wire contract: `docs/wiki/concepts/Release Pipeline.md` § The portal webhook (+ § The receiving half). Findings: `docs/plan/verification-notes.md` §153."
-gate: "A release publishes → the portal has the new `config-schema.json` cached under its version WITHOUT anyone poking it, and a POST carrying no token, an expired one, or one minted for another audience or workflow is refused."
-blocked: "the CODE is done on both sides. What remains is one repository VARIABLE: `vars.PORTAL_WEBHOOK_URL` = the portal's `/api/webhooks/golem-build`. No shared secret exists any more — OIDC removed it. Then cut a release (or dispatch Release with `notify_only`)."
+gate: "MET against a local portal 2026-09-05 (v0.52.1, `stored:true`; unauthenticated and malformed-bearer POSTs both refused 401). Re-confirm against production once `golem.run` resolves: a release publishes → the portal has the new `config-schema.json` cached under its version WITHOUT anyone poking it."
+blocked: "**`golem.run` has no A record** (observed 2026-09-05: `curl: (6) Could not resolve host`). The code is done on both sides and the loop was RUN end to end against a local portal behind a tunnel — `HTTP 200 {\"version\":\"0.52.1\",\"stored\":true}`. What remains is DNS + a portal deploy, then set `vars.PORTAL_WEBHOOK_URL` (left unset on purpose: it is what keeps the job inert instead of red every release)."
 depends_on: [release-portal-assets]
 touches: []
 created: 2026-09-04
@@ -25,6 +25,13 @@ updated: 2026-09-05
 > **Re-authenticated 2026-09-05.** The portal shipped OIDC-only and removed the
 > shared secret, so this repo's sender was switched to a GitHub Actions OIDC
 > bearer token before the next release could 401 on it. Details: §154.
+>
+> **Run end to end 2026-09-05**, shipped in v0.52.1 and proven against a portal
+> on `localhost:3000` behind an ngrok tunnel — the first time either half had
+> executed against the other. `golem.run` turned out not to resolve yet, so the
+> remaining blocker is DNS and a deploy, not code and not a credential.
+> Details: §155. Debrief:
+> `docs/wiki/debriefs/2026-09-05-portal-release-webhook-oidc.md`.
 
 ## Why it is tracked in this repo
 
@@ -86,19 +93,31 @@ All five are implemented. Kept as the checklist the receiver is judged against.
 
 ## What closing it actually needs now
 
-1. Set **`vars.PORTAL_WEBHOOK_URL`** (a repository *variable*, Settings →
-   Secrets and variables → Actions → Variables) to the portal's
-   `/api/webhooks/golem-build`. Set `vars.PORTAL_OIDC_AUDIENCE` only if the
-   portal's audience is not `https://golem.run`.
-2. Delete the now-dead **`PORTAL_WEBHOOK_SECRET`** secret, and
-   `PORTAL_WEBHOOK_URL` if it is still sitting there as a secret.
-3. Cut a release — or dispatch Release with `notify_only` against an existing
-   tag — then confirm the portal answers `{"version":"…","stored":true}` (a
-   re-run answers `{"stored":false,"reason":"unchanged"}`, also success) and has
-   that `config-schema.json` cached under its version.
+1. **Make `golem.run` resolve** and deploy the portal there. This is the whole
+   remaining blocker — see `R7.6-infra`.
+2. Set **`vars.PORTAL_WEBHOOK_URL`** (a repository *variable*: Settings →
+   Secrets and variables → Actions → **Variables**) to
+   `https://golem.run/api/webhooks/golem-build`. Leave `PORTAL_OIDC_AUDIENCE`
+   unset — the workflow already defaults to `https://golem.run`, which is what
+   the portal pins regardless of the URL it is reached by.
+3. Dispatch **Release → `notify_only`** against the latest tag and confirm
+   `{"version":"…","stored":true}` (a repeat answers
+   `{"stored":false,"reason":"unchanged"}`, also success). No release needs
+   cutting to test it.
 
-All three are `owner: user`. The portal side is already deployed OIDC-only, so
-there is no longer a branch in that repo waiting on review.
+There is nothing to delete: this repo has **no** Actions secrets and no other
+variables. All three steps are `owner: user`; the portal side is already
+deployed OIDC-only, so nothing in that repo is waiting on review.
+
+### What testing against a LOCAL portal takes
+
+Proven 2026-09-05, and worth writing down because the obvious guess is wrong:
+point `vars.PORTAL_WEBHOOK_URL` at an ngrok tunnel to `localhost:3000` and leave
+the **audience at production**. The portal sets `GOLEM_OIDC_AUDIENCE`
+independently of `NEXT_PUBLIC_APP_URL` precisely so a tunnel does not move Stripe
+and Nango callbacks with it. The audience is an opaque string; it never has to
+resolve. Setting it to `http://localhost:3000` is what produced
+`401 audience must be exactly https://golem.run` on the v0.52.1 release.
 
 ## Failure behaviour on this side
 

@@ -8941,3 +8941,88 @@ sends the request; a `workflow_ref` check is precisely a statement about the
 file. The identity is the path, so moving or renaming the workflow is a
 contract change and needs telling the other side — the same class of coupling
 [[Portal Install Contract]] already records for asset names.
+
+---
+
+## §155 — The release→portal loop RAN, against a real portal: the audience is pinned separately from the app URL, and `golem.run` does not resolve yet (2026-09-05)
+
+**Source: a live release.** v0.52.1 was cut and its `notify-portal` job observed
+end to end, plus the portal's own `.env.local` read on the same machine. Every
+line below is **[OBSERVED]** in a workflow log or a curl response, not inferred.
+
+§153 recorded that a contract only one side has ever executed is untested by
+construction. This is the entry where it finally executed.
+
+### The green path, in full
+
+```
+OIDC claims: {"aud":"https://golem.run","repository":"cloudcatalyst/golem",
+              "workflow_ref":"cloudcatalyst/golem/.github/workflows/release.yml@refs/tags/v0.52.1",
+              "exp":1788577435}
+attempt 1 → HTTP 200
+Portal notified: v0.52.1 (schema sha256 389edf91a49b…)
+{"version":"0.52.1","stored":true,"replaced":false}
+```
+
+Sent from the real `release.yml`, to a portal running on `localhost:3000` behind
+an ngrok tunnel. `workflow_ref` from a **tag** dispatch is `@refs/tags/v0.52.1` —
+the portal's prefix check covers everything before the `@`, so it holds for
+branch and tag refs alike, which is what makes `notify_only` usable against any
+published tag.
+
+### The 401 that came first, and why it is not a bug
+
+The v0.52.1 release's own `notify-portal` failed:
+
+```
+portal rejected the webhook with HTTP 401 — {"error":"OIDC token rejected: audience must be exactly https://golem.run"}
+```
+
+The harness had been told to send `aud: http://localhost:3000`, reasoning from
+`lib/env.ts` that a local portal falls back to `NEXT_PUBLIC_APP_URL`. It does —
+but the portal **overrides it deliberately**, and says so in `.env.local`:
+
+> Set separately from `NEXT_PUBLIC_APP_URL` so that pointing the webhook at an
+> ngrok URL does not also move Stripe return URLs and Nango callbacks. Must equal
+> the `aud` in the workflow log; the portal compares exactly, never by prefix.
+
+**The audience is an opaque string and never has to resolve.** So the correct
+setting when tunnelling is: move `PORTAL_WEBHOOK_URL` to the tunnel and leave the
+audience at production. Reading the fallback in code and stopping there was the
+mistake — a default that is documented as being overridden is not a default.
+
+### `golem.run` has no A record
+
+Pointing `PORTAL_WEBHOOK_URL` at `https://golem.run/api/webhooks/golem-build`
+produced `curl: (6) Could not resolve host: golem.run`, three times, from the
+runner and again locally. The production portal is not reachable yet — which
+makes the remaining blocker on `portal-release-webhook` **DNS and a deploy**, not
+code and not a credential.
+
+The variable was therefore left **unset**. That is not neglect: the job is
+written to be inert without it, and a release job that is red on every run is the
+"a check nobody is gated by is a check nobody reads" failure `ci.yml` already
+carries a comment about — the same lesson `npm-token-set-but-broken` cost four
+red releases to learn.
+
+### Two operational facts worth not rediscovering
+
+1. **A bot-opened release PR stalls at `action_required`.** `release-prepare.yml`
+   opens the PR as `github-actions[bot]`, and the resulting CI run does not
+   execute until a human approves it (or
+   `POST /repos/:owner/:repo/actions/runs/:id/approve`). It reports as a
+   completed run of 0s, which reads like a failure and is not one.
+2. **`curl -w '%{http_code}' … || echo 000` prints `000000`.** `-w` already emits
+   `000` when there was no response, so the `|| echo` appended a second one; the
+   resulting two-line value is not an integer, so the 4xx/5xx comparisons failed
+   silently instead of reporting. Present since the job was written, and only a
+   host that does not resolve was ever going to expose it. Now normalised to
+   three digits before use.
+
+### The generalisable lesson
+
+**A tunnel moves the address, not the identity.** OIDC splits "where the request
+goes" from "who the request claims to be", and every instinct that treats them as
+one value — set the audience to the tunnel, set it to localhost because the
+server is local — produces a 401 that looks like a signing failure. The audience
+belongs to the *service*, not to the route you reached it by.
