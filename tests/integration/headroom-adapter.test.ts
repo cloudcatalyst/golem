@@ -128,17 +128,32 @@ describe("HeadroomSidecar (fake worker)", () => {
     expect(await sc.start()).toBe(true);
     expect(sc.isRunning()).toBe(true);
 
-    // The fake worker dies after 300ms. Wait for it to exit.
-    await new Promise((r) => setTimeout(r, 400));
-    expect(sc.isRunning()).toBe(false);
+    // R10.2 — wait for the OBSERVED exit, not for a wall-clock guess. This used
+    // to sleep 400ms against a worker that dies at 300ms, leaving 100ms for the
+    // exit handler to run in; under load it had not, and `isRunning()` read true.
+    // Polling asserts the same thing without budgeting for the machine's mood.
+    await expect.poll(() => sc.isRunning(), { timeout: 10_000, interval: 10 }).toBe(false);
 
-    // The exit handler armed a 500ms backoff from death time (~300ms ago).
-    // A start() issued now must NOT respawn immediately — it should wait out
-    // the remaining backoff (~200ms) before spawning again.
-    const t0 = Date.now();
+    // The exit handler armed a backoff from the death time. A start() issued now
+    // must NOT respawn immediately — it must wait out the remainder.
+    //
+    // Asserted against the sidecar's OWN deadline rather than a hand-picked
+    // margin: `nextSpawnAt` and `Date.now()` are two readings of one clock, so a
+    // slow machine can only push the second one later, never make this fail. The
+    // old form measured elapsed time against a 100ms floor and inherited every
+    // scheduling delay between the death and the assertion.
+    // TWO assertions, because either alone is passable by a broken implementation:
+    //   1. the armed DELAY is the configured backoff — pure state, no clock, so it
+    //      fails the moment the backoff stops being armed;
+    //   2. start() did not return before the deadline that delay produced.
+    // The deadline alone is not enough: with no backoff armed, `nextSpawnAt` is
+    // already in the past and `Date.now() >= it` is vacuously true. That exact
+    // hole was found by deliberately removing the backoff and watching this test
+    // still pass (R10.2).
+    const backoffUntil = sc.nextSpawnAt;
+    expect(sc.respawnDelayMs).toBe(500); // === backoffBaseMs, first attempt
     expect(await sc.start()).toBe(true);
-    const elapsed = Date.now() - t0;
-    expect(elapsed).toBeGreaterThanOrEqual(100); // waited out most of the backoff
+    expect(Date.now()).toBeGreaterThanOrEqual(backoffUntil); // waited it out
 
     // And after a successful restart, the worker is running again.
     expect(sc.isRunning()).toBe(true);

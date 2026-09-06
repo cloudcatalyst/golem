@@ -168,6 +168,8 @@ class HeadroomWorkerProcess {
   #startPromise: Promise<boolean> | null = null;
   /** Next-spawn timestamp — backs off after an unexpected worker death (R8.30). */
   #nextSpawnAt: number = 0;
+  /** R10.2 — the delay most recently armed by the exit handler, 0 when none. */
+  #respawnDelayMs: number = 0;
   /** Base backoff in ms for worker-respawn delays (R8.30). Default 1000 (1s). */
   readonly #backoffBaseMs: number;
   /** Consecutive spawn failures since last successful start. */
@@ -186,6 +188,28 @@ class HeadroomWorkerProcess {
     this.#log = options.log;
     this.#backoffBaseMs = options.backoffBaseMs ?? 1000;
     this.#projectDir = options.projectDir;
+  }
+
+  /**
+   * R10.2 — the `Date.now()`-scale instant the respawn backoff expires, or 0 when
+   * none is armed. Read-only, and exposed for tests: asserting "start() waited"
+   * against a hand-picked millisecond margin is a race the machine wins under
+   * load, whereas comparing two readings of the same clock either side of the
+   * call cannot be. Not part of the sidecar's behaviour — nothing in `src/` reads
+   * it.
+   */
+  get nextSpawnAt(): number {
+    return this.#nextSpawnAt;
+  }
+
+  /**
+   * R10.2 — the backoff delay the exit handler armed, in ms, or 0 when none is.
+   * Read alongside {@link nextSpawnAt}: the deadline alone cannot tell "waited
+   * out a real backoff" from "no backoff was ever armed", because `Date.now()`
+   * after the call is trivially >= a deadline that is already in the past.
+   */
+  get respawnDelayMs(): number {
+    return this.#respawnDelayMs;
   }
 
   /** True once the worker is listening and health-checked. */
@@ -289,6 +313,7 @@ class HeadroomWorkerProcess {
           this.#spawnAttempts++;
           const delay = Math.min(this.#backoffBaseMs * 2 ** (this.#spawnAttempts - 1), 30_000);
           this.#nextSpawnAt = Date.now() + delay;
+          this.#respawnDelayMs = delay;
           this.#log(
             `worker died unexpectedly (code ${code}) — respawn delayed ${delay}ms (attempt ${this.#spawnAttempts})`,
           );
@@ -326,6 +351,7 @@ class HeadroomWorkerProcess {
     // Successful start: reset the respawn backoff (R8.30).
     this.#spawnAttempts = 0;
     this.#nextSpawnAt = 0;
+    this.#respawnDelayMs = 0;
     this.#log(`worker ready on ${this.#host}:${port}`);
     return true;
   }
@@ -613,6 +639,20 @@ export class HeadroomSidecar implements SemanticCompressor {
   }
 
   /** True once the worker is listening and health-checked. */
+  /**
+   * R10.2 — see {@link HeadroomWorkerProcess.nextSpawnAt}. Exposed for tests so
+   * the respawn-backoff assertion compares two readings of one clock instead of
+   * betting on a millisecond margin.
+   */
+  get nextSpawnAt(): number {
+    return this.#proc.nextSpawnAt;
+  }
+
+  /** R10.2 — see {@link HeadroomWorkerProcess.respawnDelayMs}. Tests only. */
+  get respawnDelayMs(): number {
+    return this.#proc.respawnDelayMs;
+  }
+
   isRunning(): boolean {
     return this.#proc.isRunning();
   }
