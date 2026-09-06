@@ -16,6 +16,31 @@ name: Prepare release
 #
 # auto-bump.yml is deleted, not disabled: two mechanisms writing the same version
 # is exactly the drift this repo keeps finding the hard way.
+#
+# THE RELEASE PR NEEDS ONE HUMAN CLICK BEFORE CI WILL RUN. That is deliberate,
+# not a defect, and this comment exists because the behaviour and the docs used
+# to disagree — which cost two releases (v0.50.0, v0.53.0) an afternoon each.
+#
+#   GitHub does not let events raised with GITHUB_TOKEN start new workflow runs
+#   ("events triggered by the GITHUB_TOKEN will not create a new workflow run"),
+#   to stop workflows recursing. `pull_request` is the one exception that
+#   matters here: the run IS created, but parked in an approval-required state
+#   for a user with write access.
+#
+# So the release PR opens with its required `CI gate` check at `action_required`
+# — zero jobs, mergeStateStatus BLOCKED, and `gh pr checks` reporting "no checks
+# reported". Nothing is broken; nothing is going to happen either. Someone with
+# write access clicks "Approve workflows to run" in the PR's Checks tab, or POSTs
+# the approve endpoint. The "Say what the human must click" step below prints the
+# exact commands, and the PR body repeats them, because the symptom reads like a
+# failure and is not one.
+#
+# Kept rather than automated away: the alternative is a long-lived PAT with repo
+# scope stored as a CI secret, and this project's posture (ADR-0003) is that
+# credentials live in a keychain, not in CI config. One human confirming before
+# anything reaches npm and a public CDN path is a fair price for not holding that
+# credential. See docs/wiki/concepts/Release Pipeline.md
+# § The release PR needs one click before CI will run.
 
 on:
   workflow_dispatch:
@@ -80,6 +105,7 @@ jobs:
           git push origin development
 
       - name: Open (or update) the release PR
+        id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -87,11 +113,37 @@ jobs:
         run: |
           set -euo pipefail
           TITLE="Release v$VERSION"
+          # Quoted heredoc: nothing in the body is expanded by the shell, so the
+          # backticks and $-signs below stay literal. The repository slug is
+          # substituted afterwards rather than interpolated, for the same reason.
           BODY=$(cat <<'EOBODY'
           Merging this PR cuts the release: `release.yml` runs the full CI gate,
           tags the merge commit, and publishes the GitHub Release with the
           binaries, the npm tarball, `install.sh`, `install.ps1` and
           `config-schema.json` — then notifies the portal.
+
+          ## First, approve the CI run — it will NOT start on its own
+
+          This PR was opened by `GITHUB_TOKEN`, and GitHub does not let that token
+          start workflow runs. For a pull request it makes the one exception that
+          matters: the CI run **is** created, but parked awaiting approval from
+          someone with write access. Until you approve it, the required `CI gate`
+          check sits at `action_required` with zero jobs, this PR reads
+          `BLOCKED`, and `gh pr checks` says *"no checks reported"*. **That is the
+          expected opening state, not a failure.**
+
+          Clear it either way:
+
+          - In this PR's **Checks** tab, click **Approve workflows to run**; or
+          - run:
+
+          ```sh
+          gh api "repos/__REPO__/actions/runs?status=action_required&per_page=10"
+          gh api -X POST repos/__REPO__/actions/runs/RUN_ID/approve
+          ```
+
+          Approving only lets the tests run — it publishes nothing. **Merging** is
+          what publishes, and the merge is yours to do.
 
           **Merge with a merge commit, not squash.** A squash rewrites the
           history `development` is built on, so the two branches diverge and
@@ -99,13 +151,49 @@ jobs:
 
           Checklist before merging:
 
+          - [ ] The CI run on this PR has been approved (see above)
           - [ ] The version in `package.json` is the one you mean to publish
           - [ ] CI is green on this PR
           EOBODY
           )
+          BODY="${BODY//__REPO__/$GH_REPO}"
           if EXISTING=$(gh pr list --base main --head development --state open --json number --jq '.[0].number') && [ -n "$EXISTING" ]; then
             echo "Release PR #$EXISTING already open — retitling to $TITLE."
             gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY"
+            NUMBER="$EXISTING"
           else
             gh pr create --base main --head development --title "$TITLE" --body "$BODY"
+            NUMBER="$(gh pr list --base main --head development --state open --json number --jq '.[0].number')"
           fi
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+
+      # The workflow cannot approve its own PR's CI run — GITHUB_TOKEN is the very
+      # token GitHub is refusing to let start runs. So it does the next honest
+      # thing: name the one click, in the place the operator is already looking.
+      - name: Say what the human must click
+        env:
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Release v$VERSION prepared — one click left"
+            echo
+            echo "Release PR: https://github.com/$GH_REPO/pull/$NUMBER"
+            echo
+            echo "Its CI run does **not** start on its own. GitHub parks runs on PRs"
+            echo "opened with \`GITHUB_TOKEN\` in an approval-required state, so the"
+            echo "required \`CI gate\` check will read \`action_required\` with zero jobs"
+            echo "and \`gh pr checks\` will say \"no checks reported\". That is expected."
+            echo
+            echo "Approve it in the PR's **Checks** tab (\"Approve workflows to run\"), or:"
+            echo
+            echo '```sh'
+            echo "gh api \"repos/$GH_REPO/actions/runs?status=action_required&per_page=10\""
+            echo "gh api -X POST repos/$GH_REPO/actions/runs/RUN_ID/approve"
+            echo '```'
+            echo
+            echo "Approving only runs the tests. Merging — with a merge commit, not a"
+            echo "squash — is what publishes the release."
+          } >> "$GITHUB_STEP_SUMMARY"
