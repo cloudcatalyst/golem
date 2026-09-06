@@ -1,8 +1,13 @@
-# team-portal-auth — signing in to the portal from the CLI
+---
+title: Sign In From The CLI — PKCE Over A Loopback Redirect, And Two Invariants Stated Wrong
+type: debrief
+tags: [oauth, pkce, credentials, portal, cli, security, keychain, dpapi, adr-0003, adr-0008]
+sources: [docs/plan/tasks/team-portal-auth.md, docs/plan/verification-notes.md, src/portal/index.ts, src/portal/tokens.ts, src/portal/client.ts, src/cli/commands/team.ts, src/config/loader.ts, docs/wiki/concepts/Settings Cascade.md, docs/wiki/concepts/Team Layer.md]
+created: 2026-09-07
+updated: 2026-09-07
+---
 
-**Date:** 2026-09-07
-**Task:** `team-portal-auth`
-**Tags:** #oauth #pkce #credentials #portal #cli #security #adr-0003 #adr-0008
+# team-portal-auth — signing in to the portal from the CLI
 
 ## Outcome
 
