@@ -798,6 +798,58 @@ export const SETTINGS_LEAVES = {
      */
     load: z.array(z.string().min(1)),
   },
+  /**
+   * `team-portal-auth` — where the hosted portal is, and which OAuth client this
+   * harness presents. **No credential is in here**: the access and refresh
+   * tokens live in the OS keychain (ADR-0003, `src/portal/tokens.ts`), because a
+   * settings file is read by the control panel, copied between machines, and
+   * regularly pasted into bug reports.
+   */
+  portal: {
+    /**
+     * The portal's API base — `/api/v1/...` hangs off this. Empty means no
+     * portal is configured, which is the default: Golem is local-first and a
+     * team link is an enhancement, never a prerequisite.
+     *
+     * `GOLEM_PORTAL_URL` sets it, which is the single variable the portal's
+     * `docs/api-contract.md` §1 says should be enough to point the harness at
+     * any environment. It is enough on its own for a deployment that publishes
+     * its own authorization-server metadata; see {@link issuer} for the case
+     * where the authorization server sits on a different origin.
+     */
+    url: z.string(),
+    /**
+     * The OAuth authorization server, when it is NOT the same origin as
+     * {@link url}. Endpoints are still discovered from
+     * `<issuer>/.well-known/oauth-authorization-server` rather than hardcoded —
+     * this only says where to look.
+     *
+     * It exists because the portal's API lives on its own domain while its
+     * authorization server is Clerk's Frontend API
+     * (`https://clerk.<domain>`, or `https://<slug>.clerk.accounts.dev` in
+     * development), and those are different origins. Empty (the default) means
+     * "same as `url`".
+     */
+    issuer: z.string(),
+    /**
+     * The public OAuth client id. Empty by default and deliberately NOT baked
+     * in: registering the application is a one-off act by the portal operator,
+     * so a compiled-in value would either be wrong or would put a real client id
+     * in a public repository.
+     *
+     * It is an identifier, not a secret — the application is registered
+     * `public: true` and PKCE stands in for a client secret, which is the only
+     * option for a harness that ships as source.
+     */
+    client_id: z.string(),
+    /**
+     * How long `golem team link` waits for the browser round trip before giving
+     * up and closing the loopback listener. Long enough for a password manager,
+     * an MFA prompt and a consent screen; short enough that an abandoned attempt
+     * does not leave a port listening all afternoon.
+     */
+    link_timeout_ms: timeoutMsSchema,
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -1046,6 +1098,16 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
   plugins: {
     enabled: true,
     load: [],
+  },
+  // No portal by default. Golem is local-first: an unconfigured harness must
+  // behave exactly as it did before this section existed, and every portal
+  // command must fail with "no portal is configured" rather than reaching for
+  // some default host.
+  portal: {
+    url: "",
+    issuer: "",
+    client_id: "",
+    link_timeout_ms: 300_000,
   },
 });
 
