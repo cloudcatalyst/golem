@@ -116,9 +116,11 @@ is `pruneRetiredSkills` pointed at a remote list — and it inherits the same ru
 that provenance decides and an edited file is kept.
 
 Which makes `skill-provenance-on-clone` load-bearing here: managed files that
-arrive via git have no provenance record (it lives in gitignored `.golem/state/`)
-and classify as permanently unrefreshable. Golem's own skills hit that once per
-project; team skills would hit it on every member's machine.
+arrive via git used to have no provenance record — it lived in gitignored
+`.golem/state/` — and classified as permanently unrefreshable. The record now
+lives in committed `.golem/managed-files.json`, so the hash travels with the file
+it describes. Golem's own skills hit that once per project; team skills would
+have hit it on every member's machine.
 
 ## The schema stays here
 

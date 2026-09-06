@@ -5,6 +5,11 @@
  * skill, and an improved guidance rule never reached an already-initialized
  * project. Both come from asking "does this differ from what Golem ships?" when
  * the real question is "did the USER change it, or did Golem's text move on?"
+ *
+ * `skill-provenance-on-clone` adds the half that was missing: the record has to
+ * reach the machines the FILES reach. It lives in committed
+ * `.golem/managed-files.json` now, with the old gitignored
+ * `.golem/state/managed-files.json` still read so nothing regresses.
  */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -14,7 +19,9 @@ import {
   classifyManaged,
   forgetManaged,
   hashManaged,
+  isUnmodifiedManaged,
   managedKey,
+  managedRecordPath,
   managedStatePath,
   rememberManaged,
   removeManagedState,
@@ -22,12 +29,26 @@ import {
 import { useTempDirs } from "../helpers/tmp.js";
 
 let dir: string;
-const FILE = (): string => path.join(dir, ".claude", "skills", "golem", "ship", "SKILL.md");
+const FILE = (): string => path.join(dir, ".claude", "skills", "golem-ship", "SKILL.md");
 
 async function put(file: string, content: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, content, "utf8");
 }
+
+/** Write a record file directly, the way a clone receives one (or once had one). */
+async function putRecord(file: string, record: Record<string, string>): Promise<void> {
+  await put(file, `${JSON.stringify(record, null, 2)}\n`);
+}
+
+const readRecord = async (file: string): Promise<Record<string, string>> =>
+  JSON.parse(await readFile(file, "utf8")) as Record<string, string>;
+
+const exists = (file: string): Promise<boolean> =>
+  readFile(file, "utf8").then(
+    () => true,
+    () => false,
+  );
 
 const newTempDir = useTempDirs("golem-managed-");
 
@@ -65,22 +86,45 @@ describe("classifyManaged", () => {
   });
 
   it("degrades to owned — never to overwrite — on a corrupt record", async () => {
-    await mkdir(path.dirname(managedStatePath(dir)), { recursive: true });
-    await writeFile(managedStatePath(dir), "{not json", "utf8");
+    await put(managedRecordPath(dir), "{not json");
     expect(await classifyManaged(dir, FILE(), "v2", "v1")).toBe("owned");
   });
 });
 
 describe("the provenance record", () => {
   it("keys by project-relative POSIX path so it is portable", async () => {
-    expect(managedKey(dir, FILE())).toBe(".claude/skills/golem/ship/SKILL.md");
+    expect(managedKey(dir, FILE())).toBe(".claude/skills/golem-ship/SKILL.md");
+  });
+
+  it("is written where git can carry it, not under gitignored .golem/state/", async () => {
+    await rememberManaged(dir, FILE(), "v1");
+    expect(managedRecordPath(dir)).toBe(path.join(dir, ".golem", "managed-files.json"));
+    expect(await exists(managedRecordPath(dir))).toBe(true);
+    expect(await exists(managedStatePath(dir))).toBe(false);
   });
 
   it("stores a hash of the content, never the content itself", async () => {
     await rememberManaged(dir, FILE(), "secret-ish text");
-    const raw = await readFile(managedStatePath(dir), "utf8");
+    const raw = await readFile(managedRecordPath(dir), "utf8");
     expect(raw).toContain(hashManaged("secret-ish text"));
     expect(raw).not.toContain("secret-ish text");
+  });
+
+  it("sorts its keys, so two machines recording the same facts write the same file", async () => {
+    const rules = path.join(dir, ".claude", "rules", "golem-ccr-refs.md");
+    await rememberManaged(dir, FILE(), "a");
+    await rememberManaged(dir, rules, "b");
+    expect(Object.keys(await readRecord(managedRecordPath(dir)))).toEqual([
+      ".claude/rules/golem-ccr-refs.md",
+      ".claude/skills/golem-ship/SKILL.md",
+    ]);
+  });
+
+  it("leaves the committed file alone when nothing changed", async () => {
+    await rememberManaged(dir, FILE(), "v1");
+    const before = await readFile(managedRecordPath(dir), "utf8");
+    await rememberManaged(dir, FILE(), "v1");
+    expect(await readFile(managedRecordPath(dir), "utf8")).toBe(before);
   });
 
   it("forgets one file without disturbing the others", async () => {
@@ -88,19 +132,18 @@ describe("the provenance record", () => {
     await rememberManaged(dir, FILE(), "a");
     await rememberManaged(dir, other, "b");
     await forgetManaged(dir, FILE());
-    const record = JSON.parse(await readFile(managedStatePath(dir), "utf8")) as Record<
-      string,
-      string
-    >;
+    const record = await readRecord(managedRecordPath(dir));
     expect(record[managedKey(dir, FILE())]).toBeUndefined();
     expect(record[managedKey(dir, other)]).toBe(hashManaged("b"));
   });
 
-  it("removes the whole record, and tolerates removing it twice", async () => {
+  it("removes both records, and tolerates removing them twice", async () => {
     await rememberManaged(dir, FILE(), "a");
+    await putRecord(managedStatePath(dir), { [managedKey(dir, FILE())]: hashManaged("a") });
     await removeManagedState(dir);
     await removeManagedState(dir);
-    await expect(readFile(managedStatePath(dir), "utf8")).rejects.toThrow();
+    expect(await exists(managedRecordPath(dir))).toBe(false);
+    expect(await exists(managedStatePath(dir))).toBe(false);
   });
 
   it("re-recording after a refresh makes the next drift stale again", async () => {
@@ -110,5 +153,91 @@ describe("the provenance record", () => {
     await rememberManaged(dir, FILE(), "v2");
     expect(await classifyManaged(dir, FILE(), "v3", "v2")).toBe("stale");
     expect(await classifyManaged(dir, FILE(), "v3", "v2 edited")).toBe("owned");
+  });
+});
+
+describe("the pre-clone-fix machine-local record", () => {
+  it("still counts as proof Golem wrote the file", async () => {
+    // An already-initialized project: its hashes are under .golem/state/ only.
+    await putRecord(managedStatePath(dir), { [managedKey(dir, FILE())]: hashManaged("v1") });
+    expect(await classifyManaged(dir, FILE(), "v2", "v1")).toBe("stale");
+    expect(await isUnmodifiedManaged(dir, FILE(), "v1")).toBe(true);
+  });
+
+  it("is folded into the portable record the next time Golem writes anything", async () => {
+    const other = path.join(dir, ".claude", "rules", "golem-ccr-refs.md");
+    await putRecord(managedStatePath(dir), { [managedKey(dir, other)]: hashManaged("b") });
+    await rememberManaged(dir, FILE(), "a");
+    const record = await readRecord(managedRecordPath(dir));
+    expect(record[managedKey(dir, other)]).toBe(hashManaged("b"));
+    expect(record[managedKey(dir, FILE())]).toBe(hashManaged("a"));
+  });
+
+  it("is cleared by forgetManaged too — a stale hash there would resurrect the claim", async () => {
+    await putRecord(managedStatePath(dir), { [managedKey(dir, FILE())]: hashManaged("v1") });
+    await forgetManaged(dir, FILE());
+    expect(await isUnmodifiedManaged(dir, FILE(), "v1")).toBe(false);
+    expect(await classifyManaged(dir, FILE(), "v2", "v1")).toBe("owned");
+  });
+});
+
+describe("a managed file outside the project", () => {
+  // A user-scope install lands under the user's home. `path.relative` then
+  // yields `../..` — or, across Windows drives, an absolute path — and the KEY
+  // would carry the user's username into a committed file. Found for real while
+  // generating this repo's own record: 22 such keys in the machine-local one.
+  const outside = (): string => path.join(dir, "..", "elsewhere", ".claude", "skills", "x.md");
+
+  it("is recorded machine-locally, never in the committed record", async () => {
+    await rememberManaged(dir, outside(), "v1");
+    expect(await exists(managedRecordPath(dir))).toBe(false);
+    expect(await readRecord(managedStatePath(dir))).toEqual({
+      [managedKey(dir, outside())]: hashManaged("v1"),
+    });
+  });
+
+  it("is still classified from that record", async () => {
+    await rememberManaged(dir, outside(), "v1");
+    expect(await classifyManaged(dir, outside(), "v2", "v1")).toBe("stale");
+  });
+
+  it("is not dragged into the committed record by the legacy migration", async () => {
+    await putRecord(managedStatePath(dir), {
+      [managedKey(dir, outside())]: hashManaged("v1"),
+      "C:/Users/someone/.claude/skills/golem-ship/SKILL.md": hashManaged("v1"),
+      ".claude/rules/golem-ccr-refs.md": hashManaged("b"),
+    });
+    await rememberManaged(dir, FILE(), "a");
+    const record = await readRecord(managedRecordPath(dir));
+    expect(Object.keys(record)).toEqual([
+      ".claude/rules/golem-ccr-refs.md",
+      ".claude/skills/golem-ship/SKILL.md",
+    ]);
+    expect(JSON.stringify(record)).not.toContain("Users");
+  });
+});
+
+describe("a clone (skill-provenance-on-clone)", () => {
+  it("refreshes a committed file whose hash arrived with it", async () => {
+    // Exactly what a teammate checks out: the file and a committed record,
+    // and NO .golem/state/ anywhere.
+    await put(FILE(), "an older Golem's shipped text");
+    await putRecord(managedRecordPath(dir), {
+      [managedKey(dir, FILE())]: hashManaged("an older Golem's shipped text"),
+    });
+    expect(await exists(managedStatePath(dir))).toBe(false);
+
+    expect(
+      await classifyManaged(dir, FILE(), "the new text", "an older Golem's shipped text"),
+    ).toBe("stale");
+  });
+
+  it("still reports a genuinely hand-edited file as owned", async () => {
+    await putRecord(managedRecordPath(dir), {
+      [managedKey(dir, FILE())]: hashManaged("an older Golem's shipped text"),
+    });
+    expect(
+      await classifyManaged(dir, FILE(), "the new text", "an older Golem's text + my notes"),
+    ).toBe("owned");
   });
 });
