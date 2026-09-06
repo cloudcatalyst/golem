@@ -1,7 +1,7 @@
 ---
 task: team-portal-auth
 title: "Sign in to the portal from the CLI — authorization code + PKCE over a loopback redirect, tokens in the OS keychain"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -10,7 +10,7 @@ gate: "`golem team link` on a machine with a browser completes the flow and stor
 depends_on: []
 touches: [src/cli/, src/config/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06T17:42:47.920Z
 ---
 
 ## What this is
@@ -73,3 +73,7 @@ timing out mysteriously.
   `GET /api/v1/me` → `project-team-binding` chooses and records the team.
 - Registering the OAuth application. That is a one-off act by the portal
   operator (`owner: user`), already documented in `docs/api-contract.md` §1.
+
+## Outcome
+
+shipped — golem team link/status/logout with authorization code + PKCE over a loopback redirect, tokens in the OS keychain. Verified live end to end against a local fake authorization server driving the real CLI: discovery, S256 authorization URL, real loopback listener, state check, code exchange (86-char verifier, no client_secret), keychain write, GET /api/v1/me answering 200 with organizations, status and logout. Both named gate items covered by tests: a tampered state is refused and its code never exchanged; a 401 triggers exactly ONE refresh (asserted as both the client's counter and the POSTs the fake fetch saw) before the full flow. No-token-on-disk asserted in the suite AND live against the real Windows DPAPI backend: 71 files scanned, 0 containing plaintext. UNVERIFIED, and cannot be by an agent: the leg where a real person signs in at a real Clerk tenant — registering the OAuth application is owner:user and out of scope, so there is no client id or credentials to drive; the portal's actual responses remain untested against fixtures shaped from docs/api-contract.md. Contract gap recorded in verification-notes 158: /api/v1/me is on the portal domain while the Clerk issuer is a different origin and no v1 endpoint maps one to the other, hence a separate portal.issuer setting.

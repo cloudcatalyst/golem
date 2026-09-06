@@ -114,12 +114,27 @@ export const ORIGIN_ORDER: readonly LayerName[] = [
  * could ship `proxy.bypass_all: true` as `team!` and every machine in the org
  * would forward unredacted traffic.
  *
+ * The `portal.*` identity keys (`team-portal-auth`) are here for a narrower but
+ * equally circular reason: they say WHICH portal to trust and which OAuth client
+ * to present, and the team layer is fetched FROM that portal. A remote origin
+ * able to move `portal.url` or `portal.issuer` could point the next sign-in at a
+ * server of its choosing and harvest the authorization code — a portal
+ * redirecting its own clients elsewhere is not a configuration change, it is a
+ * handover. `portal.link_timeout_ms` is deliberately NOT denied: it is a
+ * convenience with no security weight, and a team with slow SSO has a real
+ * reason to raise it.
+ *
  * Compiled in, never fetched: a list the remote can edit is not a floor. A
  * denied key is DROPPED with a loud warning, never sanitised in silence.
  * CLAUDE.md governs — importance is a dial, and no dial value disables
  * redaction.
  */
-export const REMOTE_DENIED_SETTINGS: ReadonlySet<string> = new Set(["proxy.bypass_all"]);
+export const REMOTE_DENIED_SETTINGS: ReadonlySet<string> = new Set([
+  "proxy.bypass_all",
+  "portal.url",
+  "portal.issuer",
+  "portal.client_id",
+]);
 
 /** The `"!important"` declaration list, top-level and sibling to the sections. */
 const IMPORTANT_KEY = "!important";
