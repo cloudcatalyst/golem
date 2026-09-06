@@ -9106,3 +9106,66 @@ matrix leg: a flake varies, an input difference does not.
 Fix is to regenerate with the untracked docs moved aside, which is what the
 committed state actually describes. Worth knowing before assuming a red shard
 after a green `golem verify` means CI is wrong.
+
+## §157 — The CSS cascade really does reverse origin order for `!important`, and it reverses LAYER order too — the evidence ADR-0008 cited before it existed (2026-09-06)
+
+ADR-0008 (2026-09-04) says its mapping is "verified against MDN's origin table,
+verification-notes §154". **That note was never written.** §154 was the next free
+number when the ADR was drafted, and the 2026-09-05 portal-OIDC work took it, so
+the citation has been pointing at an unrelated section ever since. Recorded here
+and the ADR repointed. The facts themselves check out.
+
+### Origin order — MDN, verbatim
+
+`https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_cascade/Cascade`
+(fetched 2026-09-04, served from Golem's KB cache 2026-09-06), under
+*Cascading order → Origin and importance*:
+
+| Precedence Order (low to high) | Origin | Importance |
+|---|---|---|
+| 1 | user-agent (browser) | normal |
+| 2 | user | normal |
+| 3 | author (developer) | normal |
+| 4 | CSS keyframe animations | |
+| 5 | author (developer) | `!important` |
+| 6 | user | `!important` |
+| 7 | user-agent (browser) | `!important` |
+| 8 | CSS transitions | |
+
+So the normal band runs user-agent → user → author, and the important band runs
+author → user → user-agent. **The reversal is real and it is not partial** — the
+whole origin order inverts, which is precisely the property ADR-0008 borrows.
+
+Also verbatim, on why an author reset beats a browser default:
+
+> Unless the user-agent stylesheet includes an `!important` next to a property,
+> making it "important", styles declared by author styles, including a reset
+> stylesheet, take precedence over the user-agent styles, regardless of the
+> specificity of the associated selector.
+
+### Layer order — the half that was NOT obviously true
+
+ADR-0008 also claims CSS "reverses cascade **layer** order within an origin
+too", and leans on it for `team!` beating `project!` beating `local!`. That is a
+separate claim from the origin table and needed its own source.
+`https://developer.mozilla.org/en-US/docs/Web/CSS/@layer` (fetched 2026-09-06),
+verbatim:
+
+> The order of precedence among important rules is the inverse of normal rules.
+
+> The declaration order matters. The first declared layer gets the lowest
+> priority and the last declared layer gets the highest priority. However, the
+> priority is reversed when the `!important` flag is used.
+
+So with `@layer theme, layout, utilities;`, `utilities` wins normally and `theme`
+wins for important declarations. **Both halves of ADR-0008's analogy hold**, and
+the mapping (`user` ↔ user stylesheet, `team`/`project`/`local` ↔ author layers,
+`default` ↔ user-agent stylesheet) survives contact with the actual spec table.
+
+### The lesson, which is not about CSS
+
+**A citation to a section number that does not exist yet will silently point at
+whatever later takes that number.** It does not dangle — it misdirects, which is
+worse, because the reference resolves and reads as verified. Cite by *title*
+when the target is not written yet, or write the section first. Found only
+because the three files were still uncommitted and got read before landing.
