@@ -20,6 +20,7 @@ import { CLOSE_OUT_SKILLS } from "./skills/close-out.js";
 import { DEVELOP_SKILLS } from "./skills/develop.js";
 import { FOOTGUN_SKILLS } from "./skills/footguns.js";
 import { HYGIENE_SKILLS } from "./skills/hygiene.js";
+import { PACE_SKILLS } from "./skills/pace.js";
 import { RESEARCH_SKILLS } from "./skills/research.js";
 
 /** command -> SKILL.md content; installed under .claude/skills/golem-<command>/. */
@@ -30,4 +31,5 @@ export const P0_SKILLS: Readonly<Record<string, string>> = {
   ...CLOSE_OUT_SKILLS,
   ...FOOTGUN_SKILLS,
   ...HYGIENE_SKILLS,
+  ...PACE_SKILLS,
 };
