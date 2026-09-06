@@ -46,6 +46,36 @@ async function staysQuiet(batches: FileChangeBatch[], windowMs = 700): Promise<b
   return batches.length === 0;
 }
 
+/**
+ * Spin the real event loop until `done()` holds, under fake timers.
+ *
+ * The whole point of this file's fake-timer tests: the watcher does REAL fs work
+ * inside a poll and inside a flush, and a fixed number of `setImmediate` turns
+ * cannot promise a libuv threadpool operation has landed. Waiting on a CONDITION
+ * can. `setImmediate` is deliberately not faked, so this still turns while the
+ * clock is frozen, and `Date.now` is real, so the bound is a real deadline — a
+ * stall fails with a sentence rather than a 20s vitest timeout that reads like a
+ * hang.
+ */
+async function waitUntil(done: () => boolean, what: string): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((r) => setImmediate(r));
+  }
+}
+
+/**
+ * Advance the fake clock by one poll interval and wait until that poll has
+ * actually COMPLETED, by watching the watcher's own cycle counter — which is
+ * incremented after the scan resolves and its events have armed the debounce.
+ */
+async function advanceOnePoll(watcher: FileWatcher, pollMs = 60): Promise<void> {
+  const before = watcher.cycles;
+  await vi.advanceTimersByTimeAsync(pollMs);
+  await waitUntil(() => watcher.cycles > before, `poll cycle ${before + 1} to complete`);
+}
+
 describe("watchPath", () => {
   it("debounces a burst of writes into a single batch", async () => {
     // R10.2 — the burst is driven by FAKE timers, so the poll and the debounce
@@ -64,15 +94,22 @@ describe("watchPath", () => {
     // watcher with no debouncing at all still emits exactly one batch. That is
     // the trap the sibling fixes in `test-timing-flakes` hit, so the assertion
     // is deliberately "one batch across three separate detections".
-    // Only the timers are faked. The watcher does REAL fs work inside each poll,
+    //
+    // Only the TIMERS are faked. The watcher does real fs work inside each poll,
     // and faking `setImmediate`/`nextTick` too would stall those promises: the
     // poll never resolves, so it never arms the debounce and never schedules the
-    // next cycle. Draining with `settle()` after each advance is what lets the
-    // real I/O finish between simulated ticks.
+    // next cycle.
+    //
+    // Letting that real I/O finish between simulated ticks is a CONDITION, not a
+    // duration. The first version of this test drained ten `setImmediate` turns,
+    // which only approximates one: macrotask turns do not wait on the libuv
+    // threadpool. It flaked on CI the day after it landed
+    // (`file-watcher-settle-is-a-guess`), and in the worst possible shape —
+    // `loop` arms the NEXT poll timer only after the previous poll resolves, so
+    // outlasting the drain once stalls the chain, and the symptom is an EMPTY
+    // batches array rather than a doubled one. Nothing about that reads as
+    // "timing" when you find it.
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const settle = async (): Promise<void> => {
-      for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r));
-    };
     const batches: FileChangeBatch[] = [];
     watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
     const file = path.join(dir, "note.md");
@@ -82,14 +119,16 @@ describe("watchPath", () => {
     // no write at all.
     for (const content of ["a", "bb", "ccc"]) {
       await writeFile(file, content);
-      await vi.advanceTimersByTimeAsync(60); // one poll — detects, and RESETS the debounce
-      await settle();
+      await advanceOnePoll(watcher); // one poll — detects, and RESETS the debounce
     }
     // Three detections so far, and the debounce has been pushed back each time.
     expect(batches).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(150); // quiet period elapses — exactly one flush
-    await settle();
+    // The quiet period elapses and the debounce fires — but `flush()` re-stats
+    // every pending path, which is more real fs work, so the batch arrives on a
+    // condition too rather than at the end of the advance.
+    await vi.advanceTimersByTimeAsync(150);
+    await waitUntil(() => batches.length > 0, "the debounce to flush its batch");
     expect(batches).toHaveLength(1);
     expect(batches[0]?.changed).toEqual([file]);
     expect(batches[0]?.removed).toEqual([]);
@@ -101,6 +140,35 @@ describe("watchPath", () => {
     // batch arrived during the quiet window with no further writes. Debouncing
     // means "a burst collapses into one batch", and that is asserted above; the
     // quiet-window claim was always about the filesystem, not this code.
+  });
+
+  it("survives a poll whose fs work outlasts any fixed event-loop drain", async () => {
+    // The regression guard for `file-watcher-settle-is-a-guess`. A green run of
+    // the test above is not evidence on its own — the form it replaced was green
+    // locally and on most CI legs, and still failed on one.
+    //
+    // So reproduce the CI condition with REAL work rather than a mock: a tree big
+    // enough that one `snapshot()` is a readdir plus several hundred stats, which
+    // comfortably outlasts the ten `setImmediate` turns the old `settle()` drained.
+    // Under the old form this stalls the chain and `batches` stays empty; waiting
+    // on the cycle counter, it simply takes longer.
+    await Promise.all(
+      Array.from({ length: 300 }, (_, i) => writeFile(path.join(dir, `bulk-${i}.md`), "x")),
+    );
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const batches: FileChangeBatch[] = [];
+    watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
+
+    // Those 300 are the BASELINE — only what changes after watch start is
+    // reported, so exactly one file should come back.
+    const file = path.join(dir, "note.md");
+    await writeFile(file, "a");
+    await advanceOnePoll(watcher);
+
+    await vi.advanceTimersByTimeAsync(150);
+    await waitUntil(() => batches.length > 0, "the debounce to flush a batch");
+    expect(batches[0]?.changed).toEqual([file]);
   });
 
   it("reports a deleted file as removed", async () => {

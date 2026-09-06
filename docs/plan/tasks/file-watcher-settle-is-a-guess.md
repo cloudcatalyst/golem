@@ -1,15 +1,16 @@
 ---
 task: file-watcher-settle-is-a-guess
 title: "The debounce test still flakes — `settle()` counts event-loop turns as a proxy for fs I/O finishing, and one missed poll stalls the whole chain"
-state: queued
+state: done
 owner: agent
 size: S
 discipline: code
 design: "The fix this supersedes is `docs/plan/tasks/file-watcher-debounce-determinism.md` (done 2026-09-06) and its debrief `docs/wiki/debriefs/2026-09-06-file-watcher-fake-timers.md`. The sibling lesson — that `expect.poll` + state accessors is the right tool when a fixed wait is standing in for a condition — is `docs/wiki/debriefs/2026-09-06-timing-flakes-are-three-bugs.md`. Code: `src/knowledge/file-watcher.ts`, test `tests/unit/knowledge/file-watcher.test.ts`."
 gate: "The test must not depend on a fixed number of event-loop turns being enough for real fs I/O. Prove it the way the last two timing fixes were proven: (1) removing the debounce from `watchPath` must still fail the test — the fix must not make the assertion weaker; (2) the test must survive artificial delay in the poll's fs work, which is the CI condition it fails under. A green run alone is not evidence, because the current form is green locally and on most legs."
+depends_on: []
 touches: [src/knowledge/file-watcher.ts, tests/unit/knowledge/file-watcher.test.ts]
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-06T13:40:16.135Z
 ---
 
 ## What happened
@@ -97,3 +98,7 @@ wrong first time because only the first proof was done**:
   visible flake into a hidden hang.
 - The other tests in this file, unless the same accessor makes them simpler for
   free.
+
+## Outcome
+
+shipped — FileWatcher.cycles; test waits on a condition; both proofs run

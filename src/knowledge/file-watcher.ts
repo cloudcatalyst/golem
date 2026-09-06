@@ -48,6 +48,24 @@ export interface FileWatcherOptions {
 export interface FileWatcher {
   /** Stop watching and release every underlying resource. */
   close(): void;
+  /**
+   * How many poll cycles have COMPLETED — incremented after a scan resolves and
+   * any resulting events have armed the debounce, so observing it advance means
+   * the cycle's real fs work is genuinely finished.
+   *
+   * Observability for tests, and it earns its place. A test driving this watcher
+   * on fake timers has to know when a poll's REAL fs I/O has landed before it
+   * advances the clock again, and draining a fixed number of `setImmediate`
+   * turns only approximates that: macrotask turns do not wait on the libuv
+   * threadpool. The approximation fails under load, and it fails badly — `loop`
+   * arms the next poll timer only after the previous poll resolves, so one
+   * missed cycle stalls the chain entirely and nothing ever flushes. That was a
+   * real CI flake (`file-watcher-settle-is-a-guess`). A counter turns the wait
+   * into a condition.
+   *
+   * Nothing about polling, debouncing or batching depends on this value.
+   */
+  readonly cycles: number;
 }
 
 function isIgnoredSegment(name: string): boolean {
@@ -135,14 +153,23 @@ export async function watchPath(
   };
 
   // Self-scheduling (not setInterval) so a slow scan on a big tree never overlaps.
+  let cycles = 0;
   const loop = async (): Promise<void> => {
     if (stopped) return;
     await poll();
+    // Counted AFTER the scan resolves and its events have armed the debounce, so
+    // a reader that sees this advance knows the cycle's fs work is done. Counted
+    // before the next timer is armed only because a stopped watcher must not
+    // appear to still be cycling.
+    cycles += 1;
     if (!stopped) pollTimer = setTimeout(() => void loop(), pollMs);
   };
   pollTimer = setTimeout(() => void loop(), pollMs);
 
   return {
+    get cycles(): number {
+      return cycles;
+    },
     close(): void {
       stopped = true;
       if (pollTimer !== null) clearTimeout(pollTimer);
