@@ -1,7 +1,7 @@
 ---
 task: skill-provenance-on-clone
 title: "A cloned project can never refresh its Golem skills — the provenance record is gitignored, so every teammate sees a permanent conflict"
-state: queued
+state: done
 owner: agent
 size: S
 discipline: code
@@ -10,7 +10,7 @@ gate: "Clone-shaped test: a project whose `.claude/skills/golem/<cmd>/SKILL.md` 
 depends_on: []
 touches: [src/cli/managed-files.ts, src/cli/init-skills.ts, src/cli/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06T17:26:35.432Z
 ---
 
 ## The bug
@@ -57,3 +57,7 @@ Two candidate shapes — pick one, record why in the debrief:
   same clone path bites them, and say so in the debrief, but fix skills first.
 - Any automatic refresh. This task makes `golem init` able to do the right thing;
   it does not add a nag, a session-start sync, or a staleness check.
+
+## Outcome
+
+shipped

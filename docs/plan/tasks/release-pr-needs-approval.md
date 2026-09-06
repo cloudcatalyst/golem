@@ -1,7 +1,7 @@
 ---
 task: release-pr-needs-approval
 title: "The release PR cannot go green on its own — a bot-opened PR does not trigger CI, so every release stalls at `action_required`"
-state: queued
+state: done
 owner: agent
 size: S
 discipline: code
@@ -10,7 +10,7 @@ gate: "Cutting a release requires no manual approval step — or, if the manual 
 depends_on: []
 touches: [.github/workflows/release-prepare.yml, docs/wiki/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06T17:20:42.119Z
 ---
 
 ## What happened
@@ -73,3 +73,7 @@ Worth weighing before "fixing" this: the approval is a *deliberate* GitHub safet
 feature for bot-opened PRs, so removing it may be the wrong goal. The gate's
 second clause — document the beat and tell the human what to click — is probably
 the honest answer, and it is far cheaper.
+
+## Outcome
+
+shipped
