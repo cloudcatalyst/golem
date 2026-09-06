@@ -92,8 +92,11 @@ says something out loud; none of them stops the tool.
 ## Out of scope
 
 - The OAuth flow itself → `team-portal-auth`.
-- The resolver work — where a team value sits in the precedence ladder and how
-  `~/.golem/team.json` is cached → `team-settings-layer`.
+- Where a team value sits in the precedence ladder → SHIPPED by
+  `settings-cascade-importance` (ADR-0008); the origin exists and is ranked.
+- Fetching the payload and caching it to `~/.golem/team.json` →
+  `team-layer-fetch`. (This used to point at `team-settings-layer`, which was
+  closed as superseded on 2026-09-06.)
 - Syncing the skills themselves → `team-skills-sync`. This task only writes and
   removes the key, and calls whatever those tasks expose.
 - Anything about billing, membership or connectors. Those are browser flows in

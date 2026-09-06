@@ -4,6 +4,7 @@
 import type { InitProbe } from "../cli/init.js";
 import type { GuidanceScope } from "../hooks/guidance.js";
 import { ConfigError } from "./errors.js";
+import { type LayerName, ORIGIN_ORDER } from "./loader.js";
 import { type SettingKind, settingMeta } from "./ui-model.js";
 import type { SettingsScope } from "./write-setting.js";
 
@@ -101,6 +102,54 @@ export const GUIDANCE_SCOPES: readonly GuidanceScope[] = ["project", "user"];
 export const ENV_LOCKED = (source: string | undefined): string =>
   `set by ${source ?? "an environment variable"} — env overrides every file layer, ` +
   "so a write here would have no effect. Unset it to edit this again.";
+
+/**
+ * How each origin is named to a reader. Prose, not identifiers: the point of a
+ * locked reason is that someone who has never read ADR-0008 knows which file to
+ * open.
+ */
+const ORIGIN_PROSE: Readonly<Record<LayerName, string>> = {
+  default: "Golem itself",
+  user: "your `~/.golem/settings.json`",
+  team: "your team",
+  project: "the repo's `.golem/settings.json`",
+  local: "this checkout's `.golem/settings.local.json`",
+  env: "a `GOLEM_*` environment variable",
+  override: "a per-request header",
+};
+
+/**
+ * Why a control the cascade has PINNED cannot be written, and what the reader
+ * can still do about it (ADR-0008 §Provenance and the UI).
+ *
+ * The recourse is derived from {@link ORIGIN_ORDER} rather than written out per
+ * origin, so it stays true when an origin is added: under importance the order
+ * reverses, so the origins that can still win are the ones BEFORE the pinning
+ * one in the normal ladder. `default!` has none before it, which is exactly why
+ * it is the mechanism for a value nothing may argue with.
+ *
+ * The panel cannot write an `!important` declaration itself — there is no
+ * widget for it — so this is genuinely locked here and answerable elsewhere,
+ * which is the honest pairing. "Locked" on its own is not.
+ */
+export const IMPORTANT_LOCKED = (layer: string, source: string | undefined): string => {
+  const rank = ORIGIN_ORDER.indexOf(layer as LayerName);
+  // `default` is dropped: it outranks everything, but nobody can write it, so
+  // naming it as recourse would be an answer the reader cannot act on.
+  const stronger =
+    rank <= 0
+      ? []
+      : ORIGIN_ORDER.slice(0, rank)
+          .filter((o) => o !== "default")
+          .map((o) => ORIGIN_PROSE[o]);
+  const who = ORIGIN_PROSE[layer as LayerName] ?? layer;
+  const where = source !== undefined ? ` (${source})` : "";
+  const recourse =
+    stronger.length === 0
+      ? "No origin can override it."
+      : `Only ${stronger.reverse().join(", or ")} can override it, and only with \`!important\` of its own.`;
+  return `set by ${who}${where} as \`!important\`, which beats every ordinary declaration. ${recourse}`;
+};
 
 // ---------------------------------------------------------------------------
 // Collect
