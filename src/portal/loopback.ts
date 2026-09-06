@@ -58,7 +58,7 @@ function page(title: string, body: string): string {
   // Deliberately dependency-free and inline-styled: this renders in a browser
   // that has no access to anything the harness ships.
   return (
-    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Golem</title></head>" +
+    '<!doctype html><html><head><meta charset="utf-8"><title>Golem</title></head>' +
     '<body style="font:16px/1.5 system-ui,sans-serif;margin:4rem auto;max-width:34rem;padding:0 1rem">' +
     `<h1 style="font-size:1.3rem">${title}</h1><p>${body}</p>` +
     "</body></html>"

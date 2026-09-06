@@ -39,10 +39,10 @@ export {
   resolvePortalConfig,
 } from "./config.js";
 export {
-  assertSupportsThisFlow,
   type AuthorizationServerMetadata,
-  discoverAuthorizationServer,
+  assertSupportsThisFlow,
   type DiscoveryOptions,
+  discoverAuthorizationServer,
   discoveryUrlFor,
   type FetchLike,
   isLoopback,
@@ -54,14 +54,14 @@ export {
   type PortalAuthErrorKind,
 } from "./errors.js";
 export {
-  assertScopesSupported,
   type AuthorizationRequest,
+  assertScopesSupported,
   authorizationUrl,
   DEFAULT_SCOPES,
-  exchangeCode,
   type ExchangeOptions,
-  refreshTokens,
+  exchangeCode,
   type RefreshOptions,
+  refreshTokens,
 } from "./exchange.js";
 export {
   type LinkOptions,
@@ -70,8 +70,8 @@ export {
   type PortalStatus,
   portalStatus,
   type StatusOptions,
-  unlinkPortal,
   type UnlinkResult,
+  unlinkPortal,
 } from "./link.js";
 export {
   CALLBACK_PATH,

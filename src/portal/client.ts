@@ -29,9 +29,7 @@ import { isExpired, type PortalTokenSet, type PortalTokenStore } from "./tokens.
 /** `GET /api/v1/me` — the first call any client makes. */
 const identitySchema = z.object({
   user: z.object({ id: z.string(), email: z.string().optional() }),
-  auth: z
-    .object({ via: z.string().optional(), scopes: z.array(z.string()).optional() })
-    .optional(),
+  auth: z.object({ via: z.string().optional(), scopes: z.array(z.string()).optional() }).optional(),
   organizations: z
     .array(
       z.object({
@@ -149,48 +147,48 @@ export function createPortalClient(options: PortalClientOptions): PortalClient {
   async function request(path: string, init: RequestInit = {}): Promise<Response> {
     let tokens = await current();
 
-      // A token we already know is expired should not be spent on a doomed
-      // request first — that would burn the one refresh on a 401 we could have
-      // predicted. This pre-emptive renewal is the SAME single refresh: if it
-      // fails, the ladder below still has exactly its full-flow rung left.
-      if (isExpired(tokens, now())) {
-        const renewed = await tryRefresh(tokens);
-        if (renewed !== null) tokens = renewed;
-      }
+    // A token we already know is expired should not be spent on a doomed
+    // request first — that would burn the one refresh on a 401 we could have
+    // predicted. This pre-emptive renewal is the SAME single refresh: if it
+    // fails, the ladder below still has exactly its full-flow rung left.
+    if (isExpired(tokens, now())) {
+      const renewed = await tryRefresh(tokens);
+      if (renewed !== null) tokens = renewed;
+    }
 
-      let response = await send(path, init, tokens);
-      if (response.status !== 401) return response;
+    let response = await send(path, init, tokens);
+    if (response.status !== 401) return response;
 
-      // Rung 1: exactly one refresh — unless the pre-emptive renewal above
-      // already spent it.
-      if (stats.refreshAttempts === 0) {
-        const renewed = await tryRefresh(tokens);
-        if (renewed !== null) {
-          tokens = renewed;
-          response = await send(path, init, tokens);
-          if (response.status !== 401) return response;
-        }
+    // Rung 1: exactly one refresh — unless the pre-emptive renewal above
+    // already spent it.
+    if (stats.refreshAttempts === 0) {
+      const renewed = await tryRefresh(tokens);
+      if (renewed !== null) {
+        tokens = renewed;
+        response = await send(path, init, tokens);
+        if (response.status !== 401) return response;
       }
+    }
 
-      // Rung 2: the full flow, once.
-      const relinked = await tryReauthorize();
-      if (relinked === null) {
-        throw new PortalAuthError(
-          "not_linked",
-          "the portal rejected the stored token and it could not be refreshed. " +
-            "Run `golem team link` to sign in again.",
-          401,
-        );
-      }
-      response = await send(path, init, relinked);
-      if (response.status === 401) {
-        throw new PortalAuthError(
-          "not_linked",
-          "the portal rejected a freshly issued token. That is a portal-side problem, " +
-            "not a stale credential — nothing further will help from here.",
-          401,
-        );
-      }
+    // Rung 2: the full flow, once.
+    const relinked = await tryReauthorize();
+    if (relinked === null) {
+      throw new PortalAuthError(
+        "not_linked",
+        "the portal rejected the stored token and it could not be refreshed. " +
+          "Run `golem team link` to sign in again.",
+        401,
+      );
+    }
+    response = await send(path, init, relinked);
+    if (response.status === 401) {
+      throw new PortalAuthError(
+        "not_linked",
+        "the portal rejected a freshly issued token. That is a portal-side problem, " +
+          "not a stale credential — nothing further will help from here.",
+        401,
+      );
+    }
     return response;
   }
 

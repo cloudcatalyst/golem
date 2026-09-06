@@ -173,9 +173,7 @@ function toTokenSet(
     ...(refresh === undefined ? {} : { refresh_token: refresh }),
     token_type: response.token_type,
     ...(response.scope === undefined ? {} : { scope: response.scope }),
-    ...(response.expires_in === undefined
-      ? {}
-      : { expires_at: now + response.expires_in * 1000 }),
+    ...(response.expires_in === undefined ? {} : { expires_at: now + response.expires_in * 1000 }),
     obtained_at: now,
   };
 }
