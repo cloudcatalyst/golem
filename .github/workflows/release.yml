@@ -427,7 +427,14 @@ jobs:
               -X POST "$PORTAL_WEBHOOK_URL" \
               -H 'content-type: application/json' \
               -H "Authorization: Bearer $TOKEN" \
-              --data-raw "$BODY" || echo 000)"
+              --data-raw "$BODY" || true)"
+            # `-w '%{http_code}'` already prints 000 when curl never got a
+            # response, so the old `|| echo 000` appended a SECOND one and the
+            # log read "HTTP 000000" — observed 2026-09-05 against a host that
+            # does not resolve. A two-line CODE is also not an integer, so the
+            # comparisons below silently failed rather than saying so.
+            CODE="$(printf '%s' "$CODE" | tr -dc '0-9' | tail -c 3)"
+            [ -n "$CODE" ] || CODE=000
             echo "attempt $attempt → HTTP $CODE"
             if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 300 ]; then
               echo "Portal notified: $TAG (schema sha256 ${SCHEMA_SHA:0:12}…)"

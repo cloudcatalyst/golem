@@ -268,11 +268,79 @@ Two details worth knowing before editing either half:
   the machine-specific `header` block, which is the same thing this workflow
   asserts on the way out.
 
-What is left is credentialed, not code, and the OIDC switch made it smaller:
-`PORTAL_WEBHOOK_URL` as a repository **variable** pointing at the portal's
-`/api/webhooks/golem-build`. There is no second half to match any more — no
-secret to generate, copy or rotate. Set `vars.PORTAL_OIDC_AUDIENCE` only if the
-portal's audience is not `https://golem.run`. See `portal-release-webhook`.
+### What the portal answers, and what the job does with it
+
+A status code is an instruction to the sender, so the sending job's behaviour is
+*derived* from this table rather than chosen alongside it:
+
+| code | body | meaning | the job |
+|---|---|---|---|
+| 200 | `{version, stored: true, replaced}` | stored | success |
+| 200 | `{version, stored: false, reason: "unchanged"}` | the same document is already stored | success |
+| 401 | `OIDC token rejected: <reason>` | `aud` / `repository` / `workflow_ref` mismatch | fails, no retry |
+| 422 | what was wrong with the payload | permanent — a `config_schema.url` that is not a release asset of this repo, or a document carrying the `header` block | fails, no retry |
+| 502 | GitHub unreachable, or the asset was not fetchable | transient — a release asset can take a moment to become readable | retries |
+| 500 | storage failed | transient | retries |
+
+**A re-push is a no-op, not a failure.** `notify_only` against a tag whose
+document is already stored answers `200` with `stored: false`, which is exactly
+why the job tests the *status class* and never reads `stored`.
+
+### Proven live, and what is actually left (2026-09-05)
+
+The loop **ran**, in v0.52.1, against a portal on `localhost:3000` behind an
+ngrok tunnel — the first time either half executed against the other:
+
+```
+attempt 1 → HTTP 200
+{"version":"0.52.1","stored":true,"replaced":false}
+```
+
+What was left then was neither code nor a secret: **`golem.run` had no A
+record**. It has one now — see the section below.
+
+**To test against a local portal**, point `PORTAL_WEBHOOK_URL` at a tunnel and
+leave the audience at production. The portal pins `GOLEM_OIDC_AUDIENCE`
+separately from `NEXT_PUBLIC_APP_URL` on purpose, so that tunnelling the webhook
+does not also move its Stripe and Nango callbacks. **A tunnel moves the address,
+not the identity** — the audience is an opaque string and never has to resolve.
+Setting it to `http://localhost:3000` is what earned
+`401 audience must be exactly https://golem.run` on the v0.52.1 release.
+
+See `portal-release-webhook`, and verification-notes §154/§155.
+
+### Deployed at the address it will actually run at (2026-09-06)
+
+`golem.run` resolves (`216.198.79.1`) and the portal is live there, with Stripe,
+Nango and Clerk webhooks all reaching it and schema `0.52.1` served from the
+stored table — the version the localhost run above pushed. So the only untested
+leg is this one, because it needs a release from this repo.
+
+**Nothing in `release.yml` changed to close the gap.** The job has spoken the
+OIDC contract since 2026-09-05, so the entire remaining step was setting the two
+repository variables. Checked against the receiving half point by point:
+
+| the portal checks | the job already does |
+|---|---|
+| `permissions: id-token: write` | on the `notify-portal` job alone |
+| `Authorization: Bearer <OIDC token>` | yes, and no HMAC header remains to send |
+| `aud` exactly `https://golem.run` | `vars.PORTAL_OIDC_AUDIENCE`, defaulting to that string, asserted locally before the POST |
+| `repository` == `cloudcatalyst/golem` | `$GITHUB_REPOSITORY`, by construction |
+| `workflow_ref` == `.github/workflows/release.yml` | asserted locally, and the re-push is a `notify_only` mode of this file for that reason |
+| a release-asset `config_schema.url` | `releases/download/<tag>/config-schema.json` for this repo |
+| a document with no `header` block | `config schema --json --no-header`, asserted header-free in the `assets` job |
+| retry 5xx, give up on 4xx | yes |
+
+The job logs the `aud` it minted on every release (`OIDC claims: {…}`), so a
+mismatch is one line away from diagnosed; the portal logs `authenticated by
+OIDC` then `stored schema`.
+
+**One contract detail the halves describe differently, and it is harmless.** The
+live success body was `{"version":"0.52.1","stored":true,"replaced":false}` —
+`replaced`, where the portal's own account of the contract names
+`reason: "unchanged"` on the `stored: false` path. Both are `200`, and the job
+reads neither field, so nothing behaves differently either way; the response
+table above records both shapes rather than picking one.
 
 ## Repository settings
 
@@ -298,6 +366,15 @@ Branch protection and rulesets are paid features **for private repositories**.
 The repo was made public the same day, and the identical call then succeeded. So
 between the release model landing and the repo going public, `main` was protected
 by convention only — a gap that existed and is now closed.
+
+Set 2026-09-06, once `golem.run` resolved and the portal was deployed there:
+
+- **`PORTAL_WEBHOOK_URL`** = `https://golem.run/api/webhooks/golem-build`
+- **`PORTAL_OIDC_AUDIENCE`** = `https://golem.run`
+
+Repository *variables*, not secrets — neither is one, and a secret is invisible
+in the log exactly when you want to read it. The audience must be byte-identical
+(no trailing slash, no `www`); see § The portal webhook above for why.
 
 The single `CI gate` job is what makes this workable: protection names one check,
 however the shard matrix is tuned. Pinning the 22 individual job names would break
