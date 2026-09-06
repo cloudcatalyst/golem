@@ -47,11 +47,13 @@
  *
  * Two details keep that from regressing an existing project:
  *
- * - the pre-fix machine-local record is still **read** (never written again),
- *   and the two are consulted as one set — matching *either* is proof Golem
- *   wrote the bytes, so nothing that was `stale` yesterday becomes `owned`
- *   today. {@link rememberManaged} folds the legacy entries into the portable
- *   record as it writes, so a project migrates simply by being used.
+ * - the machine-local record is still read, and the two are consulted as one
+ *   set — matching *either* is proof Golem wrote the bytes, so nothing that was
+ *   `stale` yesterday becomes `owned` today. {@link rememberManaged} folds its
+ *   entries into the portable record as it writes, so a project migrates simply
+ *   by being used. It keeps one live job of its own: a managed file OUTSIDE the
+ *   project (see {@link travelsWithTheProject}) is recorded there and nowhere
+ *   else, because it cannot travel and its key is a home-directory path.
  * - keys are sorted on write and the file is left untouched when nothing
  *   changed, because a committed file that churns on every `golem init` is a
  *   diff nobody asked for.
@@ -76,9 +78,10 @@ export function managedRecordPath(projectDir: string): string {
 }
 
 /**
- * The pre-`skill-provenance-on-clone` location: machine-local and gitignored.
- * Still read so an already-initialized project keeps the provenance it has;
- * never written again.
+ * The machine-local, gitignored record. It was where everything lived before
+ * `skill-provenance-on-clone`, so it is still read (an already-initialized
+ * project keeps the provenance it has), and it is still WRITTEN for the one
+ * kind of managed file that cannot travel: one outside the project directory.
  */
 export function managedStatePath(projectDir: string): string {
   return path.join(projectDir, ".golem", "state", "managed-files.json");
@@ -151,6 +154,27 @@ export function managedKey(projectDir: string, file: string): string {
   return path.relative(projectDir, file).split(path.sep).join("/");
 }
 
+/**
+ * Does this key describe a file INSIDE the project — one a clone would receive?
+ *
+ * Not every managed file is: a user-scope install lands under the user's home,
+ * and `path.relative` then yields `../..`-style or, across Windows drives, a
+ * fully absolute key. Two reasons those must never reach the committed record,
+ * and the second is the serious one:
+ *
+ * - the hash describes a file the clone does not have, so it is noise;
+ * - the KEY is an absolute path containing the user's home directory, and
+ *   committing `C:/Users/<name>/...` publishes their username to everyone with
+ *   access to the repo. Found by generating this repo's own record: the
+ *   machine-local record being migrated held 22 such keys.
+ *
+ * They stay in the machine-local record, which is exactly where a machine-local
+ * fact belongs.
+ */
+function travelsWithTheProject(key: string): boolean {
+  return key !== "" && !key.startsWith("../") && !path.isAbsolute(key) && !/^[A-Za-z]:/.test(key);
+}
+
 /** Did Golem write exactly these bytes to this path, per either record? */
 async function wroteExactly(projectDir: string, file: string, onDisk: string): Promise<boolean> {
   const key = managedKey(projectDir, file);
@@ -184,12 +208,24 @@ export async function rememberManaged(
   file: string,
   content: string,
 ): Promise<void> {
+  const key = managedKey(projectDir, file);
+  const hash = hashManaged(content);
+  const local = managedStatePath(projectDir);
+  if (!travelsWithTheProject(key)) {
+    const record = await readRecordAt(local);
+    record[key] = hash;
+    await writeRecord(local, record);
+    return;
+  }
   const target = managedRecordPath(projectDir);
-  const portable = await readRecordAt(target);
+  const next = await readRecordAt(target);
   // Fold the machine-local record in as we go, so a project that pre-dates the
-  // portable one migrates by being used rather than by being re-initialized.
-  const next: ManagedRecord = { ...(await readRecordAt(managedStatePath(projectDir))), ...portable };
-  next[managedKey(projectDir, file)] = hashManaged(content);
+  // portable one migrates by being used rather than by being re-initialized —
+  // but only the entries a clone could actually use.
+  for (const [legacyKey, legacyHash] of Object.entries(await readRecordAt(local))) {
+    if (travelsWithTheProject(legacyKey) && !(legacyKey in next)) next[legacyKey] = legacyHash;
+  }
+  next[key] = hash;
   await writeRecord(target, next);
 }
 

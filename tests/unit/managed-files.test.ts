@@ -181,6 +181,42 @@ describe("the pre-clone-fix machine-local record", () => {
   });
 });
 
+describe("a managed file outside the project", () => {
+  // A user-scope install lands under the user's home. `path.relative` then
+  // yields `../..` — or, across Windows drives, an absolute path — and the KEY
+  // would carry the user's username into a committed file. Found for real while
+  // generating this repo's own record: 22 such keys in the machine-local one.
+  const outside = (): string => path.join(dir, "..", "elsewhere", ".claude", "skills", "x.md");
+
+  it("is recorded machine-locally, never in the committed record", async () => {
+    await rememberManaged(dir, outside(), "v1");
+    expect(await exists(managedRecordPath(dir))).toBe(false);
+    expect(await readRecord(managedStatePath(dir))).toEqual({
+      [managedKey(dir, outside())]: hashManaged("v1"),
+    });
+  });
+
+  it("is still classified from that record", async () => {
+    await rememberManaged(dir, outside(), "v1");
+    expect(await classifyManaged(dir, outside(), "v2", "v1")).toBe("stale");
+  });
+
+  it("is not dragged into the committed record by the legacy migration", async () => {
+    await putRecord(managedStatePath(dir), {
+      [managedKey(dir, outside())]: hashManaged("v1"),
+      "C:/Users/someone/.claude/skills/golem-ship/SKILL.md": hashManaged("v1"),
+      ".claude/rules/golem-ccr-refs.md": hashManaged("b"),
+    });
+    await rememberManaged(dir, FILE(), "a");
+    const record = await readRecord(managedRecordPath(dir));
+    expect(Object.keys(record)).toEqual([
+      ".claude/rules/golem-ccr-refs.md",
+      ".claude/skills/golem-ship/SKILL.md",
+    ]);
+    expect(JSON.stringify(record)).not.toContain("Users");
+  });
+});
+
 describe("a clone (skill-provenance-on-clone)", () => {
   it("refreshes a committed file whose hash arrived with it", async () => {
     // Exactly what a teammate checks out: the file and a committed record,
