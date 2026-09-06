@@ -18,6 +18,7 @@ import {
   type Control,
   type ControlGroup,
   ENV_LOCKED,
+  IMPORTANT_LOCKED,
   OPAQUE_LOCKED,
   parseSettingScope,
   restartHintFor,
@@ -48,7 +49,13 @@ export async function settingControlGroups(shared: {
     // A leaf a runtime control owns is edited there, not twice here.
     if (meta?.ownedBy !== undefined) continue;
     const [section] = entry.key.split(".", 2) as [string, string];
-    const control = settingControl(entry.key, entry.value, entry.layer, entry.source);
+    const control = settingControl(
+      entry.key,
+      entry.value,
+      entry.layer,
+      entry.source,
+      entry.important,
+    );
     if (control === null) continue;
     const list = bySection.get(section);
     if (list === undefined) bySection.set(section, [control]);
@@ -76,6 +83,7 @@ export function settingControl(
   value: unknown,
   layer: string,
   source: string | undefined,
+  important?: true,
 ): Control | null {
   const [section, leafKey] = key.split(".", 2) as [string, string];
   const schema = leafSchema(section, leafKey);
@@ -84,8 +92,17 @@ export function settingControl(
   const kind = settingKind(key, schema);
   const options = enumOptionsFor(schema);
   const range = numericRangeFor(schema);
+  // Order matters: an env-set value is normal-band, so it can only be the
+  // effective one when nothing declared this key important. Importance is
+  // therefore the stronger reason and is checked first.
   const locked =
-    layer === "env" ? ENV_LOCKED(source) : kind === "opaque" ? OPAQUE_LOCKED : undefined;
+    important === true
+      ? IMPORTANT_LOCKED(layer, source)
+      : layer === "env"
+        ? ENV_LOCKED(source)
+        : kind === "opaque"
+          ? OPAQUE_LOCKED
+          : undefined;
 
   return {
     id: `setting:${key}`,
@@ -145,8 +162,14 @@ export async function applySetting(
     value: result.effective.value,
     message: `${key} = ${JSON.stringify(result.value)} (${target} scope)`,
     file: result.file,
+    // ADR-0008 makes this common rather than rare: any origin may pin a key,
+    // so a write that lands in the file and still does not take effect is an
+    // ordinary outcome the UI must state, not an edge case it may skip.
     ...(result.overriddenBy !== undefined && {
-      overridden: `a higher layer wins — effective value is ${JSON.stringify(result.overriddenBy.value)} from ${result.overriddenBy.layer}`,
+      overridden:
+        result.overriddenBy.important === true
+          ? `${result.overriddenBy.layer} pins it as !important — effective value stays ${JSON.stringify(result.overriddenBy.value)}`
+          : `a higher layer wins — effective value is ${JSON.stringify(result.overriddenBy.value)} from ${result.overriddenBy.layer}`,
     }),
     ...restartHintFor(key),
   };

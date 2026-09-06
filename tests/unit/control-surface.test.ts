@@ -195,6 +195,30 @@ describe("collectControlSurface", () => {
     expect(control.writableScopes).toEqual([]);
   });
 
+  it("locks a control the cascade has PINNED, naming the origin and the recourse", async () => {
+    // ADR-0008: "Locked" alone is not answerable. The reason has to say who
+    // pinned it and what the reader can still do, because the panel itself has
+    // no widget for writing an `!important` declaration.
+    await writeFile(
+      projectFile(),
+      JSON.stringify({
+        knowledge: { rerank_enabled: true },
+        "!important": ["knowledge.rerank_enabled"],
+      }),
+      "utf8",
+    );
+    const control = find(await collectControlSurface(OPTS()), "setting:knowledge.rerank_enabled");
+    expect(control.value).toBe(true);
+    expect(control.layer).toBe("project");
+    expect(control.locked).toContain("!important");
+    // The recourse: origins that outrank `project!` are `team!` and `user!`.
+    expect(control.locked).toContain("~/.golem/settings.json");
+    expect(control.locked).toContain("your team");
+    // ...and never `local`, which importance demotes below the repo.
+    expect(control.locked).not.toContain("settings.local.json");
+    expect(control.writableScopes).toEqual([]);
+  });
+
   it("locks a structured value instead of offering to edit it", async () => {
     // R9.23: renamed from proxy.gateways → proxy.gateways
     const control = find(await collectControlSurface(OPTS()), "setting:proxy.gateways");
@@ -282,6 +306,22 @@ describe("applyControl", () => {
     expect(result.value).toBe("docs/wiki");
     const control = find(await collectControlSurface(OPTS()), "setting:knowledge.wiki_dir");
     expect(control.layer).toBe("default");
+  });
+
+  it("reports a write the cascade PINS against, rather than silently accepting it", async () => {
+    // ADR-0008 makes this common rather than rare, so it stops being an edge
+    // case a UI may skip: the file write succeeds and changes nothing.
+    await writeFile(
+      projectFile(),
+      JSON.stringify({
+        knowledge: { rerank_enabled: true },
+        "!important": ["knowledge.rerank_enabled"],
+      }),
+      "utf8",
+    );
+    const result = await applyControl("setting:knowledge.rerank_enabled", false, "local", OPTS());
+    expect(result.overridden).toContain("!important");
+    expect(result.overridden).toContain("project");
   });
 
   it("says so when a higher layer overrides the write", async () => {

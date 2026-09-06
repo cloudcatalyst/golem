@@ -4,7 +4,7 @@ type: concept
 tags: [config, settings, precedence, cascade, important, team, css, provenance]
 sources: [docs/decisions/ADR-0008-settings-cascade-and-importance.md, docs/golem-spec.md, src/config/loader.ts, docs/plan/verification-notes.md#154]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 ---
 
 # Settings Cascade
@@ -168,6 +168,33 @@ Precedence was never the gap in `src/config/loader.ts` — presentation was
   `!important`" is answerable; "locked" is not.
 - `ApplyResult.overridden` stops being an edge case a UI may skip: writing at an
   origin the cascade will overrule is now common rather than rare.
+
+## Where it lives
+
+Shipped 2026-09-06 (`settings-cascade-importance`). The resolver is
+`src/config/loader.ts`, and the ranking lives in exactly one place —
+`ORIGIN_ORDER`, which pass 1 reads forwards and pass 2 reads reversed. Two
+hand-kept lists that must stay mirror images is a bug waiting for the next
+origin, so there is only one.
+
+- **`REMOTE_DENIED_SETTINGS`** is the floor, compiled in, carrying
+  `proxy.bypass_all`. It applies to any origin marked remote, and a denied key
+  is dropped with a `REFUSED` warning rather than sanitised quietly.
+- **`IMPORTANT_LOCKED`** (`src/config/control-surface-types.ts`) writes the
+  locked reason, deriving the recourse from `ORIGIN_ORDER` rather than spelling
+  it out per origin — so it stays true when an origin is added. `default` is
+  filtered out of the recourse: it outranks everything, but nobody can write it.
+- **`tests/unit/config-cascade-importance.test.ts`** asserts the reversal per
+  pair. Reversing pass 2 back to forward order fails four of its tests, which is
+  the check that it is testing the ordering and not merely the outcome.
+
+**The `team` origin is a slot, not a feature.** It has its rank and its
+`LayerName` value, and `loadConfig`'s `teamLayer` option is where an
+already-resolved payload goes — but nothing fetches one yet, and
+`team-settings-layer` is retired rather than pending ([[Team Layer]] describes
+the mechanism ADR-0008 replaced). Filling the slot is `team-layer-fetch`.
+Marking an origin remote is what arms the floor, so today the floor is a
+mechanism with no origin using it, exercised by tests that construct one.
 
 ## What did not change
 

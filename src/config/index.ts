@@ -43,7 +43,7 @@ export type {
   ProvenanceEntry,
   SettingsOverrides,
 } from "./loader.js";
-export { loadConfig } from "./loader.js";
+export { loadConfig, ORIGIN_ORDER, REMOTE_DENIED_SETTINGS } from "./loader.js";
 export type {
   MigrationSweep,
   ScopeResult,

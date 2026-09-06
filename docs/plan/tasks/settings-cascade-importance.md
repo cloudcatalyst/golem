@@ -1,7 +1,7 @@
 ---
 task: settings-cascade-importance
 title: "Two bands in the resolver — any origin may declare `!important`, and importance reverses origin order"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -10,7 +10,7 @@ gate: "Reversal is asserted per pair, not in aggregate: `user!` beats `team!` be
 depends_on: []
 touches: [src/config/loader.ts, src/config/index.ts, src/config/control-surface-settings.ts, src/config/control-surface-types.ts]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06T13:18:16.316Z
 ---
 
 ## Why this is its own task
@@ -129,3 +129,7 @@ disable redaction.**
 today.** The existing loader fixtures are the assertion; they should pass
 unmodified. If one needs editing to go green, something has changed that this
 task did not intend to change.
+
+## Outcome
+
+shipped — two-band cascade, ORIGIN_ORDER, remote floor; debrief 2026-09-06-two-bands-not-two-ladders
