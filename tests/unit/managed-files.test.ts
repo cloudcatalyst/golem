@@ -227,9 +227,9 @@ describe("a clone (skill-provenance-on-clone)", () => {
     });
     expect(await exists(managedStatePath(dir))).toBe(false);
 
-    expect(await classifyManaged(dir, FILE(), "the new text", "an older Golem's shipped text")).toBe(
-      "stale",
-    );
+    expect(
+      await classifyManaged(dir, FILE(), "the new text", "an older Golem's shipped text"),
+    ).toBe("stale");
   });
 
   it("still reports a genuinely hand-edited file as owned", async () => {
