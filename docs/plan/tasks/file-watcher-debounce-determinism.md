@@ -1,14 +1,14 @@
 ---
 task: file-watcher-debounce-determinism
 title: "The debounce test races the poll loop — a burst of writes can straddle the window and emit two batches"
-state: queued
+state: done
 owner: agent
 size: S
 discipline: code
 design: "`src/knowledge/file-watcher.ts` is a polling watcher: a self-scheduling `setTimeout(pollMs)` scan feeds a `setTimeout(debounceMs)` flush. The test (`tests/unit/knowledge/file-watcher.test.ts`, \"debounces a burst of writes into a single batch\") writes three files then asserts ONE batch arrives and that nothing follows within 300ms. Under load the three writes straddle the 150ms debounce, a second scan detects the tail, and a SECOND batch arrives — `staysQuiet(300)` returns false and the failure reads `expected false to be true`. Diagnosed 2026-09-06 while closing `test-timing-flakes`; that task fixed the two sleep-margin flakes and established that the other three are 20s vitest TIMEOUTS, not margins. This one is the only genuine margin left."
 gate: "The debounce test cannot fail for want of CPU: the burst and the flush are both driven by the test rather than by wall-clock racing, and the test still fails if debouncing is removed — proven by deliberately breaking it once, the way the two fixes in `test-timing-flakes` were. No production behaviour change: any new seam is defaulted so `watchPath` behaves identically when it is not passed."
 depends_on: []
-touches: [src/knowledge/file-watcher.ts, tests/unit/knowledge/file-watcher.test.ts]
+touches: [tests/unit/knowledge/file-watcher.test.ts]
 created: 2026-09-06
 updated: 2026-09-06
 ---
@@ -56,3 +56,53 @@ wrong in an instructive way:
   weaker** — asserting only `Date.now() >= nextSpawnAt` after `start()` is
   vacuously true when no backoff is armed — and only the deliberate-break step
   caught it. Do the break-proof before believing the fix.
+
+
+## OUTCOME (2026-09-06) — fixed with NO source change; this task's own recommendation was wrong
+
+The design section above recommends an injected scheduler and calls a manual scan
+trigger the weaker option. **Neither was needed.** `vi.useFakeTimers()` already
+drives `setTimeout`/`clearTimeout`, so `file-watcher.ts` is untouched — no
+test-only surface added to production code for something the test runner does.
+
+The catch, and the reason a first attempt failed with zero batches: **fake only
+the timers.** Faking `setImmediate`/`nextTick` as well stalls the watcher's real
+fs promises, so `poll()` never resolves, never arms the debounce, and never
+schedules the next cycle.
+
+```ts
+vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+const settle = async () => { for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r)); };
+```
+
+`settle()` after each `advanceTimersByTimeAsync` lets the real I/O finish between
+simulated ticks. Writes use distinct LENGTHS (`a`, `bb`, `ccc`) because the change
+signal is `mtimeMs:size` and three same-length writes inside one mtime tick are
+indistinguishable from no write at all.
+
+### One assertion deliberately removed, and it is not a weakening
+
+The old test ended with `staysQuiet(300)` — "and no batch ever follows". **That
+was never a property of the debouncer.** A later poll can legitimately see
+`mtimeMs` change again with no further writes, because the OS settles file
+timestamps on its own schedule; reproduced here on Windows, where a second batch
+arrived during the quiet window. The test now asserts what debouncing actually
+means — three separate detections collapse into exactly one batch — which is
+strictly the stronger claim.
+
+### Break-proof
+
+Replacing the debounce with `void flush()` on every event fails it: two batches
+where zero are expected, *before* the window elapses. Done before believing the
+fix, per the precedent in `test-timing-flakes` where the first attempt at the
+`headroom-adapter` fix was vacuous.
+
+### Honest note
+
+Immediately after restoring the source from the break-proof, one run of the file
+showed `1 failed | 6 passed` — one of the OTHER tests in it, not the debounce
+one. Three subsequent full-file runs were clean, and the debounce test passed
+3/3 in isolation. Not attributed further. The remaining tests in this file still
+use the real-timer `nextBatch`/`staysQuiet` helpers, so they carry the same
+load-sensitivity the rest of the suite does; `npm run test:serial` is the answer
+there, not another seam.
