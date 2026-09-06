@@ -176,6 +176,17 @@ export interface WebFetchHookOptions {
    * than that, in a suite already sensitive to timing under load (R10.2).
    */
   readonly serveReserveMs?: number;
+  /**
+   * R10.2 — the clock the BUDGET is measured against, defaulting to `Date.now`.
+   * Tests only, and distinct from {@link nowMs}, which dates cache entries: this
+   * one decides whether the hook believes it has time left.
+   *
+   * It exists because the out-of-budget branch was otherwise only reachable by
+   * sleeping, which made the test a race between a 70ms margin and whatever else
+   * the machine was doing. An injected clock lets a test step past the deadline
+   * exactly, so the branch is asserted rather than provoked.
+   */
+  readonly clock?: () => number;
   /** Per-project gate for {@link fetchRaw}; CLI reads `knowledge.webcache_fetch_raw`. */
   readonly fetchRawEnabled?: (projectDir: string) => Promise<boolean>;
 }
@@ -227,7 +238,8 @@ async function fetchCacheAndServe(
   // gate's "either it serves, or it declines early": the alternative is paying for
   // a full download and then being killed on the way to serving it.
   const reserveMs = options.serveReserveMs ?? WEB_FETCH_SERVE_RESERVE_MS;
-  const fetchBudgetMs = deadlineMs - Date.now() - reserveMs;
+  const now = options.clock ?? Date.now;
+  const fetchBudgetMs = deadlineMs - now() - reserveMs;
   if (fetchBudgetMs <= 0) {
     io.stderr.write(
       `golem hook web-fetch-pre: no budget left to fetch ${url} within the hook's ` +
@@ -273,7 +285,7 @@ async function fetchCacheAndServe(
   // cached, so skipping this costs a KB entry, not a download. A KB failure must
   // never block serving — and nor may a slow one, which is what the budget check
   // is for. The next fetch is a cache hit either way.
-  if (Date.now() < deadlineMs) {
+  if (now() < deadlineMs) {
     try {
       await ingestWebPage(options, projectDir, url, content, nowIso);
     } catch {
@@ -303,7 +315,7 @@ export async function runWebFetchPre(
   // R9.21 — the clock starts at the top of the hook, not at the fetch: reading
   // stdin, loading config and probing the loopback endpoint all spend the same
   // budget the platform is counting down.
-  const startedMs = Date.now();
+  const startedMs = (options.clock ?? Date.now)();
   const deadlineMs = startedMs + (options.budgetMs ?? WEB_FETCH_PRE_TIMEOUT_SECONDS * 1_000);
   try {
     const parsed = payloadSchema.safeParse(JSON.parse(await readAll(io.stdin)));
