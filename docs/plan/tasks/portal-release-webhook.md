@@ -1,7 +1,7 @@
 ---
 task: portal-release-webhook
 title: "The portal end of the release webhook — OIDC on both sides; now needs one repo variable and a release"
-state: queued
+state: done
 owner: user
 size: S
 discipline: code
@@ -11,7 +11,7 @@ blocked: "CLEARED 2026-09-06 — `golem.run` resolves (`216.198.79.1`), the port
 depends_on: [release-portal-assets]
 touches: []
 created: 2026-09-04
-updated: 2026-09-06
+updated: 2026-09-06T07:53:45.078Z
 ---
 
 > **Re-scoped 2026-09-04.** The receiving half turned out to be already written
@@ -134,3 +134,7 @@ visible in Actions, and re-runnable via the Release workflow's
 `workflow_dispatch` with `notify_only`, which re-sends the webhook for an
 already-published tag without rebuilding a byte. It must never be able to
 unpublish or block a release.
+
+## Outcome
+
+shipped — v0.53.0 webhook accepted on attempt 1, {"version":"0.53.0","stored":true,"replaced":false}, published schema hash matches the payload

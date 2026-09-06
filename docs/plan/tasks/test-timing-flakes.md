@@ -37,3 +37,27 @@ distinguish "flaky" from "broken" — the merge stops either way, and the honest
 response is a re-run, which trains the reader to re-run rather than to look. The
 suite grows every batch, so the margins only get tighter: R14.2 alone added ~23
 tests and both failures appeared on that run.
+
+## A third one, found 2026-09-06
+
+The title says two; there are at least three. During the v0.53.0 release CI:
+
+```
+tests/unit/knowledge/file-watcher.test.ts > watchPath > debounces a burst of writes into a single batch
+AssertionError: expected false to be true
+```
+
+`test / ubuntu-latest / node 22 / shard 4` only — green on every other leg of the
+same run, and green on re-run with no change. A debounce window racing a loaded
+runner, the same shape as the other two.
+
+Two more flaked locally under full-suite load and passed in isolation, so they
+belong in the same sweep: `tests/integration/cli-status.test.ts` ("reads the CA
+trust from settings.local.json (R9.22)", 20054ms) and
+`tests/unit/session/join-queue.test.ts` (two `FileJoinQueue` cases, 20949ms).
+Both took ~20s, which is a timeout, not a margin.
+
+**Diagnostic worth keeping:** a load flake fails on ONE matrix leg and passes on
+the rest; a real input difference fails identically on every leg. That single
+distinction is what separated this from the ROADMAP staleness bug in the same
+release (verification-notes §156 addendum).
