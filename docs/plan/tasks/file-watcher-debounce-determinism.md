@@ -106,3 +106,16 @@ one. Three subsequent full-file runs were clean, and the debounce test passed
 use the real-timer `nextBatch`/`staysQuiet` helpers, so they carry the same
 load-sensitivity the rest of the suite does; `npm run test:serial` is the answer
 there, not another seam.
+
+## FOLLOW-UP 2026-09-06 — the fix narrowed the window, it did not close it
+
+The same test failed on CI the next PR (#175), on `windows / node 24 / shard 4`
+alone, with `expected [] to have a length of 1 but got +0`, and passed on re-run.
+Root cause: `settle()`'s ten `setImmediate` turns are a **proxy** for the poll's
+real fs I/O finishing, and macrotask turns do not wait on the libuv threadpool.
+One slow `snapshot()` stalls the entire chain, because the next poll timer is
+armed only after the previous poll resolves.
+
+Tracked as `file-watcher-settle-is-a-guess`. This task stays `done` — the fake
+timers were the right move and are kept; what is left is replacing the turn-count
+drain with an observable poll-cycle signal.
