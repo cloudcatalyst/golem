@@ -57,6 +57,40 @@ trust from settings.local.json (R9.22)", 20054ms) and
 `tests/unit/session/join-queue.test.ts` (two `FileJoinQueue` cases, 20949ms).
 Both took ~20s, which is a timeout, not a margin.
 
+A fourth, seen 2026-09-06 on a full local run:
+
+```
+tests/integration/hooks/web-fetch-budget.test.ts > web-fetch-pre budget (R9.21)
+  > still serves when the ingest is skipped for want of budget, and caches the page
+AssertionError: expected undefined to be 'deny'
+```
+
+This one is worth singling out because **it does not look like a timing test** —
+the assertion is on a hook decision, not a duration, so it reads as a real
+regression. It passed in isolation immediately afterwards. The test budgets
+itself against a timeout (R9.21), so a saturated machine makes the budget
+decision it asserts on never arrive.
+
+### The measurement that settles it (2026-09-06)
+
+Two consecutive full-parallelism runs of the SAME commit failed different sets —
+2 tests, then 4, with `headroom-adapter` passing in the first at 3438ms and
+failing in the second, and `web-fetch-budget` failing on a *different* test each
+time. Then, sequentially:
+
+```
+npx vitest run --fileParallelism=false
+Test Files  262 passed | 1 skipped (263)
+      Tests  3437 passed | 2 skipped (3439)
+   Duration  457.38s
+```
+
+**Zero failures.** So every one of the six is parallelism-induced, and none is a
+logic defect. `--fileParallelism=false` costs ~7m37s against ~3m45s and is the
+cheapest trustworthy answer when a local gate is flaking — CLI only, since R10.1
+settled that tuning `vitest.config.ts` for *speed* is a dead end (this is for
+*signal*, which is a different question).
+
 **Diagnostic worth keeping:** a load flake fails on ONE matrix leg and passes on
 the rest; a real input difference fails identically on every leg. That single
 distinction is what separated this from the ROADMAP staleness bug in the same
