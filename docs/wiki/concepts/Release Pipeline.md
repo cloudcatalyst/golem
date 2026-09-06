@@ -276,7 +276,7 @@ A status code is an instruction to the sender, so the sending job's behaviour is
 | code | body | meaning | the job |
 |---|---|---|---|
 | 200 | `{version, stored: true, replaced}` | stored | success |
-| 200 | `{version, stored: false, reason: "unchanged"}` | the same document is already stored | success |
+| 200 | `{version, stored: false, replaced: false}` | the same document is already stored | success |
 | 401 | `OIDC token rejected: <reason>` | `aud` / `repository` / `workflow_ref` mismatch | fails, no retry |
 | 422 | what was wrong with the payload | permanent — a `config_schema.url` that is not a release asset of this repo, or a document carrying the `header` block | fails, no retry |
 | 502 | GitHub unreachable, or the asset was not fetchable | transient — a release asset can take a moment to become readable | retries |
@@ -285,6 +285,12 @@ A status code is an instruction to the sender, so the sending job's behaviour is
 **A re-push is a no-op, not a failure.** `notify_only` against a tag whose
 document is already stored answers `200` with `stored: false`, which is exactly
 why the job tests the *status class* and never reads `stored`.
+
+The success body carries **`replaced`**, not `reason` — observed on both live
+runs (v0.52.1 and v0.53.0). An earlier account of the portal's contract named
+`reason: "unchanged"`; production says otherwise, so this table follows
+production. Nothing depends on it either way, because the job reads neither
+field.
 
 ### Proven live, and what is actually left (2026-09-05)
 
@@ -341,6 +347,32 @@ live success body was `{"version":"0.52.1","stored":true,"replaced":false}` —
 `reason: "unchanged"` on the `stored: false` path. Both are `200`, and the job
 reads neither field, so nothing behaves differently either way; the response
 table above records both shapes rather than picking one.
+
+### Proven in production (2026-09-06)
+
+`v0.53.0` is the first release cut with the variables set, and the webhook was
+accepted **on the first attempt**:
+
+```
+OIDC claims: {"aud":"https://golem.run","repository":"cloudcatalyst/golem",
+              "workflow_ref":"cloudcatalyst/golem/.github/workflows/release.yml@refs/heads/main"}
+attempt 1 → HTTP 200
+Portal notified: v0.53.0 (schema sha256 358aea61a428…)
+{"version":"0.53.0","stored":true,"replaced":false}
+```
+
+Independently checked afterwards: `releases/latest/download/config-schema.json`
+hashes to `358aea61a4281b089f0c4444618aca78ff70321594a7328ac08d70c6a587aee0` —
+the same digest the body carried, so the portal fetched and hash-checked exactly
+these bytes — and the document is `version 0.53.0`, 14 groups, **no `header`
+block**. `golem.run/install.sh` and `/install.ps1` answer 307 to
+`releases/latest/download/…`.
+
+**What this does NOT prove**, stated so nobody upgrades it by retelling: that the
+portal is *serving* 0.53.0 from its stored table. `{"stored":true}` is the
+portal's own report to the sender, not a read-back, and the route that serves the
+stored schema is not public. Every leg on this repo's side of the contract is
+measured; the last one is attested.
 
 ## Repository settings
 
