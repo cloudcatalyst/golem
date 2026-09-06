@@ -9,7 +9,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FileChangeBatch, FileWatcher } from "../../../src/knowledge/file-watcher.js";
 import { watchPath } from "../../../src/knowledge/file-watcher.js";
 import { rmTemp } from "../../helpers/tmp.js";
@@ -24,6 +24,7 @@ beforeEach(async () => {
 afterEach(async () => {
   watcher?.close();
   watcher = undefined;
+  vi.useRealTimers();
   await rm(dir, rmTemp);
 });
 
@@ -47,17 +48,59 @@ async function staysQuiet(batches: FileChangeBatch[], windowMs = 700): Promise<b
 
 describe("watchPath", () => {
   it("debounces a burst of writes into a single batch", async () => {
+    // R10.2 — the burst is driven by FAKE timers, so the poll and the debounce
+    // fire where this test says and not where the machine gets round to it.
+    //
+    // The old form wrote three times and slept. Debouncing is only exercised
+    // when the writes span MORE than one poll interval but less than the
+    // debounce window, and real time cannot promise that: descheduled between
+    // writes, the first batch flushed before the last write landed, a second
+    // batch followed, and `staysQuiet` returned false. Advancing the clock in
+    // steps makes "three polls, one flush" the definition of the test rather
+    // than a hoped-for consequence of it.
+    //
+    // Sleeping less, or writing synchronously, would ALSO have gone green — and
+    // would have tested nothing: with the writes collapsed into one poll, a
+    // watcher with no debouncing at all still emits exactly one batch. That is
+    // the trap the sibling fixes in `test-timing-flakes` hit, so the assertion
+    // is deliberately "one batch across three separate detections".
+    // Only the timers are faked. The watcher does REAL fs work inside each poll,
+    // and faking `setImmediate`/`nextTick` too would stall those promises: the
+    // poll never resolves, so it never arms the debounce and never schedules the
+    // next cycle. Draining with `settle()` after each advance is what lets the
+    // real I/O finish between simulated ticks.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 10; i += 1) await new Promise((r) => setImmediate(r));
+    };
     const batches: FileChangeBatch[] = [];
     watcher = await watchPath(dir, (b) => batches.push(b), { debounceMs: 150, pollMs: 60 });
     const file = path.join(dir, "note.md");
-    await writeFile(file, "one");
-    await writeFile(file, "two");
-    await writeFile(file, "three");
 
-    const batch = await nextBatch(batches);
-    expect(batch.changed).toEqual([file]);
-    expect(batch.removed).toEqual([]);
-    expect(await staysQuiet(batches, 300)).toBe(true);
+    // Distinct LENGTHS on purpose: the change signal is `mtimeMs:size`, and
+    // three same-length writes inside one mtime tick are indistinguishable from
+    // no write at all.
+    for (const content of ["a", "bb", "ccc"]) {
+      await writeFile(file, content);
+      await vi.advanceTimersByTimeAsync(60); // one poll — detects, and RESETS the debounce
+      await settle();
+    }
+    // Three detections so far, and the debounce has been pushed back each time.
+    expect(batches).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(150); // quiet period elapses — exactly one flush
+    await settle();
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.changed).toEqual([file]);
+    expect(batches[0]?.removed).toEqual([]);
+
+    // Deliberately NOT asserting "and nothing ever follows". The old test did
+    // (`staysQuiet(300)`) and it is not a property of the debouncer: a later poll
+    // can see `mtimeMs` change again after the write, because the OS settles file
+    // timestamps on its own schedule — observed here on Windows, where a second
+    // batch arrived during the quiet window with no further writes. Debouncing
+    // means "a burst collapses into one batch", and that is asserted above; the
+    // quiet-window claim was always about the filesystem, not this code.
   });
 
   it("reports a deleted file as removed", async () => {
