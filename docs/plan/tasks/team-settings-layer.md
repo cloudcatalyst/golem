@@ -1,7 +1,7 @@
 ---
 task: team-settings-layer
 title: "The team settings layer — one remote source that lands in the precedence ladder TWICE, cached so a lost network keeps policy"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -81,3 +81,22 @@ That report is fire-and-forget: it always answers `{ "recorded": true }`, and
 - Secrets. Team settings hold none by construction — the portal refuses a
   credential-shaped key at write time (ADR-0003's line). Do not add a local
   decrypt path for something that cannot arrive.
+
+## SUPERSEDED 2026-09-06 — do NOT build this
+
+**ADR-0008 retires the mechanism this task describes.** Decision 62(c), accepted
+2026-09-04 and landed in the spec 2026-09-06:
+
+> This REPLACES the "team layer appears twice" mechanism designed in
+> `team-settings-layer` and `docs/wiki/concepts/Team Layer.md` — that design is a
+> special case of this one and is retired rather than extended.
+
+The two-position ladder cost two `LayerName` values for one source, made
+provenance answer "which of the two team positions" instead of "the team", and
+generalised to nobody: a project could not use it and neither could a user. Any
+origin declaring `!important` meets the same need, for everyone.
+
+Closed as **superseded, not shipped** — nothing here was built and nothing here
+should be. The work is `settings-cascade-importance`. The document stays for the
+reasoning trail, because an agent picking this up off the ready list and building
+a retired design was a live risk until today.
