@@ -1,12 +1,12 @@
 ---
 task: team-layer-fetch
-title: "Fill the `team` origin — fetch the org's settings, cache them to `~/.golem/team.json`, and let a lost network keep policy"
+title: "Fill the `team` origin — fetch the org's settings, cache them per org to `~/.golem/teams/<org_id>.json`, and let a lost network keep policy"
 state: queued
 owner: agent
 size: M
 discipline: code
 design: "ADR-0008 (`docs/decisions/ADR-0008-settings-cascade-and-importance.md`) settles WHERE a team value lands and what `enforced` now means; `docs/wiki/concepts/Settings Cascade.md` is the reader-facing version. The wire is the portal repo's `docs/api-contract.md` (`GET`/`POST /api/v1/orgs/{orgId}/settings`) and `docs/team-config.md` §1–§3, summarised in `docs/plan/verification-notes.md` §149 items 3 and 8. The retired two-position ladder is `docs/plan/tasks/team-settings-layer.md` — read its §SUPERSEDED, then do NOT build what the rest of it describes."
-gate: "The origin is populated, not just declared: `loadConfig` resolves a real team payload at `team` rank, and `enforced: true` on a key arrives as a `\"!important\"` declaration. Offline is a first-class path — a portal that cannot be reached uses `~/.golem/team.json` and `golem status` reports its age; an absent cache falls through to local config, LOUDLY, and NEVER stops the proxy starting. `REMOTE_DENIED_SETTINGS` must be armed for this origin — a payload naming `proxy.bypass_all` is dropped with the existing `REFUSED` warning, asserted against a real fetched payload rather than a constructed one."
+gate: "The origin is populated, not just declared: `loadConfig` resolves a real team payload at `team` rank, and `enforced: true` on a key arrives as a `\"!important\"` declaration. Offline is a first-class path — a portal that cannot be reached uses `~/.golem/teams/<org_id>.json` and `golem status` reports its age PER TEAM, asserted with two cached teams present so a single figure standing in for both fails the test (Decision 63); an absent cache falls through to local config, LOUDLY, and NEVER stops the proxy starting. `REMOTE_DENIED_SETTINGS` must be armed for this origin — a payload naming `proxy.bypass_all` is dropped with the existing `REFUSED` warning, asserted against a real fetched payload rather than a constructed one."
 depends_on: [team-portal-auth, project-team-binding]
 touches: [src/config/loader.ts, src/cli/, docs/wiki/]
 created: 2026-09-06
@@ -36,8 +36,12 @@ is missing is the code that puts something in the slot.
    consequences chose the `"!important"` syntax partly because it maps 1:1 onto
    the flag the portal already sends. Only the MEANING changed, and the portal's
    copy has to follow.
-3. **Cache to `~/.golem/team.json`,** and report its age. Stale policy beats
-   absent policy.
+3. **Cache to `~/.golem/teams/<org_id>.json`,** one file per team, and report
+   its age per team. Stale policy beats absent policy. Keyed by org because a
+   team link is a property of the PROJECT, so one machine holds projects
+   belonging to different teams and a single `team.json` would let whichever
+   synced last answer for both (Decision 63). The org id is already
+   filename-safe; do not sanitise it, that is how two ids collide on one file.
 4. **Hand it to `loadConfig` as `teamLayer`,** with a `source` that names the
    TEAM rather than the cache path where a human will read it — ADR-0008
    requires provenance for a team value to name the team, and that requirement

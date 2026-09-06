@@ -184,9 +184,10 @@ export interface LoadConfigOptions {
    * The `team` origin's already-resolved payload, same shape as a settings file
    * (sections plus an optional `"!important"` list).
    *
-   * The SLOT, not the fetch: `team-settings-layer` owns retrieving this from
-   * the portal and caching it to `~/.golem/team.json`. Nothing in this module
-   * reaches the network. Supplying it marks the origin REMOTE, so
+   * The SLOT, not the fetch: `team-layer-fetch` owns retrieving this from the
+   * portal and caching it per org to `~/.golem/teams/<org_id>.json` (Decision
+   * 63). Nothing in this module reaches the network. Supplying it marks the
+   * origin REMOTE, so
    * {@link REMOTE_DENIED_SETTINGS} applies to it.
    */
   readonly teamLayer?: {

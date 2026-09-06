@@ -73,7 +73,9 @@ the same way, so "why can I not change this" is answered on screen.
 
 ## Stale policy beats absent policy
 
-The last fetched layer caches to `~/.golem/team.json`. A machine with no network
+The last fetched layer caches to `~/.golem/teams/<org_id>.json`, one file per
+team because a machine holds projects belonging to different teams (Decision
+63). A machine with no network
 uses the last known team settings rather than silently dropping to user
 defaults, and the file records when it was fetched so `golem status` can say how
 old it is.
