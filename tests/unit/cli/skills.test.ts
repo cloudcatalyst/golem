@@ -203,3 +203,50 @@ describe("P0 skill registry", () => {
     }
   });
 });
+
+describe("/golem-step — the stepwise pacing mode", () => {
+  it("is a user-invoked skill that takes an optional depth or task argument", () => {
+    const skill = P0_SKILLS.step;
+    if (skill === undefined) throw new Error("expected a step skill");
+    expect(skill).toContain("invocationMode: user");
+    expect(skill).toMatch(/\$ARGUMENTS/);
+  });
+
+  it("names all three parts of the turn shape, and caps the next-step list", () => {
+    const skill = P0_SKILLS.step;
+    if (skill === undefined) throw new Error("expected a step skill");
+    expect(skill).toContain("AskUserQuestion");
+    expect(skill).toContain("(Recommended)");
+    expect(skill.toLowerCase()).toContain("four at most");
+    // Exactly one question is the whole point — a list of decisions is what the
+    // mode exists to stop.
+    expect(skill).toMatch(/ONE question/);
+  });
+
+  it("sends the detail to a gitignored scratchpad, not to the reply", () => {
+    const skill = P0_SKILLS.step;
+    if (skill === undefined) throw new Error("expected a step skill");
+    expect(skill).toContain(".golem/state/wip-");
+    expect(skill.toLowerCase()).toContain("gitignored");
+    // The pointer is what makes the short reply safe; assert the file is linked.
+    expect(skill).toContain("## Next");
+  });
+
+  it("exempts substance from the brevity rule", () => {
+    const skill = P0_SKILLS.step;
+    if (skill === undefined) throw new Error("expected a step skill");
+    const exempt = skill.slice(skill.indexOf("What still gets said in full"));
+    expect(exempt).toContain("irreversible");
+    expect(exempt.toLowerCase()).toContain("failed");
+    expect(exempt.toLowerCase()).toContain("correction");
+    // Never trade an honest report for a shorter one.
+    expect(skill.toLowerCase()).toContain("brevity is about narration");
+  });
+
+  it("is a mode that persists, and says how to suspend it for one turn", () => {
+    const skill = P0_SKILLS.step;
+    if (skill === undefined) throw new Error("expected a step skill");
+    expect(skill.toLowerCase()).toContain("rest of the session");
+    expect(skill).toContain("full");
+  });
+});
