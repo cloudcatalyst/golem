@@ -6,12 +6,35 @@ owner: agent
 size: M
 discipline: code
 design: "The portal repo's `docs/team-config.md` §4 for the design and `docs/api-contract.md` (`GET /api/v1/orgs/{orgId}/skills`, `?manifest=1`) for the wire; summarised in `docs/plan/verification-notes.md` §149 item 6. The local mechanism is `src/cli/managed-files.ts` + `src/cli/init-skills.ts`, unchanged in kind."
-gate: "A skill added in the portal appears at `.claude/skills/golem-team/<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output)."
+gate: "A skill added in the portal appears at `.claude/skills/golem-team/<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output). PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
 depends_on: [project-team-binding]
 touches: [src/cli/managed-files.ts, src/cli/init-skills.ts, src/cli/]
 created: 2026-09-04
 updated: 2026-09-04
 ---
+## Decision 64 — the free/team boundary this task must hold
+
+**Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
+it ADDS org-wide config, synced skills and shared standards, and never unlocks
+something a solo user was denied. Read `docs/wiki/concepts/Free and Team Tiers.md`
+before starting; spec Decision 64 is authoritative.
+
+Three rules bind this task specifically:
+
+1. **No link, no team code path.** A project whose committed config has no
+   `team.org_id` must perform ZERO portal I/O, read no cache, look up no token,
+   and nag at most once. **This is an invariant with its own test** — not a
+   default, and not something covered incidentally by another assertion. It is
+   what makes "free for solo users" checkable rather than aspirational.
+2. **"Cannot reach" and "not entitled" are DIFFERENT STATES.** Unreachable
+   (timeout, DNS, offline) → use the cache and report its age. `402
+   subscription_required` / `403 not_a_member` → do NOT use the cache; fall back
+   to local config and say why. Treating a 402 like a timeout hands out a free
+   team layer; treating a timeout like a 402 punishes an offline developer for
+   the network.
+3. **Nothing here may break anything.** No entitlement outcome may stop the proxy
+   starting, fail `golem init`, or fail a build. Every one degrades to local
+   config, out loud.
 
 ## RESOLVED 2026-09-04 — no marketplace; this design stands
 
