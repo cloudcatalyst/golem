@@ -344,6 +344,21 @@ describe("a hand-edited team skill is reported and KEPT, never overwritten", () 
     expect(result.outcome).toMatchObject({ removed: [], conflicts: ["mine"] });
   });
 
+  it("survives a namespace directory whose name this module would never have written", async () => {
+    // `golem-team-Upper` is inside the prefix the pruner walks but is not a
+    // name `teamSkillDirName` would produce, so rebuilding the label from it
+    // threw out of a sync that must never throw. The label comes off the
+    // DIRECTORY now. Found by re-reading the prune path, not by a failing test.
+    const odd = await installUnknown("golem-team-Upper", "hand made, odd name");
+    const served = portalServing({});
+    const result = await run({ team: linked(), transport: served.transport });
+    expect(await readFile(odd, "utf8")).toBe("hand made, odd name");
+    expect(result.outcome).toMatchObject({ kind: "synced", removed: [] });
+    expect(result.actions.some((a) => a.kind === "conflict" && a.path.includes("Upper"))).toBe(
+      true,
+    );
+  });
+
   it("leaves a team directory with no readable SKILL.md alone", async () => {
     // Whatever put it there, it is not a file Golem can account for — so it is
     // reported and survives, exactly as `init-skills.ts` treats the same shape.

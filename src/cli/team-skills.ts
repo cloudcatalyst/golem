@@ -266,6 +266,14 @@ async function removeIfOurs(
   dryRun: boolean,
   why: string,
 ): Promise<{ readonly action: InitAction; readonly removed: boolean }> {
+  // Read back off the DIRECTORY rather than rebuilt from the name.
+  // `teamSkillDirName` refuses a name it would not itself have written, and
+  // these names come from disk — a directory somebody created by hand as
+  // `golem-team-Upper` is inside the namespace this function prunes but is not
+  // a name this module would ever produce. Rebuilding it would throw out of a
+  // sync that is required never to throw, and the honest label is the directory
+  // that actually exists anyway.
+  const dirName = path.basename(path.dirname(local.file));
   if (local.content === null) {
     // A directory with no readable SKILL.md is not ours to interpret, exactly as
     // in `init-skills.ts`. Leave it and say it is there.
@@ -284,7 +292,7 @@ async function removeIfOurs(
       action: {
         kind: "conflict",
         path: rel(projectDir, local.file),
-        detail: ownedDetail(`team skill /${teamSkillDirName(local.name)} (${why})`),
+        detail: ownedDetail(`team skill /${dirName} (${why})`),
       },
     };
   }
@@ -297,7 +305,7 @@ async function removeIfOurs(
     action: {
       kind: "remove",
       path: rel(projectDir, local.file),
-      detail: `team skill /${teamSkillDirName(local.name)} — ${why}, and unmodified since Golem wrote it`,
+      detail: `team skill /${dirName} — ${why}, and unmodified since Golem wrote it`,
     },
   };
 }
