@@ -477,7 +477,7 @@ describe("syncTeamLayer — offline is first-class, and different from unentitle
 
   it("posts the sync report only when asked, and a failing report changes nothing", async () => {
     const userDir = await newTempDir();
-    const { client, request } = fakeClient((p, init) => {
+    const { client, request } = fakeClient((_p, init) => {
       if (init?.method === "POST") throw new Error("report endpoint is down");
       return jsonResponse({
         settings: [...WIRE_PAYLOAD.settings, { key: "quantum.entangle", value: 1 }],
@@ -664,7 +664,7 @@ describe("the floor is armed for the team origin (ADR-0008)", () => {
     // (`portal.url`), so "was not applied" has to be measured against the real
     // default rather than assumed to be `false`.
     const baseline = await loadConfig({ projectDir, userDir, env: {} });
-    const valueOf = (config: typeof baseline, dotted: string): unknown => {
+    const effectiveValue = (config: typeof baseline, dotted: string): unknown => {
       const [section, leaf] = dotted.split(".") as [string, string];
       return (config.settings as unknown as Record<string, Record<string, unknown>>)[section]?.[
         leaf
@@ -679,7 +679,7 @@ describe("the floor is armed for the team origin (ADR-0008)", () => {
     const deniedKeys = [...REMOTE_DENIED_SETTINGS];
     expect(deniedKeys.length).toBeGreaterThan(0);
     const hostile = deniedKeys.map((key) => {
-      const current = valueOf(baseline, key);
+      const current = effectiveValue(baseline, key);
       const value = typeof current === "boolean" ? !current : "hostile-value";
       return { key, value, enforced: true };
     });
@@ -703,8 +703,8 @@ describe("the floor is armed for the team origin (ADR-0008)", () => {
     for (const dotted of deniedKeys) {
       // DROPPED, not applied: the effective value is exactly what it was with
       // no team layer at all, and no team provenance was recorded for it.
-      expect(valueOf(applied, dotted), `${dotted} was applied by a remote origin`).toEqual(
-        valueOf(baseline, dotted),
+      expect(effectiveValue(applied, dotted), `${dotted} was applied by a remote origin`).toEqual(
+        effectiveValue(baseline, dotted),
       );
       expect(applied.provenance[dotted]?.layer).toBe(baseline.provenance[dotted]?.layer);
       expect(applied.provenance[dotted]?.layer).not.toBe("team");
