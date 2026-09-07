@@ -37,12 +37,39 @@ const exists = async (p: string) =>
 describe("guidance feature registry", () => {
   it("covers base defaults (seeded) and opt-in features", () => {
     const byName = new Map(GUIDANCE_FEATURES.map((g) => [g.name, g]));
-    for (const n of ["ccr-refs", "wiki-kb-first", "coder-first", "local-answer", "snooze-hold"]) {
+    for (const n of [
+      "ccr-refs",
+      "wiki-kb-first",
+      "coder-first",
+      "local-answer",
+      "snooze-hold",
+      "parallel-agent-isolation",
+    ]) {
       expect(byName.get(n)?.seededByDefault).toBe(true);
     }
     for (const n of ["prompt-translation", "durable-tasks"]) {
       expect(byName.get(n)?.seededByDefault).toBe(false);
     }
+  });
+
+  it("parallel-agent-isolation names the worktree command and all three collisions", () => {
+    // The rule exists because ownership rules did not prevent any of this: two
+    // agents in one checkout collided through git HEAD and through node_modules,
+    // and an "empty" worktree nearly got deleted with uncommitted work in it.
+    // A rule that only said "use a worktree" would not have prevented the third.
+    const snip = guidanceFeature("parallel-agent-isolation")?.snippet ?? "";
+    expect(snip).toContain("git worktree add");
+    // 1 — the shared HEAD
+    expect(snip).toContain("ONE HEAD");
+    expect(snip).toContain("git add -A");
+    // 2 — the shared dependency tree
+    expect(snip).toContain("node_modules");
+    expect(snip).toContain("npm ci");
+    // 3 — a dirty tree is invisible to a commit count
+    expect(snip).toContain("status --short");
+    expect(snip).toContain("git stash list");
+    // ...and the generated-file trap when the shared docs conflict
+    expect(snip).toContain("golem task index --write");
   });
 
   it("local-answer explains the proxy behaviour + the keep-the-wiki-current lever", () => {
