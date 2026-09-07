@@ -68,6 +68,8 @@ describe("guidance feature registry", () => {
     // 3 — a dirty tree is invisible to a commit count
     expect(snip).toContain("status --short");
     expect(snip).toContain("git stash list");
+    // ...and that a resumable agent may still need the worktree it reported done with
+    expect(snip).toContain("OWNING AGENT");
     // ...and the generated-file trap when the shared docs conflict
     expect(snip).toContain("golem task index --write");
   });
