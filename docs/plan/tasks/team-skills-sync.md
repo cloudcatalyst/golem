@@ -1,7 +1,7 @@
 ---
 task: team-skills-sync
 title: "Team skills sync into their own managed namespace — and a skill deleted in the portal disappears locally"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -10,8 +10,9 @@ gate: "A skill added in the portal appears at `.claude/skills/golem-team-<name>/
 depends_on: [project-team-binding]
 touches: [src/cli/managed-files.ts, src/cli/init-skills.ts, src/cli/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-07T11:24:59.781Z
 ---
+
 ## Decision 64 — the free/team boundary this task must hold
 
 **Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
@@ -105,3 +106,7 @@ debrief. It is the one design question this task must not leave implicit.
 
 - Authoring or editing team skills. That is a portal page.
 - Golem's own `.claude/skills/golem/` namespace. Untouched here.
+
+## Outcome
+
+shipped
