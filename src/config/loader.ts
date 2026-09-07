@@ -87,8 +87,10 @@ export type LayerName = "default" | "user" | "team" | "project" | "local" | "env
  * declarations) walks it reversed. Adding an origin means adding it here and
  * nowhere else.
  *
- * `team` is declared but not yet populated by any fetch: `team-settings-layer`
- * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills. It
+ * `team` is declared but not yet populated by any fetch: `team-layer-fetch`
+ * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills
+ * (`team-settings-layer` was the original owner and is retired — Decision
+ * 62(c) — so do not go looking for it). It
  * sits above `user` in the normal band because a team is shared across many
  * projects, so a repo specialising a company default is the expected case
  * rather than a violation (ADR-0008 §The origins).
@@ -184,9 +186,10 @@ export interface LoadConfigOptions {
    * The `team` origin's already-resolved payload, same shape as a settings file
    * (sections plus an optional `"!important"` list).
    *
-   * The SLOT, not the fetch: `team-settings-layer` owns retrieving this from
-   * the portal and caching it to `~/.golem/team.json`. Nothing in this module
-   * reaches the network. Supplying it marks the origin REMOTE, so
+   * The SLOT, not the fetch: `team-layer-fetch` owns retrieving this from the
+   * portal and caching it per org to `~/.golem/teams/<org_id>.json` (Decision
+   * 63). Nothing in this module reaches the network. Supplying it marks the
+   * origin REMOTE, so
    * {@link REMOTE_DENIED_SETTINGS} applies to it.
    */
   readonly teamLayer?: {

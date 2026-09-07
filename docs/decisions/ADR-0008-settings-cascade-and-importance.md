@@ -5,7 +5,7 @@ tags: [config, settings, precedence, cascade, important, team, portal, css]
 sources:
   [src/config/loader.ts, src/config/schema.ts, src/config/control-surface-types.ts, docs/wiki/concepts/Team Layer.md, docs/wiki/concepts/Configuration Surfaces.md, docs/plan/tasks/team-settings-layer.md, docs/plan/verification-notes.md#157]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 ---
 
 # ADR-0008 — The settings cascade: any origin may declare `!important`, and importance reverses origin order
@@ -17,6 +17,12 @@ and it is retired rather than extended. Amends the shipped precedence decision
 that put `GOLEM_*` above every other layer (see §The env reversal). Does not
 modify ADR-0004; `proxy.bypass_all` stays exactly as it is, and §The floor is
 what keeps this ADR from becoming a way around it.
+
+**Amended by Decision 63 (2026-09-06, USER DECISION):** the offline cache this
+ADR describes as `~/.golem/team.json` is keyed by org instead,
+`~/.golem/teams/<org_id>.json`. One machine holds projects belonging to
+different teams, so one file has one slot for two team layers. Nothing else here
+moves; see §What this does NOT change → The offline rule.
 
 ## Context
 
@@ -63,7 +69,7 @@ Seven, most foundational first. `team` is new; the rest are today's ladder with
 |---|---|---|---|
 | 1 | `default` | compiled-in | Golem |
 | 2 | `user` | `~/.golem/settings.json` | the person at the keyboard |
-| 3 | `team` | portal, cached to `~/.golem/team.json` | the org's admins |
+| 3 | `team` | portal, cached to `~/.golem/teams/<org_id>.json` | the org's admins |
 | 4 | `project` | `<project>/.golem/settings.json` (committed) | the repo |
 | 5 | `local` | `<project>/.golem/settings.local.json` (gitignored) | this checkout |
 | 6 | `env` | `GOLEM_*` | the invoking shell |
@@ -268,8 +274,10 @@ The wire format is unchanged; three meanings change.
 - **Redaction.** Unconditional, unreordered, no dial. See §The floor.
 - **ADR-0004.** `proxy.bypass_all` keeps its shape, its loudness and its
   CLI-only write path.
-- **The offline rule.** The team layer still caches to `~/.golem/team.json`;
-  stale policy still beats absent policy; `golem status` still reports its age.
+- **The offline rule.** The team layer still caches; stale policy still beats
+  absent policy; `golem status` still reports its age. Decision 63 later keyed
+  the cache per org, `~/.golem/teams/<org_id>.json`, and made the age report
+  per team; the rule itself is unchanged.
 - **The failure rule.** A team link is an enhancement to a local-first tool.
   Nothing about it may stop the proxy from starting — an unreachable portal
   falls back to the cache, then to local config, loudly.

@@ -31,7 +31,7 @@ Most foundational first. Only `team` is new; the rest is the shipped ladder with
 |---|---|---|---|
 | 1 | `default` | compiled-in | Golem |
 | 2 | `user` | `~/.golem/settings.json` | the person at the keyboard |
-| 3 | `team` | portal, cached to `~/.golem/team.json` | the org's admins |
+| 3 | `team` | portal, cached to `~/.golem/teams/<org_id>.json` | the org's admins |
 | 4 | `project` | `<project>/.golem/settings.json` (committed) | the repo |
 | 5 | `local` | `<project>/.golem/settings.local.json` (gitignored) | this checkout |
 | 6 | `env` | `GOLEM_*` | the invoking shell |
@@ -198,11 +198,15 @@ mechanism with no origin using it, exercised by tests that construct one.
 
 ## What did not change
 
-Redaction, ADR-0004 and `proxy.bypass_all`'s shape and loudness; the
-`~/.golem/team.json` offline cache and its age report; the rule that nothing
-about a team link may stop the proxy starting; retirement and migration handling
-(both run before importance is considered); and every frozen `src/interfaces/`
-contract.
+Redaction, ADR-0004 and `proxy.bypass_all`'s shape and loudness; the team
+offline cache and its age report; the rule that nothing about a team link may
+stop the proxy starting; retirement and migration handling (both run before
+importance is considered); and every frozen `src/interfaces/` contract.
+
+The cache's *path* did change later, but not because of this design: Decision 63
+(2026-09-06) keys it per org as `~/.golem/teams/<org_id>.json`, because one
+machine holds projects belonging to different teams and one file has one slot for
+two team layers. Its role in the cascade is exactly as described above.
 
 **Existing installs resolve identically.** Nothing declares importance until
 someone writes it, and no client ships a team layer yet.

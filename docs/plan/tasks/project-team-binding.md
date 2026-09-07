@@ -6,11 +6,11 @@ owner: agent
 size: M
 discipline: code
 design: "The portal repo's `docs/team-config.md` §4b is authoritative for the key shape and the failure table; `docs/api-contract.md` §2–§4 for the wire. Both read on 2026-09-04 and summarised in `docs/plan/verification-notes.md` §149 — read §149 first, then the portal docs for detail. ADR-0003 is why the credential does not live in the file."
-gate: "Four behaviours, each a test: (1) no `team.org_id` → zero portal I/O and no nag beyond one mention; (2) `team.org_id` present with no token → `golem init` still SUCCEEDS, names `golem team link`, and needs no network; (3) `403 not_a_member` / `402 subscription_required` → the team the project names is reported, local config is used, and NOTHING fails; (4) `golem team unlink` removes both the key and `.claude/skills/golem-team/`."
+gate: "Four behaviours, each a test: (1) no `team.org_id` → zero portal I/O and no nag beyond one mention; (2) `team.org_id` present with no token → `golem init` still SUCCEEDS, names `golem team link`, and needs no network; (3) `403 not_a_member` / `402 subscription_required` → the team the project names is reported, local config is used, and NOTHING fails; (4) `golem team unlink` removes both the key and `.claude/skills/golem-team/`, and LEAVES `~/.golem/teams/<org_id>.json` in place — asserted with a second project on the same machine still linked to that team, which must keep working offline."
 depends_on: [team-portal-auth]
 touches: [src/config/schema.ts, src/cli/, docs/wiki/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 ---
 
 > **Rewritten 2026-09-04** after reading the portal repo. The first draft
@@ -62,6 +62,12 @@ token is a credential in a repository waiting to happen.
 `unlink` removes the key **and** the managed `.claude/skills/golem-team/`
 directory. A team that no longer applies must not leave its instructions behind.
 
+It does **not** touch `~/.golem/teams/<org_id>.json`. The cache is machine scope
+and the link is project scope, so another project on this machine may still be
+linked to that team, and deleting the file would take its offline policy away —
+a silent downgrade to user defaults, which is the one outcome §The failure rule
+forbids. An unreferenced cache is stale at worst, and its timestamp says so.
+
 ## What `golem init` does
 
 | state | behaviour |
@@ -82,7 +88,7 @@ never nags.
 |---|---|
 | `403 not_a_member` | Name the team the project points at, use local config, do not fail |
 | `402 subscription_required` | Same, with the reason named |
-| portal unreachable | Use the cached `~/.golem/team.json`, say how old it is |
+| portal unreachable | Use the cached `~/.golem/teams/<org_id>.json`, say how old it is |
 | token expired | Refresh silently; on failure fall back to cache and prompt at the next interactive command |
 
 **Degrade, but never silently.** The hazard this design is avoiding is someone
@@ -94,7 +100,7 @@ says something out loud; none of them stops the tool.
 - The OAuth flow itself → `team-portal-auth`.
 - Where a team value sits in the precedence ladder → SHIPPED by
   `settings-cascade-importance` (ADR-0008); the origin exists and is ranked.
-- Fetching the payload and caching it to `~/.golem/team.json` →
+- Fetching the payload and caching it to `~/.golem/teams/<org_id>.json` →
   `team-layer-fetch`. (This used to point at `team-settings-layer`, which was
   closed as superseded on 2026-09-06.)
 - Syncing the skills themselves → `team-skills-sync`. This task only writes and
