@@ -9433,3 +9433,83 @@ The generalisable version: **an entitlement check whose enforcement lives only
 on the fetch path is only as current as the last fetch.** Any design that
 separates "refresh" from "read" has to decide where a verdict is durable, and
 the answer is not automatically "the fetch".
+
+## §162 — golem.run is LIVE, and the first real portal bytes confirm §158: discovery is not on the portal's own origin (2026-09-08)
+
+First contact with the deployed portal. No credentials were used and none were
+needed for any of this — every probe below is unauthenticated and read-only.
+
+### 1. The API is up and rejects properly — [OBSERVED]
+
+```
+GET https://golem.run/api/v1/me      → 401
+GET https://golem.run/api/v1/orgs    → 404
+```
+
+`401` on `/api/v1/me` is the contract behaving: the endpoint exists and refuses
+an unauthenticated caller. `/api/v1/orgs` is `404` — the contract's org routes
+are `/api/v1/orgs/{orgId}/...`, so a bare collection route is not expected to
+exist and its absence is not a fault.
+
+### 2. §158 is CONFIRMED against the live host — [OBSERVED]
+
+```
+GET https://golem.run/.well-known/oauth-authorization-server  → 404
+GET https://golem.run/.well-known/openid-configuration        → 404
+```
+
+§158 argued from the contract that the Clerk issuer is a different origin from
+the portal API, and that one `GOLEM_PORTAL_URL` therefore cannot serve both.
+That is now observed rather than reasoned: **discovery is not on golem.run at
+all.** `portal.issuer` is not a defensive extra key — without it the harness
+cannot find an authorization server.
+
+### 3. The entitlement classifier survived real bytes — [OBSERVED]
+
+`golem team sync` against the live host, with a linked org and no token:
+
+```
+Team org_livetest: the portal could not be reached (the portal's authorization
+server metadata at https://golem.run/.well-known/oauth-authorization-server
+answered 404. Check `portal.url` — it must be the Clerk Frontend API URL (the
+issuer), not the portal's web address.) and this machine has no cached team
+settings — using local configuration only.
+EXIT=0
+```
+
+Three things worth recording:
+
+- **Exit 0.** A misconfigured portal degraded to local configuration and did not
+  fail the command — Decision 64(f) holding against a real host rather than a
+  fake transport.
+- **Classified as `unreachable`, not `not_entitled`.** A 404 on discovery is not
+  a verdict about the team, and the classifier did not treat it as one. No cache
+  was written and none was stamped.
+- **The diagnostic names the cause, not just the symptom.** It quotes the URL it
+  probed, the status, and the fix. That is §158's finding surfaced where someone
+  will actually meet it.
+
+### 4. The UA-sniffing install map works — [OBSERVED], and it clears most of `R7.6-infra`
+
+```
+curl/8.0            → 307 → .../releases/latest/download/install.sh
+PowerShell/7.4      → 307 → .../releases/latest/download/install.ps1
+Chrome (Win64) UA   → 200 (serves the page)
+```
+
+All three UA classes route correctly. **Caveat, stated rather than glossed:**
+these are `curl -A` requests, so the *sniffing logic* is verified for all three
+while a real browser *render* is not — the browser case is confirmed only as far
+as "200, serves the page instead of redirecting".
+
+### What remains, and it is small
+
+An end-to-end `golem team link` needs two strings that only the Clerk dashboard
+can give, both `owner: user`:
+
+1. **The Clerk Frontend API URL** — the issuer, for `portal.issuer`.
+2. **A registered public OAuth client id** — for `portal.client_id`, registered
+   with the loopback redirect the harness uses (RFC 8252).
+
+Everything on the harness side is built and tested; the wire shape stays
+`[UNESTABLISHED]` as deployed behaviour until those exist.
