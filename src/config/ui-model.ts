@@ -690,6 +690,48 @@ export const SETTING_META = {
       "whatever it returns.",
     advanced: true,
   },
+
+  // --- portal ---------------------------------------------------------------
+  "portal.url": {
+    label: "Portal URL",
+    summary: "The hosted portal's address — empty means no portal, which is the default",
+    detail:
+      "`/api/v1/...` hangs off this. Golem is local-first: with no portal configured every " +
+      "team command says so and nothing else changes. GOLEM_PORTAL_URL sets it, which is the " +
+      "one variable the portal's API contract says should be enough to point the harness at " +
+      "any environment.",
+  },
+  "portal.issuer": {
+    label: "Authorization server",
+    summary:
+      "Where OAuth endpoints are discovered, when that is not the same origin as the portal URL",
+    detail:
+      "Endpoints are always discovered from `<issuer>/.well-known/oauth-authorization-server` " +
+      "(RFC 8414) rather than hardcoded; this only says where to look. It exists because the " +
+      "portal's API is on its own domain while its authorization server is Clerk's Frontend " +
+      "API — https://clerk.<domain>, or https://<slug>.clerk.accounts.dev in development. " +
+      "Empty means 'same as the portal URL'.",
+    advanced: true,
+  },
+  "portal.client_id": {
+    label: "OAuth client id",
+    summary: "The public client id this harness presents — an identifier, not a secret",
+    detail:
+      "The OAuth application is registered `public: true`, so there is no client secret " +
+      "anywhere: the harness ships as source and could not keep one. PKCE stands in for it. " +
+      "There is no default because registering the application is a one-off act by the portal " +
+      "operator, and a compiled-in id would either be wrong or would put a real client id in a " +
+      "public repository. The tokens it yields go to the OS keychain, never to a settings file.",
+  },
+  "portal.link_timeout_ms": {
+    label: "Sign-in timeout",
+    summary: "How long `golem team link` waits for the browser round trip",
+    detail:
+      "Long enough for a password manager, an MFA prompt and a consent screen; short enough " +
+      "that an abandoned sign-in does not leave a loopback port listening all afternoon. On " +
+      "expiry the listener closes and nothing is stored.",
+    advanced: true,
+  },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
 /** Metadata for one leaf; undefined for an unknown path. */
@@ -753,6 +795,11 @@ export const SECTION_META = {
     title: "Plugins",
     summary: "Third-party in-process seams — no sandbox, nothing discovered (ADR-0005)",
     order: 80,
+  },
+  portal: {
+    title: "Team portal",
+    summary: "Where the hosted portal is and which OAuth client to present — no credential here",
+    order: 85,
   },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 

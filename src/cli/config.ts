@@ -27,6 +27,8 @@ export interface ConfigEntry {
   readonly value: unknown;
   readonly layer: string;
   readonly source?: string;
+  /** ADR-0008: the winning declaration was `!important` at {@link layer}. */
+  readonly important?: true;
 }
 
 export interface ConfigListReport {
@@ -38,6 +40,8 @@ export interface ConfigGetReport {
   readonly value: unknown;
   readonly layer: string;
   readonly source?: string;
+  /** ADR-0008: the winning declaration was `!important` at {@link layer}. */
+  readonly important?: true;
 }
 
 export interface ConfigWriteResult {
@@ -69,6 +73,7 @@ export async function listConfig(options: ConfigReadOptions): Promise<ConfigList
       value: sectionValues[section]?.[key],
       layer: entry?.layer ?? "default",
       ...(entry?.source !== undefined && { source: entry.source }),
+      ...(entry?.important === true && { important: true as const }),
     });
   }
   return { entries };
@@ -94,6 +99,7 @@ export async function getConfig(
     value: sectionValues[section]?.[leafKey],
     layer: entry?.layer ?? "default",
     ...(entry?.source !== undefined && { source: entry.source }),
+    ...(entry?.important === true && { important: true as const }),
   };
 }
 
@@ -328,7 +334,8 @@ export function renderConfigList(report: ConfigListReport): string {
   const lines: string[] = [];
   for (const entry of report.entries) {
     const source = entry.source !== undefined ? ` (${entry.source})` : "";
-    lines.push(`  ${entry.key} = ${JSON.stringify(entry.value)} — ${entry.layer}${source}`);
+    const band = entry.important === true ? " !important" : "";
+    lines.push(`  ${entry.key} = ${JSON.stringify(entry.value)} — ${entry.layer}${band}${source}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -336,7 +343,8 @@ export function renderConfigList(report: ConfigListReport): string {
 /** Human rendering of `config get`. */
 export function renderConfigGet(report: ConfigGetReport): string {
   const source = report.source !== undefined ? ` (${report.source})` : "";
-  return `${report.key} = ${JSON.stringify(report.value)} — ${report.layer}${source}\n`;
+  const band = report.important === true ? " !important" : "";
+  return `${report.key} = ${JSON.stringify(report.value)} — ${report.layer}${band}${source}\n`;
 }
 
 /** Human rendering of `config set`. */
@@ -357,9 +365,13 @@ export function renderConfigSet(result: ConfigWriteResult): string {
   if (result.overriddenBy !== undefined) {
     const o = result.overriddenBy;
     const oSource = o.source !== undefined ? ` (${o.source})` : "";
-    lines.push(
-      `note: a higher-precedence layer overrides it — effective value is from ${o.layer}${oSource}`,
-    );
+    // ADR-0008: say WHICH band won. "a higher-precedence layer" stops being true
+    // once importance exists — user! outranks local without being higher.
+    const why =
+      o.important === true
+        ? `${o.layer} declares it !important, which beats every ordinary declaration`
+        : `a higher-precedence layer overrides it — effective value is from ${o.layer}`;
+    lines.push(`note: ${why}${oSource}`);
   }
   return `${lines.join("\n")}\n`;
 }

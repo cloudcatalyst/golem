@@ -83,6 +83,13 @@ export async function installSkills(projectDir: string, dryRun: boolean): Promis
     const disposition = await classifyManaged(projectDir, skillPath, content, existing);
     if (disposition === "current") {
       actions.push({ kind: "skip", path: rel(projectDir, skillPath), detail: "up to date" });
+      // Nothing was written, but something was LEARNED: bytes identical to what
+      // Golem ships are provably Golem's own text, whoever put them there. That
+      // is the only honest way a project whose skills were committed before the
+      // record was portable can acquire provenance — and without it the first
+      // teammate to upgrade Golem still meets the permanent conflict this whole
+      // mechanism exists to end (skill-provenance-on-clone).
+      if (!dryRun) await rememberManaged(projectDir, skillPath, content);
       continue;
     }
     if (disposition === "owned") {

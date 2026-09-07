@@ -1,13 +1,13 @@
 ---
 task: release-portal-assets
 title: "The release must carry install.sh, install.ps1 and config-schema.json — every portal path redirects to assets that do not exist"
-state: queued
+state: done
 owner: agent
 size: S
 discipline: code
 design: "The portal repo's `docs/deploy.md` (\"Prerequisite in the harness repo\") and `docs/team-config.md` §2; measured against `.github/workflows/release.yml` in `docs/plan/verification-notes.md` §149 item 2. The pipeline it now lives in: `docs/wiki/concepts/Release Pipeline.md`."
 gate: "A release built from this workflow carries, at `releases/latest/download/`: `install.sh`, `install.ps1`, `config-schema.json`, the npm tarball, and all six binaries. `config-schema.json` contains no `header` and no control whose layer is anything but `default`/`runtime`."
-blocked: "IMPLEMENTED 2026-09-04, not yet PROVEN — no release has been cut since the workflow was fixed. Actions itself is healthy (the billing block cleared by 2026-09-02), so the proof needs only a release, not a payment. Left open deliberately: an unrun workflow is not a passed one."
+blocked: "CLEARED 2026-09-06 — PROVEN by v0.53.0."
 depends_on: []
 touches: [.github/workflows/release.yml, src/cli/commands/config.ts]
 created: 2026-09-04
@@ -60,3 +60,26 @@ prevents that: the billing block that stopped Actions between 2026-08-22 and
 Until a release IS cut, the front door still 404s — the assets exist in the
 workflow, not on a release. That is now one merge away rather than a payment
 away.
+
+## PROVEN 2026-09-06 by v0.53.0
+
+The gate needed a release, not a code change, and v0.53.0 supplied it. The
+`release` job's own "Confirm every asset golem.run redirects to is present" step
+passed, and `gh release view v0.53.0` lists all seventeen assets:
+
+```
+config-schema.json  install.ps1  install.sh  golem-run-0.53.0.tgz  SHA256SUMS
+golem-{darwin,linux}-{x64,arm64}  golem-windows-{x64,arm64}.exe  (+ .map each)
+```
+
+Checked independently rather than inferred from a green job:
+
+- `https://golem.run/install.sh` and `/install.ps1` answer **307** to
+  `releases/latest/download/…`
+- the published `config-schema.json` is `version 0.53.0`, 14 groups, **no
+  `header` block**, and hashes to
+  `358aea61a4281b089f0c4444618aca78ff70321594a7328ac08d70c6a587aee0` — the same
+  digest the portal webhook carried, so the portal fetched exactly those bytes
+
+"An unrun workflow is not a passed one" was the right call to leave this open.
+It has now been run.

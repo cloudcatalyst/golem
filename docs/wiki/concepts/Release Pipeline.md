@@ -2,9 +2,9 @@
 title: Release Pipeline
 type: concept
 tags: [ci, release, branches, npm, github-actions, portal, webhook]
-sources: [.github/workflows/ci.yml, .github/workflows/release.yml, .github/workflows/release-prepare.yml, scripts/release.mjs, src/cli/commands/config.ts]
+sources: [.github/workflows/ci.yml, .github/workflows/release.yml, .github/workflows/release-prepare.yml, scripts/release.mjs, src/cli/commands/config.ts, "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow"]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-06
 ---
 
 # Release Pipeline
@@ -97,6 +97,77 @@ the compiled-in `VERSION` constant together, so all three move or none do.
 **Merge the release PR with a merge commit, not a squash.** A squash rewrites the
 history `development` is built on, and the branches then diverge permanently —
 every later release PR would show the whole delta again.
+
+## The release PR needs one click before CI will run
+
+**Cutting a release has exactly one manual beat that is not the merge: approving
+the CI run on the release PR.** It is deliberate, it is not going away, and this
+section exists because for two releases nothing said so.
+
+### The symptom, so it is recognised and not debugged
+
+The release PR opens looking finished and stuck at the same time:
+
+- the required `CI gate` check reads `action_required`, with **zero jobs**
+- `gh pr checks <n>` answers *"no checks reported on the 'development' branch"*
+- the PR reports `mergeable=MERGEABLE state=BLOCKED`
+- the CI run, if you find it, is **`completed` after 0 seconds**
+
+Every one of those reads like a failure. None of them is one. Nothing is broken,
+and nothing is going to happen either.
+
+### Why
+
+`release-prepare.yml` opens the PR with `gh pr create` authenticated as
+`GITHUB_TOKEN`, and GitHub's anti-recursion rule is that *"events triggered by
+the `GITHUB_TOKEN` will not create a new workflow run"*. `pull_request` is the
+one exception that matters here: rather than dropping the run, GitHub **creates
+it and parks it awaiting approval** from a user with write access — explicitly
+"to prevent recursive workflow runs while still allowing CI workflows to run on
+pull requests created by automation".
+
+`main` requires the `CI gate` check (§ Repository settings), so the release
+cannot merge until CI runs, and CI will not run until a human approves it. That
+is the whole stall.
+
+### Clearing it
+
+Either the Checks tab of the release PR → **Approve workflows to run**, or:
+
+```sh
+gh api "repos/cloudcatalyst/golem/actions/runs?status=action_required&per_page=10"
+gh api -X POST repos/cloudcatalyst/golem/actions/runs/RUN_ID/approve
+```
+
+**Approving only lets the tests run — it publishes nothing**, so an agent may
+safely do it. The release PR itself is still the user's to merge, with a merge
+commit.
+
+### Why it was kept rather than automated away
+
+Three options were on the table, and two of them cost more than the beat does:
+
+| option | cost |
+|---|---|
+| Push the bump, let a human open the PR | trades one click for another, and loses the generated PR body |
+| Open the PR with a **PAT** stored as a secret | a long-lived credential with `repo` scope living in CI config — against this project's own posture (ADR-0003: credentials live in a keychain, not in CI config) |
+| **Keep the approval, document it** | one click per release, in the same session as the merge |
+
+The third won. A human confirming before anything reaches npm and a public CDN
+path is not obviously wrong for a step that publishes, and GitHub's own framing
+is that the approval is a safety feature for bot-opened PRs, not an obstacle to
+route around. **The actual defect was never the click — it was that the workflow's
+comments described the flow as automatic.** Behaviour and documentation
+disagreed, and documentation is the one people believe.
+
+So the beat is now stated in three places, in the order an operator meets them:
+the header comment of `release-prepare.yml`, the **job summary** of the prepare
+run (which prints the PR URL and the two `gh api` calls above), and the **PR body
+itself**, whose first section is what to click and whose merge checklist opens
+with *"the CI run on this PR has been approved"*.
+
+The workflow cannot approve its own run: `GITHUB_TOKEN` is the very token GitHub
+is refusing to let start runs. Naming the click is the most it can honestly do.
 
 ## What a release publishes
 
@@ -276,7 +347,7 @@ A status code is an instruction to the sender, so the sending job's behaviour is
 | code | body | meaning | the job |
 |---|---|---|---|
 | 200 | `{version, stored: true, replaced}` | stored | success |
-| 200 | `{version, stored: false, reason: "unchanged"}` | the same document is already stored | success |
+| 200 | `{version, stored: false, replaced: false}` | the same document is already stored | success |
 | 401 | `OIDC token rejected: <reason>` | `aud` / `repository` / `workflow_ref` mismatch | fails, no retry |
 | 422 | what was wrong with the payload | permanent — a `config_schema.url` that is not a release asset of this repo, or a document carrying the `header` block | fails, no retry |
 | 502 | GitHub unreachable, or the asset was not fetchable | transient — a release asset can take a moment to become readable | retries |
@@ -285,6 +356,12 @@ A status code is an instruction to the sender, so the sending job's behaviour is
 **A re-push is a no-op, not a failure.** `notify_only` against a tag whose
 document is already stored answers `200` with `stored: false`, which is exactly
 why the job tests the *status class* and never reads `stored`.
+
+The success body carries **`replaced`**, not `reason` — observed on both live
+runs (v0.52.1 and v0.53.0). An earlier account of the portal's contract named
+`reason: "unchanged"`; production says otherwise, so this table follows
+production. Nothing depends on it either way, because the job reads neither
+field.
 
 ### Proven live, and what is actually left (2026-09-05)
 
@@ -341,6 +418,32 @@ live success body was `{"version":"0.52.1","stored":true,"replaced":false}` —
 `reason: "unchanged"` on the `stored: false` path. Both are `200`, and the job
 reads neither field, so nothing behaves differently either way; the response
 table above records both shapes rather than picking one.
+
+### Proven in production (2026-09-06)
+
+`v0.53.0` is the first release cut with the variables set, and the webhook was
+accepted **on the first attempt**:
+
+```
+OIDC claims: {"aud":"https://golem.run","repository":"cloudcatalyst/golem",
+              "workflow_ref":"cloudcatalyst/golem/.github/workflows/release.yml@refs/heads/main"}
+attempt 1 → HTTP 200
+Portal notified: v0.53.0 (schema sha256 358aea61a428…)
+{"version":"0.53.0","stored":true,"replaced":false}
+```
+
+Independently checked afterwards: `releases/latest/download/config-schema.json`
+hashes to `358aea61a4281b089f0c4444618aca78ff70321594a7328ac08d70c6a587aee0` —
+the same digest the body carried, so the portal fetched and hash-checked exactly
+these bytes — and the document is `version 0.53.0`, 14 groups, **no `header`
+block**. `golem.run/install.sh` and `/install.ps1` answer 307 to
+`releases/latest/download/…`.
+
+**What this does NOT prove**, stated so nobody upgrades it by retelling: that the
+portal is *serving* 0.53.0 from its stored table. `{"stored":true}` is the
+portal's own report to the sender, not a read-back, and the route that serves the
+stored schema is not public. Every leg on this repo's side of the contract is
+measured; the last one is attested.
 
 ## Repository settings
 

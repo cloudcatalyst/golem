@@ -58,12 +58,39 @@ The full suite is minutes long and saturates every core, so **don't run it per t
 - Inner loop: `npm run test:changed` (only what your working-tree diff reaches) or `npm run test:unit` (no daemons, no git spawns)
 - Close-out / pre-merge: `npm test` — still the whole suite, still the gate. `test:full` is the same thing under an explicit name
 
+- When the parallel run flakes: `npm run test:serial` (`--fileParallelism=false`)
+
+**A red full-suite run is not automatically a broken change.** This suite has
+tests that overrun the global `testTimeout: 20_000` on a saturated machine —
+`join-queue`'s cap test does ~200 fs operations, `cli-status` runs a real
+`golemInit` — and they fail as *timeouts*, which read like hangs. Two
+consecutive runs of the same commit failed 2 tests, then 4, with a different set
+each time. `npm run test:serial` settles it: ~7m40s instead of ~3m45s, and it
+came back **3437 passed, zero failures** on exactly the commit the parallel runs
+were failing. Judge by that before believing a local red.
+
+**Two failure shapes, and telling them apart saves an afternoon.** A load flake
+fails on ONE matrix leg and passes on re-run; a real input difference fails
+*identically* on every OS and node version. Both showed up in the v0.53.0
+release: `file-watcher` flaked on `ubuntu / node 22 / shard 4` alone, while a
+stale `ROADMAP.md` failed on all of them.
+
 `test:changed` runs the WHOLE suite whenever `package.json` or `vitest.config.ts` is in your diff — that is vitest's `forceRerunTriggers` default, not a bug. Use `test:unit` in that case.
 
 Two things are already settled, don't re-derive them: **`vitest.config.ts` pool/worker tuning is a measured dead end** (R10.1 — every variant came out slower than baseline), and **the integration tests are not redundant** (they carry R8.32/R9.4/R9.22). Vitest parallelises across *files*, never within one, so when a file gets slow enough to become the suite's floor the fix is to **split it along its `describe` seams** — same tests, more files — as R13.17 did to `checkpoint-ledger` (51.4s → 20.4s).
 
 ## Multi-agent
 Claim tasks by ID in PR title. Don't modify files owned by another workstream. Blocked? Write the question in verification-notes and pick up another task.
+
+**Give every parallel agent its own worktree — `git worktree add ../<repo>-<task> -b <branch> development` — in the dispatch prompt, before it starts.** File ownership is not enough, because the collisions are not file collisions. Proven three ways in one afternoon (2026-09-06, three concurrent agents):
+
+- **Shared HEAD.** A checkout has one. Between agent A's `git checkout -b` and its first commit, agent B's checkout moved it — A's commits landed on B's branch and B's `git add -A` swept up A's files. Cost a rebase and a re-review of both branches.
+- **Shared `node_modules`.** A published-package install replaced the dev tree and broke the `golem` CLI repo-wide (`Cannot find package 'commander' imported from …/dist/`). Repair with `npm ci`; prevent by not sharing.
+- **A worktree is never disposable because its commit count is zero.** That says nothing about a dirty tree. `git -C <path> status --short` and `git stash list` before removing one — uncommitted design work that exists nowhere else looks exactly like an abandoned branch. Commit it on its own branch rather than deciding for the author.
+
+Shared append-only docs (`docs/plan/SHIPPED.md`, `docs/wiki/WIKI.md`) conflict between every pair: keep BOTH sides. **Never hand-resolve `ROADMAP.md` — it is generated**; take either side, then `golem task index --write`. Merge one PR at a time and re-check the next one's mergeability afterwards.
+
+This is shipped as the `parallel-agent-isolation` guidance rule, seeded by `golem init` into `.claude/rules/`, so every project gets it — not just this one.
 
 ## Batch close-out
 Run `/golem-ship` after the last task in a batch. Checklist:

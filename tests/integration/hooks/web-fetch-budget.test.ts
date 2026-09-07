@@ -152,16 +152,24 @@ describe("web-fetch-pre budget (R9.21)", () => {
     // preserved even when the indexing is not.
     let ingested = false;
     const io = fakeIo(preInput(URL_BIG));
+    // R10.2 — the budget is STEPPED, not slept. This used to sleep 140ms against a
+    // 90ms budget with a 20ms reserve, leaving a 70ms margin for the machine to
+    // eat: under load the hook bailed before emitting the deny-that-serves and
+    // `permissionDecision` read `undefined`, which looks exactly like a
+    // regression. An injected clock asserts the branch instead of provoking it,
+    // and cannot lose the race because there is no race.
+    let clockMs = 1_000_000;
     await runWebFetchPre(io, {
       projectDir,
-      // Enough at the start to clear the reserve check, but past the deadline by
-      // the time the fetch returns. The reserve is scaled down so this costs
-      // milliseconds instead of sleeping past the real 4s one.
+      // Enough at the start to clear the reserve check (90 - 20 = 70 left to
+      // fetch in), and past the deadline by the time the fetch returns.
       budgetMs: 90,
       serveReserveMs: 20,
+      clock: () => clockMs,
       fetchRawEnabled: async () => true,
       fetchRaw: async () => {
-        await new Promise((r) => setTimeout(r, 140));
+        // Overruns the 90ms budget by 50ms, exactly and every time.
+        clockMs += 140;
         return { content: BIG_PAGE, headers: {} };
       },
       buildKnowledge: async () => {

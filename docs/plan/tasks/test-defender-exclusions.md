@@ -60,3 +60,26 @@ undoes them.
 
 - Disabling real-time protection outright. Not on the table.
 - Anything in `vitest.config.ts` (R10.1 measured that dead end).
+
+## Fresh evidence 2026-09-06 — the suspicion now has numbers, and they point at fs
+
+Closing `test-timing-flakes` produced exactly the data this task wanted, and it
+implicates I/O rather than CPU:
+
+- Three tests fail on a saturated machine as **20s `testTimeout` timeouts**, and
+  all three are I/O-heavy. `join-queue`'s cap test does ~200 fs operations
+  (O(n²) in directory scans) and runs in **~0.5s idle** — a 40× slowdown.
+- Two consecutive full-parallelism runs of the *same commit* failed 2 tests, then
+  4, with a **different set each time**.
+- The same commit, run sequentially: **3437 passed, zero failures**, ~7m40s
+  against ~3m45s.
+
+A 40× slowdown concentrated on fs syscalls is what real-time scanning looks like.
+This stays `owner: user` — `Get-MpPreference`/`Add-MpPreference` need an elevated
+shell — but the measurement is now cheap: `npm test` and `npm run test:serial`
+before and after excluding the repo and the vitest temp directories.
+
+**REGRESSED or NO EFFECT is still an acceptable answer** and must be written down
+either way. If it is NO EFFECT, the honest conclusion is that the suite simply
+oversubscribes this machine, and `test:serial` is the permanent answer rather
+than a workaround.

@@ -82,11 +82,39 @@ than pick one as canonical, [[Release Pipeline]] § What the portal answers now
 records both shapes, and the question went back to the portal side. This repo
 owns the wire contract, so if it should say one thing, it gets said here first.
 
-## Where it stands
+## Where it stands: DONE
 
-Unblocked, not done. The gate on `portal-release-webhook` is "a release
-publishes and the portal has the new `config-schema.json` cached under its
-version without anyone poking it", and only a release can meet it — the merge
-into `main` IS the release, so cutting one is the test. Read the `OIDC claims:`
-line in the job log for the `aud` it minted; the portal side logs
-`authenticated by OIDC` then `stored schema`. Details: §156.
+`v0.53.0` was cut the same day and the webhook was accepted **on the first
+attempt** — no retry, no 401:
+
+```
+OIDC claims: {"aud":"https://golem.run","repository":"cloudcatalyst/golem",
+              "workflow_ref":"cloudcatalyst/golem/.github/workflows/release.yml@refs/heads/main"}
+attempt 1 → HTTP 200
+{"version":"0.53.0","stored":true,"replaced":false}
+```
+
+The published `config-schema.json` hashes to the exact digest the body carried
+(`358aea61a428…`), is `version 0.53.0` with 14 groups, and has no `header` block.
+So the gate is met and `portal-release-webhook` is closed.
+
+The success-body divergence resolved itself by being observed twice: the field is
+**`replaced`**, not `reason`. [[Release Pipeline]] now follows production rather
+than either side's prose.
+
+One honest limit, recorded so it is not upgraded by retelling: `{"stored":true}`
+is the portal reporting to the sender, not a read-back. The route that serves the
+stored schema is not public, and four guesses at it hit the Next.js 404 catch-all.
+Every leg on this repo's side is measured; the last one is attested.
+
+## Two things the release turned up on the way
+
+**`golem task index --write` reads the working tree**, so three untracked files
+made local generation write `7 ready` into a committed file while CI regenerated
+`6`. A green local `golem verify` could not see it — the same pollution sat on
+both sides of the comparison. The tell was that CI failed *identically* on every
+OS and node version: a flake varies, an input difference does not.
+
+**A third load-sensitive test** surfaced —
+`file-watcher.test.ts > debounces a burst of writes` — which is neither of the two
+`test-timing-flakes` names, so that task understates the problem.

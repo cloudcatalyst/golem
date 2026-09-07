@@ -9106,3 +9106,133 @@ matrix leg: a flake varies, an input difference does not.
 Fix is to regenerate with the untracked docs moved aside, which is what the
 committed state actually describes. Worth knowing before assuming a red shard
 after a green `golem verify` means CI is wrong.
+
+## §157 — The CSS cascade really does reverse origin order for `!important`, and it reverses LAYER order too — the evidence ADR-0008 cited before it existed (2026-09-06)
+
+ADR-0008 (2026-09-04) says its mapping is "verified against MDN's origin table,
+verification-notes §154". **That note was never written.** §154 was the next free
+number when the ADR was drafted, and the 2026-09-05 portal-OIDC work took it, so
+the citation has been pointing at an unrelated section ever since. Recorded here
+and the ADR repointed. The facts themselves check out.
+
+### Origin order — MDN, verbatim
+
+`https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_cascade/Cascade`
+(fetched 2026-09-04, served from Golem's KB cache 2026-09-06), under
+*Cascading order → Origin and importance*:
+
+| Precedence Order (low to high) | Origin | Importance |
+|---|---|---|
+| 1 | user-agent (browser) | normal |
+| 2 | user | normal |
+| 3 | author (developer) | normal |
+| 4 | CSS keyframe animations | |
+| 5 | author (developer) | `!important` |
+| 6 | user | `!important` |
+| 7 | user-agent (browser) | `!important` |
+| 8 | CSS transitions | |
+
+So the normal band runs user-agent → user → author, and the important band runs
+author → user → user-agent. **The reversal is real and it is not partial** — the
+whole origin order inverts, which is precisely the property ADR-0008 borrows.
+
+Also verbatim, on why an author reset beats a browser default:
+
+> Unless the user-agent stylesheet includes an `!important` next to a property,
+> making it "important", styles declared by author styles, including a reset
+> stylesheet, take precedence over the user-agent styles, regardless of the
+> specificity of the associated selector.
+
+### Layer order — the half that was NOT obviously true
+
+ADR-0008 also claims CSS "reverses cascade **layer** order within an origin
+too", and leans on it for `team!` beating `project!` beating `local!`. That is a
+separate claim from the origin table and needed its own source.
+`https://developer.mozilla.org/en-US/docs/Web/CSS/@layer` (fetched 2026-09-06),
+verbatim:
+
+> The order of precedence among important rules is the inverse of normal rules.
+
+> The declaration order matters. The first declared layer gets the lowest
+> priority and the last declared layer gets the highest priority. However, the
+> priority is reversed when the `!important` flag is used.
+
+So with `@layer theme, layout, utilities;`, `utilities` wins normally and `theme`
+wins for important declarations. **Both halves of ADR-0008's analogy hold**, and
+the mapping (`user` ↔ user stylesheet, `team`/`project`/`local` ↔ author layers,
+`default` ↔ user-agent stylesheet) survives contact with the actual spec table.
+
+### The lesson, which is not about CSS
+
+**A citation to a section number that does not exist yet will silently point at
+whatever later takes that number.** It does not dangle — it misdirects, which is
+worse, because the reference resolves and reads as verified. Cite by *title*
+when the target is not written yet, or write the section first. Found only
+because the three files were still uncommitted and got read before landing.
+
+## §158 — The portal contract's "one `GOLEM_PORTAL_URL` is enough" does not cover the API half, and the OS-keychain invariant is stated wrong for Windows (2026-09-07)
+
+Both found while building `team-portal-auth`. **Sources:** the portal repo's
+`docs/api-contract.md` §1 (read 2026-09-06 from the local working copy at
+`D:\Personal\Projects\Golem`), §149 item 5, and this repo's
+`src/credentials/backends.ts` read from source. Item 2 is **[OBSERVED]** on this
+machine; item 1 is **[OBSERVED]** as a property of the two documents and
+**[UNESTABLISHED]** as deployed behaviour — no live portal was reachable to try
+it against.
+
+### 1. Discovery and the API are on different origins, and no v1 endpoint bridges them
+
+`docs/api-contract.md` §1 says: *"a single `GOLEM_PORTAL_URL` plus discovery is
+enough to point the harness at any environment."* That is true of the
+**authorization server** — `authorization_endpoint` and `token_endpoint` really
+do come from `<issuer>/.well-known/oauth-authorization-server`, so nothing needs
+hardcoding. It is **not** true of the **API**: the same document puts
+`/api/v1/me` and `/api/v1/orgs/{orgId}/config` on the portal's own domain, while
+it names the issuer as the *Clerk Frontend API URL* — `https://clerk.<domain>` in
+production, `https://<slug>.clerk.accounts.dev` in development.
+
+Those are different origins, and **nothing in v1 maps one to the other**: there
+is no endpoint that advertises the issuer, and the discovery document is not
+served from the portal's own root by anything the contract promises. A harness
+that took the sentence literally would fetch
+`https://golem.run/.well-known/oauth-authorization-server`, get a 404, and report
+"the portal is unreachable" about a portal that is up.
+
+Resolved here by splitting the setting in two: `portal.url` (the API base) and
+`portal.issuer` (the authorization server), with `issuer` **falling back to
+`url`** — which makes the contract's one-variable claim true for any deployment
+that does publish the metadata at its own origin, without assuming every
+deployment does. `src/portal/config.ts` `resolvePortalConfig` is the single
+function that changes if the portal later grows an issuer-advertising endpoint.
+
+**For the portal side:** either add that endpoint, or state the two-origin fact
+in §1 so the next client does not have to discover it. This does not block
+anything — setting `portal.issuer` works today.
+
+### 2. "The token is not under `~/.golem/`" is false on Windows for a correct design — [OBSERVED]
+
+ADR-0003 and this task's gate both phrase the invariant as a **path**: no token
+under `~/.golem/`. On macOS that is `security`, on Linux `secret-tool`, and the
+secret genuinely lives outside the config directory. On **Windows there is no
+keychain daemon**: `keychainBackend("win32", userDir)` returns `windowsDpapi`,
+which writes a `CryptProtectData` blob to
+`~/.golem/credentials/<account>.dpapi`. The OS-backed store *is* a file at the
+path the invariant forbids.
+
+**[OBSERVED] on this machine (2026-09-07)**, after a real `golem team link`
+against a local fake authorization server: `~/.golem` — 69 files scanned, **0**
+containing the plaintext access or refresh token; the project `.golem` — 2 files,
+**0**. `portal-oauth.dpapi` present, 1581 bytes, beginning
+`01000000d08c9ddf0115d1118c7a00c04fc297eb`, which is the standard DPAPI blob
+header. The plaintext is not in it, and DPAPI binds it to this user and machine,
+so a copied or roamed blob cannot be read elsewhere.
+
+So the path phrasing would have failed a correct implementation on one of the
+three supported platforms. The invariant with actual security content — and the
+one asserted in `tests/unit/portal/tokens.test.ts` — is **"the plaintext token
+appears in no file"**, checked by walking every file under both the user and
+project directories. It is strictly stronger: a path check passes a design that
+writes plaintext to `~/.config/` instead.
+
+Worth restating wherever ADR-0003's invariant is quoted, rather than quietly
+carrying two versions.
