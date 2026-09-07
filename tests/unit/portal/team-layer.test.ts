@@ -812,7 +812,7 @@ describe("Decision 64 — no link, no team code path", () => {
     await writeTeamLayerCache(userDir, {
       org_id: ORG,
       fetched_at: new Date().toISOString(),
-      settings: [{ key: "telemetry.enabled", value: false }],
+      settings: [{ key: "telemetry.enabled", value: false, enforced: false }],
     });
 
     const withTeam = await loadConfigWithTeamLayer({ projectDir, userDir, env: {} });
