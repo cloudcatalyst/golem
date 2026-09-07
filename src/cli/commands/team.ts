@@ -37,11 +37,14 @@ import {
   resolvePortalConfig,
   systemBrowser,
   type TeamSettings,
+  type TeamSkillsTransport,
+  teamApiBaseUrl,
   teamCachePath,
   unbindTeam,
   unlinkPortal,
 } from "../../portal/index.js";
 import { forgetManaged } from "../managed-files.js";
+import { syncTeamSkills } from "../team-skills.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -504,6 +507,82 @@ export default function register(program: Command): void {
           "This is local only: the token is gone from this machine but was not revoked at " +
             "the portal. Revoke it there if it may have been exposed.\n",
         );
+      } catch (err) {
+        _fail(err);
+      }
+    });
+
+  // `golem team skills` — `team-skills-sync`. The user-facing way to run the
+  // sync that `golem init` will also run through `init-team.ts`'s
+  // `syncTeamLayer` seam. It has no failure path of its own for an entitlement
+  // outcome: a lapsed subscription or an offline laptop is a REPORT and exit 0,
+  // because nothing in the team layer may break a local-first tool.
+  teamCmd
+    .command("skills")
+    .description("Sync this project's team skills into .claude/skills/golem-team-<name>/")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--dry-run", "show what would change and write nothing", false)
+    .option("--json", "machine-readable output", false)
+    .action(async (opts: { dir: string; dryRun: boolean; json: boolean }) => {
+      try {
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const state = readTeamBinding(settings.team);
+
+        // Decision 64, at the earliest point it can be applied: an unlinked
+        // project builds no portal client, so there is no keychain lookup and
+        // no request to accidentally make. The transport stays undefined for
+        // any state but `linked`, and `syncTeamSkills` refuses to invent one.
+        let transport: TeamSkillsTransport | undefined;
+        let unconfigured: string | null = null;
+        if (state.kind === "linked") {
+          try {
+            const config = resolvePortalConfig(settings.portal);
+            const client = createPortalClient({
+              apiBaseUrl: teamApiBaseUrl(state.binding, config.apiBaseUrl),
+              clientId: config.clientId,
+              metadata: () => discoverAuthorizationServer(config.issuerUrl),
+              tokens: portalTokenStore(createCredentialStore()),
+            });
+            transport = (reqPath) => client.request(reqPath);
+          } catch (err) {
+            // A project can commit `team.org_id` without a portal address —
+            // a merge, or a team whose members were told to set `portal.url`
+            // themselves. That is a configuration gap, not an entitlement
+            // verdict, and it must not hard-fail a command every member runs:
+            // no transport is built, the sync reports honestly, and the reason
+            // is printed. Exit 0, nothing on disk touched.
+            unconfigured = err instanceof Error ? err.message : String(err);
+          }
+        }
+
+        const result = await syncTeamSkills({
+          projectDir: opts.dir,
+          team: settings.team,
+          dryRun: opts.dryRun,
+          ...(transport === undefined ? {} : { transport }),
+        });
+
+        if (opts.json) {
+          process.stdout.write(
+            `${JSON.stringify({ ...result, dryRun: opts.dryRun, unconfigured }, null, 2)}\n`,
+          );
+          return;
+        }
+        if (unconfigured !== null) {
+          process.stdout.write(`${unconfigured}\n`);
+        }
+        for (const action of result.actions) {
+          process.stdout.write(`${action.kind.padEnd(8)} ${action.path} — ${action.detail}\n`);
+        }
+        for (const notice of result.notices) {
+          process.stdout.write(`${notice}\n`);
+        }
+        if (result.outcome.kind === "unlinked") {
+          process.stdout.write(
+            "No team is linked to this project — Golem is complete without one. " +
+              "`golem team link` adds org-wide settings and shared skills if you have a team.\n",
+          );
+        }
       } catch (err) {
         _fail(err);
       }
