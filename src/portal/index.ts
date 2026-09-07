@@ -12,11 +12,38 @@
  * `link.ts`      — the flow, start to finish
  * `config.ts`    — `portal.*` settings to URLs and ids
  *
+ * `project-team-binding` adds the two that are about a PROJECT rather than a
+ * machine, and neither touches a credential:
+ *
+ * `binding.ts`     — which team this project names, and the Decision 64 gate
+ * `entitlement.ts` — "cannot reach" versus "not entitled", decided in one place
+ *
  * **ADR-0003 invariant 4 holds here too**: nothing under `src/mcp/` or
  * `src/tools/` may import this module. A tool call cannot sign a user in, and
  * cannot read the token it produced.
  */
 
+export {
+  type BindTeamOptions,
+  type BindTeamResult,
+  bindTeam,
+  chooseOrganization,
+  isValidOrgId,
+  type OrganizationChoice,
+  type PortalOrganization,
+  readTeamBinding,
+  TEAM_CACHE_DIR_NAME,
+  TEAM_SKILLS_DIR,
+  TEAM_SKILLS_PREFIX,
+  type TeamBinding,
+  type TeamBindingState,
+  type TeamSettings,
+  teamApiBaseUrl,
+  teamCachePath,
+  type UnbindTeamOptions,
+  type UnbindTeamResult,
+  unbindTeam,
+} from "./binding.js";
 export {
   type BrowserOpener,
   HEADLESS_MESSAGE,
@@ -48,6 +75,16 @@ export {
   isLoopback,
   supportsRefresh,
 } from "./discovery.js";
+export {
+  classifyPortalError,
+  classifyPortalResponse,
+  type DescribeOutcomeOptions,
+  describeCacheAge,
+  describeTeamOutcome,
+  mayUseCachedTeamLayer,
+  type NotEntitledCode,
+  type TeamLayerDisposition,
+} from "./entitlement.js";
 export {
   describeOAuthError,
   PortalAuthError,
@@ -95,6 +132,7 @@ export {
   PORTAL_ACCOUNT,
   type PortalTokenSet,
   type PortalTokenStore,
+  portalTokenPresent,
   portalTokenStore,
   type TokenBinding,
   type TokenSummary,

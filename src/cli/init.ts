@@ -30,10 +30,12 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
+import { createCredentialStore } from "../credentials/index.js";
 import { resolveCoderPrompt } from "../inference/coder-prompt.js";
 import { resolvePersonaLane } from "../inference/persona-lane.js";
 import { effectivePersonas, resolvePersonaPrompt } from "../inference/personas.js";
 import type { CompressionLevel } from "../interfaces/index.js";
+import { portalTokenPresent } from "../portal/index.js";
 import { withDefaultTarget } from "../providers/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
@@ -58,6 +60,7 @@ import {
   pruneRetiredSkills,
   removeSkills,
 } from "./init-skills.js";
+import { teamInitStep } from "./init-team.js";
 import {
   ensureVscodeWatcherExclude,
   installVscodeExtension,
@@ -166,6 +169,23 @@ export interface InitOptions {
   readonly vscodeSourceDir?: string;
   /** External-state probe; tests inject a fake. */
   readonly probe?: InitProbe;
+  /**
+   * `project-team-binding` test/override seam: is a portal token on this
+   * machine? Defaults to a keychain probe that touches no network.
+   *
+   * Only ever consulted when this project's settings name a team — which is
+   * what makes Decision 64's "an unlinked project looks up no token" provable
+   * rather than merely intended: a test passes a spy and asserts zero calls.
+   */
+  readonly teamTokenPresent?: () => Promise<boolean>;
+  /**
+   * `project-team-binding` seam for `team-layer-fetch` / `team-skills-sync`.
+   * Absent (the default) means no sync is wired up yet and init says so.
+   *
+   * Whatever it throws is CLASSIFIED, never propagated: no entitlement outcome
+   * may fail an init.
+   */
+  readonly teamSyncLayer?: Parameters<typeof teamInitStep>[0]["syncTeamLayer"];
 }
 
 export type ActionKind =
@@ -191,6 +211,16 @@ export interface InitAction {
 export interface InitReport {
   readonly dryRun: boolean;
   readonly actions: readonly InitAction[];
+  /**
+   * Lines to print after the action list — things that are true but are not
+   * file changes, so they have no `path` and cannot be an {@link InitAction}.
+   *
+   * The team step is the first user (`project-team-binding`): "this project
+   * names a team but this machine is not signed in" is exactly the class of
+   * fact that must be said out loud while changing nothing on disk. Optional so
+   * `golem uninit`'s report is unchanged.
+   */
+  readonly notices?: readonly string[];
 }
 
 /** A conflict or precondition failure with a user-actionable message. */
@@ -555,7 +585,24 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   const vscodeAction = await installVscodeExtension(options, dryRun);
   if (vscodeAction !== null) actions.push(vscodeAction);
 
-  return { dryRun, actions };
+  // 9. The team step (`project-team-binding`). LAST, and it cannot fail: every
+  // outcome is a notice and `golem init` still succeeds. Settings are re-read
+  // here rather than reusing `existingGolem` so the step sees the same effective
+  // `team` section every other surface does — including `GOLEM_TEAM_ORG_ID`.
+  //
+  // On the unlinked path this reaches no network, no cache and no keychain,
+  // which is Decision 64's invariant. That is why the probe is injected: the
+  // default is only constructed as an arrow function, so an unlinked project
+  // never even builds a credential store.
+  const { settings: effective } = await loadConfig({ projectDir });
+  const team = await teamInitStep({
+    dryRun,
+    team: effective.team,
+    tokenPresent: options.teamTokenPresent ?? (() => portalTokenPresent(createCredentialStore())),
+    ...(options.teamSyncLayer === undefined ? {} : { syncTeamLayer: options.teamSyncLayer }),
+  });
+
+  return { dryRun, actions, notices: team.notices };
 }
 
 export interface UninitOptions {

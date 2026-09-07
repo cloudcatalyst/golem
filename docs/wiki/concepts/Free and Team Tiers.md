@@ -16,8 +16,8 @@ machine.
 Settled by spec **Decision 64** (2026-09-07), which closes the pricing question
 [[Architecture]]'s Decision 20 deferred.
 
-Related pages: [[Team Layer]] · [[Settings Cascade]] · [[Configuration Surfaces]] ·
-[[Portal Install Contract]].
+Related pages: [[Project Team Binding]] · [[Team Layer]] ·
+[[Settings Cascade]] · [[Configuration Surfaces]] · [[Portal Install Contract]].
 
 ---
 

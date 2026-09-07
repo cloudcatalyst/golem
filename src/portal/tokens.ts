@@ -106,6 +106,33 @@ export interface TokenBinding {
   readonly clientId: string;
 }
 
+/**
+ * Is there a portal token on this machine at all?
+ *
+ * Deliberately issuer-agnostic, which is the whole reason it exists.
+ * {@link PortalTokenStore.read} takes a {@link TokenBinding}, and getting the
+ * issuer means fetching the authorization-server metadata — a network call. The
+ * one caller that cannot afford that is `golem init`, which must work offline
+ * (`project-team-binding`: *a project must initialise without a network*).
+ *
+ * So this answers only the question init actually asks: name `golem team link`,
+ * or try a sync? A token for the wrong issuer is not returned by `read` later
+ * anyway, and the wrong answer here costs one attempted sync that degrades
+ * loudly rather than an init that fails.
+ *
+ * Reads no token INTO anything: the secret is fetched by the credential store
+ * and immediately discarded in favour of a boolean.
+ */
+export async function portalTokenPresent(credentials: CredentialStore): Promise<boolean> {
+  try {
+    return (await credentials.resolve(PORTAL_ACCOUNT)) !== null;
+  } catch {
+    // No usable keychain on this machine is "no token", not a failure — and on
+    // a Linux box with no `secret-tool` it is the normal answer.
+    return false;
+  }
+}
+
 export function portalTokenStore(credentials: CredentialStore): PortalTokenStore {
   return {
     read: async (binding) => {

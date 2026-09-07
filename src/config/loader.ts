@@ -126,6 +126,16 @@ export const ORIGIN_ORDER: readonly LayerName[] = [
  * convenience with no security weight, and a team with slow SSO has a real
  * reason to raise it.
  *
+ * The whole `team.*` section (`project-team-binding`) is denied for the same
+ * circularity, one level closer in: those keys say WHICH organization this
+ * project belongs to and WHETHER the team layer applies at all. A team origin
+ * able to write `team.org_id` could rebind the project to another organization
+ * — which is a takeover, not a setting — and one able to write `team.sync` or
+ * `team.skills` could switch itself back on for a member who had deliberately
+ * turned it off. A layer must not be the thing that decides it is allowed to be
+ * a layer, so the binding is only ever writable by a LOCAL file, `golem team
+ * link`, or `GOLEM_TEAM_*` on the machine itself.
+ *
  * Compiled in, never fetched: a list the remote can edit is not a floor. A
  * denied key is DROPPED with a loud warning, never sanitised in silence.
  * CLAUDE.md governs — importance is a dial, and no dial value disables
@@ -136,6 +146,10 @@ export const REMOTE_DENIED_SETTINGS: ReadonlySet<string> = new Set([
   "portal.url",
   "portal.issuer",
   "portal.client_id",
+  "team.org_id",
+  "team.portal_url",
+  "team.sync",
+  "team.skills",
 ]);
 
 /** The `"!important"` declaration list, top-level and sibling to the sections. */

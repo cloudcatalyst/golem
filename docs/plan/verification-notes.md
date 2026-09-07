@@ -9236,3 +9236,65 @@ writes plaintext to `~/.config/` instead.
 
 Worth restating wherever ADR-0003's invariant is quoted, rather than quietly
 carrying two versions.
+## §159 — Team skills are FLAT (`golem-team-<name>/`), the portal doc's nested path would never load, and the org id needs a refusal rather than a sanitiser (2026-09-07)
+
+Both found while building `project-team-binding`. **Sources:** the portal repo's
+`docs/team-config.md` §4/§4b and `docs/api-contract.md` §3 (read 2026-09-07 from
+the local working copy at `D:\Personal\Projects\Golem`), this repo's
+`src/cli/init-skills.ts` read from source, and spec Decision 63. Item 1 is
+**[OBSERVED]** as a property of this repo's code plus the two documents; item 2
+is **[OBSERVED]** as a property of the code paths involved.
+
+### 1. `.claude/skills/golem-team/<name>/SKILL.md` cannot be discovered — and this repo already knew
+
+The portal's `docs/team-config.md` §4, `docs/api-contract.md` §3's
+`/orgs/{orgId}/skills` section, §149 item 6 and
+`docs/wiki/concepts/Team Layer.md` all name a **nested** team-skill path:
+`.claude/skills/golem-team/<name>/SKILL.md`.
+
+Claude Code discovers **exactly one level** under `.claude/skills/` — the
+finding that cost the 2026-09-04 skills work an afternoon
+(`debriefs/2026-09-04-skills-were-never-discoverable.md`). So every team skill
+written to that path would be silently absent, exactly as Golem's own skills
+were before they went flat.
+
+`src/cli/init-skills.ts` **already implements the flat shape**: `isTeamSkillDir`
+matches `golem-team-` as a PREFIX and excludes those directories from
+`ourSkillDirs`, so the pruner already expects `golem-team-<name>/`. Only the
+prose was stale, in this repo and in the portal's.
+
+Consequences applied here: `Team Layer.md` corrected; `golem team unlink` clears
+**both** shapes (every `golem-team-*` directory, and a literal `golem-team/` if
+one exists), because "unlink leaves no team instructions behind" has to hold for
+a directory that is present whatever wrote it. `team-skills-sync` should write
+the flat path and needs no nesting logic.
+
+**For the portal side:** `docs/team-config.md` §4 and `docs/api-contract.md` §3
+describe a client path that cannot work. The API itself is unaffected — it
+returns a `name` and the client decides the path — so this is a documentation
+correction, not a contract change.
+
+### 2. Decision 63(e) is right about sanitising and is answering a different question — [OBSERVED]
+
+Decision 63(e): *"The org id needs no sanitising. It is a Clerk identifier
+(`org_` plus alphanumerics), already filename-safe, and a sanitiser is how two
+distinct org ids collide on one file."*
+
+Both clauses hold. What the decision assumes is the value's **provenance**: an
+id that came from `GET /api/v1/me` is a Clerk identifier. But the id that
+reaches `teamCachePath` comes from `.golem/settings.json` — a committed text
+file a human edits and merges — or from `GOLEM_TEAM_ORG_ID`. Neither is
+validated by the portal, and the cache path interpolates it directly into
+`<userDir>/teams/<orgId>.json`: an `org_id` of `../../../.ssh/authorized_keys` is a
+path traversal with a settings key as the delivery mechanism.
+
+So the shape is **refused**, not sanitised — which keeps 63(e)'s collision
+argument intact, because a rejection maps no two ids onto one file. Checked once
+(`isValidOrgId`, `^[A-Za-z0-9_-]{1,128}$`) before any path is built from it, and
+a bad value degrades to the free path with a printed reason rather than throwing
+out of `golem init`. `bindTeam` refuses to write one, and `teamCachePath` throws
+if it is ever reached with one.
+
+Worth stating generally: *validate-and-refuse* and *sanitise-and-continue* are
+different answers to "this input is wrong", and a decision that rules out one has
+not ruled out the other.

@@ -1,7 +1,7 @@
 ---
 task: project-team-binding
 title: "A team-connected project names its team in its committed config — and a team that cannot be reached never stops the proxy"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -10,8 +10,9 @@ gate: "Four behaviours, each a test: (1) no `team.org_id` → zero portal I/O an
 depends_on: [team-portal-auth]
 touches: [src/config/schema.ts, src/cli/, docs/wiki/]
 created: 2026-09-04
-updated: 2026-09-06
+updated: 2026-09-07T06:14:19.649Z
 ---
+
 ## Decision 64 — the free/team boundary this task must hold
 
 **Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
@@ -130,3 +131,7 @@ says something out loud; none of them stops the tool.
   removes the key, and calls whatever those tasks expose.
 - Anything about billing, membership or connectors. Those are browser flows in
   the portal, deliberately (`docs/api-contract.md` §6).
+
+## Outcome
+
+shipped
