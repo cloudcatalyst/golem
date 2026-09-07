@@ -30,12 +30,20 @@
  * ## Why the sync is a seam and not an implementation
  *
  * Fetching the team layer is `team-layer-fetch` and syncing skills is
- * `team-skills-sync`; neither exists yet. Rather than pretend, this step takes
- * `syncTeamLayer` as an optional injection: absent, it reports the honest state
- * ("linked, signed in, nothing fetched yet"); present, it reports what landed
- * and — more importantly — degrades correctly when it throws. The degradation
- * is the part worth having early, because it is the part with a rule
- * ("cannot reach" is not "not entitled") rather than a payload.
+ * `team-skills-sync`. This step takes `syncTeamLayer` as an injection rather
+ * than importing one, because building a portal client needs the portal config
+ * and the credential store — and constructing either on the unlinked path would
+ * undo the invariant this file exists to hold.
+ *
+ * **`team-layer-fetch` has since shipped and `golem init` passes a real sync**
+ * (`syncTeamLayerForInit` in `./init.ts`). The `undefined` branch is kept for
+ * callers that deliberately want the binding recorded and nothing fetched —
+ * tests, and an embedder that resolves the layer itself — and it says so rather
+ * than claiming the feature is unbuilt.
+ *
+ * What is injected still cannot fail this step: whatever it throws is
+ * CLASSIFIED, never propagated, because "cannot reach" is not "not entitled"
+ * and neither may fail an init.
  */
 
 import {
@@ -157,8 +165,9 @@ export async function teamInitStep(options: TeamInitStepOptions): Promise<TeamIn
     return {
       outcome: { kind: "not_fetched", orgId: binding.orgId },
       notices: [
-        `Team ${binding.orgId} is linked and this machine is signed in. Team settings are ` +
-          "not fetched yet (`team-layer-fetch`), so Golem is using local configuration.",
+        `Team ${binding.orgId} is linked and this machine is signed in, but this run was ` +
+          "given no way to fetch the team layer — Golem is using local configuration. " +
+          "`golem team sync` fetches it.",
       ],
     };
   }
