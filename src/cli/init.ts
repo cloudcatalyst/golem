@@ -30,12 +30,23 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
+import { defaultUserDir } from "../config/paths.js";
 import { createCredentialStore } from "../credentials/index.js";
 import { resolveCoderPrompt } from "../inference/coder-prompt.js";
 import { resolvePersonaLane } from "../inference/persona-lane.js";
 import { effectivePersonas, resolvePersonaPrompt } from "../inference/personas.js";
 import type { CompressionLevel } from "../interfaces/index.js";
-import { portalTokenPresent } from "../portal/index.js";
+import {
+  createPortalClient,
+  discoverAuthorizationServer,
+  type PortalSettings,
+  portalTokenPresent,
+  portalTokenStore,
+  resolvePortalConfig,
+  syncTeamLayer,
+  type TeamBinding,
+  teamApiBaseUrl,
+} from "../portal/index.js";
 import { withDefaultTarget } from "../providers/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
@@ -599,10 +610,50 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
     dryRun,
     team: effective.team,
     tokenPresent: options.teamTokenPresent ?? (() => portalTokenPresent(createCredentialStore())),
-    ...(options.teamSyncLayer === undefined ? {} : { syncTeamLayer: options.teamSyncLayer }),
+    // `team-layer-fetch` fills the seam `project-team-binding` left. Passed as
+    // an arrow so nothing is constructed on the unlinked path — no portal
+    // config resolved, no credential store, no client — which is the structural
+    // half of Decision 64(c). `teamInitStep` only ever calls this for a linked
+    // project with a token present, and classifies whatever it throws.
+    syncTeamLayer:
+      options.teamSyncLayer ?? ((binding) => syncTeamLayerForInit(binding, effective.portal)),
   });
 
   return { dryRun, actions, notices: team.notices };
+}
+
+/**
+ * `golem init`'s team sync — `team-layer-fetch`.
+ *
+ * Built here rather than in `init-team.ts` because it needs the portal config
+ * and the credential store, and `init-team.ts` is deliberately I/O-free on the
+ * unlinked path. It is only ever reached for a linked project with a token
+ * present.
+ *
+ * The returned lines are what LANDED. Everything else — offline, lapsed, not a
+ * member — is reported by `teamInitStep` from the disposition, and none of it
+ * fails the init: `syncTeamLayer` does not throw, and Decision 64(f) puts that
+ * above every other consideration on this path.
+ */
+async function syncTeamLayerForInit(
+  binding: TeamBinding,
+  portal: PortalSettings,
+): Promise<readonly string[]> {
+  const config = resolvePortalConfig(portal);
+  const tokens = portalTokenStore(createCredentialStore());
+  const client = createPortalClient({
+    apiBaseUrl: teamApiBaseUrl(binding, config.apiBaseUrl),
+    clientId: config.clientId,
+    metadata: () => discoverAuthorizationServer(config.issuerUrl),
+    tokens,
+  });
+  const result = await syncTeamLayer({
+    binding,
+    userDir: defaultUserDir(),
+    client,
+    report: true,
+  });
+  return result.applied;
 }
 
 export interface UninitOptions {

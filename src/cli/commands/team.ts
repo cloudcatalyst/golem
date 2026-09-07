@@ -27,6 +27,7 @@ import {
   describeCacheAge,
   discoverAuthorizationServer,
   linkPortal,
+  listTeamLayerCaches,
   PortalAuthError,
   type PortalIdentity,
   type PortalOrganization,
@@ -35,8 +36,10 @@ import {
   printingBrowser,
   readTeamBinding,
   resolvePortalConfig,
+  syncTeamLayer,
   systemBrowser,
   type TeamSettings,
+  teamApiBaseUrl,
   teamCachePath,
   unbindTeam,
   unlinkPortal,
@@ -419,6 +422,124 @@ export default function register(program: Command): void {
           );
         }
       } catch (err) {
+        _fail(err);
+      }
+    });
+
+  // `golem team sync` — `team-layer-fetch`. The ONE place a team layer is
+  // fetched on demand; everything else reads the cache it writes.
+  //
+  // **This settles Decision 63(f)**, which asked whether a sync refreshes only
+  // the current project's team or every linked team. The answer is *the current
+  // project's team by default, with `--all` as an explicit machine-wide sweep*,
+  // and the reason is that the two are answers to different questions:
+  //
+  //   - A sync is a PROJECT-scoped act. It is run in a repo, it reports against
+  //     that repo's team, and an entitlement verdict it receives is about the
+  //     org that repo names. Refreshing a second org silently would produce a
+  //     402 with no project to report it against.
+  //   - "Every linked team" is also not knowable: the cache directory lists
+  //     teams previously SYNCED on this machine, not teams currently linked by
+  //     some project on it, and 63(d) guarantees those sets differ. Sweeping it
+  //     spends a request per org on policy no live project may still use.
+  //
+  // 63(f) worried that only-current leaves a rarely-touched repo's cache
+  // quietly ancient. 63(c)'s per-team age in `golem status` makes that visible,
+  // and `--all` is the fix once it is visible — which is the right order: see
+  // the staleness, then choose to clear it.
+  teamCmd
+    .command("sync")
+    .description("Fetch this project's team settings layer and cache it (team-layer-fetch)")
+    .option("--dir <path>", "project directory", _DEFAULT_DIR)
+    .option("--all", "also refresh every other team already cached on this machine", false)
+    .option("--json", "machine-readable output", false)
+    .action(async (opts: { dir: string; all: boolean; json: boolean }) => {
+      try {
+        const userDir = defaultUserDir();
+        const { settings, config, tokens } = await portalContext(opts.dir);
+        const state = readTeamBinding(settings.team);
+
+        // Decision 64(c). No team named means no portal request, no cache read
+        // and no token lookup — and this returns before any of the three, which
+        // is why the branch is first rather than folded into the loop below.
+        if (state.kind === "unlinked") {
+          const line =
+            "This project is not linked to a team, so there is nothing to sync — " +
+            "Golem is complete without one. `golem team link` links it.";
+          process.stdout.write(
+            opts.json ? `${JSON.stringify({ linked: false, synced: [] }, null, 2)}\n` : `${line}\n`,
+          );
+          return;
+        }
+        if (state.kind === "invalid") {
+          process.stdout.write(
+            `Team ${state.orgId} is named in this project's settings but ${state.reason}. ` +
+              "Nothing was synced.\n",
+          );
+          process.exitCode = 2;
+          return;
+        }
+
+        const { binding } = state;
+        const targets: { orgId: string; portalUrl: string }[] = [
+          { orgId: binding.orgId, portalUrl: teamApiBaseUrl(binding, config.apiBaseUrl) },
+        ];
+        if (opts.all) {
+          for (const cached of await listTeamLayerCaches(userDir)) {
+            if (cached.org_id === binding.orgId) continue;
+            // Another team's own `team.portal_url` is not knowable from here —
+            // only the project that names it has that — so a sweep uses this
+            // machine's configured portal, which is right for the ordinary
+            // single-portal case and honestly wrong for nothing else.
+            targets.push({ orgId: cached.org_id, portalUrl: config.apiBaseUrl });
+          }
+        }
+
+        const results: Record<string, unknown>[] = [];
+        for (const target of targets) {
+          const client = createPortalClient({
+            apiBaseUrl: target.portalUrl,
+            clientId: config.clientId,
+            metadata: () => discoverAuthorizationServer(config.issuerUrl),
+            tokens,
+          });
+          const result = await syncTeamLayer({
+            binding: { ...binding, orgId: target.orgId, portalUrl: target.portalUrl },
+            userDir,
+            client,
+            report: true,
+          });
+          results.push({
+            org_id: target.orgId,
+            disposition: result.disposition.kind,
+            applied: result.applied,
+            skipped: result.skipped,
+            from_cache: result.fromCache,
+            notice: result.notice,
+            ...(result.cacheWritten === undefined ? {} : { cache_written: result.cacheWritten }),
+            ...(result.cacheDenied === undefined ? {} : { cache_denied: result.cacheDenied }),
+          });
+
+          if (!opts.json) {
+            // The notice is the honest line for every outcome — it names the
+            // team, says what is actually applied, and never says "failed".
+            process.stdout.write(`${result.notice}\n`);
+            for (const key of result.applied) process.stdout.write(`  ${key}\n`);
+            for (const row of result.skipped) {
+              process.stdout.write(`  skipped ${row.key} — ${row.reason}\n`);
+            }
+            if (result.cacheWritten !== undefined) {
+              process.stdout.write(`  cached to ${result.cacheWritten}\n`);
+            }
+          }
+        }
+
+        if (opts.json) {
+          process.stdout.write(`${JSON.stringify({ linked: true, synced: results }, null, 2)}\n`);
+        }
+      } catch (err) {
+        // A sync that cannot even be attempted (no portal configured, no token)
+        // is a recoverable state, and `_fail` already codes those 2.
         _fail(err);
       }
     });

@@ -123,6 +123,15 @@ export function teamSettingsPath(orgId: string, schemaVersion: string = VERSION)
 // `enforced: true` → `"!important"`
 // ---------------------------------------------------------------------------
 
+/**
+ * How long a team-settings fetch may take before it counts as unreachable.
+ *
+ * Short on purpose. This runs during `golem init`, and the cost of waiting is
+ * paid by a developer watching a prompt; the cost of giving up early is a cache
+ * read. Those are not symmetric.
+ */
+export const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+
 /** The `"!important"` declaration list, as the loader spells it. */
 const IMPORTANT_KEY = "!important";
 
@@ -618,6 +627,8 @@ export interface SyncTeamLayerOptions {
    * for, and its failure is invisible.
    */
   readonly report?: boolean;
+  /** Abort the settings request after this long. See {@link DEFAULT_FETCH_TIMEOUT_MS}. */
+  readonly timeoutMs?: number;
   readonly now?: () => number;
 }
 
@@ -690,7 +701,7 @@ export async function syncTeamLayer(options: SyncTeamLayerOptions): Promise<Sync
   const { binding, userDir, client } = options;
   const now = options.now ?? Date.now;
 
-  const fetched = await fetchTeamSettings(client, binding.orgId);
+  const fetched = await fetchTeamSettings(client, binding.orgId, options.timeoutMs);
   const { disposition } = fetched;
 
   if (disposition.kind === "entitled" && fetched.response !== undefined) {
@@ -788,10 +799,18 @@ export interface FetchTeamSettingsResult {
 export async function fetchTeamSettings(
   client: PortalClient,
   orgId: string,
+  timeoutMs: number = DEFAULT_FETCH_TIMEOUT_MS,
 ): Promise<FetchTeamSettingsResult> {
   let response: Response;
   try {
-    response = await client.request(teamSettingsPath(orgId));
+    // Bounded, because this runs inside `golem init`: a portal that accepts the
+    // connection and then says nothing would otherwise hang an init for as long
+    // as the OS lets it, and "a project must initialise without a network" has
+    // to hold for a network that is *present and unhelpful*, not just absent.
+    // An abort throws, so it classifies as `unreachable` — the cache path.
+    response = await client.request(teamSettingsPath(orgId), {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
   } catch (err) {
     return { disposition: classifyPortalError(err) };
   }

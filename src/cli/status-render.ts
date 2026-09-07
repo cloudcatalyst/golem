@@ -85,6 +85,35 @@ export function renderDevices(devices: NonNullable<StatusReport["devices"]>): st
   return `Write surface: ${reach} · ${paired}${retired}${gate}${pairing}`;
 }
 
+/**
+ * The cached team layers, **one line each** (Decision 63(c)).
+ *
+ * Never a single aggregate age. A machine holding a team synced this morning
+ * and one last touched in March has no honest "cache age": the mean is a
+ * fiction and the newest is a lie about the oldest. So a row per team, and the
+ * header counts them rather than summarising them.
+ *
+ * A DENIED cache is on disk and is not applied, so its row says that instead of
+ * its age — a line reading "2 hours old" about policy that is being ignored
+ * would be the exact inversion of the truth.
+ */
+export function renderTeams(teams: NonNullable<StatusReport["teams"]>): readonly string[] {
+  const lines = [`Team caches: ${teams.length} (~/.golem/teams — machine scope)`];
+  for (const team of teams) {
+    if (team.denied !== undefined) {
+      lines.push(
+        `  ${team.org_id}: NOT APPLIED — the portal denied this team on ${team.denied.at} ` +
+          `(${team.denied.code}). \`golem team sync\` re-checks.`,
+      );
+      continue;
+    }
+    const age = team.age ?? "of unknown age";
+    const enforced = team.enforced_count > 0 ? `, ${team.enforced_count} enforced` : "";
+    lines.push(`  ${team.org_id}: ${age} — ${team.settings_count} setting(s)${enforced}`);
+  }
+  return lines;
+}
+
 export function renderLimits(limits: NonNullable<StatusReport["limits"]>): string {
   const pct = Math.round(limits.five_hour_utilization * 100);
   const park = limits.enforced ? "enforced" : "advisory";
@@ -331,6 +360,9 @@ export function renderStatus(report: StatusReport): string {
         ? `Update: ${report.update.current} → ${report.update.latest} available (run \`golem update\`)`
         : `Update: up to date (${report.update.current})`,
     );
+  }
+  if (report.teams !== undefined) {
+    lines.push(...renderTeams(report.teams));
   }
   if (report.limits !== undefined) {
     lines.push(renderLimits(report.limits));
