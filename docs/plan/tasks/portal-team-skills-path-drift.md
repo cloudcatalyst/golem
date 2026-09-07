@@ -42,6 +42,18 @@ the harness is broken. That is the same failure the release-webhook body
 mismatch produced (`portal-success-body-replaced`): two halves of a contract,
 each internally consistent, disagreeing on paper.
 
+## Exact locations, confirmed 2026-09-07
+
+`team-skills-sync` read the contract while building against it and reported the
+two lines still showing the nested path:
+
+- `api-contract.md` **line 243**
+- `team-config.md` **line 457**
+
+It did **not** follow them — it built flat and said so. That is the right
+outcome, and it is also the evidence: an implementer read the contract, found it
+wrong, and had to override it. The next one may not.
+
 ## What to do
 
 Correct the portal repo's team-config documentation to the flat path, and note
