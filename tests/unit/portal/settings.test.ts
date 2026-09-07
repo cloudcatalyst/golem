@@ -59,6 +59,36 @@ describe("the portal settings section", () => {
   });
 });
 
+describe("the team settings section (project-team-binding)", () => {
+  it("is part of the schema", () => {
+    expect(SECTION_NAMES).toContain("team");
+    expect(allLeafPaths()).toEqual(
+      expect.arrayContaining(["team.org_id", "team.portal_url", "team.sync", "team.skills"]),
+    );
+  });
+
+  it("defaults to NO team, which is the whole free tier (Decision 64)", () => {
+    // The empty org id is the gate. A fresh install must behave exactly as it
+    // did before this section existed: no portal I/O, no cache, no token.
+    expect(DEFAULT_SETTINGS.team.org_id).toBe("");
+    expect(DEFAULT_SETTINGS.team.portal_url).toBe("");
+  });
+
+  it("defaults sync and skills ON, because they describe a LINKED project", () => {
+    // Inert while `org_id` is empty, so this costs an unlinked project nothing
+    // — it is what a project does once `golem team link` has bound it.
+    expect(DEFAULT_SETTINGS.team.sync).toBe(true);
+    expect(DEFAULT_SETTINGS.team.skills).toBe(true);
+  });
+
+  it("types the org id as a string and the switches as booleans", () => {
+    expect(leafSchema("team", "org_id")?.safeParse("org_abc").success).toBe(true);
+    expect(leafSchema("team", "org_id")?.safeParse(7).success).toBe(false);
+    expect(leafSchema("team", "sync")?.safeParse(true).success).toBe(true);
+    expect(leafSchema("team", "sync")?.safeParse("yes").success).toBe(false);
+  });
+});
+
 describe("REMOTE_DENIED_SETTINGS", () => {
   it("still denies the redaction bypass", () => {
     expect(REMOTE_DENIED_SETTINGS.has("proxy.bypass_all")).toBe(true);
@@ -68,6 +98,15 @@ describe("REMOTE_DENIED_SETTINGS", () => {
     expect(REMOTE_DENIED_SETTINGS.has("portal.url")).toBe(true);
     expect(REMOTE_DENIED_SETTINGS.has("portal.issuer")).toBe(true);
     expect(REMOTE_DENIED_SETTINGS.has("portal.client_id")).toBe(true);
+  });
+
+  it("denies the whole team section, so a layer cannot re-bind or re-enable itself", () => {
+    // `team.org_id` from the team origin is a rebinding of the project to
+    // another organization; `team.sync` from the team origin switches itself
+    // back on for a member who deliberately turned it off.
+    for (const key of ["team.org_id", "team.portal_url", "team.sync", "team.skills"]) {
+      expect(REMOTE_DENIED_SETTINGS.has(key), key).toBe(true);
+    }
   });
 
   it("does not deny the sign-in timeout", () => {
