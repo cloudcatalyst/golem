@@ -3,15 +3,7 @@ title: For team skills the cache IS the working tree
 type: debrief
 task: team-skills-sync
 tags: [team, portal, skills, entitlement, provenance, decision-64, managed-files, local-first]
-sources:
-  [
-    docs/plan/tasks/team-skills-sync.md,
-    docs/wiki/concepts/Free and Team Tiers.md,
-    docs/plan/verification-notes.md,
-    src/portal/team-skills.ts,
-    src/cli/team-skills.ts,
-    src/cli/managed-files.ts,
-  ]
+sources: [docs/plan/tasks/team-skills-sync.md, docs/wiki/concepts/Free and Team Tiers.md, docs/plan/verification-notes.md, src/portal/team-skills.ts, src/cli/team-skills.ts, src/cli/managed-files.ts]
 created: 2026-09-07
 updated: 2026-09-07
 ---
