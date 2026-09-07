@@ -82,6 +82,16 @@ Two things are already settled, don't re-derive them: **`vitest.config.ts` pool/
 ## Multi-agent
 Claim tasks by ID in PR title. Don't modify files owned by another workstream. Blocked? Write the question in verification-notes and pick up another task.
 
+**Give every parallel agent its own worktree — `git worktree add ../<repo>-<task> -b <branch> development` — in the dispatch prompt, before it starts.** File ownership is not enough, because the collisions are not file collisions. Proven three ways in one afternoon (2026-09-06, three concurrent agents):
+
+- **Shared HEAD.** A checkout has one. Between agent A's `git checkout -b` and its first commit, agent B's checkout moved it — A's commits landed on B's branch and B's `git add -A` swept up A's files. Cost a rebase and a re-review of both branches.
+- **Shared `node_modules`.** A published-package install replaced the dev tree and broke the `golem` CLI repo-wide (`Cannot find package 'commander' imported from …/dist/`). Repair with `npm ci`; prevent by not sharing.
+- **A worktree is never disposable because its commit count is zero.** That says nothing about a dirty tree. `git -C <path> status --short` and `git stash list` before removing one — uncommitted design work that exists nowhere else looks exactly like an abandoned branch. Commit it on its own branch rather than deciding for the author.
+
+Shared append-only docs (`docs/plan/SHIPPED.md`, `docs/wiki/WIKI.md`) conflict between every pair: keep BOTH sides. **Never hand-resolve `ROADMAP.md` — it is generated**; take either side, then `golem task index --write`. Merge one PR at a time and re-check the next one's mergeability afterwards.
+
+This is shipped as the `parallel-agent-isolation` guidance rule, seeded by `golem init` into `.claude/rules/`, so every project gets it — not just this one.
+
 ## Batch close-out
 Run `/golem-ship` after the last task in a batch. Checklist:
 

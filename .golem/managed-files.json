@@ -4,7 +4,9 @@
   ".claude/agents/golem-scribe.md": "8837fabd4fa5f399eee32e563275929af0a9ea56f6676b17924f33d93fa7709d",
   ".claude/rules/golem-ccr-refs.md": "0596b472b1cd8e579b8b479bd1bb49259ab1313c082f06c29d9d8b91f7ddd615",
   ".claude/rules/golem-local-answer.md": "0ca6fec30b3047fcfb90019f0ee3faee395e0d479d2f4a35015eb1968ed6eb1e",
+  ".claude/rules/golem-local-coder.md": "46ae0335b28cd808aecb29dfa02f72dbd79c47691f641f3ee1dc3ad5e65a3bf4",
   ".claude/rules/golem-long-run-visibility.md": "0d4f076ca4d2d80f85689dffe3be2caa20e968062dc7849fbbc35838931a0664",
+  ".claude/rules/golem-parallel-agent-isolation.md": "6e9fb8ec3e76f4256d1cc06192d7e2f639dffec54217e83f52090a2a8cf0c643",
   ".claude/rules/golem-snooze-hold.md": "21e7012855c0fa88914a68db756b3041abf48e538fc917e94f726629dc7f797b",
   ".claude/rules/golem-subagent-headroom.md": "b5593e4893209f974b566bec9a2ad38582215080e0b153f39c3ca7dab557264d",
   ".claude/rules/golem-wiki-kb-first.md": "8eded5fdeb69a2f45cf565aaf43d580ce776d930b7723f170b514da73cf8c9c4",
@@ -27,5 +29,6 @@
   ".claude/skills/golem-triage/SKILL.md": "080a6e4e5347233a697bd788475bac75045a5634dab5cdcc724ac4ff9b487834",
   ".claude/skills/golem-upstream/SKILL.md": "e534d99c3c953787084f0c9f5b3b024b547510fa8d66d4612004a0c816d4bad2",
   ".claude/skills/golem-verify/SKILL.md": "2cb2dee08a422a05cd3ad97f990d13e63e53e725971fe9520fac84ff125c383e",
-  ".claude/skills/golem-wiki-ingest/SKILL.md": "4cca58fb31a4619b028aca70618e9b0da9d9894572288cbb162007eaeb8eabbe"
+  ".claude/skills/golem-wiki-ingest/SKILL.md": "4cca58fb31a4619b028aca70618e9b0da9d9894572288cbb162007eaeb8eabbe",
+  ".claude/skills/golem/grill/SKILL.md": "16aa3a61a90ee8a9e5039c87ac4ab539a4a31858e3bde870c880beb8ab723474"
 }
