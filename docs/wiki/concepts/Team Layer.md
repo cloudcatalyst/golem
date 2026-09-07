@@ -17,7 +17,8 @@ The portal half is built and its contract is written down. The client half is
 this repo's `project-team-binding`, `team-portal-auth`, `team-settings-layer`
 and `team-skills-sync`. Facts and provenance: `verification-notes.md` §149.
 
-Related pages: [[Portal Install Contract]] · [[Configuration Surfaces]] ·
+Related pages: [[Project Team Binding]] · [[Portal Install Contract]] ·
+[[Configuration Surfaces]] ·
 [[Guidance Rules]] · [[Architecture]].
 
 ---
@@ -107,10 +108,18 @@ oversight.
 
 ## Team skills are a second managed namespace
 
-`.claude/skills/golem-team/<name>/SKILL.md`, separate from Golem's own
-`.claude/skills/golem/` so a team skill can never overwrite a personal one and so
-ownership is obvious from the path. Per project, so unrelated personal work does
-not inherit an employer's skills.
+`.claude/skills/golem-team-<name>/SKILL.md`, separate from Golem's own
+`.claude/skills/golem-<cmd>/` so a team skill can never overwrite a personal one
+and so ownership is obvious from the path. Per project, so unrelated personal
+work does not inherit an employer's skills.
+
+**Flat, one level — corrected 2026-09-07.** The portal's `docs/team-config.md`
+and an earlier draft of this page both wrote `golem-team/<name>/SKILL.md`, but
+Claude Code discovers exactly ONE level under `.claude/skills/` (the 2026-09-04
+skills debrief), so the nested path would never be loaded. `init-skills.ts`
+already installs and excludes the flat `golem-team-` prefix; only the prose was
+stale. `golem team unlink` clears both shapes anyway — see
+[[Project Team Binding]] and verification-notes §159.
 
 **Managed means deletions propagate**: a skill absent from the portal's list is
 removed locally, which is what makes it a sync rather than a one-way copy. That
