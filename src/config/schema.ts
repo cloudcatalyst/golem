@@ -850,6 +850,65 @@ export const SETTINGS_LEAVES = {
      */
     link_timeout_ms: timeoutMsSchema,
   },
+  /**
+   * `project-team-binding` — WHICH team this project belongs to. Committed at
+   * project scope on purpose: none of it is secret (a public organization
+   * identifier and a URL), and that is exactly why it belongs in the committed
+   * file — a colleague who clones the repo is pointed at the right team before
+   * they have run anything.
+   *
+   * **An empty `org_id` is the free tier, and it is the default.** Decision 64:
+   * a project with no `team.org_id` performs zero portal I/O, reads no team
+   * cache, looks up no token and is nagged at most once. That is an invariant
+   * with its own test rather than a default — it is what makes "Golem is free
+   * and complete for a solo user" a checkable property instead of a promise.
+   *
+   * **No credential is in here.** The OAuth tokens stay per person, per machine,
+   * in the OS keychain (ADR-0003, `src/portal/tokens.ts`). The project says
+   * which team, the keychain says who you are, and the two are combined at sync
+   * time — a per-project copy of a token is a credential in a repository waiting
+   * to happen.
+   */
+  team: {
+    /**
+     * The portal organization id this project is bound to, e.g. `org_3IojJ`.
+     * Empty means unlinked, which is the default and the whole of the free tier.
+     *
+     * Written by `golem team link` at PROJECT scope and removed by `golem team
+     * unlink`. Which team a project belongs to is a property of the project, not
+     * of the machine: one machine routinely holds repos belonging to different
+     * teams, or to none, so a machine-scoped "current team" is wrong the same
+     * way a global skills install is wrong — one setting silently colours every
+     * repo, and anyone working across two teams has it wrong for one of them.
+     */
+    org_id: z.string(),
+    /**
+     * The portal this team lives on, when it is not the one `portal.url` names.
+     * Empty (the default) means "use `portal.url`", which is the normal case.
+     *
+     * It exists because the binding is committed while `portal.url` need not be:
+     * a repo can carry the address of the portal its team is on without every
+     * clone having to configure one by hand. It is only ever the API base —
+     * `portal.issuer` still says where OAuth metadata is discovered.
+     */
+    portal_url: z.string(),
+    /**
+     * Whether to apply the team's settings layer. On by default *for a linked
+     * project*, and completely inert while {@link org_id} is empty.
+     *
+     * Off is an escape hatch rather than a normal state: it keeps the link
+     * recorded while stopping the organization's configuration being applied on
+     * this machine.
+     */
+    sync: z.boolean(),
+    /**
+     * Whether to sync the team's skills into `.claude/skills/golem-team/`.
+     * Separate from {@link sync} because settings and instructions are different
+     * kinds of thing to accept from an organization, and a member may
+     * reasonably want one without the other.
+     */
+    skills: z.boolean(),
+  },
 } as const satisfies Readonly<Record<string, Readonly<Record<string, z.ZodTypeAny>>>>;
 
 export type SectionName = keyof typeof SETTINGS_LEAVES;
@@ -1108,6 +1167,17 @@ export const DEFAULT_SETTINGS: GolemSettings = deepFreeze({
     issuer: "",
     client_id: "",
     link_timeout_ms: 300_000,
+  },
+  // Decision 64 — no team by default, and "no team" is the complete product,
+  // not a trimmed tier. The empty `org_id` is the gate: while it is empty
+  // nothing in the team path runs at all, so `sync` and `skills` defaulting to
+  // true costs an unlinked project nothing. They describe what a project does
+  // ONCE it is linked, which is the state `golem team link` puts it in.
+  team: {
+    org_id: "",
+    portal_url: "",
+    sync: true,
+    skills: true,
   },
 });
 

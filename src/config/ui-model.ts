@@ -732,6 +732,47 @@ export const SETTING_META = {
       "expiry the listener closes and nothing is stored.",
     advanced: true,
   },
+
+  // --- team -----------------------------------------------------------------
+  "team.org_id": {
+    label: "Team organization",
+    summary: "Which team this project belongs to — empty is the free tier, and the default",
+    detail:
+      "A public organization identifier, which is why it lives in the committed project " +
+      "settings file: a colleague who clones the repo is pointed at the right team before " +
+      "they have run anything. No credential follows it — tokens stay per person, per " +
+      "machine, in the OS keychain. While this is empty Golem performs no portal I/O, reads " +
+      "no team cache and looks up no token, which is the free tier being an invariant rather " +
+      "than a promise. Set it with `golem team link`, remove it with `golem team unlink`.",
+  },
+  "team.portal_url": {
+    label: "Team portal URL",
+    summary: "The portal this team lives on, when it is not the one the portal URL names",
+    detail:
+      "Empty means 'use the portal URL', which is the normal case. It exists because the team " +
+      "binding is committed while the portal URL need not be, so a repo can carry the address " +
+      "of its team's portal without every clone configuring one by hand. This is the API base " +
+      "only; the authorization server is still discovered from the issuer setting.",
+    advanced: true,
+  },
+  "team.sync": {
+    label: "Apply team settings",
+    summary: "Whether a linked project applies its team's settings layer",
+    detail:
+      "Inert while there is no team organization set. Turning it off keeps the link recorded " +
+      "while stopping the organization's configuration being applied on this machine — an " +
+      "escape hatch, not a normal state. A team origin can never set this key: a layer must " +
+      "not be the thing that decides it is allowed to be a layer.",
+  },
+  "team.skills": {
+    label: "Sync team skills",
+    summary: "Whether a linked project syncs its team's skills into .claude/skills/golem-team",
+    detail:
+      "Separate from applying team settings because configuration and instructions are " +
+      "different kinds of thing to accept from an organization, and a member may reasonably " +
+      "want one without the other. The directory is managed: a skill the team removes is " +
+      "removed locally, and `golem team unlink` deletes the whole directory.",
+  },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
 /** Metadata for one leaf; undefined for an unknown path. */
@@ -800,6 +841,11 @@ export const SECTION_META = {
     title: "Team portal",
     summary: "Where the hosted portal is and which OAuth client to present — no credential here",
     order: 85,
+  },
+  team: {
+    title: "Team binding",
+    summary: "Which team THIS project belongs to — empty is the free tier, and the default",
+    order: 86,
   },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 

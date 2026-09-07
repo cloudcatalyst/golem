@@ -23,6 +23,12 @@ function printReport(report: InitReport): void {
   for (const action of report.actions) {
     process.stdout.write(`  ${action.kind.padEnd(8)} ${action.path} — ${action.detail}\n`);
   }
+  // Notices are not file changes, so they get no `kind`/`path` column — and
+  // they must not be silent: `project-team-binding`'s whole failure rule is
+  // "degrade, but say so".
+  for (const notice of report.notices ?? []) {
+    process.stdout.write(`\n${notice}\n`);
+  }
   if (report.dryRun) process.stdout.write("dry run: nothing was written.\n");
 }
 
