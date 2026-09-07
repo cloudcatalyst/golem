@@ -126,6 +126,18 @@ export {
   statesMatch,
 } from "./pkce.js";
 export {
+  fetchTeamSkills,
+  isValidTeamSkillName,
+  MAX_TEAM_SKILL_BYTES,
+  MAX_TEAM_SKILLS,
+  type RejectedTeamSkill,
+  type TeamSkillEntry,
+  type TeamSkillRow,
+  type TeamSkillsFetch,
+  type TeamSkillsTransport,
+  teamSkillsPath,
+} from "./team-skills.js";
+export {
   describeTokenSet,
   EXPIRY_SKEW_MS,
   isExpired,

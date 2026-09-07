@@ -1,17 +1,18 @@
 ---
 task: team-skills-sync
 title: "Team skills sync into their own managed namespace — and a skill deleted in the portal disappears locally"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
 design: "The portal repo's `docs/team-config.md` §4 for the design and `docs/api-contract.md` (`GET /api/v1/orgs/{orgId}/skills`, `?manifest=1`) for the wire; summarised in `docs/plan/verification-notes.md` §149 item 6. The local mechanism is `src/cli/managed-files.ts` + `src/cli/init-skills.ts`, unchanged in kind."
-gate: "A skill added in the portal appears at `.claude/skills/golem-team/<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output). PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
+gate: "A skill added in the portal appears at `.claude/skills/golem-team-<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output). PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
 depends_on: [project-team-binding]
 touches: [src/cli/managed-files.ts, src/cli/init-skills.ts, src/cli/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-07T11:24:59.781Z
 ---
+
 ## Decision 64 — the free/team boundary this task must hold
 
 **Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
@@ -105,3 +106,7 @@ debrief. It is the one design question this task must not leave implicit.
 
 - Authoring or editing team skills. That is a portal page.
 - Golem's own `.claude/skills/golem/` namespace. Untouched here.
+
+## Outcome
+
+shipped
