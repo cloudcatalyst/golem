@@ -1,7 +1,7 @@
 ---
 task: team-layer-fetch
 title: "Fill the `team` origin — fetch the org's settings, cache them per org to `~/.golem/teams/<org_id>.json`, and let a lost network keep policy"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
@@ -10,8 +10,9 @@ gate: "The origin is populated, not just declared: `loadConfig` resolves a real 
 depends_on: [team-portal-auth, project-team-binding]
 touches: [src/config/loader.ts, src/cli/, docs/wiki/]
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-09-07T11:32:51.915Z
 ---
+
 ## Decision 64 — the free/team boundary this task must hold
 
 **Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
@@ -101,3 +102,7 @@ Per ADR-0008 §Portal consequences the portal must ALSO refuse the denied keys a
 write time, so an admin never believes they set something the client drops. That
 half is outward and cross-repo (portal at `D:/Personal/Projects/Golem`), so it
 needs its own `owner: user` conversation rather than being assumed here.
+
+## Outcome
+
+shipped

@@ -27,6 +27,7 @@ import {
 } from "../../inference/index.js";
 import type { InferenceService } from "../../interfaces/inference.js";
 import { initPlugins } from "../../plugins/index.js";
+import { loadConfigWithTeamLayer } from "../../portal/team-layer.js";
 import { resolveUpstreamDisplay } from "../../providers/index.js";
 import { ensureLoopbackCert } from "../../proxy/loopback-cert.js";
 import { startLoopbackServe } from "../../proxy/loopback-serve.js";
@@ -147,9 +148,19 @@ async function runProxyForeground(dir: string, portOpt?: string, shim = false): 
   for (const line of (await migrateOnVersionChange({ projectDir: dir, version: VERSION })).lines) {
     process.stderr.write(`golem config: ${line}\n`);
   }
-  const { settings, warnings } = await loadConfig({ projectDir: dir });
+  // `team-layer-fetch`: the proxy runs under its project's TEAM policy, not just
+  // its local files. Cache-only (no socket, no keychain) and unable to fail, so
+  // this cannot stop the proxy starting — Decision 64(f) — and an unlinked
+  // project resolves byte-identically to a plain `loadConfig`. The team notice
+  // is logged with the warnings because a proxy silently running WITHOUT the
+  // team policy someone believes is in force is the hazard the whole design is
+  // built around; the REFUSED lines for any denied key arrive in `warnings`.
+  const { settings, warnings, team } = await loadConfigWithTeamLayer({ projectDir: dir });
   for (const warning of warnings) {
     proxyLog(warning);
+  }
+  if (team.notice !== undefined) {
+    proxyLog(`golem team: ${team.notice}`);
   }
   const { port } = await resolvePort(dir, portOpt);
 

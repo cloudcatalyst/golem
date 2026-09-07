@@ -17,12 +17,14 @@ import path from "node:path";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { unreachableHeadroomConfigKeys } from "../compression/headroom-adapter.js";
 import { loadConfig } from "../config/index.js";
+import { defaultUserDir } from "../config/paths.js";
 // Narrow specifiers, not the `../hooks/index.js` barrel (~446ms — it pulls every
 // hook handler) for two small file reads.
 import { readSessionState, resolveBlock } from "../hooks/session-state.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { selectTarget } from "../inference/target-dispatcher.js";
 import { declaredWorkers, unknownWorkerWarnings } from "../inference/workers.js";
+import { listTeamLayerCaches, loadConfigWithTeamLayer } from "../portal/team-layer.js";
 import {
   listTargets,
   resolveDefaultTargetId,
@@ -133,7 +135,14 @@ export function probeProxy(
 
 export async function collectStatus(options: StatusOptions): Promise<StatusReport> {
   const projectDir = path.resolve(options.projectDir);
-  const { settings, provenance, warnings } = await loadConfig({
+  // `team-layer-fetch`: the team origin, POPULATED. Cache-only and unable to
+  // fail, so status keeps working offline — and an unlinked project resolves
+  // byte-identically to a plain `loadConfig` (asserted in
+  // tests/unit/portal/team-layer.test.ts). Without this, `golem status` would
+  // report the effective config of a project WITHOUT its team policy, which is
+  // the "believing you are under team policy when you are not" hazard pointed
+  // the other way.
+  const { settings, provenance, warnings } = await loadConfigWithTeamLayer({
     projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
@@ -275,6 +284,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // once: the device CA is created by the first `golem device enrol`, so its
   // absence is the honest signal that the feature is unused here.
   const devices = await collectDeviceStatus(projectDir);
+  // Decision 63(c) — one row per cached team, each with its OWN age.
+  const teams = await listTeamLayerCaches(options.userDir ?? defaultUserDir());
   const limits =
     baseLimits === undefined
       ? undefined
@@ -385,6 +396,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           },
         }
       : {}),
+    // Decision 63(c): per team, never one figure. Omitted entirely when the
+    // machine holds no caches, so a solo install's status says nothing about
+    // teams. This lists what the MACHINE holds — the counterpart to Decision
+    // 64(c)'s "no link, no cache read", which governs the config path and is
+    // held by `resolveTeamLayerForProject`. Reading a directory of settings
+    // opens no socket and looks up no token.
+    ...(teams.length > 0 ? { teams } : {}),
     ...(limits !== undefined ? { limits } : {}),
     ...(devices !== undefined ? { devices } : {}),
     // R12.2: the blocked read model, in the SAME shape the dashboard serves at
