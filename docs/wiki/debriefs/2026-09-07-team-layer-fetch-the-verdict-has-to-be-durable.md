@@ -35,6 +35,12 @@ possible:
   current one.
 - `golem status` gains one row per cached team, each with its own age (63(c)).
 - `golem team sync` is the on-demand fetch; `golem init`'s step-9 seam is filled.
+- **the two surfaces that consume it were wired**, because a populated slot
+  nothing reads is still inert: `golem proxy run` and `collectStatus` both load
+  through `loadConfigWithTeamLayer`, so the proxy runs under its project'"'"'s team
+  policy and `golem status` reports the effective config WITH it, naming the
+  team as the source. Cache-only, so neither can block or fail — and an
+  unlinked project resolves byte-identically either way.
 - the resolver was not touched. `LoadConfigOptions.teamLayer` already marks the
   origin remote, so arming `REMOTE_DENIED_SETTINGS` in production meant
   *supplying a real payload*, not writing new enforcement.

@@ -10,6 +10,7 @@
  * emitted and the field being displayed are two different regressions.
  */
 
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectStatus, type StatusReport } from "../../../src/cli/status.js";
@@ -151,5 +152,71 @@ describe("renderTeams", () => {
     expect(body).toContain("NOT APPLIED");
     expect(body).toContain("subscription_required");
     expect(body).not.toContain("2 hours old");
+  });
+});
+describe("golem status reports the effective config WITH team policy", () => {
+  it("names the team as the source of a team value", async () => {
+    // Without this wiring the whole feature is inert in the surface that
+    // matters most: `golem status` would report a project's effective config
+    // WITHOUT its team policy, which is the "believing you are under team
+    // policy when you are not" hazard pointed the other way.
+    const userDir = await newTempDir();
+    const projectDir = await newTempDir();
+    await mkdir(path.join(projectDir, ".golem"), { recursive: true });
+    await writeFile(
+      path.join(projectDir, ".golem", "settings.json"),
+      JSON.stringify({ team: { org_id: RECENT } }),
+      "utf8",
+    );
+    await writeTeamLayerCache(userDir, {
+      org_id: RECENT,
+      fetched_at: new Date().toISOString(),
+      settings: [
+        { key: "telemetry.enabled", value: false, enforced: false },
+        { key: "security.join_injection", value: true, enforced: true },
+      ],
+    });
+
+    const report = await collectStatus({
+      projectDir,
+      userDir,
+      env: {},
+      version: VERSION,
+      probeTimeoutMs: 1,
+    });
+
+    const telemetry = report.config["telemetry.enabled"];
+    expect(telemetry?.value).toBe(false);
+    expect(telemetry?.layer).toBe("team");
+    // ADR-0008: provenance for a team value names the TEAM, not the cache path.
+    expect(telemetry?.source).toContain(RECENT);
+    expect(telemetry?.source).not.toContain(userDir);
+
+    expect(report.config["security.join_injection"]?.value).toBe(true);
+    expect(report.config["security.join_injection"]?.layer).toBe("team");
+  });
+
+  it("applies nothing for an unlinked project, even with a cache on the machine", async () => {
+    const userDir = await newTempDir();
+    const projectDir = await newTempDir();
+    await writeTeamLayerCache(userDir, {
+      org_id: RECENT,
+      fetched_at: new Date().toISOString(),
+      settings: [{ key: "telemetry.enabled", value: false, enforced: true }],
+    });
+
+    const report = await collectStatus({
+      projectDir,
+      userDir,
+      env: {},
+      version: VERSION,
+      probeTimeoutMs: 1,
+    });
+
+    // The cache is LISTED (machine scope, Decision 63(c)/(d)) and NOT APPLIED
+    // (Decision 64(c)). Those two facts coexisting is the whole boundary.
+    expect(report.teams).toHaveLength(1);
+    expect(report.config["telemetry.enabled"]?.layer).toBe("default");
+    expect(report.config["telemetry.enabled"]?.value).toBe(true);
   });
 });
