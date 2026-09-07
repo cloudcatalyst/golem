@@ -2,7 +2,7 @@
 title: "team-layer-fetch — the verdict has to be durable, not just correct"
 type: debrief
 tags: [team, portal, config, precedence, entitlement, cache, offline, decision-63, decision-64, adr-0008]
-sources: [docs/plan/tasks/team-layer-fetch.md, docs/decisions/ADR-0008-settings-cascade-and-importance.md, docs/plan/verification-notes.md#160, src/portal/team-layer.ts, tests/unit/portal/team-layer.test.ts]
+sources: [docs/plan/tasks/team-layer-fetch.md, docs/decisions/ADR-0008-settings-cascade-and-importance.md, docs/plan/verification-notes.md#161, src/portal/team-layer.ts, tests/unit/portal/team-layer.test.ts]
 created: 2026-09-07
 updated: 2026-09-07
 ---
@@ -100,7 +100,7 @@ actually reach `proxy.bypass_all`, the client would have **REFUSED it loudly**
 rather than applied it — the correct outcome, and also not the outcome the
 example implies. So the example is wrong in the safe direction, twice.
 
-Recorded as verification-notes §160 item 1, with the fix for the portal side
+Recorded as verification-notes §161 item 1, with the fix for the portal side
 (use keys that exist and are allowed, and state that the client has a
 deny-list). The write-time refusal ADR-0008 asks the portal for is `owner: user`
 cross-repo work and was not assumed here.

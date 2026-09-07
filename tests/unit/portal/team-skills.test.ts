@@ -1,0 +1,292 @@
+/**
+ * `team-skills-sync` — the wire.
+ *
+ * Two things are being tested here and they are different in kind. One is that
+ * a well-formed response parses. The other is that a MALFORMED or hostile one
+ * cannot reach the filesystem half at all: `name` becomes a directory name, so
+ * every row that could escape the namespace has to be refused here, before any
+ * path exists to be escaped.
+ *
+ * And the Decision 64 fork: every failure has to land on the right side of
+ * `mayUseCachedTeamLayer`, because that single function decides whether an
+ * offline developer keeps working or a lapsed subscription keeps its skills.
+ */
+
+import { describe, expect, it, vi } from "vitest";
+import { mayUseCachedTeamLayer } from "../../../src/portal/entitlement.js";
+import { PortalAuthError } from "../../../src/portal/errors.js";
+import {
+  fetchTeamSkills,
+  isValidTeamSkillName,
+  MAX_TEAM_SKILL_BYTES,
+  MAX_TEAM_SKILLS,
+  teamSkillsPath,
+} from "../../../src/portal/team-skills.js";
+
+const ORG = "org_3IojJexample";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function row(name: string, content: string, overrides: Record<string, unknown> = {}) {
+  return {
+    name,
+    content,
+    content_sha256: "0".repeat(64),
+    updated_by: "user_1",
+    updated_at: "2026-09-04T02:11:00Z",
+    ...overrides,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The endpoint
+// ---------------------------------------------------------------------------
+
+describe("teamSkillsPath", () => {
+  it("is the contract's endpoint, and adds ?manifest=1 only when asked", () => {
+    expect(teamSkillsPath(ORG, false)).toBe(`/api/v1/orgs/${ORG}/skills`);
+    expect(teamSkillsPath(ORG, true)).toBe(`/api/v1/orgs/${ORG}/skills?manifest=1`);
+  });
+
+  it("encodes the org id, so a caller cannot smuggle a second path segment", () => {
+    // `readTeamBinding` refuses this shape long before here — this is the
+    // second layer, and the point of a second layer is that it does not rely on
+    // the first having run.
+    expect(teamSkillsPath("../../me", true)).toBe("/api/v1/orgs/..%2F..%2Fme/skills?manifest=1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The name is a path component
+// ---------------------------------------------------------------------------
+
+describe("isValidTeamSkillName: refuse, never sanitise", () => {
+  it("accepts the Agent Skills shape", () => {
+    for (const ok of ["house-style", "a", "review2", "x-y-z", "0abc"]) {
+      expect(isValidTeamSkillName(ok)).toBe(true);
+    }
+  });
+
+  it("refuses everything that could escape a directory or collide", () => {
+    for (const bad of [
+      "",
+      ".",
+      "..",
+      "../golem-ship",
+      "..\\golem-ship",
+      "a/b",
+      "a\\b",
+      "C:evil",
+      "-leading-hyphen",
+      "Upper",
+      "has space",
+      "trailing.",
+      "nul\u0000byte",
+      "a".repeat(65),
+    ]) {
+      expect(isValidTeamSkillName(bad), bad).toBe(false);
+    }
+  });
+});
+
+describe("a row that could escape the namespace never becomes an entry", () => {
+  it("rejects a traversal name, reports it, and keeps the good rows", async () => {
+    const transport = vi.fn(async () =>
+      jsonResponse({
+        skills: [row("../golem-ship", "pwned"), row("house-style", "fine")],
+      }),
+    );
+
+    const result = await fetchTeamSkills(transport, ORG, { manifest: false });
+
+    expect(result.kind).toBe("ok");
+    if (result.kind !== "ok") return;
+    expect(result.entries.map((e) => e.name)).toEqual(["house-style"]);
+    expect(result.rejected).toHaveLength(1);
+    expect(result.rejected[0]?.name).toBe("../golem-ship");
+    expect(result.rejected[0]?.reason).toContain("directory name");
+  });
+
+  it("reports a duplicate name rather than silently picking a winner", async () => {
+    const transport = vi.fn(async () =>
+      jsonResponse({ skills: [row("dup", "first"), row("dup", "second")] }),
+    );
+    const result = await fetchTeamSkills(transport, ORG, { manifest: false });
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]?.content).toBe("first");
+    expect(result.rejected[0]?.reason).toContain("twice");
+  });
+
+  it("refuses an absurdly large body and an absurdly long list", async () => {
+    const big = "x".repeat(MAX_TEAM_SKILL_BYTES + 1);
+    const many = Array.from({ length: MAX_TEAM_SKILLS + 5 }, (_, i) => row(`s${i}`, "ok"));
+    const oversize = await fetchTeamSkills(
+      async () => jsonResponse({ skills: [row("big", big)] }),
+      ORG,
+      {
+        manifest: false,
+      },
+    );
+    if (oversize.kind !== "ok") throw new Error("expected ok");
+    expect(oversize.entries).toHaveLength(0);
+    expect(oversize.rejected[0]?.reason).toContain("KiB");
+
+    const flood = await fetchTeamSkills(async () => jsonResponse({ skills: many }), ORG, {
+      manifest: false,
+    });
+    if (flood.kind !== "ok") throw new Error("expected ok");
+    expect(flood.entries.length).toBeLessThanOrEqual(MAX_TEAM_SKILLS);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The happy path
+// ---------------------------------------------------------------------------
+
+describe("a well-formed response", () => {
+  it("parses a manifest, which carries hashes and no content", async () => {
+    const transport = vi.fn(async () =>
+      jsonResponse({
+        skills: [{ name: "house-style", content_sha256: "AB".repeat(32), updated_at: "x" }],
+      }),
+    );
+    const result = await fetchTeamSkills(transport, ORG, { manifest: true });
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(transport).toHaveBeenCalledWith(`/api/v1/orgs/${ORG}/skills?manifest=1`);
+    expect(result.entries[0]?.content).toBeUndefined();
+    // Lower-cased so a hash comparison is not case-sensitive by accident.
+    expect(result.entries[0]?.contentSha256).toBe("ab".repeat(32));
+  });
+
+  it("ignores unknown fields, because the contract reserves the right to add them", async () => {
+    const result = await fetchTeamSkills(
+      async () =>
+        jsonResponse({
+          skills: [row("house-style", "body", { something_new: 42, nested: { a: 1 } })],
+          pagination: { next: null },
+        }),
+      ORG,
+      { manifest: false },
+    );
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.entries).toHaveLength(1);
+  });
+
+  it("treats a missing skills array as an empty team rather than an error", async () => {
+    const result = await fetchTeamSkills(async () => jsonResponse({}), ORG, { manifest: true });
+    if (result.kind !== "ok") throw new Error("expected ok");
+    expect(result.entries).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Decision 64: which failures may fall back to what is on disk
+// ---------------------------------------------------------------------------
+
+describe("Decision 64: cannot reach vs not entitled", () => {
+  async function failWith(response: Response) {
+    return fetchTeamSkills(async () => response, ORG, { manifest: true });
+  }
+
+  it("402 subscription_required is a VERDICT — the cache may not be used", async () => {
+    const result = await failWith(
+      jsonResponse({ error: "needs a subscription", code: "subscription_required" }, 402),
+    );
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("not_entitled");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(false);
+  });
+
+  it("403 not_a_member is a VERDICT — the cache may not be used", async () => {
+    const result = await failWith(jsonResponse({ code: "not_a_member" }, 403));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("not_entitled");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(false);
+  });
+
+  it("a 403 with a code this version does not know still denies", async () => {
+    const result = await failWith(jsonResponse({ code: "some_future_denial" }, 403));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(false);
+  });
+
+  it("401 is about the CREDENTIAL, not entitlement, so the cache stands (e2)", async () => {
+    const result = await failWith(jsonResponse({ code: "unauthenticated" }, 401));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("auth_failed");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(true);
+  });
+
+  it("5xx is a portal-side fault and not a verdict, so the cache stands", async () => {
+    const result = await failWith(new Response("bang", { status: 503 }));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("unreachable");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(true);
+  });
+
+  it("offline is unreachable, so the cache stands", async () => {
+    const result = await fetchTeamSkills(
+      async () => {
+        throw new TypeError("fetch failed");
+      },
+      ORG,
+      { manifest: true },
+    );
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(true);
+  });
+
+  it("a machine that is not linked at all is not a verdict either", async () => {
+    const result = await fetchTeamSkills(
+      async () => {
+        throw new PortalAuthError("not_linked", "run `golem team link`");
+      },
+      ORG,
+      { manifest: true },
+    );
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(true);
+  });
+
+  it("an error body that is not JSON does not change the verdict the status carries", async () => {
+    const result = await failWith(new Response("<html>402</html>", { status: 402 }));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("not_entitled");
+  });
+
+  it("a 200 that is not JSON is unreachable, not a verdict", async () => {
+    const result = await failWith(new Response("<html>hello</html>", { status: 200 }));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("unreachable");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(true);
+  });
+
+  it("a 200 whose shape breaks the contract is OUR bug, and may not use the cache", async () => {
+    // `api_error` is deliberately not cache-eligible: if the harness cannot
+    // tell what the portal said, it must not assume the answer was yes.
+    const result = await failWith(jsonResponse({ skills: [{ name: 1234 }] }));
+    if (result.kind !== "failed") throw new Error("expected failed");
+    expect(result.disposition.kind).toBe("api_error");
+    expect(mayUseCachedTeamLayer(result.disposition)).toBe(false);
+  });
+
+  it("never throws, whatever comes back", async () => {
+    for (const make of [
+      () => {
+        throw new Error("boom");
+      },
+      () => {
+        throw "a string, thrown by something rude";
+      },
+      async () => new Response(null, { status: 204 }),
+    ]) {
+      await expect(fetchTeamSkills(make as never, ORG, { manifest: true })).resolves.toBeDefined();
+    }
+  });
+});

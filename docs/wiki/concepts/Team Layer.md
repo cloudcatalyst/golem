@@ -157,7 +157,7 @@ apply it, with the code and the date. Without that, Decision 64(d) would hold
 only until the next config load: nothing on a `loadConfig` asks the portal
 anything, so a subscription that lapsed in March would keep enforcing March's
 policy until somebody happened to sync. A successful sync rewrites the file and
-clears the stamp, so re-subscribing needs no repair. See verification-notes §160.
+clears the stamp, so re-subscribing needs no repair. See verification-notes §161.
 
 ## The failure rule
 

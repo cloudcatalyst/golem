@@ -9298,7 +9298,60 @@ if it is ever reached with one.
 Worth stating generally: *validate-and-refuse* and *sanitise-and-continue* are
 different answers to "this input is wrong", and a decision that rules out one has
 not ruled out the other.
-## §160 — The portal contract's team-settings EXAMPLE names a key Golem does not have, and a cache-only read path does not enforce Decision 64(d) by itself (2026-09-07)
+
+## §160 — The team-skills endpoint's `name` is an unvalidated PATH COMPONENT, and the portal's contract still shows the nested path (2026-09-07)
+
+Both found while building `team-skills-sync`. **Sources:** the portal repo's
+`docs/api-contract.md` §3 (`GET /api/v1/orgs/{orgId}/skills`) and §5, read
+2026-09-07 from the local working copy at `D:\Personal\Projects\Golem`; this
+repo's `src/portal/team-skills.ts` and `src/cli/team-skills.ts`. Both items are
+**[OBSERVED]** as properties of the contract text plus this repo's code.
+
+### 1. `name` decides a directory name, and nothing in the contract constrains it
+
+The contract is explicit that the client owns the path: the response carries a
+`name` and *"a client can fetch only what its hashes say has changed"*. So the
+harness interpolates `name` into
+`.claude/skills/golem-team-<name>/SKILL.md` — and §3 places no constraint on
+the field at all. No charset, no length, no statement that it is slug-shaped.
+
+That is exactly the shape §159 item 2 found on `org_id`, reached from the other
+direction: **a remote string used to build a filesystem path.** A row named
+`../../rules/golem-evil` is a write outside the managed namespace with a JSON
+field as the delivery mechanism, and a row named `..` is worse.
+
+Answer applied here is §159's: **validate and refuse, never sanitise and
+continue.** `isValidTeamSkillName` is `^[a-z0-9][a-z0-9-]{0,63}$`, checked
+before any path is built, and a refused row is REPORTED and skipped rather than
+failing the sync (nothing in the team layer may break anything). The built path
+is then re-checked against `.claude/skills/` as a second guard, on the principle
+that the point of a second layer is not relying on the first having run.
+
+**For the portal side:** this needs no API change — the client must validate
+whatever arrives. But §3 would be better with a stated `name` charset, because
+every client implementer otherwise has to derive this hazard independently, and
+the portal's own admin UI is the natural place to reject the name at authoring
+time instead.
+
+### 2. The nested-path drift is STILL PRESENT in the portal contract — [OBSERVED]
+
+§159 item 1 recorded that `docs/api-contract.md` §3 and `docs/team-config.md`
+§4 describe `.claude/skills/golem-team/<name>/SKILL.md`, which Claude Code
+never discovers. Re-checked 2026-09-07 while implementing the client:
+`docs/api-contract.md` still reads *"for syncing into
+`.claude/skills/golem-team/<name>/SKILL.md`"*.
+
+So `portal-team-skills-path-drift` (`owner: user`) is open, and the practical
+consequence is now concrete rather than theoretical: **a client written from the
+contract as it stands today ships skills that sync perfectly and never load,
+with every surface reporting success.** The flat path is what this repo
+implements and what `init-skills.ts` has always expected.
+
+Corrected here on the way: `docs/plan/tasks/team-skills-sync.md`'s own `gate`
+line carried the nested path too. The wiki's `Team Layer.md` was already fixed
+by §159.
+
+## §161 — The portal contract's team-settings EXAMPLE names a key Golem does not have, and a cache-only read path does not enforce Decision 64(d) by itself (2026-09-07)
 
 Both found while building `team-layer-fetch`. **Sources:** the portal repo's
 `docs/api-contract.md` §`GET /api/v1/orgs/{orgId}/settings` (read 2026-09-07
