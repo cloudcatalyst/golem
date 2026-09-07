@@ -140,6 +140,7 @@ export {
   type SyncTeamLayerOptions,
   type SyncTeamLayerResult,
   syncTeamLayer,
+  type TeamCacheDenial,
   type TeamCacheStatus,
   type TeamLayerCache,
   type TeamLayerForConfig,

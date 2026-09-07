@@ -206,12 +206,47 @@ export function translateTeamRows(rows: readonly TeamSettingRow[]): TranslatedTe
 // The cache — `~/.golem/teams/<org_id>.json`, one file per org
 // ---------------------------------------------------------------------------
 
+/**
+ * An entitlement verdict of NO, recorded against the cache it withdraws.
+ *
+ * Decision 64(d) is emphatic: *"a lapsed licence must not keep exerting
+ * control, and a cache that outlives the subscription is exactly how it
+ * would."* With a cache-only read path that is not automatic — nothing on a
+ * `loadConfig` asks the portal anything, so an org whose subscription lapsed in
+ * March would keep enforcing its March policy until somebody happened to run a
+ * sync.
+ *
+ * So the verdict is PERSISTED, and the read path refuses a stamped cache. The
+ * alternative — deleting the file — was rejected twice over: it destroys the
+ * reason (a user seeing policy vanish gets no explanation), and a file that
+ * disappears by itself is indistinguishable from a bug. A successful sync
+ * rewrites the file whole, which clears the stamp, so re-subscribing needs no
+ * repair step.
+ *
+ * Only `not_entitled` stamps. An `api_error` must not: Golem failing to
+ * understand its own portal is not a verdict, and persisting our bug as an
+ * organization's policy withdrawal is the same class of mistake in the other
+ * direction.
+ */
+const cacheDenialSchema = z.object({
+  /** The entitlement `code`, e.g. `subscription_required`. */
+  code: z.string(),
+  status: z.number(),
+  detail: z.string(),
+  /** ISO 8601 — when the portal said no. */
+  at: z.string(),
+});
+
+export type TeamCacheDenial = z.infer<typeof cacheDenialSchema>;
+
 const teamCacheSchema = z.object({
   org_id: z.string(),
   /** ISO 8601, so a human reading the file can date it without a tool. */
   fetched_at: z.string(),
   schema_version: z.string().optional(),
   settings: z.array(teamSettingRowSchema).default([]),
+  /** Present once the portal has denied this org. See {@link cacheDenialSchema}. */
+  denied: cacheDenialSchema.optional(),
 });
 
 /**
@@ -269,6 +304,12 @@ export interface TeamCacheStatus {
   readonly settings_count: number;
   readonly enforced_count: number;
   readonly path: string;
+  /**
+   * The portal's verdict of NO, when one has been recorded. A denied cache is
+   * on disk but is NOT applied, and a status line that showed only its age
+   * would say the opposite of what is happening.
+   */
+  readonly denied?: TeamCacheDenial;
 }
 
 /**
@@ -315,6 +356,7 @@ export async function listTeamLayerCaches(
       settings_count: cache.settings.length,
       enforced_count: cache.settings.filter((row) => row.enforced).length,
       path: teamCachePath(userDir, orgId),
+      ...(cache.denied === undefined ? {} : { denied: cache.denied }),
     });
   }
   // Stable order so a status snapshot diffs cleanly between runs.
@@ -419,6 +461,19 @@ export async function resolveTeamLayer(
       notice:
         `Team ${binding.orgId} is linked but this machine has no cached team settings — ` +
         `using local configuration. Run \`golem team sync\` to fetch them.`,
+    };
+  }
+
+  if (cache.denied !== undefined) {
+    // Decision 64(d), enforced on the read path rather than only at the moment
+    // of the verdict — otherwise a lapsed subscription's policy would stand
+    // until the next sync, which might be never.
+    return {
+      ...NO_TEAM_LAYER,
+      notice:
+        `Team ${binding.orgId}: the portal denied this team on ${cache.denied.at} ` +
+        `(${cache.denied.code}) — ${cache.denied.detail}. The cached team settings are NOT ` +
+        `being applied. Using local configuration. \`golem team sync\` re-checks.`,
     };
   }
 
@@ -571,6 +626,43 @@ export interface SyncTeamLayerResult extends TeamLayerResolution {
   readonly disposition: TeamLayerDisposition;
   /** Absolute path written, when the fetch succeeded. */
   readonly cacheWritten?: string;
+  /**
+   * Absolute path STAMPED as denied, when the portal rendered a verdict of no
+   * and a cache existed to withdraw. See {@link TeamCacheDenial}.
+   */
+  readonly cacheDenied?: string;
+}
+
+/**
+ * Record a `not_entitled` verdict against an existing cache.
+ *
+ * Nothing is created: with no cache there is nothing to withdraw, and writing
+ * one here would put an organization's *name* on a machine as a side effect of
+ * being told it has no subscription.
+ */
+async function stampCacheDenied(
+  userDir: string,
+  orgId: string,
+  disposition: Extract<TeamLayerDisposition, { kind: "not_entitled" }>,
+  nowMs: number,
+): Promise<string | undefined> {
+  const cache = await readTeamLayerCache(userDir, orgId);
+  if (cache === null) return undefined;
+  try {
+    return await writeTeamLayerCache(userDir, {
+      ...cache,
+      denied: {
+        code: disposition.code,
+        status: disposition.status,
+        detail: disposition.detail,
+        at: new Date(nowMs).toISOString(),
+      },
+    });
+  } catch {
+    // An unwritable cache dir cannot make the verdict wrong, and the caller has
+    // already been told the layer is not being applied.
+    return undefined;
+  }
 }
 
 /**
@@ -642,10 +734,18 @@ export async function syncTeamLayer(options: SyncTeamLayerOptions): Promise<Sync
   // No usable payload. Whether the cache may stand in is decided in exactly
   // one place, and it is not this one.
   if (!mayUseCachedTeamLayer(disposition)) {
+    // A VERDICT of no is recorded against the cache, so it stops applying on
+    // every later config load and not merely on this one (Decision 64(d)). Our
+    // own `api_error` is not a verdict and stamps nothing.
+    let cacheDenied: string | undefined;
+    if (disposition.kind === "not_entitled") {
+      cacheDenied = await stampCacheDenied(userDir, binding.orgId, disposition, now());
+    }
     return {
       disposition,
       ...NO_TEAM_LAYER,
       notice: describeTeamOutcome(disposition, { orgId: binding.orgId }),
+      ...(cacheDenied === undefined ? {} : { cacheDenied }),
     };
   }
 
