@@ -71,6 +71,15 @@ The single most important distinction in this design:
 | *nothing* (timeout, DNS, offline) | **cannot reach** | Use the cached team layer, and report how old it is |
 | `402 subscription_required` | **not entitled** | Do NOT use the cache. Fall back to local config, and say why |
 | `403 not_a_member` | **not entitled** | Same as 402, naming the team the project claims |
+| `401`, or a refresh that failed | **cannot authenticate** | Use the cache; prompt at the next interactive command |
+| `5xx` | **portal-side fault, not a verdict** | Use the cache — the portal did not judge anything |
+
+The rule that generates every row: **the cache is for the case where no verdict
+was rendered.** A `401` is about the credential, not the subscription — the
+portal never got as far as judging entitlement — so the cache stands, and it
+fails safe: a stale team layer keeps restrictions and unlocks nothing. A `403`
+with a code this version does not recognise still denies, because a 403 is an
+authorization verdict however it is spelled.
 
 Conflating them fails in both directions:
 
