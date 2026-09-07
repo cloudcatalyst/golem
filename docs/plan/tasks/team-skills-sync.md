@@ -6,7 +6,7 @@ owner: agent
 size: M
 discipline: code
 design: "The portal repo's `docs/team-config.md` §4 for the design and `docs/api-contract.md` (`GET /api/v1/orgs/{orgId}/skills`, `?manifest=1`) for the wire; summarised in `docs/plan/verification-notes.md` §149 item 6. The local mechanism is `src/cli/managed-files.ts` + `src/cli/init-skills.ts`, unchanged in kind."
-gate: "A skill added in the portal appears at `.claude/skills/golem-team/<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output). PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
+gate: "A skill added in the portal appears at `.claude/skills/golem-team-<name>/SKILL.md` on the next sync; a skill REMOVED in the portal is deleted locally on the next sync; a hand-edited team skill is reported and KEPT, never overwritten; and a sync where nothing changed writes no file and touches no mtime (assert on mtimes, not on log output). PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
 depends_on: [project-team-binding]
 touches: [src/cli/managed-files.ts, src/cli/init-skills.ts, src/cli/]
 created: 2026-09-04
