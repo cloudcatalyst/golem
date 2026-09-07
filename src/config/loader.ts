@@ -87,8 +87,10 @@ export type LayerName = "default" | "user" | "team" | "project" | "local" | "env
  * declarations) walks it reversed. Adding an origin means adding it here and
  * nowhere else.
  *
- * `team` is declared but not yet populated by any fetch: `team-settings-layer`
- * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills. It
+ * `team` is declared but not yet populated by any fetch: `team-layer-fetch`
+ * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills
+ * (`team-settings-layer` was the original owner and is retired — Decision
+ * 62(c) — so do not go looking for it). It
  * sits above `user` in the normal band because a team is shared across many
  * projects, so a repo specialising a company default is the expected case
  * rather than a violation (ADR-0008 §The origins).
