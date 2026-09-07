@@ -9298,3 +9298,85 @@ if it is ever reached with one.
 Worth stating generally: *validate-and-refuse* and *sanitise-and-continue* are
 different answers to "this input is wrong", and a decision that rules out one has
 not ruled out the other.
+## §160 — The portal contract's team-settings EXAMPLE names a key Golem does not have, and a cache-only read path does not enforce Decision 64(d) by itself (2026-09-07)
+
+Both found while building `team-layer-fetch`. **Sources:** the portal repo's
+`docs/api-contract.md` §`GET /api/v1/orgs/{orgId}/settings` (read 2026-09-07
+from the local working copy at `D:\Personal\Projects\Golem`), this repo's
+`src/config/schema.ts` and `src/config/loader.ts` read from source, and spec
+Decisions 63 and 64. Item 1 is **[OBSERVED]** as a property of the two
+documents plus a failing test; item 2 is **[OBSERVED]** as a property of the
+code paths involved. Neither was verified against a live portal — no deployed
+`/orgs/{orgId}/settings` endpoint was reachable, so **the wire shape itself
+remains [UNESTABLISHED] as deployed behaviour**.
+
+### 1. `security.redact_secrets` is not a settings key — [OBSERVED]
+
+The contract's worked example for the endpoint this task consumes is:
+
+```json
+{ "settings": [
+  { "key": "security.redact_secrets", "value": true, "enforced": true, "schema_version": "v0.9.2" },
+  { "key": "proxy.default_target", "value": "main", "enforced": false, "schema_version": "v0.9.2" }
+] }
+```
+
+`security.redact_secrets` **does not exist in this Golem**. The `security`
+section is `write_port`, `write_lan`, `unlock_window_minutes`,
+`idle_relock_minutes`, `step_up_max_age_minutes`, `device_cert_days`,
+`join_injection` — the device/write-surface settings. Redaction has no on/off
+key by design: it is always on, and the single deliberate exception is
+`proxy.bypass_all` (ADR-0004), which is **on `REMOTE_DENIED_SETTINGS`** and so
+can never be set by a team at any importance.
+
+Found by writing the example into a test and watching it fail: the value never
+landed and provenance stayed `default`. That is the loader behaving correctly —
+an unknown key warns and is dropped — but it means **the contract's headline
+example, copied faithfully, produces a team layer that sets nothing.** An admin
+following it would see no effect and no reason.
+
+The near-miss is the interesting part. Had the key been spelled to reach
+`proxy.bypass_all`, the client would have REFUSED it loudly rather than applied
+it, which is the correct outcome and also not the outcome the example implies.
+So the example is wrong in the safe direction, twice over.
+
+**For the portal side:** replace the example key with one that exists and is
+allowed — `telemetry.enabled` and `security.join_injection` are both real, both
+booleans, and neither is denied. And state that the deny-list exists at the
+client, because an admin who can type a key into a form needs to know which
+keys the client will drop. Per ADR-0008 §Portal consequences the portal should
+also refuse the denied keys at write time; that half is `owner: user`
+cross-repo work and is not assumed here.
+
+### 2. Decision 64(d) is not free on a cache-only read path — [OBSERVED]
+
+Decision 64(d): *"a lapsed licence must not keep exerting control, and a cache
+that outlives the subscription is exactly how it would."*
+
+That reads as a statement about the moment of the verdict, and it is easy to
+implement as one — a `402` returns "no layer" and the fallback is skipped. It
+is not enough. A team layer is fetched RARELY and read on EVERY config load, so
+those have to be different functions (a network round trip behind every `golem`
+command is the opposite of local-first). Which means the read path is
+**cache-only**, and a cache-only read asks the portal nothing:
+
+- an org's subscription lapses in March
+- nobody runs `golem team sync` in that repo again
+- every `loadConfig` keeps applying March's policy, indefinitely
+
+The verdict was correct and had no durable effect. Resolved by **persisting the
+denial into the cache file** (`denied: { code, status, detail, at }`), which the
+read path refuses with the reason and the date; a successful sync rewrites the
+file whole and so clears it, meaning re-subscribing needs no repair step.
+Deleting the file was rejected twice over — it destroys the explanation, and a
+file that vanishes by itself is indistinguishable from a bug.
+
+`api_error` deliberately stamps nothing: Golem failing to understand its own
+portal is not a verdict on anybody's subscription, and persisting our bug as an
+organization's policy withdrawal is the same class of mistake in the other
+direction.
+
+The generalisable version: **an entitlement check whose enforcement lives only
+on the fetch path is only as current as the last fetch.** Any design that
+separates "refresh" from "read" has to decide where a verdict is durable, and
+the answer is not automatically "the fetch".

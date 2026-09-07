@@ -4,7 +4,7 @@ type: concept
 tags: [portal, team, config, precedence, skills, oauth, golem.run]
 sources: [docs/plan/verification-notes.md#149, src/config/loader.ts, src/cli/managed-files.ts, docs/plan/tasks/project-team-binding.md, docs/plan/tasks/team-settings-layer.md, docs/plan/tasks/team-skills-sync.md, docs/plan/tasks/team-portal-auth.md]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-07
 ---
 
 # Team Layer
@@ -45,32 +45,98 @@ the OS keychain (ADR-0003's line). The project says *which team*; the keychain
 says *who you are*; the two are combined at sync time. A per-project token would
 be a credential in a repository waiting to happen.
 
-## The layer sits in the ladder twice
+## `enforced` means `!important` at the team origin
+
+**Superseded 2026-09-06 by ADR-0008 / Decision 62(c).** This page used to
+describe the team layer sitting in the ladder TWICE — once as defaults, once as
+enforced keys. That mechanism is retired: it cost two `LayerName` values for one
+source, made provenance answer *"which of the two team positions"* instead of
+*"the team"*, and generalised to nobody. It was a special case of something more
+useful.
+
+What replaced it: **any origin may declare `!important`, and importance reverses
+origin order.** Seven origins, most foundational first —
 
 ```
-built-in defaults → TEAM (defaults)
-                  → user → project → local
-                  → TEAM (enforced keys only)
-                  → GOLEM_* environment variables
-                  → per-request headers
+default -> user -> team -> project -> local -> env -> override
 ```
 
-Each key is in exactly one position, chosen per key by a team admin:
+— cascade normally; important declarations cascade in REVERSED order, and every
+important beats every normal. So `user!` beats `team!` beats `project!`. Full
+design: ADR-0008; reader-facing version: [[Settings Cascade]].
 
-- **not enforced** → a company *default*, overridable by anything a person writes
-- **enforced** → *policy*, applied after every file layer
+The wire did not change, only its meaning. A row's `enforced` flag maps 1:1 onto
+the syntax:
+
+```json
+{ "settings": [{ "key": "telemetry.enabled", "value": false, "enforced": true }] }
+```
+
+becomes, at the `team` origin,
+
+```json
+{ "telemetry": { "enabled": false }, "!important": ["telemetry.enabled"] }
+```
+
+- **not enforced** -> a company *default*. `project` sits ABOVE `team` in the
+  normal band, so a repo specialising a company default is the expected case.
+- **enforced** -> *policy*, in the important band, beating every repo and every
+  checkout — but losing to a member's own `~/.golem` important declaration.
 
 That distinction is the whole feature: a redaction rule and a preferred UI colour
 are both settings, and only one of them should be a mandate.
 
-**`GOLEM_*` still beats an enforced key, deliberately.** It already wins over
-every file layer, and an exception would mean a setting that cannot be worked
-around on a machine that is on fire. `LayerName` in `src/config/loader.ts` has
-neither team position yet.
+**`GOLEM_*` no longer automatically beats an enforced key** — Decision 62(d)
+reversed that shipped behaviour, so a file origin's `!important` now outranks
+`env`. Note it is a *file origin's* declaration that does so; the team origin is
+remote, and the floor below applies to it regardless.
 
-Provenance has to name the **team**, not just a layer — the control panel already
-renders "locked" rows for env-fixed settings, and an enforced team key renders
-the same way, so "why can I not change this" is answered on screen.
+Provenance names the **team**, not just the layer: a team value's `source` reads
+`team org_… (portal)`, or `team org_… (cached copy, fetched …)` when it came off
+the cache. `C:\Users\me\.golem\teams\org_2abc.json` answers a different
+question from *whose policy is this*.
+
+## The floor: keys a remote origin may never set
+
+`REMOTE_DENIED_SETTINGS` in `src/config/loader.ts` is compiled in, never fetched
+— a list the remote can edit is not a floor. It carries `proxy.bypass_all`, the
+three `portal.*` identity keys, and the four `team.*` keys. A denied key arriving
+from the team origin is **DROPPED, not sanitised**, with a warning that names it:
+
+```
+team org_…: REFUSED "proxy.bypass_all" — a remote origin may never set it, at any
+importance (ADR-0008 floor). The value was DROPPED, not applied.
+```
+
+Loud on purpose: a floor that drops quietly leaves an admin believing they set
+something they did not. `team-layer-fetch` is what put a real payload in front of
+this check — before it, the mechanism existed with no origin using it.
+
+Two of those groups are self-defence rather than policy. `portal.*` denied means
+a compromised portal cannot redirect a client to itself; `team.*` denied means a
+team layer cannot re-point the project at a different team, or switch its own
+`sync` back on after a person switched it off.
+
+## The fetch, and the per-org cache
+
+`team-layer-fetch` (shipped 2026-09-07) fills the origin. The two halves are
+deliberately separate functions:
+
+- **`golem team sync`** — and `golem init`'s team step — talk to the portal:
+  `GET /api/v1/orgs/{orgId}/settings`, then write
+  `~/.golem/teams/<org_id>.json`.
+- **every config load** reads that file and nothing else. No socket, no
+  keychain, no failure mode.
+
+Collapsing them would put a network round trip behind every `golem` command and
+every proxy request. It would also make an offline machine *slower* than an
+online one at reading its own config. So the cache is not a fallback bolted onto
+a fetch — it is the primary read path, and the fetch is what refreshes it.
+
+**Which team a sync refreshes** is settled by Decision 63(f): the current
+project's, because a sync is a project-scoped act that reports against one repo's
+team. `golem team sync --all` is the explicit sweep over every team already
+cached on this machine.
 
 ## Stale policy beats absent policy
 
@@ -79,7 +145,19 @@ team because a machine holds projects belonging to different teams (Decision
 63). A machine with no network
 uses the last known team settings rather than silently dropping to user
 defaults, and the file records when it was fetched so `golem status` can say how
-old it is.
+old it is, **per team** — with several caches a single age is a number that
+describes none of them (Decision 63(c)). `golem team unlink` deliberately
+**keeps** the cache: it is machine scope while the link is project scope, so
+another project on this machine may still be using that team's offline policy.
+
+**One exception, and it is the important one.** A cache is for the case where no
+verdict was rendered. When the portal *does* render one — `402`, `403` — the
+verdict is written into the cache file (`denied`), and the read path refuses to
+apply it, with the code and the date. Without that, Decision 64(d) would hold
+only until the next config load: nothing on a `loadConfig` asks the portal
+anything, so a subscription that lapsed in March would keep enforcing March's
+policy until somebody happened to sync. A successful sync rewrites the file and
+clears the stamp, so re-subscribing needs no repair. See verification-notes §160.
 
 ## The failure rule
 
