@@ -111,6 +111,19 @@ failing to understand its own portal is not a verdict, and persisting our bug as
 an organization's policy withdrawal is the same mistake mirrored. Spec Decision
 64(d2).
 
+## Testing the guarantee: run the command, not just the unit
+
+Spy-based assertions prove **no portal I/O happened**. They do not prove the
+command **answered**. Both are required, and the gap between them shipped a bug:
+`golem team status` exited `2` on a default solo install, complaining about
+registering OAuth applications, while every free-tier unit test passed — because
+they exercised `golem init` and `loadConfig`, never a `golem team *` command on a
+machine with no portal configured.
+
+So an assertion about this boundary includes **a real CLI invocation's exit code
+on a default install**. That is the surface a solo user actually meets. Spec
+Decision 64(c2).
+
 ## Nothing here may break anything
 
 Every entitlement outcome degrades to local config and says so out loud. No

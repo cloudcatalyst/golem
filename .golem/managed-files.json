@@ -6,7 +6,7 @@
   ".claude/rules/golem-local-answer.md": "0ca6fec30b3047fcfb90019f0ee3faee395e0d479d2f4a35015eb1968ed6eb1e",
   ".claude/rules/golem-local-coder.md": "46ae0335b28cd808aecb29dfa02f72dbd79c47691f641f3ee1dc3ad5e65a3bf4",
   ".claude/rules/golem-long-run-visibility.md": "0d4f076ca4d2d80f85689dffe3be2caa20e968062dc7849fbbc35838931a0664",
-  ".claude/rules/golem-parallel-agent-isolation.md": "491d088855780ebb938a7e4b5540e5bc4172a2a201c68a0b128fc6ac508039ec",
+  ".claude/rules/golem-parallel-agent-isolation.md": "e2093d32493dfee60cd599ab45b4730b753bcf68dc76b34036ba8c1a3300135e",
   ".claude/rules/golem-snooze-hold.md": "21e7012855c0fa88914a68db756b3041abf48e538fc917e94f726629dc7f797b",
   ".claude/rules/golem-subagent-headroom.md": "b5593e4893209f974b566bec9a2ad38582215080e0b153f39c3ca7dab557264d",
   ".claude/rules/golem-wiki-kb-first.md": "8eded5fdeb69a2f45cf565aaf43d580ce776d930b7723f170b514da73cf8c9c4",
