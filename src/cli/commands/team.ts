@@ -178,7 +178,7 @@ async function bindProjectTeam(options: {
 }
 
 /** What `golem team status` says about the PROJECT, with no network at all. */
-interface ProjectBindingView {
+export interface ProjectBindingView {
   readonly linked: boolean;
   readonly orgId: string | null;
   readonly summary: string;
@@ -186,7 +186,19 @@ interface ProjectBindingView {
   readonly cache: string | null;
 }
 
-async function describeProjectBinding(team: TeamSettings): Promise<ProjectBindingView> {
+/**
+ * Whether a portal is configured at all — the question `golem team status` must
+ * ask BEFORE `resolvePortalConfig`, which throws when the answer is no.
+ *
+ * Exported because the ordering it protects regressed once: no portal is the
+ * DEFAULT for every solo user, so asking `resolvePortalConfig` first made a
+ * read-only status command exit 2 on a plain unlinked project.
+ */
+export function portalIsConfigured(portal: { readonly url: string }): boolean {
+  return portal.url.trim() !== "";
+}
+
+export async function describeProjectBinding(team: TeamSettings): Promise<ProjectBindingView> {
   const state = readTeamBinding(team);
   if (state.kind === "unlinked") {
     // The free tier, stated as a fact rather than an absence — and NO cache is
@@ -385,18 +397,37 @@ export default function register(program: Command): void {
     .option("--json", "machine-readable output", false)
     .action(async (opts: { dir: string; json: boolean }) => {
       try {
-        const { config, tokens, settings } = await portalContext(opts.dir);
+        // The PROJECT half first, and deliberately so: it is a pure read of
+        // already-loaded settings — no request is made, and the per-org cache is
+        // stat'd ONLY when this project names a team, because an unlinked
+        // project must read no cache at all (Decision 64).
+        //
+        // Order matters, and having it the other way round was a free-solo
+        // papercut: `resolvePortalConfig` THROWS when no portal is configured,
+        // which is the DEFAULT for every solo user. Asking it first made this
+        // command exit 2 on a plain unlinked project and report a missing portal
+        // setup as though it were the answer to "is this repo on a team?". The
+        // answer is knowable with no portal at all, so a read-only status
+        // command states it and exits 0.
+        const { settings } = await loadConfig({ projectDir: opts.dir });
+        const project = await describeProjectBinding(settings.team);
+        if (!portalIsConfigured(settings.portal)) {
+          if (opts.json) {
+            const payload = { configured: false, linked: false, team: project };
+            process.stdout.write(`${JSON.stringify(payload, null, 2)}\n`);
+            return;
+          }
+          process.stdout.write(`Team:    ${project.summary}\n`);
+          process.stdout.write("Portal:  none configured — set `portal.url` to use a team\n");
+          return;
+        }
+        const { config, tokens } = await portalContext(opts.dir);
         const status = await portalStatus({
           issuerUrl: config.issuerUrl,
           apiBaseUrl: config.apiBaseUrl,
           clientId: config.clientId,
           tokens,
         });
-        // The project half of the answer. Read from settings only — no request
-        // is made, and the per-org cache is stat'd ONLY when this project names
-        // a team, because an unlinked project must read no cache at all
-        // (Decision 64).
-        const project = await describeProjectBinding(settings.team);
         if (opts.json) {
           process.stdout.write(`${JSON.stringify({ ...status, team: project }, null, 2)}\n`);
           return;

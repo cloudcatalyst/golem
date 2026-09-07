@@ -93,6 +93,24 @@ beats absent policy only when the question is *reachability*. When the answer is
 "you are not entitled", the cache is not a fallback — it is the thing being
 withdrawn.
 
+## Why a lapsed licence needs a written-down verdict
+
+The read path is **cache-only**: nothing on a `loadConfig` asks the portal
+anything. So "a lapsed licence stops exerting control" does not happen by
+itself — an org whose subscription ended in March would keep enforcing March's
+policy until somebody happened to run a sync.
+
+So a `402`/`403` **stamps the cache**, and every later cache-only read refuses to
+apply it, naming the date and the reason. Deleting the file instead was rejected
+twice over: it destroys the explanation, and a file that disappears by itself is
+indistinguishable from a bug. A successful sync rewrites the file whole, so
+re-subscribing needs no repair step.
+
+Only a genuine *not entitled* verdict stamps. An `api_error` must not — Golem
+failing to understand its own portal is not a verdict, and persisting our bug as
+an organization's policy withdrawal is the same mistake mirrored. Spec Decision
+64(d2).
+
 ## Nothing here may break anything
 
 Every entitlement outcome degrades to local config and says so out loud. No
