@@ -2,12 +2,7 @@
 title: "team-layer-fetch — the verdict has to be durable, not just correct"
 type: debrief
 tags: [team, portal, config, precedence, entitlement, cache, offline, decision-63, decision-64, adr-0008]
-sources:
-  - docs/plan/tasks/team-layer-fetch.md
-  - docs/decisions/ADR-0008-settings-cascade-and-importance.md
-  - docs/plan/verification-notes.md#160
-  - src/portal/team-layer.ts
-  - tests/unit/portal/team-layer.test.ts
+sources: [docs/plan/tasks/team-layer-fetch.md, docs/decisions/ADR-0008-settings-cascade-and-importance.md, docs/plan/verification-notes.md#160, src/portal/team-layer.ts, tests/unit/portal/team-layer.test.ts]
 created: 2026-09-07
 updated: 2026-09-07
 ---
