@@ -288,6 +288,29 @@ describe("cache age is reported PER TEAM (Decision 63(c))", () => {
 // ---------------------------------------------------------------------------
 
 describe("the fetch and its dispositions", () => {
+  it("accepts the LIVE portal's settings payload for a team with nothing configured", async () => {
+    // Captured from the real https://golem.run on 2026-09-08, during the first
+    // end-to-end `golem team sync`: an unconfigured team answers 200 with
+    // `{"settings": [], "schema_version": null}`. The null was refused by
+    // `.optional()`, and the whole sync reported "the portal answered 200, which
+    // this version of Golem does not understand" — for a team that simply has no
+    // settings yet, which is every team's first day (verification-notes §164).
+    const { client } = fakeClient(() => jsonResponse({ settings: [], schema_version: null }));
+
+    const result = await fetchTeamSettings(client, ORG);
+
+    expect(result.disposition.kind).toBe("entitled");
+    expect(result.response?.settings).toEqual([]);
+    expect(result.response?.schema_version).toBeUndefined();
+  });
+
+  it("treats a null settings list as an empty team, not as an unreadable payload", async () => {
+    const { client } = fakeClient(() => jsonResponse({ settings: null }));
+    const result = await fetchTeamSettings(client, ORG);
+    expect(result.disposition.kind).toBe("entitled");
+    expect(result.response?.settings).toEqual([]);
+  });
+
   it("asks for /api/v1/orgs/<id>/settings and describes the client in the query", async () => {
     const { client, request } = fakeClient(() => jsonResponse(WIRE_PAYLOAD));
     const result = await fetchTeamSettings(client, ORG);
