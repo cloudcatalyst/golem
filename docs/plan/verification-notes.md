@@ -9513,3 +9513,164 @@ can give, both `owner: user`:
 
 Everything on the harness side is built and tested; the wire shape stays
 `[UNESTABLISHED]` as deployed behaviour until those exist.
+
+## §163 — The Clerk issuer, read off the live site: §158 proven end to end, and Dynamic Client Registration is NOT available (2026-09-08)
+
+Done with a real browser (chrome-devtools MCP) plus unauthenticated `curl`. **No
+Clerk dashboard access and no credentials were used** — everything below is
+either rendered publicly by golem.run or served by Clerk's public discovery.
+
+### 1. `R7.6-infra`'s last item — [OBSERVED]
+
+`https://golem.run` rendered in a real Chrome, title *"Golem · shared config and
+connectors"*, full marketing page with `Install` / `Sign in` / `Set up a team`.
+The UA-sniffing map (§162) is therefore verified for the browser case as a
+**render**, not merely a 200.
+
+Worth noting for its own sake: the page already states Decision 64's boundary in
+its own words — *"Nothing is held back from the free one. The paid tier exists
+because config a team shares has to be hosted somewhere."* Solo is listed
+**FREE**, Team as **TBC / seat / month**. The spec and the shop window agree.
+
+### 2. The issuer, discovered from the page itself — [OBSERVED]
+
+`golem.run` loads Clerk from:
+
+```
+https://immune-owl-1734.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js
+```
+
+So the Clerk **Frontend API URL** is `https://immune-owl-1734.clerk.accounts.dev`,
+and discovery is there rather than on the portal:
+
+```
+GET https://immune-owl-1734.clerk.accounts.dev/.well-known/oauth-authorization-server  → 200
+GET https://immune-owl-1734.clerk.accounts.dev/.well-known/openid-configuration        → 200
+```
+
+**§158 is now proven end to end.** `portal.url` = `https://golem.run` (the API),
+`portal.issuer` = the Clerk host above. They are different origins; one variable
+genuinely cannot serve both, and §162 already showed the portal origin 404s on
+discovery.
+
+### 3. What the issuer advertises, versus what the harness implements — [OBSERVED]
+
+| advertised | value | harness |
+|---|---|---|
+| `authorization_endpoint` | `/oauth/authorize` | matches |
+| `token_endpoint` | `/oauth/token` | matches |
+| `code_challenge_methods_supported` | `["S256"]` | S256 — matches |
+| `grant_types_supported` | `authorization_code`, `refresh_token` | matches |
+| `scopes_supported` | `openid profile email public_metadata private_metadata offline_access user:org:read` | requests `openid profile email offline_access` — all four supported |
+| `registration_endpoint` | **`null`** | — |
+
+Three consequences:
+
+1. **No device grant.** `grant_types_supported` has no `urn:ietf:params:oauth:grant-type:device_code`, confirming `team-portal-auth`'s decision to state a clear failure rather than offer a headless path.
+2. **No Dynamic Client Registration.** `registration_endpoint` is `null`, so the
+   OAuth client **cannot** be created programmatically. A human must create it in
+   the Clerk dashboard. This is why `portal.client_id` has no compiled-in default
+   and is `owner: user` — now confirmed rather than assumed.
+3. **`user:org:read` exists and is not requested.** Unproven either way: the org
+   list comes from the PORTAL's `/api/v1/me`, which resolves organizations
+   server-side from the bearer token, so the extra scope is probably unnecessary.
+   Flagged because if the live org list ever comes back empty for a user who has
+   organizations, this is the first thing to check.
+
+### 4. This is a Clerk DEVELOPMENT instance — [OBSERVED], and it needs a decision
+
+`immune-owl-1734.clerk.accounts.dev` is the shape Clerk gives a **development**
+instance (generated animal-number name under `.clerk.accounts.dev`). Production
+golem.run is serving auth from it. Development instances carry Clerk's documented
+dev-mode limits, so a production launch needs a production instance — at which
+point **the issuer changes**, and any `portal.issuer` recorded now is
+provisional. Not a defect today; a thing that must not be discovered later.
+
+### What remains, and it is one manual step
+
+Create a **public** OAuth application in the Clerk dashboard with:
+
+- **Redirect URI:** `http://127.0.0.1/callback` — loopback host, **no port**.
+  RFC 8252 §7.3 requires the server to accept any port on a loopback redirect,
+  and `src/portal/loopback.ts` binds an ephemeral one per attempt.
+- **Grant:** authorization code + PKCE (**S256**), public client, no secret.
+- **Scopes:** `openid`, `profile`, `email`, `offline_access`.
+
+Then `portal.client_id` is the only value still missing.
+
+## §164 — The team flow ran end to end against the live portal, and `null` is not `undefined` (2026-09-08)
+
+The first real `golem team link` and `golem team sync` against deployed
+`golem.run`, driven through the user's own Chrome. The wire shape is no longer
+`[UNESTABLISHED]`.
+
+### 1. What works, observed rather than argued — [OBSERVED]
+
+| step | result |
+|---|---|
+| Discovery at the Clerk issuer | ✓ |
+| PKCE `S256`, scopes `openid profile email offline_access` | ✓ |
+| Loopback redirect on an **ephemeral** port | ✓ |
+| Consent screen ("Golem CLI wants to access Golem on behalf of …") | ✓ |
+| Authorization code exchange | ✓ |
+| Token stored — `DPAPI-encrypted file … (dpapi-user)` | ✓ |
+| `GET /api/v1/me`, organizations listed | ✓ (after the fix below) |
+| Project bound, `team.org_id` written to committed config | ✓ |
+| `golem team sync` → settings applied, cached per org | ✓ (after the fix below) |
+| `golem team unlink` → **cache KEPT** (Decision 63(d)) | ✓ |
+
+### 2. Clerk honours the RFC 8252 loopback port exemption — [OBSERVED]
+
+The OAuth application registers `http://127.0.0.1/callback` with **no port**, and
+Clerk's own UI says *"the provided URI must exactly match one of the listed
+URIs"*. It nevertheless accepted `http://127.0.0.1:58314/callback`. `team-portal-auth`
+bet on §7.3 and the bet was right; had it been wrong, every sign-in on every
+machine would have failed with a redirect mismatch.
+
+### 3. The bug: `.optional()` admits `undefined`, never `null` — [OBSERVED]
+
+Both live failures were the same mistake in two schemas, and both looked like
+catastrophes while being trivial:
+
+```
+golem: GET /api/v1/me returned an unexpected shape
+Team org_…: the portal answered 200, which this version of Golem does not understand
+```
+
+The deployed portal serialises "no value" as an explicit `null`:
+
+```json
+{"user": {...}, "auth": {"via": "oauth", "scopes": null}, "organizations": [...]}
+{"settings": [], "schema_version": null}
+```
+
+Every field was correct. `auth.scopes: null` and `schema_version: null` were
+refused because zod's `.optional()` means *may be absent*, not *may be null*.
+Proved by isolating it: the identical payload with the field **absent** parses,
+and with `null` it does not.
+
+The second one matters more than it looks: `{"settings": [], "schema_version": null}`
+is what an unconfigured team returns — **every team's first day**. A team that had
+never set a policy would have been reported as a portal Golem cannot understand.
+
+**Fixed at the boundary, not in the consumers.** `wireOptional()` accepts
+`null | undefined` and normalizes to `undefined`, so `PortalIdentity` keeps its
+`T | undefined` fields and no `null` leaks inward — CLAUDE.md's "zod at external
+boundaries, trust types internally", applied literally. A null `settings` or
+`organizations` list now means "none", because a caller forced to distinguish
+absent from null from empty will eventually get it wrong.
+
+**The generalisable version: at a remote boundary, `.optional()` is a claim about
+YOUR serialiser, not theirs.** Prefer nullish-and-normalize for anything a
+third-party JSON API sends. Fixture tests built from the captured live bytes now
+guard both endpoints.
+
+### 4. Two things for the record
+
+- **The Clerk instance is still `development`** (§163). This OAuth application
+  (`Golem CLI`, public + PKCE, consent on) lives in it, so **both `portal.issuer`
+  and `portal.client_id` change when golem.run moves to a production instance.**
+- **`golem team link` writes to the CURRENT project's committed config.** Running
+  it inside this repo bound Golem's own source to a test org; reverted with
+  `golem team unlink` plus `git checkout`. Correct behaviour, but worth knowing
+  before demonstrating the flow from inside a repo you publish.

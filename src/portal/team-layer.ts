@@ -69,7 +69,7 @@ import {
   type TeamSettings,
   teamCachePath,
 } from "./binding.js";
-import type { PortalClient } from "./client.js";
+import { type PortalClient, wireOptional } from "./client.js";
 import {
   classifyPortalError,
   classifyPortalResponse,
@@ -98,14 +98,22 @@ const teamSettingRowSchema = z.object({
   value: z.unknown(),
   /** ADR-0008: `true` places the key in the IMPORTANT band at `team` rank. */
   enforced: z.boolean().default(false),
-  schema_version: z.string().optional(),
+  // `wireOptional`, not `.optional()`: the deployed portal serialises "no value"
+  // as an explicit `null`, which `.optional()` rejects. Observed live on the
+  // first real `golem team sync` (verification-notes §164).
+  schema_version: wireOptional(z.string()),
 });
 
 export type TeamSettingRow = z.infer<typeof teamSettingRowSchema>;
 
 const teamSettingsResponseSchema = z.object({
-  settings: z.array(teamSettingRowSchema).default([]),
-  schema_version: z.string().optional(),
+  // Absent, null, or a list — all mean "this team has no settings yet", which is
+  // the ordinary state of a team nobody has configured.
+  settings: z
+    .array(teamSettingRowSchema)
+    .nullish()
+    .transform((value) => value ?? []),
+  schema_version: wireOptional(z.string()),
 });
 
 export type TeamSettingsResponse = z.infer<typeof teamSettingsResponseSchema>;
