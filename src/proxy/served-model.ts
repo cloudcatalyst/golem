@@ -126,10 +126,16 @@ export async function readServedModel(projectDir: string): Promise<ServedModel |
     const stripped = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
     const parsed = servedModelSchema.safeParse(JSON.parse(stripped));
     if (!parsed.success) return null;
-    const { model, servedAtIso, accountId } = parsed.data;
+    const { model, servedAtIso, accountId, targets } = parsed.data;
     // Spread-free rebuild: under exactOptionalPropertyTypes an optional key must
-    // be absent, not present-and-undefined (a legacy snapshot has no accountId).
-    return { model, servedAtIso, ...(accountId !== undefined ? { accountId } : {}) };
+    // be absent, not present-and-undefined (a legacy snapshot has no accountId
+    // or `targets`).
+    return {
+      model,
+      servedAtIso,
+      ...(accountId !== undefined ? { accountId } : {}),
+      ...(targets !== undefined ? { targets } : {}),
+    };
   } catch {
     return null;
   }

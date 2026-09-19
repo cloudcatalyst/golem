@@ -1,9 +1,9 @@
 /**
- * R9.23 left `default_target` in two places: the live setting is
- * `inference.default_target`, while every function that consumes it
+ * R9.23 left `model` in two places: the live setting is
+ * `inference.model`, while every function that consumes it
  * ({@link resolveDefaultTargetId}, {@link listTargets}, {@link
  * resolveUpstreamDisplay}) takes a *proxy-shaped* settings object that still
- * carries the deprecated `proxy.default_target` leaf — the one the migration
+ * carries the deprecated `proxy.model` leaf — the one the migration
  * table forwards old files onto.
  *
  * Bridging the two is a three-line spread, and it was written out at five call
@@ -18,21 +18,19 @@
  */
 
 /**
- * `settings.proxy` with the live `inference.default_target` folded in, when set.
+ * `settings.proxy` with the live `inference.model` folded in, when set.
  *
  * Always returns a fresh object, never `settings.proxy` itself, so a caller that
  * holds the result cannot alias (or mutate) the loaded settings.
  */
-export function withDefaultTarget<P extends { readonly default_target?: string }>(settings: {
+export function withDefaultTarget<P extends { readonly model?: string }>(settings: {
   readonly proxy: P;
-  readonly inference: { readonly default_target?: string };
+  readonly inference: { readonly model?: string };
 }): P {
   // The cast is the price of staying generic: TypeScript cannot prove a spread
   // of `P` is still `P`, but the only key added is one `P` already declares.
   return {
     ...settings.proxy,
-    ...(settings.inference.default_target !== undefined
-      ? { default_target: settings.inference.default_target }
-      : {}),
+    ...(settings.inference.model !== undefined ? { model: settings.inference.model } : {}),
   } as P;
 }

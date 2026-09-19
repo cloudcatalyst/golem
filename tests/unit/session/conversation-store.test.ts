@@ -231,10 +231,12 @@ describe("conversationIdFor — identity agrees with session-tree.ts", () => {
 
 describe(".gitignore actually covers .golem/conversations/", () => {
   it("git check-ignore reports the store directory as ignored", () => {
-    // Proves the PATTERN, not merely that ".golem/" happens to also cover it —
-    // this repo lists every .golem subdirectory individually, so a new one is
-    // NOT ignored unless it was added explicitly (task R13.2 gate: "verify,
-    // do not assume the pattern covers a new subdirectory").
+    // Proves the PATTERN, not merely that ".golem/" happens to also cover it.
+    // As of 2026-09-17 the .golem/ block is deny-by-default (`**/.golem/*`
+    // plus an allowlist), so this is now a belt-and-braces check
+    // rather than the thing standing between a new subdirectory and getting
+    // committed — but conversation transcripts are prompt content, so this
+    // stays an explicit assertion rather than an assumption either way.
     const probe = ".golem/conversations/deadbeefdeadbeef.json";
     const output = execFileSync("git", ["check-ignore", "-q", probe], {
       cwd: REPO_ROOT,

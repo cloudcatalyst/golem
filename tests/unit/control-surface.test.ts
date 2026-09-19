@@ -164,7 +164,7 @@ describe("collectControlSurface", () => {
 
   it("omits leaves a runtime control owns, so nothing is editable twice", async () => {
     const surface = await collectControlSurface(OPTS());
-    // compression.level is edited as runtime:compression; default_target as runtime:account.
+    // compression.level is edited as runtime:compression; model as runtime:account.
     expect(ids(surface)).not.toContain("setting:slider.level");
     expect(ids(surface)).not.toContain("setting:proxy.active_account");
     expect(ids(surface)).toContain("runtime:compression");

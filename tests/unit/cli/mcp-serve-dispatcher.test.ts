@@ -4,9 +4,9 @@
  * The routing change is worthless if the dispatcher is handed the wrong settings
  * object, and that failure is completely silent: `settings.proxy` satisfies
  * `TargetRegistrySettings` structurally (it still carries the deprecated
- * `proxy.default_target` leaf), so passing it where `withDefaultTarget(settings)`
+ * `proxy.model` leaf), so passing it where `withDefaultTarget(settings)`
  * was meant type-checks, throws nothing, and simply ignores the user's
- * `inference.default_target` on every dispatch. Nothing but a test that follows
+ * `inference.model` on every dispatch. Nothing but a test that follows
  * a real setting all the way to the wire can catch that.
  *
  * So these assert on the URL actually requested, given settings written the way
@@ -55,7 +55,7 @@ function captureFetch(reply: Record<string, unknown>): {
   return { fetchImpl, sent };
 }
 
-/** Settings as a user writes them: the live key is `inference.default_target`. */
+/** Settings as a user writes them: the live key is `inference.model`. */
 function settingsWith(overrides: {
   defaultTarget?: string;
   workerTargets?: Record<string, string>;
@@ -79,14 +79,14 @@ function settingsWith(overrides: {
     },
     inference: {
       ...DEFAULT_SETTINGS.inference,
-      ...(overrides.defaultTarget !== undefined ? { default_target: overrides.defaultTarget } : {}),
+      ...(overrides.defaultTarget !== undefined ? { model: overrides.defaultTarget } : {}),
       worker_targets: overrides.workerTargets ?? {},
     },
   } as GolemSettings;
 }
 
 describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
-  it("honours inference.default_target (the bug: raw settings.proxy ignored it)", async () => {
+  it("honours inference.model (the bug: raw settings.proxy ignored it)", async () => {
     const inference = stubInference();
     const { fetchImpl, sent } = captureFetch({
       model: "openai/gpt-oss-20b:free",
@@ -101,11 +101,11 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
 
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
 
-    // Had the raw `settings.proxy` been passed, `default_target` would have read
+    // Had the raw `settings.proxy` been passed, `model` would have read
     // as undefined and this would have gone to the harness default instead —
     // with no error anywhere to say so.
     expect(result.targetId).toBe("openrouter:openai/gpt-oss-20b:free");
-    expect(result.route).toBe("default_target");
+    expect(result.route).toBe("model");
     expect(sent[0]?.url).toBe("https://openrouter.ai/api/v1/chat/completions");
     expect(inference.calls).toBe(0);
   });
@@ -134,7 +134,7 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
 
   it("reaches the harness default — NOT the local model — when nothing is configured", async () => {
     // The task's gate, through the real wiring: a project with no
-    // `worker_targets` and no `default_target` drafts on the harness's own
+    // `worker_targets` and no `model` drafts on the harness's own
     // upstream. The local service is present and is still never asked.
     const inference = stubInference();
     const { fetchImpl, sent } = captureFetch({
@@ -162,7 +162,7 @@ describe("R10.8 — createCoderDispatcher passes the MERGED settings", () => {
   it("DECLINES through the real wiring when the harness default has no credential", async () => {
     // The reported defect, end to end and in the exact shape a user meets it: a
     // Claude Code session whose upstream is Anthropic on the default `inherit`
-    // scheme, with nothing in `worker_targets` or `default_target`. Golem never
+    // scheme, with nothing in `worker_targets` or `model`. Golem never
     // holds that session's credential, so it cannot originate a request there —
     // this used to POST unauthenticated and surface a bare `401 Unauthorized`,
     // which reads as a broken proxy rather than as "nothing is routed here".

@@ -66,7 +66,7 @@ describe("collectTargets", () => {
     await store.store("openrouter", "sk-or-secret", "file");
     const report = await collectTargets(dir, {}, { store_backend: store });
 
-    expect(report.default_target).toBe("anthropic");
+    expect(report.model).toBe("anthropic");
     expect(report.default_unknown).toBe(false);
     // R9.23: gateway-derived target ids are `<gateway>/<model>`
     expect(report.targets.map((t) => t.id)).toEqual([
@@ -203,23 +203,23 @@ describe("collectTargets", () => {
     );
   });
 
-  it("flags a default_target that names an id in neither registry", async () => {
-    await writeSetting("project", "inference.default_target", "ghost", { projectDir: dir });
+  it("flags a model that names an id in neither registry", async () => {
+    await writeSetting("project", "inference.model", "ghost", { projectDir: dir });
     const report = await collectTargets(dir, {}, { store_backend: store });
     expect(report.default_unknown).toBe(true);
     expect(renderTargets(report)).toContain("WARNING");
   });
 
   it("reads a settings file that still names the retired active_account (R9.6 migration)", async () => {
-    // R9.23: default_target now references a compound target id `<gateway>/<model>`.
-    // The old `active_account: "work"` would have migrated to `default_target: "work"`
+    // R9.23: model now references a compound target id `<gateway>/<model>`.
+    // The old `active_account: "work"` would have migrated to `model: "work"`
     // (gateway id), but in the new schema the target id is `work:gpt-5.2`. This test
     // uses the compound id directly since the migration layer only renames the key.
-    await writeSetting("project", "inference.default_target", "work:gpt-5.2", { projectDir: dir });
+    await writeSetting("project", "inference.model", "work:gpt-5.2", { projectDir: dir });
     const settingsPath = path.join(dir, ".golem", "settings.json");
     const raw = JSON.parse(await readFile(settingsPath, "utf8")) as Record<string, unknown>;
     const inference = raw.inference as Record<string, unknown> | undefined;
-    if (inference !== undefined) delete inference.default_target;
+    if (inference !== undefined) delete inference.model;
     const proxy = raw.proxy as Record<string, unknown>;
     proxy.active_account = "work";
     await writeFile(
@@ -229,9 +229,9 @@ describe("collectTargets", () => {
       "utf8",
     );
     const report = await collectTargets(dir, {}, { store_backend: store });
-    // R9.23: active_account "work" migrates to default_target "work" (gateway id),
+    // R9.23: active_account "work" migrates to model "work" (gateway id),
     // and resolveDefaultTargetId resolves it to the first target from that gateway.
-    expect(report.default_target).toBe("work:gpt-5.2");
+    expect(report.model).toBe("work:gpt-5.2");
     expect(report.default_unknown).toBe(false);
     const work = report.targets.find((t) => t.id === "work:gpt-5.2");
     expect(work?.is_default).toBe(true);

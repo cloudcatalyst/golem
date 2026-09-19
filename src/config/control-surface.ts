@@ -27,7 +27,7 @@
  *   overrides would look successful and change nothing.
  * - A settings leaf with {@link SettingMeta.ownedBy} is omitted from the settings
  *   groups, because a runtime control edits the same key with a better
- *   affordance (slider.level, inference.default_target).
+ *   affordance (slider.level, inference.model).
  */
 
 import path from "node:path";

@@ -13,13 +13,16 @@ import { InitError } from "../../../src/cli/init.js";
 import {
   addEventHook,
   GOLEM_DEFAULT_MODE,
+  GOLEM_FALLBACK_MODEL,
   NOTIFICATION_COMMAND,
   removeDefaultMode,
   removeEventHook,
+  removeFallbackModel,
   removeStatusLine,
   STATUS_LINE_COMMAND,
   STATUS_LINE_REFRESH_INTERVAL_SEC,
   writeDefaultMode,
+  writeFallbackModel,
   writeStatusLine,
 } from "../../../src/hooks/index.js";
 import { useTempDirs } from "../../helpers/tmp.js";
@@ -356,6 +359,92 @@ describe("removeDefaultMode", () => {
 
   it("is a skip when settings.json doesn't exist", async () => {
     const action = await removeDefaultMode({ projectDir });
+    expect(action.kind).toBe("skip");
+  });
+});
+
+describe("writeFallbackModel", () => {
+  it("creates settings.json with fallbackModel = sonnet in a fresh project", async () => {
+    const action = await writeFallbackModel({ projectDir });
+    expect(action.kind).toBe("create");
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.fallbackModel).toEqual(GOLEM_FALLBACK_MODEL);
+  });
+
+  it("is idempotent: second write is a skip", async () => {
+    await writeFallbackModel({ projectDir });
+    const action = await writeFallbackModel({ projectDir });
+    expect(action.kind).toBe("skip");
+  });
+
+  it("refuses to clobber a fallbackModel the user already set (legacy string shape)", async () => {
+    await writeSettings({ fallbackModel: "claude-haiku-4" });
+
+    const action = await writeFallbackModel({ projectDir });
+    expect(action.kind).toBe("skip");
+    expect(action.detail).toBe('fallbackModel set to "claude-haiku-4"; left as is');
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.fallbackModel).toBe("claude-haiku-4");
+  });
+
+  it("refuses to clobber a fallbackModel the user already set (array chain)", async () => {
+    await writeSettings({ fallbackModel: ["claude-haiku-4", "claude-sonnet-4"] });
+
+    const action = await writeFallbackModel({ projectDir });
+    expect(action.kind).toBe("skip");
+    expect(action.detail).toBe(
+      'fallbackModel set to ["claude-haiku-4","claude-sonnet-4"]; left as is',
+    );
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.fallbackModel).toEqual(["claude-haiku-4", "claude-sonnet-4"]);
+  });
+
+  it("refuses to clobber a fallbackModel the user set in the OTHER scope file", async () => {
+    // Default scope is local; the committed (project) file outranks it once
+    // Claude Code reads both, so a foreign value there must be respected too.
+    const committed = path.join(projectDir, ".claude", "settings.json");
+    await mkdir(path.dirname(committed), { recursive: true });
+    await writeFile(committed, JSON.stringify({ fallbackModel: "claude-haiku-4" }), "utf8");
+
+    const action = await writeFallbackModel({ projectDir });
+    expect(action.kind).toBe("skip");
+    expect(action.detail).toBe('fallbackModel set to "claude-haiku-4"; left as is');
+
+    await expect(readSettings()).rejects.toThrow();
+    expect(JSON.parse(await readFile(committed, "utf8")).fallbackModel).toBe("claude-haiku-4");
+  });
+
+  it("does not write in dry-run mode but still reports the action", async () => {
+    const action = await writeFallbackModel({ projectDir, dryRun: true });
+    expect(action.kind).toBe("create");
+    await expect(readSettings()).rejects.toThrow();
+  });
+});
+
+describe("removeFallbackModel", () => {
+  it("removes fallbackModel when it is the Golem one", async () => {
+    await writeFallbackModel({ projectDir });
+    const action = await removeFallbackModel({ projectDir });
+    expect(action.kind).toBe("modify");
+    const settings = (await readSettings()) as Any;
+    expect(settings.fallbackModel).toBeUndefined();
+  });
+
+  it("is a skip when a foreign fallbackModel is set, and leaves it untouched", async () => {
+    await writeSettings({ fallbackModel: "claude-haiku-4" });
+
+    const action = await removeFallbackModel({ projectDir });
+    expect(action.kind).toBe("skip");
+
+    const settings = (await readSettings()) as Any;
+    expect(settings.fallbackModel).toBe("claude-haiku-4");
+  });
+
+  it("is a skip when settings.json doesn't exist", async () => {
+    const action = await removeFallbackModel({ projectDir });
     expect(action.kind).toBe("skip");
   });
 });

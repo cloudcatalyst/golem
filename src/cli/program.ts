@@ -36,17 +36,20 @@ import register_pkg_models from "./commands/pkg-models.js";
 import register_plugin from "./commands/plugin.js";
 import register_prompt_guidance from "./commands/prompt-guidance.js";
 import register_proxy from "./commands/proxy.js";
+import register_ps from "./commands/ps.js";
 import register_session from "./commands/session.js";
 import register_status_update from "./commands/status-update.js";
 import register_target from "./commands/target.js";
 import register_tasks from "./commands/tasks.js";
 import register_team from "./commands/team.js";
 import register_verify from "./commands/verify.js";
+import register_vibe from "./commands/vibe.js";
 import register_wiki from "./commands/wiki.js";
 
 register_init_uninit(program);
 register_wiki(program);
 register_proxy(program);
+register_ps(program);
 register_mcp_serve(program);
 register_status_update(program);
 register_session(program);
@@ -67,6 +70,7 @@ register_autonomy(program);
 register_prompt_guidance(program);
 register_config(program);
 register_local_ollama(program);
+register_vibe(program);
 
 export async function runCli(argv: readonly string[] = process.argv): Promise<void> {
   await program.parseAsync([...argv]);

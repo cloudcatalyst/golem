@@ -21,7 +21,7 @@ import {
   type StatusReport,
 } from "../../src/cli/status.js";
 import { writeSetting } from "../../src/config/index.js";
-import type { LimitPrediction } from "../../src/proxy/index.js";
+import { type LimitPrediction, writeServedModelForTarget } from "../../src/proxy/index.js";
 import { useTempDirs } from "../helpers/tmp.js";
 
 // R10.2: one recursive delete for the whole file, not one per test.
@@ -194,7 +194,7 @@ describe("collectStatus", () => {
     expect(report.local_model.reachable).toBe(true);
   });
 
-  it("reports the default upstream when inference.default_target is not set", async () => {
+  it("reports the default upstream when inference.model is not set", async () => {
     await writeSetting(
       "local",
       "proxy.gateways",
@@ -218,6 +218,56 @@ describe("collectStatus", () => {
     });
     expect(report.local_model.reachable).toBe(true);
     expect(report.upstream.provider).toBe("anthropic");
+  });
+
+  /**
+   * R9.2's top-level served-model fields mean "most recently served, whichever
+   * target" — a persona/worker dispatch updates them exactly like a chat
+   * request does. `upstream.last_served_model` fronts the CLI statusline's chat
+   * segment and the VS Code status bar's destination pill; reading the shared
+   * top-level fields made both flicker to whatever model `coder` last used
+   * (reported 2026-09-17). It must stay scoped to the default target's own row.
+   */
+  it("scopes upstream.last_served_model to the default target, not a persona's more-recent dispatch", async () => {
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          models: ["kimi-k3"],
+        },
+      ],
+      { projectDir },
+    );
+    await writeSetting(
+      "project",
+      "inference.personas",
+      { coder: { model: "kimi" } },
+      { projectDir },
+    );
+    // Chat serves first, on the byte-faithful default target...
+    await writeServedModelForTarget(projectDir, "anthropic", {
+      model: "claude-opus-5[1m]",
+      servedAtIso: "2026-09-17T00:00:00.000Z",
+      accountId: null,
+    });
+    // ...then `coder` dispatches, more recently, on its own resolved target.
+    await writeServedModelForTarget(projectDir, "kimi:kimi-k3", {
+      model: "kimi-k3",
+      servedAtIso: "2026-09-17T00:05:00.000Z",
+      accountId: null,
+    });
+    const report = await collectStatus({
+      projectDir,
+      version: VERSION,
+      userDir,
+      probeTimeoutMs: 200,
+      localProbe: async () => ({ reachable: false }),
+    });
+    expect(report.upstream.last_served_model).toBe("claude-opus-5[1m]");
   });
 });
 

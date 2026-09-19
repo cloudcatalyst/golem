@@ -114,6 +114,10 @@ export const UPSTREAM_PROVIDERS = [
   // and no new branch: every switch below folds it into the OpenAI path.
   "llamacpp",
   "gemini",
+  // NVIDIA NIM — OpenAI-compatible Chat Completions API with Bearer token auth.
+  // Base URL: https://integrate.api.nvidia.com/v1 (cloud) or self-hosted.
+  // Model IDs keep vendor prefix: nvidia/nemotron-3-super-120b-a12b
+  "nvidia-nim",
   // R9.15: not an endpoint at all — a target that SPAWNS the user's own Claude
   // Code CLI, so a draft runs on their subscription without Golem ever touching
   // that credential. Valid only as a target provider; see PROXY_PROVIDERS.
@@ -155,7 +159,8 @@ export function isTranslatingProvider(provider: UpstreamProvider): boolean {
     provider === "openrouter" ||
     provider === "ollama" ||
     provider === "llamacpp" ||
-    provider === "gemini"
+    provider === "gemini" ||
+    provider === "nvidia-nim"
   );
 }
 
@@ -194,9 +199,13 @@ export function isKeylessProvider(provider: UpstreamProvider): boolean {
  * (`openai/gpt-oss-20b:free` vs another host's `gpt-oss-20b`). Stripping it there
  * either 400s or silently resolves to a different vendor's model, so OpenRouter
  * ids are forwarded whole.
+ *
+ * NVIDIA NIM is also a multi-vendor gateway (NVIDIA hosts models from various
+ * vendors), so it preserves the vendor prefix: `nvidia/nemotron-3-super-120b-a12b`,
+ * `meta/llama-3.1-405b-instruct`, etc.
  */
 export function preservesVendorPrefix(provider: UpstreamProvider): boolean {
-  return provider === "openrouter";
+  return provider === "openrouter" || provider === "nvidia-nim";
 }
 
 /** Whether the provider uses the Gemini `generateContent` schema (a distinct translator). */
@@ -216,7 +225,6 @@ export const UPSTREAM_AUTH_SCHEMES = ["inherit", "x-api-key", "api-key", "bearer
 
 export type UpstreamAuthScheme = (typeof UPSTREAM_AUTH_SCHEMES)[number];
 
-/** The sensible default auth scheme for a provider when the config leaves it at `inherit`. */
 export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthScheme {
   switch (provider) {
     case "anthropic":
@@ -243,11 +251,18 @@ export function defaultAuthScheme(provider: UpstreamProvider): UpstreamAuthSchem
       // Gemini authenticates with a `?key=` query param carried in the path, not
       // a header — so no header mapping (inherit = none injected).
       return "inherit";
+    case "nvidia-nim":
+      // NVIDIA NIM uses Bearer token auth (Authorization: Bearer <api_key>)
+      return "bearer";
     case "claude-cli":
       // R9.15: there is no request for Golem to sign. The spawned Claude Code
       // authenticates as itself, which is the entire point of the route — Golem
       // never holds, reads or forwards that credential.
       return "inherit";
+    default: {
+      const _exhaustive: never = provider;
+      return _exhaustive;
+    }
   }
 }
 
@@ -302,6 +317,7 @@ export function originationAuthScheme(
       return "api-key";
     case "openrouter":
     case "openai":
+    case "nvidia-nim":
       return "bearer";
     case "ollama":
     case "llamacpp":

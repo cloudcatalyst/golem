@@ -1,3 +1,8 @@
+_Local to this project — a working convention for developing Golem's own source
+(golem.run), not one of Golem's distributed guidance features. `golem guidance
+list` won't show it and `golem init` does not seed it into other projects;
+contrast the `Managed by Golem` rules in this same folder, which are._
+
 ## Golem: work one discreet step at a time
 
 The default reply shape in this repo. `/golem-step` is the same contract as a

@@ -7,6 +7,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { golemInit, golemUninit, InitError, type InitProbe } from "../../src/cli/init.js";
+import { skillDirName } from "../../src/cli/init-skills.js";
 import { isUnmodifiedManaged, rememberManaged } from "../../src/cli/managed-files.js";
 import { defaultProjectPort } from "../../src/cli/proxy-daemon.js";
 import { P0_SKILLS } from "../../src/cli/skills.js";
@@ -94,7 +95,7 @@ describe("golem init", () => {
 
     for (const name of Object.keys(P0_SKILLS)) {
       const skill = await readFile(
-        path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"),
+        path.join(projectDir, ".claude", "skills", skillDirName(name), "SKILL.md"),
         "utf8",
       );
       expect(skill).toBe(P0_SKILLS[name]);
@@ -112,12 +113,21 @@ describe("golem init", () => {
     const cs = await readJson(CLAUDE_TARGET);
     expect(cs.statusLine).toStrictEqual({
       type: "command",
-      command: "golem statusline",
+      // --color by default (2026-09-17): Claude Code always runs this through
+      // a pipe, never a real TTY, so the line's own TTY check never turns
+      // colour on without the flag forced.
+      command: "golem statusline --color",
       refreshInterval: 2,
     });
     // defaultMode = "default" so project allow-rules (Bash(golem:*), mcp__golem)
     // are authoritative instead of "auto" mode's separate background check.
     expect(cs.defaultMode).toBe("default");
+    // fallbackModel = ["sonnet"]: a cheap first-line mitigation so a contributor
+    // without access to a persona subagent's pinned model (e.g. claude-opus-5)
+    // doesn't fail outright dispatching it — see GOLEM_FALLBACK_MODEL. An ARRAY,
+    // not a string: settings.json's fallbackModel is "an ordered chain where
+    // position carries meaning" (code.claude.com/docs/en/settings).
+    expect(cs.fallbackModel).toEqual(["sonnet"]);
     const hooks = cs.hooks as Record<string, unknown>;
     const cmds = (event: string) =>
       ((hooks[event] as { hooks: { command: string }[] }[]) ?? []).flatMap((e) =>
@@ -141,6 +151,7 @@ describe("golem init", () => {
     const cs = await readJson(CLAUDE_TARGET);
     expect(cs.statusLine).toBeUndefined();
     expect(cs.defaultMode).toBeUndefined();
+    expect(cs.fallbackModel).toBeUndefined();
     // hooks object is gone entirely once all Golem hooks are removed.
     expect(cs.hooks).toBeUndefined();
   });
@@ -406,6 +417,7 @@ describe("golem init", () => {
     expect((local.permissions as { allow?: string[] }).allow).toContain("mcp__golem__*");
     expect(local.statusLine).toBeDefined();
     expect(local.defaultMode).toBe("default");
+    expect(local.fallbackModel).toEqual(["sonnet"]);
     expect(Object.keys(local.hooks as Record<string, unknown>)).toContain("PostToolUse");
 
     // …and nothing of ours is left in the committed one.
@@ -415,6 +427,7 @@ describe("golem init", () => {
     expect(committed.hooks).toBeUndefined();
     expect(committed.statusLine).toBeUndefined();
     expect(committed.defaultMode).toBeUndefined();
+    expect(committed.fallbackModel).toBeUndefined();
   });
 
   it("uninit cleans BOTH files, whichever scope wrote them", async () => {
@@ -501,6 +514,21 @@ describe("golem init", () => {
     const gitignore = await readFile(path.join(projectDir, ".gitignore"), "utf8");
     expect(gitignore).toContain("CLAUDE.local.md");
     expect(gitignore).toContain(".claude/rules/golem-*.local.md");
+    // Deny-by-default .golem/ block: everything ignored except the allowlisted
+    // shared files/directories.
+    expect(gitignore).toContain("**/.golem/*");
+    expect(gitignore).toContain("!.golem/settings.json");
+    expect(gitignore).toContain("!.golem/managed-files.json");
+    expect(gitignore).toContain("!.golem/personas");
+  });
+
+  it("seeds the .golem/ gitignore block once (idempotent re-init)", async () => {
+    await golemInit({ projectDir, probe: okProbe });
+    const first = await readFile(path.join(projectDir, ".gitignore"), "utf8");
+    await golemInit({ projectDir, probe: okProbe });
+    const second = await readFile(path.join(projectDir, ".gitignore"), "utf8");
+    expect(second).toBe(first);
+    expect(first.match(/\*\*\/\.golem\/\*/g)).toHaveLength(1);
   });
 
   it("uninit removes the seeded guidance rules", async () => {
@@ -695,7 +723,10 @@ describe("golem init — retired skills are pruned (R11.1 leftover)", () => {
     // The skills Golem still ships are untouched.
     for (const name of Object.keys(P0_SKILLS)) {
       await expect(
-        readFile(path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"), "utf8"),
+        readFile(
+          path.join(projectDir, ".claude", "skills", skillDirName(name), "SKILL.md"),
+          "utf8",
+        ),
       ).resolves.toContain("");
     }
   });

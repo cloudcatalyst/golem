@@ -27,7 +27,7 @@ import { loadConfig } from "../config/index.js";
 // `../hooks/session-state.js`, not the `../hooks/index.js` barrel (~446ms — it
 // pulls every hook handler) for one function.
 import { type BlockKind, readSessionState, resolveBlock } from "../hooks/session-state.js";
-import { declaredWorkers, isKnownWorker } from "../inference/workers.js";
+import { type PersonaLane, resolvePersonaLane } from "../inference/persona-lane.js";
 import {
   type CompressionLevel,
   coerceCompressionLevel,
@@ -35,6 +35,7 @@ import {
 } from "../interfaces/policy.js";
 import {
   listTargets,
+  resolveDefaultTargetId,
   resolveUpstreamDisplay,
   type UpstreamProvider,
   upstreamAssumesCaching,
@@ -44,6 +45,16 @@ import {
 // server.ts, which imports `undici` (~270ms). This function only reads a JSON file.
 import { servedModelFor } from "../proxy/served-model.js";
 import { openTelemetryStore } from "../telemetry/index.js";
+// `../tui/ansi.js` and `../tui/theme.js` directly, never the `../tui/index.js`
+// barrel (it reaches the whole control panel). Both are dependency-free at
+// runtime — theme.ts's only import is a `import type` — so the per-prompt hot
+// path pays nothing for the brand colour (verification-notes §86).
+import { type ColorLevel, paint, underline } from "../tui/ansi.js";
+import { ACCENT } from "../tui/theme.js";
+// Same file that already does ANSI-aware, wide-char-aware width math for the
+// TUI — reused rather than re-solved for the one thing this surface needs:
+// truncating the persona tail without cutting a colour escape in half.
+import { displayWidth, truncateTo } from "../tui/width.js";
 import { readCachedUpdateCheck, semverGt } from "../update/index.js";
 // `../version.js`, not `../index.js` (which also re-exports every interface).
 import { VERSION } from "../version.js";
@@ -51,6 +62,8 @@ import type { ProviderEntry as LocalProviderEntry } from "./local-model.js";
 import { golemDirExists, type LocalModelInfo, localModelInfoCached } from "./local-model.js";
 import { isProcessAlive, readProxyPid } from "./proxy-daemon.js";
 import { proxyBaseUrl, readWiringState } from "./proxy-wiring.js";
+// Pure, dependency-free string module — safe on the per-prompt hot path (§86).
+import { renderQuotaSegment } from "./quota-bars.js";
 // Shared with status.ts and the control-panel header; lives in its own module so
 // rendering a label costs nothing to import (see upstream-display.ts).
 import { upstreamLabel } from "./upstream-display.js";
@@ -98,8 +111,26 @@ export interface GolemState {
   readonly upstreamProvider?: string;
   /** Configured default model (e.g. `kimi-k3`), if any. */
   readonly upstreamModel?: string;
-  /** Last model the proxy actually served (from served-model.json), if any. */
+  /**
+   * Last model the DEFAULT target (chat's own destination) actually served, if
+   * any — never a persona/worker target's, even though the served-model
+   * snapshot's top-level fields mean "most recently served, whichever target"
+   * (R9.2). Scoping this to the default target is what keeps the chat segment
+   * from flickering to whatever model `coder`/`reviewer`/`scribe` last used.
+   */
   readonly lastServedModel?: string;
+  /**
+   * Whether the chat destination was the most recently served target overall —
+   * drawn as an underline on the chat segment so "currently in use" is visible
+   * without overwriting the harness-default model name shown there.
+   */
+  readonly activeChat?: boolean;
+  /**
+   * Persona ids whose resolved target was the most recently served — same
+   * underline treatment as {@link activeChat}, applied to their own segment.
+   * More than one persona can share a target and so be active together.
+   */
+  readonly activeWorkers?: readonly string[];
   readonly tokensBefore?: number;
   readonly tokensAfter?: number;
   /** Session is waiting on the human (21b blocked-state), if known. */
@@ -302,12 +333,19 @@ export const ROLE_MARKS = {
   chat: "◆",
   /** The model `coder` drafts on. */
   coder: "✎",
+  /** The model `reviewer` reads on. */
+  reviewer: "◎",
+  /** The model `scribe` writes on. */
+  scribe: "✒",
   /** Fallback for a worker with no glyph of its own yet. */
   worker: "✦",
 } as const;
 
 /**
- * What joins the model segments of the destination (R11.6).
+ * What joins model segments WITHIN the persona list (R11.6). Chat itself is
+ * joined to that list with a plain space, not this — a roster of one to many
+ * personas reads as a list beside the chat model, not as a chain of "+"
+ * starting at it.
  *
  * Named because the VS Code status bar has to produce the same string and shares
  * no module with this file — `statusline-parity.test.ts` is what holds them
@@ -336,17 +374,21 @@ function workerRows(golem: GolemState): readonly { worker: string; model?: strin
 }
 
 /**
- * The one-liner destination, naming the CHAT gateway (model) first and then each
- * worker that diverges from it:
+ * The one-liner destination, naming the CHAT gateway (model) first and then
+ * every staffed persona, in the order they are declared in `inference.personas`:
  *
- *   `◆ openrouter (deepseek/deepseek-v4-flash) + ✎ ollama (qwen2.5-coder:7b)`
+ *   `◆ openrouter (deepseek/deepseek-v4-flash) ✎ ollama (qwen2.5-coder:7b)`
  *
  * R10.24 — the chat destination leads. It used to trail the worker list, so on
  * any machine with a local coder the arrow pointed at the DRAFTING model and the
  * model the conversation actually runs on was pushed to the end. The arrow means
  * "where this conversation goes"; whatever it touches first had better be that.
  *
- * R11.6 — ONE format for every model segment, and `+` between them.
+ * R11.6 — ONE format for every model segment. `+` joins personas WITHIN the
+ * list — they are the same kind of thing — but chat joins that list with a
+ * plain space: chat is the destination the arrow points at, and the persona
+ * list beside it is a roster, not a continuation of a "+" chain that starts
+ * at the arrow.
  *
  * The chat model read `<gateway> (<model>)` while a worker read `<gateway>
  * <model>`, so two things of the same kind were spelled two ways on one line and
@@ -354,28 +396,64 @@ function workerRows(golem: GolemState): readonly { worker: string; model?: strin
  * and a worker with no resolvable gateway falls back to the bare id rather than
  * inventing one.
  *
- * `+` because these segments are of the same kind — models this conversation
- * uses — where `·` separates DIFFERENT kinds (models · dials · brevity). Using
- * one glyph for both made the model list and the dial list read as one flat run
- * of fields. It also restores the reading R9.4's `local + upstream` had before
- * either end could be any target; what changed then was which models get named,
- * not that they are added together.
+ * Every staffed persona is shown, even one running the same model as chat: the
+ * line is a roster, not just a divergence report, and a reader who only sees
+ * `◆ anthropic (claude-opus-5)` cannot tell whether `reviewer` is staffed at
+ * all. Model ids stay verbatim (Decision 49). A persona that is unstaffed, or
+ * whose worker-lane target does not resolve, is still omitted: it fails closed
+ * on every dispatch, and there is nothing truthful to name.
  *
- * Model ids stay verbatim (Decision 49). A worker whose target does not resolve
- * is omitted: it fails closed on every dispatch.
+ * The chat segment's model NAME never changes with traffic — it is always the
+ * harness default (`inference.model`/configured upstream), even while a
+ * persona dispatch is in flight. "Which one just answered" is shown instead as
+ * an underline on that one segment (`activeChat`/`activeWorkers`, `opts.color`
+ * gated) — a style cue beside the name, not a substitute for it. CLI-only: the
+ * VS Code status bar has no equivalent of an ANSI span, the same asymmetry the
+ * quota meter already has with R10.24.
  */
-export function destinationLabel(golem: GolemState): string {
+export function destinationParts(
+  golem: GolemState,
+  opts: {
+    /**
+     * Underline the currently-active segment (`activeChat`/`activeWorkers`).
+     * Off by default so {@link destinationLabel} — the plain-text form the VS
+     * Code parity comment describes — never carries raw escape bytes.
+     */
+    readonly color?: boolean;
+  } = {},
+): {
+  readonly chat: string;
+  readonly workers: readonly string[];
+} {
+  const active = opts.color === true;
   const chatModel = upstreamModelLabel(golem);
   const chatGateway = golem.upstreamLabel;
-  const chatSeg = `${ROLE_MARKS.chat} ${chatGateway}${chatModel !== undefined ? ` (${chatModel})` : ""}`;
-  const diverging = workerRows(golem)
-    .filter((w) => w.model !== undefined && w.model !== "" && w.model !== chatModel)
+  const chatText = `${ROLE_MARKS.chat} ${chatGateway}${chatModel !== undefined ? ` (${chatModel})` : ""}`;
+  const chat = golem.activeChat === true ? underline(chatText, active) : chatText;
+  const activeWorkers = new Set(golem.activeWorkers ?? []);
+  const workers = workerRows(golem)
+    .filter((w) => w.model !== undefined && w.model !== "")
     .map((w) => {
       const g = (w as { gateway?: string }).gateway;
       const model = w.model as string;
-      return `${workerMark(w.worker)} ${g !== undefined && g !== "" ? `${g} (${model})` : model}`;
+      const text = `${workerMark(w.worker)} ${g !== undefined && g !== "" ? `${g} (${model})` : model}`;
+      return activeWorkers.has(w.worker) ? underline(text, active) : text;
     });
-  return [chatSeg, ...diverging].join(MODEL_JOIN);
+  return { chat, workers };
+}
+
+/**
+ * The whole destination as one string.
+ *
+ * Kept as the single definition of the joined form, because the VS Code status
+ * bar has to produce a byte-identical one and shares no module with this file.
+ * {@link renderStatusLine} uses {@link destinationParts} instead, so it can slot
+ * the quota meter between the chat model and the workers without the meter's own
+ * colour spans landing inside the destination's.
+ */
+export function destinationLabel(golem: GolemState): string {
+  const { chat, workers } = destinationParts(golem);
+  return workers.length === 0 ? chat : `${chat} ${workers.join(MODEL_JOIN)}`;
 }
 
 // --- minimal ANSI (honors NO_COLOR); ESC built at runtime, no literal byte ---
@@ -387,6 +465,21 @@ function ansi(code: number, enabled: boolean): Colorize {
 
 export interface RenderOptions {
   readonly color?: boolean;
+  /**
+   * Colour DEPTH, for the brand, which is painted from the Golem hex palette
+   * rather than the basic sixteen. Omitted, a coloured line assumes 24-bit;
+   * `fast-path.ts` passes what the terminal actually advertises so the violet
+   * degrades through 256 to the nearest of the basic 16 rather than emitting a
+   * sequence the terminal would print as literal text.
+   */
+  readonly colorLevel?: ColorLevel;
+  /**
+   * The terminal's width in columns, when known. `fast-path.ts` passes
+   * `process.stdout.columns` (or `COLUMNS` for a non-TTY that still sets it);
+   * omitted, the line never truncates — guessing a width would risk cutting a
+   * line that actually fit, which is worse than an occasional long one.
+   */
+  readonly columns?: number;
 }
 
 /**
@@ -400,22 +493,38 @@ export interface RenderOptions {
  * and `tests/unit/cli/statusline-parity.test.ts` now pins that they cannot drift
  * apart again.
  *
- * `_session` (Claude Code's per-turn context %, 5h quota, cost) is parsed and
- * captured by {@link parseSessionInput} but deliberately NOT rendered here yet:
- * those live signals need a legible one-liner treatment before they go back on
- * the line (deferred, 2026-07-24). Cumulative savings moved to the fuller
- * summary surfaces (VS Code hover / panel), where the token in→out detail fits.
+ * `session` carries Claude Code's per-turn signals, parsed by
+ * {@link parseSessionInput}. They were parked on 2026-07-24 pending "a legible
+ * one-liner treatment"; the 5h/7d quota pair now has one — the braille meter in
+ * `./quota-bars.js`, which spends twelve columns on two bars. Context % and cost
+ * are still parked, and cumulative savings live on the fuller summary surfaces
+ * (VS Code hover / panel) where the token in→out detail fits.
+ *
+ * The quota meter is CLI-ONLY by construction, and that is why it does not
+ * breach the R10.24 parity rule: the 5h/7d percentages arrive on the status
+ * line's stdin JSON, which the VS Code extension never receives. With no session
+ * input the segment renders as the empty string, so the two surfaces still agree
+ * on every state the extension can actually be in — which is the case
+ * `statusline-parity.test.ts` pins, since it renders with `{}`.
  */
 export function renderStatusLine(
-  _session: SessionInput,
+  session: SessionInput,
   golem: GolemState,
   options: RenderOptions = {},
 ): string {
   const color = options.color ?? false;
+  // Depth for the hex-painted brand. `paint` returns the text untouched at 0,
+  // which is what keeps a NO_COLOR line free of escape bytes.
+  const level: ColorLevel = options.colorLevel ?? (color ? 3 : 0);
   const dim = ansi(2, color);
-  const green = ansi(32, color);
   const cyan = ansi(36, color);
   const yellow = ansi(33, color);
+  // SGR 97 — bright white. Braille dots are thin, so the quota meter needs
+  // more contrast than any mid-tone colour gives it; tried plain cyan, then
+  // bright cyan, before landing here. Also used for the caps now (see below),
+  // not just the bar, so it is named for what it is rather than for one thing
+  // it used to be picked to match.
+  const brightWhite = ansi(97, color);
 
   const parts: string[] = [];
   // R10.24 — the same four state words the VS Code status bar uses
@@ -447,11 +556,17 @@ export function renderStatusLine(
   // HOLLOW, as the VS Code status bar has always drawn it. This line drew it
   // filled and green, i.e. identical to a fully-running pipeline, which is the
   // one thing Decision 56 exists to distinguish.
+  // The healthy state is the brand: glyph and wordmark both in the Golem violet,
+  // so a working Golem looks like Golem rather than like a generic green tick.
+  // The unhealthy states keep their warning colours — a brand colour on
+  // `unwired` would be exactly the confident-looking lie R8.32 exists to prevent
+  // — and keep the hollow hexagon, which is what makes "not the normal state"
+  // readable with no colour at all.
   const brand =
     unwired || golem.proxyBypass === true
       ? yellow("⬡ Golem")
       : active
-        ? green("⬢ Golem")
+        ? paint("⬢ Golem", ACCENT, level)
         : dim("⬡ Golem");
   const inert = golem.effectiveLevel !== undefined && golem.effectiveLevel !== golem.compression;
 
@@ -460,7 +575,35 @@ export function renderStatusLine(
   // line reads "Golem -> destination" on both surfaces. The CLI used to emit
   // `⬢ Golem · → dest` and the status bar `⬢ Golem → dest`.
   const head = stateWord === "" ? brand : `${brand} ${yellow(stateWord)}`;
-  parts.push(`${head} ${dim("→")} ${cyan(destinationLabel(golem))}`);
+  // The meter goes INSIDE the destination, directly after the chat model and
+  // before the personas: it is that model's quota, so it belongs beside it
+  // rather than at the far end of the line.
+  //
+  // The destination is assembled from its parts rather than colourised whole,
+  // because the meter carries its own colour span. Dropping that inside a
+  // `cyan(...)` wrapper would put its reset in the middle of the destination
+  // and leave every persona after it uncoloured.
+  //
+  // The dials are gated on `stateWord`, but the quota is NOT: they describe work
+  // the pipeline is doing, whereas the quota is Claude Code's own accounting of
+  // the user's windows, and it stays true whatever Golem is doing to the traffic.
+  // Bright white at every severity — the user's call: the meter is a gauge for
+  // the model it sits beside, not a second alarm system, and caps now paint the
+  // SAME colour as the bar rather than a separate dim tone (quota-bars.ts owns
+  // that choice). `quotaSeverity` and its thresholds stay live in
+  // quota-bars.ts (and its own tests still exercise them), so a future surface
+  // can still colour-escalate; this line just chooses not to.
+  const quota = renderQuotaSegment(session.fiveHourPct, session.sevenDayPct, {
+    accent: brightWhite,
+    warn: brightWhite,
+    critical: brightWhite,
+  });
+  const { chat, workers } = destinationParts(golem, { color });
+  const tail = workers.length === 0 ? "" : cyan(` ${workers.join(MODEL_JOIN)}`);
+  const buildDestination = (t: string) =>
+    quota === "" ? `${cyan(chat)}${t}` : `${cyan(chat)} ${quota}${t}`;
+  const destinationIndex = parts.length;
+  parts.push(`${head} ${dim("→")} ${buildDestination(tail)}`);
 
   // R10.24: the dials describe transforms the pipeline is applying, so they are
   // shown only when it is applying them. Off, unwired and bypass all run no
@@ -485,6 +628,22 @@ export function renderStatusLine(
   if (waiting !== "") parts.push(yellow(waiting));
   if (golem.updateAvailable === true) parts.push(yellow("⇧ update"));
 
+  const line = parts.join(dim(" · "));
+  // The persona tail is the one segment that grows with the roster rather
+  // than with a fixed set of dials, so it is the one that gives way. Shrink
+  // ONLY it — never the brand, dials, or a blocked/update indicator someone is
+  // waiting on — and only when the width is actually known (`options.columns`
+  // unset means a non-TTY caller, and guessing there would risk truncating a
+  // line that already fit).
+  if (options.columns === undefined || tail === "") return line;
+  const overBy = displayWidth(line) - options.columns;
+  if (overBy <= 0) return line;
+  // Floor of 1: once the roster is being cut at all, say so. Dropping the
+  // tail to "" when the budget goes negative would silently claim no persona
+  // is staffed, which is a worse lie than overshooting the width by a column
+  // or two to keep the "…".
+  const shrunkTail = truncateTo(tail, Math.max(1, displayWidth(tail) - overBy));
+  parts[destinationIndex] = `${head} ${dim("→")} ${buildDestination(shrunkTail)}`;
   return parts.join(dim(" · "));
 }
 
@@ -511,6 +670,12 @@ export async function collectGolemState(
   let workerTargetModels: readonly { worker: string; model?: string }[] = [];
   let roster: readonly string[] = [];
   let activeAccount: string | null = null;
+  // The chat destination's own target id, and which persona resolves to which
+  // target — both needed after the try block, to scope the served-model read
+  // (see the `lastServedModel`/`activeChat`/`activeWorkers` comments above) to
+  // the right target instead of the shared "most recent, whichever" fields.
+  let defaultTargetId: string | undefined;
+  let workerTargetIds: Readonly<Record<string, string>> = {};
   let effectiveLevel: CompressionLevel | undefined;
   let proxyPort: number | undefined;
   try {
@@ -532,29 +697,60 @@ export async function collectGolemState(
     // Resolved from settings already in hand — no extra I/O on a per-prompt
     // surface. A target that does not resolve yields no model, so the worker is
     // omitted from the line rather than advertised.
-    roster = declaredWorkers(settings.inference.personas);
-    const configured = settings.inference.worker_targets;
-    workerTargetModels = Object.keys(configured)
-      .filter((worker) => isKnownWorker(worker, settings.inference.personas))
-      .map((worker) => {
-        const hit = listTargets(settings.proxy).find((t) => t.id === configured[worker]);
+    //
+    // Declaration order, NOT `declaredWorkers`' alphabetical "stable id order"
+    // (personas.ts is explicit that that sort is its own contract for callers
+    // that need determinism across layers, e.g. `golem personas`). This line
+    // is a roster the user wrote, in one project's config or merged across
+    // layers base-first, and it should read back in the order they put it —
+    // `Object.keys` on the already-merged record does exactly that.
+    roster = Object.keys(settings.inference.personas ?? {});
+    // R14.2: a declared persona is staffed in one of two lanes — `worker`
+    // (Golem dispatches to a registry target) or `agent` (the harness runs a
+    // subagent on a bare model id; Golem never dispatches it, but it is still
+    // staffed and belongs on the line). Only `unstaffed` — and a lane that
+    // fails to resolve, a config typo — is omitted. `resolvePersonaLane` can
+    // throw on a bad config; caught locally so one bad persona does not blank
+    // the whole per-prompt line (the hard rule at the top of this file).
+    const workerTargetIdEntries: [string, string][] = [];
+    workerTargetModels = roster.map((worker) => {
+      let lane: PersonaLane;
+      try {
+        lane = resolvePersonaLane({
+          settings: settings.proxy,
+          personas: settings.inference.personas ?? {},
+          personaId: worker,
+          workerTargets: settings.inference.worker_targets,
+        });
+      } catch {
+        return { worker };
+      }
+      if (lane.kind === "worker") {
+        workerTargetIdEntries.push([worker, lane.targetId]);
+        const hit = listTargets(settings.proxy).find((t) => t.id === lane.targetId);
         return {
           worker,
           ...(hit?.model !== undefined ? { model: hit.model } : {}),
-          // R11.6: the same label the chat segment gets, from the same function
-          // — this used to pass the raw `accountId`, so a target with no account
-          // rendered gateway-less while the chat side happily said "ollama" for
-          // the identical provider.
           ...(hit !== undefined
             ? { gateway: providerUpstreamLabel(hit.provider, hit.baseUrl, hit.accountId) }
             : {}),
         };
-      });
+      }
+      if (lane.kind === "agent") {
+        // Not dispatched by Golem — the harness runs this verbatim, so there
+        // is no gateway to name and the bare model id is the whole story.
+        return { worker, model: lane.model };
+      }
+      return { worker };
+    });
+    workerTargetIds = Object.fromEntries(workerTargetIdEntries);
     // R6.2: reflect the ACTIVE account/provider the proxy actually fronts, not
     // just the top-level base URL (env-less resolution — the label needs no key).
-    // R9.23: default_target moved from proxy to inference — spread it onto
-    // the proxy settings so resolveUpstreamDisplay can find it.
-    const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
+    // R9.23: model moved from proxy to inference — `withDefaultTarget` folds it
+    // onto the proxy settings so resolveUpstreamDisplay can find it.
+    const registrySettings = withDefaultTarget(settings);
+    const upstream = resolveUpstreamDisplay(registrySettings);
+    defaultTargetId = resolveDefaultTargetId(registrySettings);
     label = providerUpstreamLabel(upstream.provider, upstream.baseUrl, upstream.accountId);
     provider = upstream.provider;
     model = upstream.model;
@@ -625,7 +821,43 @@ export async function collectGolemState(
     // from would otherwise keep the previous model name on the line.
     try {
       const served = await servedModelFor(dir, activeAccount);
-      if (served !== null) state = { ...state, lastServedModel: served.model };
+      if (served !== null) {
+        // R9.2's top-level `served.model`/`servedAtIso` mean "most recently
+        // served, whichever target" — a coder/reviewer/scribe dispatch updates
+        // them exactly like a chat request does. Read straight from there, the
+        // chat segment would flicker to whatever persona last ran. Scope to the
+        // DEFAULT target's own row; a `targets`-less snapshot predates
+        // per-target tracking and could only have been written by chat, so the
+        // top-level fields are trusted as-is in that case.
+        const chatSeen =
+          defaultTargetId !== undefined ? served.targets?.[defaultTargetId] : undefined;
+        const chatModel =
+          chatSeen?.model ?? (served.targets === undefined ? served.model : undefined);
+        if (chatModel !== undefined) state = { ...state, lastServedModel: chatModel };
+
+        // "Active" — the underline cue — is a separate question from which
+        // model chat shows: whichever target answered MOST RECENTLY, chat's own
+        // or a persona's, so a reader can tell which model is currently doing
+        // the work even while the chat segment stays pinned to the default.
+        if (served.targets === undefined) {
+          if (served.model !== undefined) state = { ...state, activeChat: true };
+        } else {
+          const entries = Object.entries(served.targets);
+          if (entries.length > 0) {
+            const [mostRecentId] = entries.reduce((a, b) =>
+              a[1].servedAtIso >= b[1].servedAtIso ? a : b,
+            );
+            if (mostRecentId === defaultTargetId) {
+              state = { ...state, activeChat: true };
+            } else {
+              const activeWorkers = Object.entries(workerTargetIds)
+                .filter(([, targetId]) => targetId === mostRecentId)
+                .map(([worker]) => worker);
+              if (activeWorkers.length > 0) state = { ...state, activeWorkers };
+            }
+          }
+        }
+      }
     } catch {
       // no served-model state yet — leave unknown
     }

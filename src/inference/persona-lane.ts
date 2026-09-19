@@ -118,9 +118,9 @@ export function resolvePersonaLane(input: PersonaLaneInput): PersonaLane {
   }
 
   // A bare GATEWAY id resolves to that gateway's first target, matching what
-  // `resolveDefaultTargetId` does for `default_target` (R9.23). Applied here
+  // `resolveDefaultTargetId` does for `model` (R9.23). Applied here
   // rather than assumed, because a persona model meaning something different
-  // from `default_target` for the same string would be a gratuitous
+  // from `model` for the same string would be a gratuitous
   // inconsistency between two adjacent settings.
   const viaGateway = listTargets(input.settings).find((t) => t.accountId === configured);
   if (viaGateway !== undefined) {

@@ -17,12 +17,14 @@ import path from "node:path";
 import { resolveEffectiveCompression } from "../compression/effective-level.js";
 import { unreachableHeadroomConfigKeys } from "../compression/headroom-adapter.js";
 import { loadConfig } from "../config/index.js";
+import { defaultUserDir } from "../config/paths.js";
 // Narrow specifiers, not the `../hooks/index.js` barrel (~446ms — it pulls every
 // hook handler) for two small file reads.
 import { readSessionState, resolveBlock } from "../hooks/session-state.js";
 import { STALE_AFTER_MS } from "../hooks/snooze-nudge.js";
 import { selectTarget } from "../inference/target-dispatcher.js";
 import { declaredWorkers, unknownWorkerWarnings } from "../inference/workers.js";
+import { listTeamLayerCaches, loadConfigWithTeamLayer } from "../portal/team-layer.js";
 import {
   listTargets,
   resolveDefaultTargetId,
@@ -133,7 +135,14 @@ export function probeProxy(
 
 export async function collectStatus(options: StatusOptions): Promise<StatusReport> {
   const projectDir = path.resolve(options.projectDir);
-  const { settings, provenance, warnings } = await loadConfig({
+  // `team-layer-fetch`: the team origin, POPULATED. Cache-only and unable to
+  // fail, so status keeps working offline — and an unlinked project resolves
+  // byte-identically to a plain `loadConfig` (asserted in
+  // tests/unit/portal/team-layer.test.ts). Without this, `golem status` would
+  // report the effective config of a project WITHOUT its team policy, which is
+  // the "believing you are under team policy when you are not" hazard pointed
+  // the other way.
+  const { settings, provenance, warnings } = await loadConfigWithTeamLayer({
     projectDir,
     ...(options.userDir !== undefined && { userDir: options.userDir }),
     ...(options.env !== undefined && { env: options.env }),
@@ -154,9 +163,10 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // Resolved before the reads below because the last-served-model lookup is
   // scoped to this account (a snapshot from the previous upstream must not be
   // reported as the current model).
-  // R9.23: default_target moved from proxy to inference — merge it so the
-  // display reflects the actual default target (e.g. openrouter:deepseek/...).
-  const upstream = resolveUpstreamDisplay(withDefaultTarget(settings));
+  // R9.23: model moved from proxy to inference — `withDefaultTarget` merges it
+  // so the display reflects the actual default target (e.g. openrouter:deepseek/...).
+  const proxyWithDefault = withDefaultTarget(settings);
+  const upstream = resolveUpstreamDisplay(proxyWithDefault);
 
   const localProbe = options.localProbe ?? probeAndCacheLocalModelInfo;
   const [init, reachable, daemon, brevityDial, compressionDial, localInfo, servedModel] =
@@ -181,11 +191,20 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
 
   // R9.2: per-target rows, each carrying what that target last served. Read from
   // the same snapshot the proxy writes, so status never has to reach the daemon.
-  // R9.23: default_target moved to inference — merge it so
+  // R9.23: model moved to inference — merge it so
   // resolveDefaultTargetId and listTargets see the live value.
-  const proxyWithDefault = withDefaultTarget(settings);
   const allServed = await readServedModel(projectDir).catch(() => null);
   const defaultTargetId = resolveDefaultTargetId(proxyWithDefault);
+  // The chat destination's own last-served row, scoped the same way `servedModel`
+  // already is (account-matched) — see the comment on `upstream.last_served_model`
+  // below for why this must not read the shared top-level fields directly.
+  const defaultServed =
+    servedModel === null
+      ? null
+      : (servedModel.targets?.[defaultTargetId] ??
+        (servedModel.targets === undefined
+          ? { model: servedModel.model, servedAtIso: servedModel.servedAtIso }
+          : null));
   const targetRows = listTargets(proxyWithDefault).map((t) => {
     const seen = allServed?.targets?.[t.id];
     return {
@@ -211,7 +230,7 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // `worker_targets` entry, and each carries the `route` that produced it. The
   // old shape could only answer "which workers did you configure"; the question
   // a user actually has is "where does the next `coder` draft go", and the
-  // unconfigured worker — which now lands on `inference.default_target` or the
+  // unconfigured worker — which now lands on `inference.model` or the
   // harness upstream rather than silently on the local model — is precisely the
   // one that used to have no row at all. Asked through the dispatcher's own
   // `selectTarget`, so status cannot predict one destination while dispatch
@@ -275,6 +294,8 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
   // once: the device CA is created by the first `golem device enrol`, so its
   // absence is the honest signal that the feature is unused here.
   const devices = await collectDeviceStatus(projectDir);
+  // Decision 63(c) — one row per cached team, each with its OWN age.
+  const teams = await listTeamLayerCaches(options.userDir ?? defaultUserDir());
   const limits =
     baseLimits === undefined
       ? undefined
@@ -355,8 +376,15 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
       account: upstream.accountId,
       base_url: upstream.baseUrl,
       default_model: upstream.model ?? null,
-      ...(servedModel !== null
-        ? { last_served_model: servedModel.model, last_served_at: servedModel.servedAtIso }
+      // R9.2's top-level `servedModel.model` means "most recently served, by
+      // WHICHEVER target" — a persona/worker request updates it exactly like a
+      // chat request does. Reported here it would make the destination flicker
+      // to whatever model a coder/reviewer/scribe dispatch last used. Scope to
+      // the DEFAULT target's own row instead; a snapshot with no `targets` map
+      // predates per-target tracking and could only have been written by chat,
+      // so the top-level fields are trusted as-is in that case.
+      ...(defaultServed !== null
+        ? { last_served_model: defaultServed.model, last_served_at: defaultServed.servedAtIso }
         : {}),
     },
     // R9.2: only when the proxy is actually serving more than one target —
@@ -385,6 +413,13 @@ export async function collectStatus(options: StatusOptions): Promise<StatusRepor
           },
         }
       : {}),
+    // Decision 63(c): per team, never one figure. Omitted entirely when the
+    // machine holds no caches, so a solo install's status says nothing about
+    // teams. This lists what the MACHINE holds — the counterpart to Decision
+    // 64(c)'s "no link, no cache read", which governs the config path and is
+    // held by `resolveTeamLayerForProject`. Reading a directory of settings
+    // opens no socket and looks up no token.
+    ...(teams.length > 0 ? { teams } : {}),
     ...(limits !== undefined ? { limits } : {}),
     ...(devices !== undefined ? { devices } : {}),
     // R12.2: the blocked read model, in the SAME shape the dashboard serves at

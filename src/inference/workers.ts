@@ -19,16 +19,20 @@
  * config edit. `KNOWN_WORKERS` is gone; nothing should reintroduce a
  * compile-time list of who may exist.
  *
- * ## What did NOT change
+ * ## What R14.3 changed (worker_targets retirement)
  *
- * The property that made the map safe. R9.4's header put it plainly: what a map
- * gives up is that *"a typo'd key would otherwise be silently ignored"*, and
- * {@link unknownWorkerWarnings} buys it back. A `worker_targets` key naming no
- * declared persona still does nothing and is still reported loudly — the source
- * of "what exists" moved, the honesty did not.
+ * The `inference.worker_targets` map is retired. The worker lane now reads
+ * `inference.personas[worker].model` directly. A persona's `model` field
+ * serves both lanes:
+ *   - worker lane: Golem dispatches to the target (redacted)
+ *   - harness lane: subagent runs on the model (your key)
+ *
+ * Resolution tries the target registry first; if it resolves, it's a worker
+ * target. Otherwise it's a model ID for the harness. This is the same logic
+ * `resolveCoderRoute` uses for `personas.coder.model`.
  */
 
-import { effectivePersonas, type PersonaConfig } from "./personas.js";
+import { effectivePersonas, type PersonaConfig, workerTargetFromPersona } from "./personas.js";
 
 /**
  * A worker name is a persona id. No longer a closed union: the roster is config,
@@ -68,22 +72,28 @@ export function isKnownWorker(
 /**
  * The target id a worker defaults to, or undefined for "not routed here".
  *
+ * Now reads `inference.personas[worker].model` directly (worker_targets retired).
+ * The deprecated `workerTargets` map is checked first for backward compat.
  * An unknown *worker* key resolves to nothing rather than throwing: it is a
  * config typo, not a routing decision, and it must not stop the worker that IS
- * configured correctly from working. It is surfaced by
- * {@link unknownWorkerWarnings} instead. (An unknown *target* is a different
- * matter entirely — that fails closed at dispatch, because it would otherwise
- * send context somewhere the user did not choose.)
+ * configured correctly from working. It is surfaced by {@link unknownWorkerWarnings}
+ * instead. (An unknown *target* is a different matter entirely — that fails
+ * closed at dispatch, because it would otherwise send context somewhere the
+ * user did not choose.)
  */
 export function workerTarget(
   workerTargets: Readonly<Record<string, string>> | undefined,
   worker: string,
   personas: Readonly<Record<string, PersonaConfig>> | undefined,
 ): string | undefined {
-  if (workerTargets === undefined) return undefined;
+  // First check deprecated worker_targets map for backward compat
+  if (workerTargets !== undefined) {
+    const id = workerTargets[worker];
+    if (id !== undefined && id !== "") return id;
+  }
+  // Then check personas[worker].model
   if (!isKnownWorker(worker, personas)) return undefined;
-  const id = workerTargets[worker];
-  return id !== undefined && id !== "" ? id : undefined;
+  return workerTargetFromPersona(personas ?? {}, worker);
 }
 
 /**
@@ -92,6 +102,8 @@ export function workerTarget(
  * Silently ignoring these is the failure mode the map shape would otherwise
  * introduce: the user writes `writer = "…"` before the persona exists (or
  * misspells `codr`), sees no error, and reasonably believes it took effect.
+ *
+ * Now validates against `inference.personas` keys.
  */
 export function unknownWorkerWarnings(
   workerTargets: Readonly<Record<string, string>> | undefined,

@@ -22,12 +22,12 @@ describe("proxyLog", () => {
       clock: () => new Date("2026-08-21T02:21:04.843Z"),
     });
     try {
-      proxyLog('routed to "anthropic" — inference.default_target');
+      proxyLog('routed to "anthropic" — inference.model');
     } finally {
       restore();
     }
     expect(lines).toEqual([
-      '2026-08-21T02:21:04.843Z golem proxy: routed to "anthropic" — inference.default_target\n',
+      '2026-08-21T02:21:04.843Z golem proxy: routed to "anthropic" — inference.model\n',
     ]);
   });
 

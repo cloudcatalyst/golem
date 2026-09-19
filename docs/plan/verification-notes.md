@@ -9236,3 +9236,1295 @@ writes plaintext to `~/.config/` instead.
 
 Worth restating wherever ADR-0003's invariant is quoted, rather than quietly
 carrying two versions.
+## §159 — Team skills are FLAT (`golem-team-<name>/`), the portal doc's nested path would never load, and the org id needs a refusal rather than a sanitiser (2026-09-07)
+
+Both found while building `project-team-binding`. **Sources:** the portal repo's
+`docs/team-config.md` §4/§4b and `docs/api-contract.md` §3 (read 2026-09-07 from
+the local working copy at `D:\Personal\Projects\Golem`), this repo's
+`src/cli/init-skills.ts` read from source, and spec Decision 63. Item 1 is
+**[OBSERVED]** as a property of this repo's code plus the two documents; item 2
+is **[OBSERVED]** as a property of the code paths involved.
+
+### 1. `.claude/skills/golem-team/<name>/SKILL.md` cannot be discovered — and this repo already knew
+
+The portal's `docs/team-config.md` §4, `docs/api-contract.md` §3's
+`/orgs/{orgId}/skills` section, §149 item 6 and
+`docs/wiki/concepts/Team Layer.md` all name a **nested** team-skill path:
+`.claude/skills/golem-team/<name>/SKILL.md`.
+
+Claude Code discovers **exactly one level** under `.claude/skills/` — the
+finding that cost the 2026-09-04 skills work an afternoon
+(`debriefs/2026-09-04-skills-were-never-discoverable.md`). So every team skill
+written to that path would be silently absent, exactly as Golem's own skills
+were before they went flat.
+
+`src/cli/init-skills.ts` **already implements the flat shape**: `isTeamSkillDir`
+matches `golem-team-` as a PREFIX and excludes those directories from
+`ourSkillDirs`, so the pruner already expects `golem-team-<name>/`. Only the
+prose was stale, in this repo and in the portal's.
+
+Consequences applied here: `Team Layer.md` corrected; `golem team unlink` clears
+**both** shapes (every `golem-team-*` directory, and a literal `golem-team/` if
+one exists), because "unlink leaves no team instructions behind" has to hold for
+a directory that is present whatever wrote it. `team-skills-sync` should write
+the flat path and needs no nesting logic.
+
+**For the portal side:** `docs/team-config.md` §4 and `docs/api-contract.md` §3
+describe a client path that cannot work. The API itself is unaffected — it
+returns a `name` and the client decides the path — so this is a documentation
+correction, not a contract change.
+
+### 2. Decision 63(e) is right about sanitising and is answering a different question — [OBSERVED]
+
+Decision 63(e): *"The org id needs no sanitising. It is a Clerk identifier
+(`org_` plus alphanumerics), already filename-safe, and a sanitiser is how two
+distinct org ids collide on one file."*
+
+Both clauses hold. What the decision assumes is the value's **provenance**: an
+id that came from `GET /api/v1/me` is a Clerk identifier. But the id that
+reaches `teamCachePath` comes from `.golem/settings.json` — a committed text
+file a human edits and merges — or from `GOLEM_TEAM_ORG_ID`. Neither is
+validated by the portal, and the cache path interpolates it directly into
+`<userDir>/teams/<orgId>.json`: an `org_id` of `../../../.ssh/authorized_keys` is a
+path traversal with a settings key as the delivery mechanism.
+
+So the shape is **refused**, not sanitised — which keeps 63(e)'s collision
+argument intact, because a rejection maps no two ids onto one file. Checked once
+(`isValidOrgId`, `^[A-Za-z0-9_-]{1,128}$`) before any path is built from it, and
+a bad value degrades to the free path with a printed reason rather than throwing
+out of `golem init`. `bindTeam` refuses to write one, and `teamCachePath` throws
+if it is ever reached with one.
+
+Worth stating generally: *validate-and-refuse* and *sanitise-and-continue* are
+different answers to "this input is wrong", and a decision that rules out one has
+not ruled out the other.
+
+## §160 — The team-skills endpoint's `name` is an unvalidated PATH COMPONENT, and the portal's contract still shows the nested path (2026-09-07)
+
+Both found while building `team-skills-sync`. **Sources:** the portal repo's
+`docs/api-contract.md` §3 (`GET /api/v1/orgs/{orgId}/skills`) and §5, read
+2026-09-07 from the local working copy at `D:\Personal\Projects\Golem`; this
+repo's `src/portal/team-skills.ts` and `src/cli/team-skills.ts`. Both items are
+**[OBSERVED]** as properties of the contract text plus this repo's code.
+
+### 1. `name` decides a directory name, and nothing in the contract constrains it
+
+The contract is explicit that the client owns the path: the response carries a
+`name` and *"a client can fetch only what its hashes say has changed"*. So the
+harness interpolates `name` into
+`.claude/skills/golem-team-<name>/SKILL.md` — and §3 places no constraint on
+the field at all. No charset, no length, no statement that it is slug-shaped.
+
+That is exactly the shape §159 item 2 found on `org_id`, reached from the other
+direction: **a remote string used to build a filesystem path.** A row named
+`../../rules/golem-evil` is a write outside the managed namespace with a JSON
+field as the delivery mechanism, and a row named `..` is worse.
+
+Answer applied here is §159's: **validate and refuse, never sanitise and
+continue.** `isValidTeamSkillName` is `^[a-z0-9][a-z0-9-]{0,63}$`, checked
+before any path is built, and a refused row is REPORTED and skipped rather than
+failing the sync (nothing in the team layer may break anything). The built path
+is then re-checked against `.claude/skills/` as a second guard, on the principle
+that the point of a second layer is not relying on the first having run.
+
+**For the portal side:** this needs no API change — the client must validate
+whatever arrives. But §3 would be better with a stated `name` charset, because
+every client implementer otherwise has to derive this hazard independently, and
+the portal's own admin UI is the natural place to reject the name at authoring
+time instead.
+
+### 2. The nested-path drift is STILL PRESENT in the portal contract — [OBSERVED]
+
+§159 item 1 recorded that `docs/api-contract.md` §3 and `docs/team-config.md`
+§4 describe `.claude/skills/golem-team/<name>/SKILL.md`, which Claude Code
+never discovers. Re-checked 2026-09-07 while implementing the client:
+`docs/api-contract.md` still reads *"for syncing into
+`.claude/skills/golem-team/<name>/SKILL.md`"*.
+
+So `portal-team-skills-path-drift` (`owner: user`) is open, and the practical
+consequence is now concrete rather than theoretical: **a client written from the
+contract as it stands today ships skills that sync perfectly and never load,
+with every surface reporting success.** The flat path is what this repo
+implements and what `init-skills.ts` has always expected.
+
+Corrected here on the way: `docs/plan/tasks/team-skills-sync.md`'s own `gate`
+line carried the nested path too. The wiki's `Team Layer.md` was already fixed
+by §159.
+
+## §161 — The portal contract's team-settings EXAMPLE names a key Golem does not have, and a cache-only read path does not enforce Decision 64(d) by itself (2026-09-07)
+
+Both found while building `team-layer-fetch`. **Sources:** the portal repo's
+`docs/api-contract.md` §`GET /api/v1/orgs/{orgId}/settings` (read 2026-09-07
+from the local working copy at `D:\Personal\Projects\Golem`), this repo's
+`src/config/schema.ts` and `src/config/loader.ts` read from source, and spec
+Decisions 63 and 64. Item 1 is **[OBSERVED]** as a property of the two
+documents plus a failing test; item 2 is **[OBSERVED]** as a property of the
+code paths involved. Neither was verified against a live portal — no deployed
+`/orgs/{orgId}/settings` endpoint was reachable, so **the wire shape itself
+remains [UNESTABLISHED] as deployed behaviour**.
+
+### 1. `security.redact_secrets` is not a settings key — [OBSERVED]
+
+The contract's worked example for the endpoint this task consumes is:
+
+```json
+{ "settings": [
+  { "key": "security.redact_secrets", "value": true, "enforced": true, "schema_version": "v0.9.2" },
+  { "key": "proxy.default_target", "value": "main", "enforced": false, "schema_version": "v0.9.2" }
+] }
+```
+
+`security.redact_secrets` **does not exist in this Golem**. The `security`
+section is `write_port`, `write_lan`, `unlock_window_minutes`,
+`idle_relock_minutes`, `step_up_max_age_minutes`, `device_cert_days`,
+`join_injection` — the device/write-surface settings. Redaction has no on/off
+key by design: it is always on, and the single deliberate exception is
+`proxy.bypass_all` (ADR-0004), which is **on `REMOTE_DENIED_SETTINGS`** and so
+can never be set by a team at any importance.
+
+Found by writing the example into a test and watching it fail: the value never
+landed and provenance stayed `default`. That is the loader behaving correctly —
+an unknown key warns and is dropped — but it means **the contract's headline
+example, copied faithfully, produces a team layer that sets nothing.** An admin
+following it would see no effect and no reason.
+
+The near-miss is the interesting part. Had the key been spelled to reach
+`proxy.bypass_all`, the client would have REFUSED it loudly rather than applied
+it, which is the correct outcome and also not the outcome the example implies.
+So the example is wrong in the safe direction, twice over.
+
+**For the portal side:** replace the example key with one that exists and is
+allowed — `telemetry.enabled` and `security.join_injection` are both real, both
+booleans, and neither is denied. And state that the deny-list exists at the
+client, because an admin who can type a key into a form needs to know which
+keys the client will drop. Per ADR-0008 §Portal consequences the portal should
+also refuse the denied keys at write time; that half is `owner: user`
+cross-repo work and is not assumed here.
+
+### 2. Decision 64(d) is not free on a cache-only read path — [OBSERVED]
+
+Decision 64(d): *"a lapsed licence must not keep exerting control, and a cache
+that outlives the subscription is exactly how it would."*
+
+That reads as a statement about the moment of the verdict, and it is easy to
+implement as one — a `402` returns "no layer" and the fallback is skipped. It
+is not enough. A team layer is fetched RARELY and read on EVERY config load, so
+those have to be different functions (a network round trip behind every `golem`
+command is the opposite of local-first). Which means the read path is
+**cache-only**, and a cache-only read asks the portal nothing:
+
+- an org's subscription lapses in March
+- nobody runs `golem team sync` in that repo again
+- every `loadConfig` keeps applying March's policy, indefinitely
+
+The verdict was correct and had no durable effect. Resolved by **persisting the
+denial into the cache file** (`denied: { code, status, detail, at }`), which the
+read path refuses with the reason and the date; a successful sync rewrites the
+file whole and so clears it, meaning re-subscribing needs no repair step.
+Deleting the file was rejected twice over — it destroys the explanation, and a
+file that vanishes by itself is indistinguishable from a bug.
+
+`api_error` deliberately stamps nothing: Golem failing to understand its own
+portal is not a verdict on anybody's subscription, and persisting our bug as an
+organization's policy withdrawal is the same class of mistake in the other
+direction.
+
+The generalisable version: **an entitlement check whose enforcement lives only
+on the fetch path is only as current as the last fetch.** Any design that
+separates "refresh" from "read" has to decide where a verdict is durable, and
+the answer is not automatically "the fetch".
+
+## §162 — golem.run is LIVE, and the first real portal bytes confirm §158: discovery is not on the portal's own origin (2026-09-08)
+
+First contact with the deployed portal. No credentials were used and none were
+needed for any of this — every probe below is unauthenticated and read-only.
+
+### 1. The API is up and rejects properly — [OBSERVED]
+
+```
+GET https://golem.run/api/v1/me      → 401
+GET https://golem.run/api/v1/orgs    → 404
+```
+
+`401` on `/api/v1/me` is the contract behaving: the endpoint exists and refuses
+an unauthenticated caller. `/api/v1/orgs` is `404` — the contract's org routes
+are `/api/v1/orgs/{orgId}/...`, so a bare collection route is not expected to
+exist and its absence is not a fault.
+
+### 2. §158 is CONFIRMED against the live host — [OBSERVED]
+
+```
+GET https://golem.run/.well-known/oauth-authorization-server  → 404
+GET https://golem.run/.well-known/openid-configuration        → 404
+```
+
+§158 argued from the contract that the Clerk issuer is a different origin from
+the portal API, and that one `GOLEM_PORTAL_URL` therefore cannot serve both.
+That is now observed rather than reasoned: **discovery is not on golem.run at
+all.** `portal.issuer` is not a defensive extra key — without it the harness
+cannot find an authorization server.
+
+### 3. The entitlement classifier survived real bytes — [OBSERVED]
+
+`golem team sync` against the live host, with a linked org and no token:
+
+```
+Team org_livetest: the portal could not be reached (the portal's authorization
+server metadata at https://golem.run/.well-known/oauth-authorization-server
+answered 404. Check `portal.url` — it must be the Clerk Frontend API URL (the
+issuer), not the portal's web address.) and this machine has no cached team
+settings — using local configuration only.
+EXIT=0
+```
+
+Three things worth recording:
+
+- **Exit 0.** A misconfigured portal degraded to local configuration and did not
+  fail the command — Decision 64(f) holding against a real host rather than a
+  fake transport.
+- **Classified as `unreachable`, not `not_entitled`.** A 404 on discovery is not
+  a verdict about the team, and the classifier did not treat it as one. No cache
+  was written and none was stamped.
+- **The diagnostic names the cause, not just the symptom.** It quotes the URL it
+  probed, the status, and the fix. That is §158's finding surfaced where someone
+  will actually meet it.
+
+### 4. The UA-sniffing install map works — [OBSERVED], and it clears most of `R7.6-infra`
+
+```
+curl/8.0            → 307 → .../releases/latest/download/install.sh
+PowerShell/7.4      → 307 → .../releases/latest/download/install.ps1
+Chrome (Win64) UA   → 200 (serves the page)
+```
+
+All three UA classes route correctly. **Caveat, stated rather than glossed:**
+these are `curl -A` requests, so the *sniffing logic* is verified for all three
+while a real browser *render* is not — the browser case is confirmed only as far
+as "200, serves the page instead of redirecting".
+
+### What remains, and it is small
+
+An end-to-end `golem team link` needs two strings that only the Clerk dashboard
+can give, both `owner: user`:
+
+1. **The Clerk Frontend API URL** — the issuer, for `portal.issuer`.
+2. **A registered public OAuth client id** — for `portal.client_id`, registered
+   with the loopback redirect the harness uses (RFC 8252).
+
+Everything on the harness side is built and tested; the wire shape stays
+`[UNESTABLISHED]` as deployed behaviour until those exist.
+
+## §163 — The Clerk issuer, read off the live site: §158 proven end to end, and Dynamic Client Registration is NOT available (2026-09-08)
+
+Done with a real browser (chrome-devtools MCP) plus unauthenticated `curl`. **No
+Clerk dashboard access and no credentials were used** — everything below is
+either rendered publicly by golem.run or served by Clerk's public discovery.
+
+### 1. `R7.6-infra`'s last item — [OBSERVED]
+
+`https://golem.run` rendered in a real Chrome, title *"Golem · shared config and
+connectors"*, full marketing page with `Install` / `Sign in` / `Set up a team`.
+The UA-sniffing map (§162) is therefore verified for the browser case as a
+**render**, not merely a 200.
+
+Worth noting for its own sake: the page already states Decision 64's boundary in
+its own words — *"Nothing is held back from the free one. The paid tier exists
+because config a team shares has to be hosted somewhere."* Solo is listed
+**FREE**, Team as **TBC / seat / month**. The spec and the shop window agree.
+
+### 2. The issuer, discovered from the page itself — [OBSERVED]
+
+`golem.run` loads Clerk from:
+
+```
+https://immune-owl-1734.clerk.accounts.dev/npm/@clerk/clerk-js@6/dist/clerk.browser.js
+```
+
+So the Clerk **Frontend API URL** is `https://immune-owl-1734.clerk.accounts.dev`,
+and discovery is there rather than on the portal:
+
+```
+GET https://immune-owl-1734.clerk.accounts.dev/.well-known/oauth-authorization-server  → 200
+GET https://immune-owl-1734.clerk.accounts.dev/.well-known/openid-configuration        → 200
+```
+
+**§158 is now proven end to end.** `portal.url` = `https://golem.run` (the API),
+`portal.issuer` = the Clerk host above. They are different origins; one variable
+genuinely cannot serve both, and §162 already showed the portal origin 404s on
+discovery.
+
+### 3. What the issuer advertises, versus what the harness implements — [OBSERVED]
+
+| advertised | value | harness |
+|---|---|---|
+| `authorization_endpoint` | `/oauth/authorize` | matches |
+| `token_endpoint` | `/oauth/token` | matches |
+| `code_challenge_methods_supported` | `["S256"]` | S256 — matches |
+| `grant_types_supported` | `authorization_code`, `refresh_token` | matches |
+| `scopes_supported` | `openid profile email public_metadata private_metadata offline_access user:org:read` | requests `openid profile email offline_access` — all four supported |
+| `registration_endpoint` | **`null`** | — |
+
+Three consequences:
+
+1. **No device grant.** `grant_types_supported` has no `urn:ietf:params:oauth:grant-type:device_code`, confirming `team-portal-auth`'s decision to state a clear failure rather than offer a headless path.
+2. **No Dynamic Client Registration.** `registration_endpoint` is `null`, so the
+   OAuth client **cannot** be created programmatically. A human must create it in
+   the Clerk dashboard. This is why `portal.client_id` has no compiled-in default
+   and is `owner: user` — now confirmed rather than assumed.
+3. **`user:org:read` exists and is not requested.** Unproven either way: the org
+   list comes from the PORTAL's `/api/v1/me`, which resolves organizations
+   server-side from the bearer token, so the extra scope is probably unnecessary.
+   Flagged because if the live org list ever comes back empty for a user who has
+   organizations, this is the first thing to check.
+
+### 4. This is a Clerk DEVELOPMENT instance — [OBSERVED], and it needs a decision
+
+`immune-owl-1734.clerk.accounts.dev` is the shape Clerk gives a **development**
+instance (generated animal-number name under `.clerk.accounts.dev`). Production
+golem.run is serving auth from it. Development instances carry Clerk's documented
+dev-mode limits, so a production launch needs a production instance — at which
+point **the issuer changes**, and any `portal.issuer` recorded now is
+provisional. Not a defect today; a thing that must not be discovered later.
+
+### What remains, and it is one manual step
+
+Create a **public** OAuth application in the Clerk dashboard with:
+
+- **Redirect URI:** `http://127.0.0.1/callback` — loopback host, **no port**.
+  RFC 8252 §7.3 requires the server to accept any port on a loopback redirect,
+  and `src/portal/loopback.ts` binds an ephemeral one per attempt.
+- **Grant:** authorization code + PKCE (**S256**), public client, no secret.
+- **Scopes:** `openid`, `profile`, `email`, `offline_access`.
+
+Then `portal.client_id` is the only value still missing.
+
+## §164 — The team flow ran end to end against the live portal, and `null` is not `undefined` (2026-09-08)
+
+The first real `golem team link` and `golem team sync` against deployed
+`golem.run`, driven through the user's own Chrome. The wire shape is no longer
+`[UNESTABLISHED]`.
+
+### 1. What works, observed rather than argued — [OBSERVED]
+
+| step | result |
+|---|---|
+| Discovery at the Clerk issuer | ✓ |
+| PKCE `S256`, scopes `openid profile email offline_access` | ✓ |
+| Loopback redirect on an **ephemeral** port | ✓ |
+| Consent screen ("Golem CLI wants to access Golem on behalf of …") | ✓ |
+| Authorization code exchange | ✓ |
+| Token stored — `DPAPI-encrypted file … (dpapi-user)` | ✓ |
+| `GET /api/v1/me`, organizations listed | ✓ (after the fix below) |
+| Project bound, `team.org_id` written to committed config | ✓ |
+| `golem team sync` → settings applied, cached per org | ✓ (after the fix below) |
+| `golem team unlink` → **cache KEPT** (Decision 63(d)) | ✓ |
+
+### 2. Clerk honours the RFC 8252 loopback port exemption — [OBSERVED]
+
+The OAuth application registers `http://127.0.0.1/callback` with **no port**, and
+Clerk's own UI says *"the provided URI must exactly match one of the listed
+URIs"*. It nevertheless accepted `http://127.0.0.1:58314/callback`. `team-portal-auth`
+bet on §7.3 and the bet was right; had it been wrong, every sign-in on every
+machine would have failed with a redirect mismatch.
+
+### 3. The bug: `.optional()` admits `undefined`, never `null` — [OBSERVED]
+
+Both live failures were the same mistake in two schemas, and both looked like
+catastrophes while being trivial:
+
+```
+golem: GET /api/v1/me returned an unexpected shape
+Team org_…: the portal answered 200, which this version of Golem does not understand
+```
+
+The deployed portal serialises "no value" as an explicit `null`:
+
+```json
+{"user": {...}, "auth": {"via": "oauth", "scopes": null}, "organizations": [...]}
+{"settings": [], "schema_version": null}
+```
+
+Every field was correct. `auth.scopes: null` and `schema_version: null` were
+refused because zod's `.optional()` means *may be absent*, not *may be null*.
+Proved by isolating it: the identical payload with the field **absent** parses,
+and with `null` it does not.
+
+The second one matters more than it looks: `{"settings": [], "schema_version": null}`
+is what an unconfigured team returns — **every team's first day**. A team that had
+never set a policy would have been reported as a portal Golem cannot understand.
+
+**Fixed at the boundary, not in the consumers.** `wireOptional()` accepts
+`null | undefined` and normalizes to `undefined`, so `PortalIdentity` keeps its
+`T | undefined` fields and no `null` leaks inward — CLAUDE.md's "zod at external
+boundaries, trust types internally", applied literally. A null `settings` or
+`organizations` list now means "none", because a caller forced to distinguish
+absent from null from empty will eventually get it wrong.
+
+**The generalisable version: at a remote boundary, `.optional()` is a claim about
+YOUR serialiser, not theirs.** Prefer nullish-and-normalize for anything a
+third-party JSON API sends. Fixture tests built from the captured live bytes now
+guard both endpoints.
+
+### 4. Two things for the record
+
+- **The Clerk instance is still `development`** (§163). This OAuth application
+  (`Golem CLI`, public + PKCE, consent on) lives in it, so **both `portal.issuer`
+  and `portal.client_id` change when golem.run moves to a production instance.**
+- **`golem team link` writes to the CURRENT project's committed config.** Running
+  it inside this repo bound Golem's own source to a test org; reverted with
+  `golem team unlink` plus `git checkout`. Correct behaviour, but worth knowing
+  before demonstrating the flow from inside a repo you publish.
+
+## §165 — A model the account cannot use and a model id that does not exist are the SAME 404 on the direct API; the discriminators are elsewhere (2026-09-17)
+
+Research for a proposed proxy-side model-access fallback (retry the same request
+on a configured model when the upstream refuses the requested one). The question
+that decides whether the feature is safe is: **what does the upstream return, and
+can that shape be told apart from a typo, a billing stop, or a rate limit?**
+
+### 1. The documented error taxonomy — [OBSERVED] (docs.claude.com/en/api/errors, read 2026-09-17)
+
+Each cause has its OWN status **and** its own `error.type`, which is what makes a
+narrow trigger possible at all:
+
+| status | `error.type` | documented meaning (quoted) |
+|---|---|---|
+| 400 | `invalid_request_error` | "There was an issue with the format or content of your request." Also returned "when usage reaches an organization or workspace spend limit" |
+| 401 | `authentication_error` | "There's an issue with your API key" |
+| 402 | `billing_error` | "There's an issue with your billing or payment information." |
+| 403 | `permission_error` | "Your API key does not have permission to use the specified resource." |
+| 404 | `not_found_error` | "The requested resource was not found." |
+| 429 | `rate_limit_error` | "Your organization has hit a rate limit…" |
+| 500 | `api_error` | internal |
+| 529 | `overloaded_error` | temporarily overloaded |
+
+Envelope, quoted from the page:
+
+```json
+{
+  "type": "error",
+  "error": { "type": "not_found_error", "message": "The requested resource could not be found." },
+  "request_id": "req_011CSHoEeqs5C35K2UUqR7Fy"
+}
+```
+
+**Billing and rate limits are therefore NOT ambiguous with model access** — 402
+and 429 carry distinct types. That is the safety argument for a trigger keyed on
+(status, `error.type`).
+
+### 2. Model access has no documented status of its own — [UNESTABLISHED]
+
+Neither the errors page, the Models endpoints page (`/v1/models`,
+`/v1/models/{model_id}` — read 2026-09-17, it documents `ModelInfo` and no error
+text at all), nor the Messages page states what a request naming a model the
+caller's account cannot use returns. **The docs do not distinguish "you may not
+use this model" from "no such model".**
+
+Field reports (anthropics/claude-code issues, so [OBSERVED] but second-hand) show
+the direct API answering **404 `not_found_error` with the model id as the whole
+message**:
+
+```json
+{"type":"error","error":{"type":"not_found_error","message":"model: claude-opus-4-5-20251101"}}
+```
+
+and the identical shape for a plainly mistyped id (`"message":"model: opus-4"`).
+Bedrock differs: 403 `permission_error`, "anthropic.claude-opus-4-7 is not
+available for this account."
+
+**Consequence for any fallback design: a typo and a missing entitlement are
+indistinguishable at the proxy.** A fallback keyed on this shape WILL also fire
+on a typo. That cannot be fixed by a better predicate; it can only be handled by
+making the feature opt-in and announcing every fire loudly, naming the refused
+model and quoting the upstream message.
+
+### 3. A pre-stream error is an HTTP status, not an SSE frame — [OBSERVED]
+
+Quoted from the errors page: *"When receiving a streaming response over
+server-sent events (SSE), an error can occur **after** the API returns a 200
+response. In that case, error handling doesn't follow these standard mechanisms."*
+
+So a refusal of the `model` field arrives as a normal HTTP 4xx with a small JSON
+body **before** any SSE byte. A proxy can therefore inspect it and re-dial
+without having written anything to the client — retry is mechanically possible.
+The converse also holds: a mid-stream error is unrecoverable, and no design
+should pretend otherwise.
+
+### 4. Claude Code already has a fallback chain — and its exclusion list matches §1 — [OBSERVED, quotes via docs sub-agent]
+
+`code.claude.com/docs/en/model-config`, "Fallback model chains": the
+`fallbackModel` setting and `--fallback-model` flag (comma-separated chain, flag
+wins). Trigger, quoted: *"When the primary model is overloaded, unavailable, or
+returns another non-retryable server error, Claude Code can switch to a fallback
+model instead of failing the request."* Exclusions, quoted: *"Authentication,
+billing, rate-limit, request-size, and transport errors, and a denial by your
+organization's policy check, never trigger a switch."*
+
+**Not established:** whether "unavailable" covers a 404 `not_found_error` on the
+`model` field, and whether the chain applies to a SUBAGENT dispatch (the
+sub-agents page's "API errors in subagents" section could not be read in full;
+what was retrievable says only that an API error ending a subagent early "is
+never delivered as its result"). Until someone observes it, do not assume the
+harness already solves the persona case — but do treat `fallbackModel` as the
+cheaper first lever, because Golem already writes `.claude/settings.json`.
+
+Also from that page: subagent `model:` frontmatter takes an alias (`sonnet`,
+`opus`, `haiku`, `fable`), `inherit`, or a full id; **aliases are resolved to a
+full model id before the request is sent**, so a proxy inspecting the body's
+`model` field sees `claude-opus-5`, never `opus`. Precedence: per-invocation
+parameter → frontmatter → `CLAUDE_CODE_SUBAGENT_MODEL` → main conversation.
+Consistent with §114 (Claude Code passes any model string through behind a custom
+`ANTHROPIC_BASE_URL`).
+
+### 5. Why this matters here, concretely
+
+This repo's committed `.golem/settings.json` pins `planner`/`reviewer` to
+`claude-opus-5`, and `golem init` generates `.claude/agents/golem-reviewer.md`
+with `model: claude-opus-5` in its frontmatter. Every contributor who clones the
+repo inherits that. On an account without Opus, dispatching `golem-reviewer`
+fails outright.
+
+## §166 — Regenerating `.claude/agents/golem-<id>.md` does NOT hot-reload a persona an in-flight session has already dispatched, and no doc says when that directory is rescanned (2026-09-18)
+
+Research for the proposed "settings change should reach the personas without a
+manual `golem init`" work: an unconditional SessionStart resync plus a live
+watcher in the proxy daemon. The question that decides how strongly that feature
+may be advertised is: **once the file on disk is correct, does a RUNNING Claude
+Code session see it?**
+
+### 1. A redispatched persona keeps its old definition — [OBSERVED, twice, this session]
+
+Edited a staffed persona's settings, regenerated `.claude/agents/golem-<id>.md`
+(confirmed correct on disk), then redispatched that SAME persona inside the
+already-running session. The dispatch used the OLD definition. Repeated once,
+same result. Promptness of the regeneration was not the variable — the file was
+already current before the dispatch was issued.
+
+So the claim this feature may make is bounded:
+
+- **Supported:** the file on disk is current, so the NEXT session is correct
+  without anyone running `golem init`.
+- **Unsupported:** instant hot-swap for a session that has already dispatched
+  that persona. Do not word a task doc, changelog or rule as though a live
+  session picks the change up.
+- **Unknown:** a session that has NOT yet dispatched a given persona. Plausible
+  that a first dispatch reads the file fresh, but see §2 — nothing establishes it,
+  and it was not tested.
+
+### 2. Claude Code does not document when `.claude/agents/*.md` is (re)scanned — [UNESTABLISHED] (code.claude.com/docs/en/sub-agents, read 2026-09-18)
+
+The sub-agents page documents the file format, the frontmatter fields, the
+precedence of project over user scope, and that definitions are picked up from
+`.claude/agents/`. It does **not** state the caching model. Nothing on the page
+distinguishes a session-start snapshot from a first-dispatch-per-type cache from
+a per-dispatch read, and there is no documented way to force a rescan short of a
+new session.
+
+§1's observation is consistent with a session-start snapshot AND with a
+first-dispatch-per-type cache; it does not separate them. Whichever it is, it is
+undocumented and therefore not a contract — Golem should keep the files correct
+and let a new session be the guarantee, rather than depending on a rescan it
+cannot see.
+
+### 3. The watcher must POLL — §68 already settles this, and it applies here too
+
+The settings watcher cannot reach for `node:fs.watch`: §68 records libuv aborting
+the PROCESS (uncatchable, no `error` event) on Windows/macOS path shapes, which is
+why `src/knowledge/file-watcher.ts` is polling-only on every OS. A watcher living
+inside the proxy daemon is exactly the place that crash would be worst. Reuse the
+polling + debounce shape, not `fs.watch`.
+
+`watchPath` itself is **not** reusable verbatim for `.golem/settings*.json`: its
+flush drops anything failing `isChunkableExtension` (`.json` is not chunkable —
+`src/knowledge/chunker.ts:188`) and `isIgnoredPath` skips dot-segments, which
+`.golem` is. The pattern carries over; the function does not.
+
+## §167 — The statusline's cost is TELEMETRY, not the Node spawn; and `statusLine.command` runs under a shell Claude Code picks for you (2026-09-18)
+
+Investigated for the proposal *"stop spawning Node every ~2s — let the
+statusline `curl` the proxy daemon instead"*. The proposal does not survive
+measurement, and the live docs add a second, independent reason. Both halves
+recorded here so the idea is not re-derived.
+
+### 1. Live doc — `code.claude.com/docs/en/statusline.md` (fetched 2026-09-18)
+
+- **It IS a shell command**, quoted: *"The `command` field runs in a shell, so
+  you can also use inline commands instead of a script file."* The page's own
+  inline example is `jq -r '"[\(.model.display_name)] \(.context_window.used_percentage // 0)% context"'`.
+- **Which shell on Windows is CONDITIONAL**, quoted: *"On Windows, Claude Code
+  runs status line commands through Git Bash when Git Bash is installed, or
+  through PowerShell when Git Bash is absent."* So one `command` string must be
+  valid under Git Bash **and** PowerShell **and** POSIX `sh` — three shells,
+  and which one you get depends on what the user happens to have installed.
+- The doc's own answer to that is **not** a portable one-liner: it tells Windows
+  users to write `"powershell -NoProfile -File C:/Users/username/.claude/statusline.ps1"`,
+  noting that *"This works whether Claude Code routes the command through Git
+  Bash or PowerShell"*. That command string is Windows-only — it is a
+  per-platform seed, not a cross-platform one.
+- Also quoted, on paths: *"Git Bash treats unquoted backslashes as escape
+  characters, so a Windows-style path such as `C:\Users\username\script.mjs`
+  reaches the script runner with its separators removed and the command fails
+  **without a visible error**."* Forward slashes required; `~` expands.
+- **stdin** confirmed: *"Claude Code runs your script with JSON session data on
+  stdin and displays whatever the script prints to stdout."*
+- `refreshInterval`: *"re-runs your command every N seconds in addition to the
+  event-driven updates. The minimum is `1`. … Leave it unset to run only on
+  events."* Event triggers listed: session start/resume, a new assistant
+  message, `/compact` finishing, permission-mode change, Vim-mode toggle, and
+  changing the `command` itself.
+- **NOT documented, checked for deliberately:** any timeout Claude Code enforces
+  on the command; what happens on a non-zero exit, on empty output, or on a
+  hang; stderr handling; whether ANSI colour is officially supported (§28's
+  2026-07-04 reading said multi-line and ANSI are fine, and the page still shows
+  a multi-line colour example, but there is no normative sentence). Do not build
+  on an assumed timeout.
+
+### 2. Measured — where the ~900ms actually goes (this box, Windows 11, 2026-09-18)
+
+§86b's "**301ms** — 3.3×" is no longer what this machine does. Re-measured
+end-to-end, `node dist/cli/main.js statusline --color` with a session payload on
+stdin: **905 / 817 / 1071 / 1250 ms**. The fast path did not regress; the input
+grew.
+
+Broken down by phase (importing the built modules directly):
+
+| Phase | Cost |
+|---|---|
+| `import dist/cli/statusline.js` | **106ms** |
+| `collectGolemState(dir)` (includes one telemetry aggregate) | **423ms** |
+| `openTelemetryStore(dir).aggregate()` alone | **517ms** |
+| `loadConfig({projectDir})` alone | **6ms** |
+| bare `node -e "0"` startup | **164 / 173 / 195 ms** |
+
+The cause: `TelemetryStore.aggregate()` (`src/telemetry/jsonl-store.ts:189`)
+does `readFile(events.jsonl, "utf8")` then `raw.split("\n")` and `JSON.parse`
+per line — **the whole file, every tick**. This repo's own
+`.golem/telemetry/events.jsonl` is **25.8 MB / 70,102 events**. Isolated: 21ms
+to read, **218ms to split+parse** warm; 517ms through the store's own path.
+There is **no rotation, compaction, or cached rollup** anywhere in
+`src/telemetry/` — every `aggregate*` re-reads from byte zero. The cost grows
+linearly and without bound for the life of a project.
+
+So the per-tick cost is roughly **~170ms process start + ~106ms module load +
+~400–500ms telemetry + ~150ms everything else**. Node startup is the *minority*
+of it.
+
+### 3. Measured — `curl` does not save what the proposal assumes
+
+On this box, process startup only:
+
+| Binary | Cost |
+|---|---|
+| `node -e "0"` | 164 / 173 / 195 ms |
+| `curl --version` (Git `mingw64`) | 139 / 136 / 149 ms |
+| `curl --version` (`C:\Windows\System32\curl.exe`) | 135 / 131 / 149 ms |
+| `jq -r '.'` on `{}` | 311 / 198 / 339 ms |
+| `powershell -NoProfile -Command 1` | 681 / 446 ms |
+
+`curl` is ~135–150ms to start — it is **not** free, and swapping it for Node
+saves ~30–50ms of raw process start, ~136ms once the module load goes too. But
+the status line must MERGE Claude Code's stdin JSON with Golem state, and curl
+cannot merge anything: that needs a second process (`jq`, **198–339ms**, and it
+is not guaranteed installed — here it came from Chocolatey, not the OS) or a
+PowerShell host (**446–681ms**). **Any two-process pipeline is slower than the
+one Node process it would replace**, and it would still not touch the
+~400–500ms telemetry parse, which the daemon would have to do too unless it
+cached — and caching needs no daemon.
+
+### 4. What the loopback server actually is (read, not assumed)
+
+`src/proxy/loopback-serve.ts` is a real `node:https` server, so adding a route
+is mechanically trivial — but it is **not addressable by a static command
+string**. It listens on an **ephemeral port** (`options.port ?? 0`) and gates
+every request on a **per-run 24-byte nonce**; both are published only to
+`.golem/state/loopback-serve.json`. A `curl` one-liner would first have to parse
+that JSON — in whichever of three shells it landed in — before it could form a
+URL. Its TLS is the `nameConstraints`-limited CA from
+`src/proxy/loopback-cert.ts`, trusted by Claude Code via `NODE_EXTRA_CA_CERTS`;
+`curl` on Windows uses **Schannel** (confirmed: `curl 8.15.0 … Schannel`), which
+reads the Windows cert store, not that env var, so every invocation would need
+an explicit `--cacert <path>` — a fourth dynamic value for the command string to
+discover.
+
+### 5. Conclusion
+
+The loopback-`curl` statusline is **not worth building**. Two independent
+findings kill it: the win it targets (~136ms of Node startup) is smaller than
+the cost it adds (a second process at 198–681ms), and the command string cannot
+be written portably across the three shells Claude Code may choose, against an
+ephemeral port + nonce + cert path it cannot read without one.
+
+The real lever is **§2**: make `aggregate()` incremental or cached. That is a
+pure `src/telemetry/` change, needs no server, no cert, no shell, no new
+process, and no change to the seeded `statusLine` command at all.
+
+### 6. If the seeded command ever DOES change — the migration trap
+
+`writeStatusLine` (`src/hooks/settings-extras.ts:205`) recognises "ours" by
+**exact string equality** against the single constant `STATUS_LINE_COMMAND`
+(`"golem statusline --color"`). Every other value — including a previous Golem
+default — falls into the `"status line set to a non-Golem command; left as is"`
+branch. Changing that constant would therefore **freeze every existing install
+on the old command forever**, silently. Any future change needs a list of
+*previously seeded* Golem commands treated as upgradable, alongside the current
+one, the same way `refreshInterval` is already upgraded in place. `removeStatusLine`
+has the identical equality check and the identical problem.
+
+## 17. Buzz (buzz.xyz / block/buzz) — agent config surface (2026-09-19)
+
+Checked for the Buzz-integration design ([[Buzz Integration]], tasks R14.2/R14.3).
+
+- **What it is**: confirmed via `buzz.xyz` (sparse landing page, no docs) and
+  `engineering.block.xyz/blog/configuring-agents-in-buzz` (2026-08-10) plus
+  `block.xyz/inside/introducing-buzz-where-humans-and-agents-work-together`.
+  Apache-2.0, `github.com/block/buzz`, Nostr-based channel chat, agents and
+  humans as first-class channel participants.
+- **Agent config fields confirmed** (from the engineering blog, UI-level):
+  name/avatar, agent instructions (system prompt), harness (`goose` | `claude`
+  | `codex` | `buzz-agent`, anything speaking Agent Client Protocol), provider,
+  model, effort, respond-to (`Only me` / `Selected people` / `Anyone`), plus
+  persistent per-agent "core memory" injected every session alongside the
+  agent instructions.
+- **Not found / unconfirmed**: any machine-writable config format for the
+  above (file, REST endpoint, or Nostr event kind) — the blog documents the
+  Settings UI and "ask an agent to draft one for review," not a provisioning
+  API. This blocks [[R14.2]] (Golem CLI provisioning Buzz agent identities)
+  until confirmed against the `block/buzz` source or an API doc, if one
+  exists, before writing any export code.
+- **Not found**: the exact ACP surface a `claude` harness must implement to
+  register as a Buzz agent — needed for [[R14.3]] (Golem itself addressable
+  in Buzz). Treat as unverified; do not assume Golem's existing Claude Code
+  integration satisfies it without checking the ACP spec Buzz targets.
+- Execution model is confirmed **reactive/@mention-triggered**, not pollable
+  or push-spawnable — this is load-bearing for the design (see [[Buzz
+  Integration]]'s "why this doesn't map onto the `Agent` tool directly").
+
+## 18. Buzz — Golem-as-harness scope decision (2026-09-19)
+
+Follow-up to §17. USER decided (2026-09-19) that Golem should register as its
+own first-class ACP harness in Buzz (`golem`, peer to `goose`/`claude`/`codex`)
+rather than riding the existing `claude` harness. This reopens the same open
+question from §17 item 2 with sharper stakes: the ACP surface must now be
+implemented for a *new* harness identifier, not merely relied upon via the
+existing Claude Code integration. Re-scoped as its own foundational task,
+R14.3 ("Implement Golem as its own first-class ACP harness in Buzz"), with
+R14.2 (identity provisioning) and R14.4 (orchestrator dispatch, formerly
+numbered R14.3) both now depending on it. No new external verification done
+in this pass — still blocked on confirming the real ACP spec/`block/buzz`
+source before implementation starts.
+
+## 19. Buzz + ACP — the surface, resolved (2026-09-19)
+
+Closes the open items in §17 and §18. Sources, all read 2026-09-19:
+`github.com/block/buzz` → `crates/buzz-acp/README.md`, `ARCHITECTURE.md`,
+`AGENTS.md`, `crates/buzz-cli/README.md`; `agentclientprotocol.com`
+(`/protocol/overview`, `/libraries/typescript`);
+`github.com/block/buzz/pull/7359`; `engineering.block.xyz/blog/configuring-agents-in-buzz`.
+
+### 1. ACP is a real, named, open protocol — not a Buzz-internal one
+
+**Agent Client Protocol**, created by Zed Industries (Aug 2025), Apache-2.0,
+spec at `agentclientprotocol.com`, repo
+`github.com/agentclientprotocol/agent-client-protocol`. **JSON-RPC 2.0 over
+stdin/stdout.** Adopted by JetBrains and ~25 agents; an ACP Registry exists.
+It is the LSP-shaped analogue for agent↔editor integration — deliberately NOT
+a cross-organisation orchestration protocol (the spec points at Google A2A for
+that) and NOT a tool-connectivity protocol (that is MCP).
+
+Official TypeScript SDK: **`@agentclientprotocol/sdk`** on npm. Fluent
+`agent()` / `client()` entry points register typed handlers; the older
+`AgentSideConnection` / `ClientSideConnection` classes are deprecated but still
+exported. It is pure TypeScript over JSON-RPC — **no native bindings**, so it
+does not trip `CLAUDE.md`'s "no heavyweight native deps in default install".
+
+### 2. The direction is INVERTED from what [[Buzz Integration]] assumed
+
+In ACP the **Client** is the host (editor/workspace) and the **Agent** is the
+AI process the Client spawns as a subprocess. Buzz's `buzz-acp` crate is the
+**ACP Client**. So Golem does not "register a harness inside Buzz" — Golem
+implements an **ACP Agent** that `buzz-acp` spawns over stdio:
+
+```
+Buzz Relay ──WS──→ buzz-acp ──stdio(ACP/JSON-RPC)──→ golem acp
+                                                         │
+                                                    buzz-cli
+                                                 (messages send, …)
+```
+
+What Buzz's UI calls a "harness" (`goose`, `claude`, `codex`, `buzz-agent`) is
+exactly this: the agent command `buzz-acp` launches. `goose` is `goose acp`;
+`claude` is the npm adapter `@agentclientprotocol/claude-agent-acp`; `codex` is
+`@agentclientprotocol/codex-acp`. **The USER's "Golem as its own peer harness,
+not a `claude`-harness passenger" decision survives intact and is much smaller
+than feared** — it means shipping a `golem acp` runtime and selecting it, not
+writing Rust inside `block/buzz` or forking `buzz-acp`.
+
+### 3. The exact ACP surface `buzz-acp` requires (§17 item 2, §18 — RESOLVED)
+
+Quoted verbatim from `crates/buzz-acp/README.md`, "Using Any ACP Agent":
+
+- Accept `initialize` and return a result
+- Accept `session/new` with `mcpServers` and return a `sessionId`
+- Accept `session/prompt` with a text message and stream `session/update` notifications
+- Return a `stopReason` (`end_turn`, `cancelled`, `max_tokens`, etc.)
+
+Four methods. `session/load`, `session/set_mode`, `fs/*`, `terminal/*`,
+`elicitation/*` and `session/request_permission` are all optional and
+capability-gated. Selection is by env var / flag, not registration:
+`BUZZ_ACP_AGENT_COMMAND` (default `goose`) and `BUZZ_ACP_AGENT_ARGS` (default
+`acp`, **split on commas** — `acp,--persona,coder` works; args with values use
+the `-c,key="value"` form).
+
+### 4. Named-harness registration IS file-based and documented — "BYOH"
+
+`crates/buzz-acp/README.md` § "Bring Your Own Harness (BYOH)": Buzz Desktop
+supports registering any ACP-speaking agent as a selectable runtime **without a
+PR**, in three tiers.
+
+- **Tier-1**, compiled in, with auto-installers and auth probes. IDs `goose`,
+  `claude`, `codex`, `buzz-agent` are **reserved and cannot be overridden**.
+- **Tier-2**, preset catalog in
+  `desktop/src-tauri/src/managed_agents/discovery/presets.rs`
+  (`PRESET_HARNESSES`): Cursor, Oh My Pi, Pi, Grok Build, OpenCode, Kimi Code,
+  Amp, Hermes Agent, OpenClaw. PATH-probed, not user-editable.
+- **Tier-3, user custom harnesses** — **JSON files in
+  `<app-data>/custom_harnesses/`**, creatable from the Settings UI or dropped in
+  directly. Documented schema:
+
+```json
+{
+  "id": "my-agent",
+  "label": "My Agent",
+  "command": "my-agent-bin",
+  "args": ["acp"],
+  "env": { "MY_AGENT_MODE": "acp" },
+  "installInstructionsUrl": "https://example.com/docs",
+  "installHint": "Download from example.com"
+}
+```
+
+`id` must match `[a-z0-9_][a-z0-9_-]*` and is both the picker value and the file
+name. `env` is a **floor** — user/persona/global env override it, and
+Buzz-reserved identity keys (`BUZZ_MANAGED_AGENT`, etc.) are stripped and cannot
+be set from a definition. Invalid files are skipped with a warning rather than
+breaking discovery. `can_auto_install` is always false for tier-2/3 and no
+install shell commands are permitted — only the user's own PATH is consulted.
+
+**`golem` is not in the reserved namespace** (`BUILTIN_IDS` = tier-1 ids + all
+current preset ids), so `custom_harnesses/golem.json` is available. This is the
+machine-writable registration surface §17 item 1 could not find — it just isn't
+where the design looked, because it registers the *runtime*, not the *agent*.
+
+### 5. Agent identity provisioning — confirmed, and it is per-keypair
+
+From `crates/buzz-acp/README.md` § "Generating Keys":
+
+- `buzz-admin generate-key` prints a public/secret keypair as hex. **The secret
+  is not stored and cannot be recovered** — capture it at mint time or lose it.
+- `BUZZ_PRIVATE_KEY` (`nsec1…`) sets the process's identity; it is used for both
+  relay auth and agent identity.
+- The pubkey must then be registered as a relay member:
+  `BUZZ_RELAY_PRIVATE_KEY=<relay signing key> buzz-admin add-member --pubkey <hex>`,
+  which publishes a **kind:13534** membership event. The relay needs a stable
+  signing key set in its own environment and a restart before this works.
+- Verbatim: *"Running multiple agents? Mint a separate keypair for each. Every
+  agent needs its own identity."* — [[Buzz Integration]]'s one-identity-per-persona
+  rule is what Buzz itself prescribes, not a Golem invention.
+
+**`add-member` is a credentialed operator act** (it needs the relay's signing
+key). Golem may mint keypairs and print the command; it must not run it.
+
+### 6. `respond-to` IS settable outside the UI (§17 — RESOLVED)
+
+`--respond-to` / `BUZZ_ACP_RESPOND_TO`, default **`owner-only`**, one of
+`owner-only` · `allowlist` · `anyone` · `nobody`, with
+`--respond-to-allowlist` taking comma-separated 64-char hex pubkeys (the owner
+is always implicitly included). The blog's "Only me / Selected people / Anyone"
+are the UI names for the first three; `nobody` (heartbeat-only, broadcast) has
+no UI equivalent. The gate applies to *all* inbound events — mentions, DMs,
+thread replies — and an agent with no resolved `agent_owner_pubkey` under
+`owner-only` responds to **nothing** until the owner resolves.
+
+Owner control commands are consumed by the harness *before* the gate:
+`!shutdown`, `!cancel`, `!rotate`. They must be kind:9 stream messages from the
+owner, with the body exactly the command after trimming, and must mention the
+agent via a **separate `p` tag** — an inline `@Name` changes the body and does
+not match:
+
+```bash
+buzz messages send --channel <channel-id> --reply-to <thread-root-id> \
+  --mention <agent-pubkey> --content '!cancel'
+```
+
+### 7. Execution model — reactive confirmed, but with a timer escape hatch
+
+`buzz-acp` "How It Works": spawn N agent subprocesses → ACP `initialize` each →
+NIP-42 auth to the relay → discover channels via `GET /api/channels?member=true`
+→ listen for **kind 9 events carrying the agent's pubkey in a `#p` tag** →
+queue per channel → when nothing is in flight for that channel, **drain all
+queued events into a single batched `session/prompt`**. At most one prompt in
+flight per channel; multiple channels concurrent when `--agents > 1`. On
+startup it **replays all unprocessed @mentions since the last run** (expect a
+burst). On agent crash it respawns; on relay disconnect it reconnects with a
+`since` filter.
+
+Two corrections to [[Buzz Integration]]'s "the only way to wake an agent is to
+mention it":
+
+- `--heartbeat-interval` / `BUZZ_ACP_HEARTBEAT_INTERVAL` (0 = off, otherwise
+  ≥10s) fires a prompt on an **idle** agent, with `--heartbeat-prompt` /
+  `--heartbeat-prompt-file` for the text. It is lower priority than queued
+  events, **dropped** (never queued) when all agents are busy, and at most one
+  is in flight globally. So there *is* a timer wake — just a best-effort one.
+- Forum kinds (45001 post, 45002 vote, 45003 comment) do not mention anyone, so
+  they need `--kinds 9,46010,40007,45001,45002,45003 --no-mention-filter`, or
+  per-channel TOML `[channel.<UUID>] kinds = [...] / require_mention = false`.
+
+### 8. How an agent replies: `buzz-cli`, not an ACP method
+
+The agent posts by shelling out to **`buzz` (buzz-cli)** — "agent-first CLI,
+JSON in, JSON out", stdout JSON, stderr JSON errors, exit codes **0 ok · 1 user
+error · 2 network · 3 auth · 4 other · 5 write conflict**. `buzz-acp`
+**auto-injects `BUZZ_RELAY_URL`, `BUZZ_PRIVATE_KEY` and `BUZZ_AUTH_TAG`** into
+the managed agent subprocess, so the CLI is pre-authenticated as that agent.
+Relevant commands: `buzz messages send --channel <uuid> --content … [--reply-to
+<event-id>] [--mention <pubkey>] [--broadcast]`, `messages get`, `messages
+thread`, `messages search`, `messages edit/delete`, `channels
+create|list|members|add-member`, plus canvas/reactions/DMs/workflows/feed/repos
+groups. `--content -` reads stdin.
+
+### 9. Timeouts and concurrency — load-bearing for long turns
+
+- `BUZZ_ACP_IDLE_TIMEOUT`, default **620s**: max seconds of silence before the
+  turn is cancelled, **reset on any agent stdout activity**. An ACP agent that
+  thinks quietly for >10 minutes gets killed; streaming `session/update`
+  notifications is therefore both the UX path and the keepalive.
+- `BUZZ_ACP_MAX_TURN_DURATION`, default **7200s**: absolute wall-clock cap.
+- `--agents` / `BUZZ_ACP_AGENTS`, 1–32, default 1. `--lazy-pool` defers
+  subprocess start until the first accepted event.
+- **All N agents behind one `buzz-acp` process authenticate as the SAME Nostr
+  identity** — "users see one bot regardless of how many agents are running."
+  So N distinct `@mention`-able personas require **N separate `buzz-acp`
+  processes**, each with its own keypair. `--agents` is a throughput dial, not a
+  roster.
+- Session scope defaults to **`channel`**; a **`thread`** policy exists, under
+  which `!cancel` / `!rotate` posted as a thread reply scope to that thread
+  alone. DMs are always one conversation scope. *(The exact flag/env name that
+  selects the policy was not captured in the README excerpt read — unconfirmed,
+  see below.)*
+
+### 10. `effort` (§17 item 3 / the open question in [[Buzz Integration]]) — ANSWERED, and it does not apply to us
+
+`effort` is real: the engineering blog describes Provider (where inference
+runs), Model (the LLM the runtime talks to) and **Effort** ("the tuning dial —
+how hard the model is allowed to think, the reasoning level, roughly medium /
+high / xhigh, defaulting to whatever the model ships with"). Desktop persists
+managed agents to a JSON file reported as
+`~/.local/share/xyz.block.buzz.app/agents/managed-agents.json`, holding one
+**definition** record per persona plus one **instance** record per
+community/relay, instances carrying `relay_url` and their own `env_vars`.
+
+**There is no documented CLI, REST or env-var path that sets `effort`** —
+`block/buzz#4869` ("expose a secured local control API/CLI for Desktop
+configuration and agent lifecycle") is open precisely because callers otherwise
+have to mutate `managed-agents.json` and custom-runtime files directly.
+
+But the more important finding is that **provider/model/effort are meaningless
+for a tier-3 `golem` runtime.** Buzz can only apply them to runtimes whose
+launch flags it knows (tier-1). For a custom harness, Buzz spawns `command` +
+`args` + `env` and nothing else — inference is entirely the runtime's business.
+A `golem` runtime therefore takes its model from Golem's own
+`inference.personas.<id>.model`, and "effort" from whatever Golem's routing
+decides. This **removes the need for a per-persona `effort` field in Golem
+config**, and removes most of R14.2's supposed write-to-Buzz requirement: the
+only thing Golem must put on the Buzz side is identity and process wiring.
+
+Corroborating gotcha from a field report on the same page: a harness logged
+`configured_model=sonnet` while the session used something else, because the
+user's global `~/.claude/settings.json` overrode the harness config — i.e.
+even for tier-1 the runtime's own config wins. Same lesson.
+
+### 11. Still unconfirmed after this pass
+
+- **`managed-agents.json` schema and path.** Sourced from a filed bug report
+  and the blog, not from a documented schema. Treat as private, Desktop-owned
+  state that may be rewritten under us. Do not write to it (see the task briefs
+  for the alternative).
+- **Whether BYOH exists on hosted `buzz.xyz`.** The README scopes tier-3 custom
+  harnesses to **Buzz Desktop**. A hosted-only user may have no way to select a
+  `golem` runtime; the headless `buzz-acp` path does not care, because it takes
+  `BUZZ_ACP_AGENT_COMMAND` from the environment.
+- **Persona packs.** `--persona-pack <DIR>` / `--persona <NAME>`
+  (`BUZZ_ACP_PERSONA_PACK` / `BUZZ_ACP_PERSONA_NAME`), `--workdir` /
+  `BUZZ_ACP_WORKDIR`, per-persona MCP servers from a pack `.mcp.json` plus
+  frontmatter `mcp_servers:`, and skills materialised into
+  `<workdir>/.agents/skills/<name>` and linked into `.claude/skills`,
+  `.goose/skills`, `.codex/skills` — all of this is **PR #7359, open and
+  unmerged as of 2026-09-19**. `buzz pack validate` / `buzz pack show` exist on
+  `main`; the *spawn* wiring does not. Do not build on it. Persona `hooks`,
+  `runtime_env_vars` and `${VAR}` interpolation in MCP env are called out in
+  that PR as still unwired.
+- **Session-scope policy flag name** (`channel` vs `thread`) — see §9.
+- **Private channel membership.** Verbatim: *"The relay doesn't yet have a
+  REST/event API for managing channel members — this is a known gap."* Workaround
+  is `create_channel` via buzz-cli, where the creator is automatically a member.
+- **Anything needing a live relay**: the NIP-42 handshake, a real end-to-end
+  turn, and whether `golem acp` satisfies `buzz-acp` in practice. That needs a
+  running relay (`just relay`, i.e. Docker Postgres + Redis) and a `buzz-acp`
+  binary (Rust/cargo build, or a Buzz Desktop install). Both are the user's to
+  provide — see R14.3's `blocked` field.
+
+## 20. Buzz — rate limits, setup cost, and the session-scope flag (2026-09-19)
+
+Third pass, after §19. Two things prompted it: a gap the task briefs did not
+cover (what a headless `golem acp` turn does when the model call is
+rate-limited), and four items §19 left open. Sources, all read 2026-09-19:
+`raw.githubusercontent.com/block/buzz/main/` → `README.md`,
+`crates/buzz-acp/README.md`, `crates/buzz-acp/src/config.rs`,
+`crates/buzz-acp/src/scope.rs`, `crates/buzz-acp/src/acp.rs`,
+`crates/buzz-acp/src/pool.rs`; `api.github.com/repos/block/buzz/releases/latest`
+and `.../releases/383339197/assets`; `github.com/block/buzz/pull/7359`;
+`github.com/block/buzz/issues/2312`; `engineering.block.xyz/blog/run-your-own-buzz-relay`;
+`agentclientprotocol.com/protocol/{overview,prompt-turn,agent-plan,schema}`;
+`raw.githubusercontent.com/agentclientprotocol/claude-agent-acp/main/docs/session-failure-extension.md`;
+`github.com/agentclientprotocol/codex-acp/tree/main/docs`;
+`registry.npmjs.org`. Golem-side facts are from this checkout at `5b94936`.
+
+### 1. Golem's usage-limit protection does NOT reach a `golem acp` turn
+
+Read in this repo, not inferred:
+
+- **`.golem/state/limit-state.json` is written from exactly one place** —
+  `src/cli/proxy-build/telemetry-hooks.ts:181-191`, inside the **proxy
+  process**. It calls `parseLimitPrediction(headers, nowIso)` on upstream
+  responses (throttled by `LIMIT_PERSIST_THROTTLE_MS`) and then
+  `writeLimitState(dir, {...prediction, targetId: route?.targetId ?? null})`.
+  The file is therefore a **side effect of proxied traffic**, not of Golem
+  making a model call.
+- **Every reader is a Claude Code session surface**: `src/hooks/pre-tool-use.ts`
+  (the park gate at :229, the spawn gate at :288) and `src/cli/status-collect.ts`
+  (:282). Nothing under `src/inference/` reads it.
+- **In-process dispatch has no rate-limit awareness whatsoever.**
+  `src/inference/target-dispatcher.ts` collapses every non-ok response into one
+  generic error in both transports — `dispatchOpenAI` (:522-526) and
+  `dispatchAnthropic` (:581-585) throw
+  `TargetDispatchError('target "<id>" returned <status> <statusText>. No draft
+  was produced.')` and **discard `res.headers`**. A grep for
+  `429|rate.limit|ratelimit|retry-after` over `src/inference/*.ts` returns
+  **zero hits**. The whole error taxonomy is `TargetDispatchError` plus
+  `NoDrafterConfiguredError` (a *decline*, not a failure).
+
+So a `golem acp` turn that dispatches in-process sees a 429 as a string
+indistinguishable from a 500 or a 401, and writes no limit state. The park hook
+cannot help either: it is a Claude Code `PreToolUse` gate that denies the *next
+tool call* and redirects a human-driven session to call `snooze`. A headless
+daemon reacting to an `@mention` has no tool-call loop for that gate to sit in
+front of, and no human to answer it.
+
+**The proxy is dialable from another local process**, which is the cheap fix:
+`src/cli/proxy-daemon.ts` binds `127.0.0.1` on a deterministic per-project port
+(`PROXY_PORT_BASE = 4653`, `PROXY_PORT_SPAN = 1000`, derived from the project
+path, overridable via `proxy.port`). Pointing `golem acp`'s dispatch at it makes
+limit state, redaction, compression and telemetry all apply for free.
+
+**Reusable, already-pure pieces of the snooze machinery** (none of which need
+MCP or a hook):
+
+- `decideSnoozeNudge(prediction, state, nowMs, threshold =
+  DEFAULT_NUDGE_UTILIZATION (0.9), staleAfterMs = STALE_AFTER_MS (30 min),
+  enforce = false)` in `src/hooks/snooze-nudge.ts` → `{kind:"none"|"park"|"stale"}`.
+  A pure function of a `LimitPrediction`; the hook is only the delivery channel.
+- `persistSnoozeNote(projectDir, note, {nowIso})` in `src/mcp/snooze-note.ts`
+  writes a queued local task via `FileTaskStore`, fail-open `{ok:false}`.
+- `resolveSnoozeTargetMs()` in `src/mcp/snooze.ts` is pure.
+  **`runSnooze()` is the one piece that must not be reused** — it blocks the
+  live session, which is precisely the deadlock described in item 3.
+
+### 2. ACP has no way to say "come back later" — confirmed, by absence
+
+- **The complete `StopReason` enum is five values**, verbatim from
+  `agentclientprotocol.com/protocol/prompt-turn`: `end_turn`, `max_tokens`,
+  `max_turn_requests`, `refusal`, `cancelled`. There is **no `error` value and
+  no provider-failure value**. §19 item 3's trailing "etc." was doing more work
+  than the spec supports.
+- **Error handling is plain JSON-RPC 2.0** (`code` + `message`, per
+  `/protocol/overview`). Core ACP defines **no** taxonomy distinguishing a
+  transient external failure from a permanent one, and **no** retryable or
+  deferred-turn concept. `/protocol/overview`, `/protocol/prompt-turn` and
+  `/protocol/agent-plan` were read in full looking for one; it is not there.
+- **Cancellation**: `session/cancel` is a notification. On receipt the agent
+  must stop model requests, abort tool calls, flush pending `session/update`s,
+  and — verbatim — *"MUST respond to the original session/prompt request with
+  the cancelled stop reason."* There is no way to end a turn with no response.
+- **`session/update` has no status variant for a degraded turn.** `plan`
+  entries are constrained to `pending`/`in_progress`/`completed`;
+  `usage_update` carries numbers only.
+
+### 3. The ecosystem's answer: end the turn, narrate out of band — and Buzz ignores the out-of-band part
+
+`@agentclientprotocol/claude-agent-acp` (npm, v0.79.0, published 2026-09-19)
+ships a **`sessionFailure` extension** — opt-in, negotiated via
+`_meta.jetbrains.air.capabilities`, documented at
+`docs/session-failure-extension.md`. Its provider-condition table maps
+`billing_error`, `rate_limit`, `max_output_tokens` and spend/budget limits to
+category **`limit`**. The load-bearing sentence, verbatim: *"A turn-terminal
+failure is attached to the successful ACP `PromptResponse` in `_meta`; the
+response uses `stopReason: end_turn`."* Retries happen **inside the Claude Agent
+SDK**, below the adapter, which merely narrates them as `severity: warning`
+records on the same failure id; the wire schema deliberately has **no**
+`retryable`, `retryAfterMs` or retry-counter field. Unnegotiated, it degrades to
+plain ACP with no rate-limit signal at all.
+
+`@agentclientprotocol/codex-acp` has **no** equivalent — its `docs/` directory
+carries nine extension docs and `session-failure-extension.md` is not among
+them. Its per-turn rate-limit behaviour could not be confirmed from the web
+(npm page 403s to fetch; the TypeScript source was not read). **Unconfirmed.**
+
+`goose`'s handling is **provider-level and predates its ACP mode**: env-tuned
+retry/backoff (`BEDROCK_MAX_RETRIES`, `BEDROCK_INITIAL_RETRY_INTERVAL_MS`,
+`BEDROCK_BACKOFF_MULTIPLIER`, `BEDROCK_MAX_RETRY_INTERVAL_MS`), default reported
+in `block/goose#4173` as 3 tries / 1s / ×2. `block/goose#322` reports goose
+*crashing* at Tier 1 rate limits. How `goose acp` maps an exhausted 429 onto a
+`stopReason` **could not be sourced** — flagged rather than guessed.
+
+**And the decisive Buzz-side fact**: `crates/buzz-acp/src/acp.rs` handles
+`_meta` for `goose.activeRunId`, `steering.supported`, `systemPrompt` and
+`sessionTitle` — and **nothing else**. There is no `sessionFailure` handling.
+A `_meta` failure payload from Golem would be **silently dropped**.
+
+`crates/buzz-acp/src/pool.rs` then settles which `stopReason` to return:
+
+- `MaxTokens | MaxTurnRequests` → **the ACP session is rotated** (`:3240-3243`),
+  i.e. discarded.
+- Every reason, including `Refusal`, produces **only a `tracing::warn!`**
+  (`:4830-4842`). **No stopReason is ever posted to the channel.**
+
+So the only rate-limit signal that can reach a human is **a chat message posted
+with `buzz messages send`**, and `end_turn` is the only stopReason that neither
+throws away the session nor misreports the cause. That is also exactly what
+claude-agent-acp returns for this condition.
+
+### 4. Session-scope flag — CONFIRMED (§19 item 11, closed)
+
+From `crates/buzz-acp/src/config.rs:353-364` and `src/scope.rs:30-42`:
+
+```
+--session-policy <channel|thread>     env BUZZ_ACP_SESSION_POLICY     default: channel
+```
+
+`SessionPolicy::Channel` (default) = one provider session per channel;
+`SessionPolicy::Thread` = each canonical channel thread gets an isolated
+provider session. DMs stay conversation-scoped either way. The source comment
+says it "ships as `channel` so thread scoping can be canaried and rolled back
+without code changes" — i.e. `thread` is **implemented but shipped dark**, which
+is a reason to verify it live before depending on it, not a reason to avoid it.
+
+### 5. A correction to §19: the default is NOT queue-and-batch
+
+§19 item 7 said queued events are "drained into a single batched
+`session/prompt`". That is the **non-default** mode. From `config.rs:366-378`:
+
+```
+--multiple-event-handling <steer|queue|interrupt|owner-interrupt>
+    env BUZZ_ACP_MULTIPLE_EVENT_HANDLING    default: steer
+```
+
+Verbatim: *"steer (default): cancel+re-prompt, framing the new mention as a
+message that arrived mid-task"*; `queue` is *"events wait until the current turn
+completes"*; `interrupt` is a supersede; `owner-interrupt` restricts that to the
+owner. **So by default a new @mention CANCELS the in-flight turn.** R14.4's
+replay-idempotency requirement stands, and gains a second reason: a cancelled
+turn may already have posted messages before it was cut off.
+
+Two more defaults worth having: `--context-message-limit` (env
+`BUZZ_ACP_CONTEXT_MESSAGE_LIMIT`, default **12**, max 100) means buzz-acp
+fetches recent thread context automatically, so a turn does not start blind;
+`--max-turns-per-session` (default 0) rotates a session proactively, and at 0
+rotates "only on MaxTokens / MaxTurnRequests".
+
+### 6. Owner-user infra — the setup is one command, but the CLIs are source-only
+
+- **A `just` quickstart exists** (`README.md`): `git clone … && cd buzz`,
+  `. ./bin/activate-hermit`, `just setup && just build`, then `just dev` (relay
+  + desktop, relay on `ws://localhost:3000`) or `just relay` alone. `just setup`
+  runs `just bootstrap`, which copies `.env.example` → `.env`, fetches tools via
+  Hermit, and starts Docker services + migrations. Other recipes: `just build`,
+  `just check`, `just test-unit`, `just test`, `just ci`, `just reset`.
+  Prereqs are Docker + Hermit, or Rust 1.88+ / Node 24+ / pnpm 10+ / `just`.
+- A root `docker-compose.yml` covers the dev loop; a **separate production
+  bundle** lives at `deploy/compose/` with a `run.sh` (`./run.sh start|status|
+  add-member npub1… --role member|list-members`) per
+  `engineering.block.xyz/blog/run-your-own-buzz-relay` (2026-07-31). There is
+  also a **one-click "Deploy on Railway"** template
+  (`railway.com/deploy/buzz-relay-block`) that provisions relay + Postgres +
+  Redis + object storage.
+- **`buzz-admin` is available prebuilt inside the relay container image** —
+  `docker run --rm --entrypoint /usr/local/bin/buzz-admin ghcr.io/block/buzz:main
+  generate-key` (same blog post). That removes the Rust toolchain from the
+  *key-minting* step specifically.
+- **There are no standalone CLI binaries.** Checked the release API directly:
+  latest release is `desktop-v0.5.23` (published 2026-09-05) and its **twelve
+  assets are, in full**: `Buzz_0.5.23_aarch64.app.tar.gz` (+ `.sig`),
+  `Buzz_0.5.23_aarch64.dmg`, `Buzz_0.5.23_amd64.AppImage` (+ `.sig`),
+  `Buzz_0.5.23_amd64.deb`, `Buzz_0.5.23_x64-setup_alpha-unsigned.exe` (+ `.sig`),
+  `Buzz_0.5.23_x64.app.tar.gz` (+ `.sig`), `Buzz_0.5.23_x64.dmg`,
+  `updater-manifest.json`. All Buzz **Desktop** installers. No `buzz`,
+  `buzz-acp` or `buzz-admin` asset. No Homebrew tap or formula found; no npm
+  distribution. Documented install for all three crates is
+  `cargo build --release -p <crate>` / `cargo run -p buzz-admin -- …`.
+- **Hosted relays are real, but they are per-user communities, not a shared
+  public relay.** `engineering.block.xyz/blog/run-your-own-buzz-relay`: *"Don't
+  want to run infrastructure? buzz.xyz offers hosted relays — same open-source
+  relay, managed for you."* `block/buzz#2312` (2026-07-22) shows the flow:
+  Desktop's "Create your community" opens a hosted sign-in at
+  `app.builderlab.xyz`, you bind your npub, pick a name matching
+  `^[a-z0-9]+(?:-[a-z0-9]+)*$`, and get a dedicated community at
+  `<name>.communities.buzz.xyz`, limited to 3 per account. So a user can skip
+  Docker entirely for the relay — but they own that community rather than
+  joining a shared one.
+- **Whether a hosted community can register an agent pubkey without the relay
+  signing key is UNCONFIRMED.** `add-member` needs `BUZZ_RELAY_PRIVATE_KEY`,
+  which Block would hold for a hosted community. `block/buzz#4209` ("Invite /
+  Relay Access UI is missing for self-hosted communities") implies hosted
+  communities *do* have an in-app invite UI that self-hosted ones lack, which
+  would be the path — but that is inferred from an issue title, not a
+  walkthrough. **Needs a live Builderlab account.**
+- **Whether tier-3 BYOH works against a hosted community is UNCONFIRMED.** BYOH
+  shipped in Buzz Desktop v0.5.0 (2026-07-28, PR #2773) and reads as a
+  client-side runtime seam that should be relay-agnostic, but no text confirms
+  it. The headless `buzz-acp` path is unaffected either way, since it takes
+  `BUZZ_ACP_AGENT_COMMAND` from the environment.
+
+### 7. PR #7359 (persona packs) — still open, direction unchanged
+
+`github.com/block/buzz/pull/7359`, "feat(buzz-acp): wire persona-pack MCP
+servers and skills into spawn", by `mraad`, opened 2026-09-04, **6 commits into
+`block:main`, not merged and not closed as of 2026-09-19**. Flags unchanged
+(`--persona-pack`, `--persona`, `--workdir` and their `BUZZ_ACP_*` env vars);
+the author still lists *"desktop spawn plumbing, persona hooks (still
+parsed-but-unwired), persona runtime_env_vars, and `${VAR}` interpolation in MCP
+env"* as out of scope. **§19's "do not build on this" stands unchanged.**
+Whether there has been review pushback could not be read — GitHub's review
+threads did not render to an unauthenticated fetch, and the GitHub MCP server
+was down this session (`AUTH_HEADER_REJECTED`). **Unconfirmed, minor.**
+
+### 8. No TypeScript client for buzz-cli exists
+
+npm registry search (`registry.npmjs.org/-/v1/search?text=buzz-cli`) returns
+only unrelated packages: `buzz-cli` (a Vue/Webpack tool, repo
+`zlxbuzz/buzz-cli`), `buzz` (an HTML5 audio library), `@infomiho/buzz-cli` (a
+static-site deploy CLI), `@eve/buzz-acp-adapter` (repo `vercel/eve`, a generic
+ACP adapter, **not** Block's). `buzz-agent-skill` (`thalixinc/buzz-agent-skill`)
+is a third-party installer for the Buzz CLI *skill files*, not a client library.
+No `@buzz-xyz/*` or `@block/buzz*` scope exists. `block/buzz`'s own crate map
+lists `buzz-sdk`, `buzz-core`, `buzz-cli` etc. as **Rust** crates; there is no
+`clients/`, `sdk/` or `packages/` JS directory.
+
+The realistic alternatives to shelling out, neither of them a drop-in: a generic
+Nostr library such as `nostr-tools` over the relay's WebSocket (implementing
+NIP-42 auth by hand), or plain `fetch` against the relay's REST surface —
+`GET /api/channels?member=true` is confirmed in `crates/buzz-acp/README.md`, but
+**no full REST reference or OpenAPI spec was found**. Both paths would also
+require reimplementing the credential handling that `buzz-acp`'s injected
+`BUZZ_PRIVATE_KEY` / `BUZZ_AUTH_TAG` currently give the CLI for free. **R14.4's
+shell-out to `buzz` stands**; this is recorded so the option is not re-derived.

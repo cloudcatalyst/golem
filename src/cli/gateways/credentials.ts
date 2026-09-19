@@ -232,7 +232,7 @@ export async function credentialEnvForProxy(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<Record<string, string>> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.inference.default_target ?? null;
+  const selected = settings.inference.model ?? null;
   const defaultId = defaultGatewayId(settings.proxy.upstream_provider);
   // The default top-level config is in force when nothing is selected or the
   // selection names the default id; its credential rides the plain var.

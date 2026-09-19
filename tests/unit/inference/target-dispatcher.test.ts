@@ -380,7 +380,7 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
 
   it("falls through to the harness default when the worker has no entry (R10.8)", async () => {
     // Pre-R10.8 this drafted locally. It now continues down the chain — there is
-    // no `inference.default_target` here either, so it lands on the synthetic
+    // no `inference.model` here either, so it lands on the synthetic
     // default over `proxy.upstream_*`, and the LOCAL SERVICE IS NEVER ASKED.
     const inference = stubInference();
     const { fetchImpl, sent } = captureFetch({
@@ -405,14 +405,14 @@ describe("inference.coder_target — the default coder target (R9.4)", () => {
 
 /**
  * R10.8 — `coder` fell through to the LOCAL model whenever nothing named a
- * target, so `inference.default_target` (the setting whose only job is to name
+ * target, so `inference.model` (the setting whose only job is to name
  * the default) was dead config. The chain is now:
  *
- *   explicit targetId → worker_targets[worker] → default_target → harness default
+ *   explicit targetId → worker_targets[worker] → model → harness default
  *
  * Every step below resolves through the SAME fail-closed lookup and the SAME
  * redaction floor; the tests here are about which step wins, and about the two
- * properties that make the change safe — that an unknown `default_target` raises
+ * properties that make the change safe — that an unknown `model` raises
  * instead of sliding to local, and that the redaction floor still applies to the
  * traffic this change newly routes off-machine.
  */
@@ -457,14 +457,14 @@ describe("R10.8 — the resolution chain", () => {
     GOLEM_UPSTREAM_API_KEY__VENDORGW: "sk-ant-vendorgw",
   };
 
-  it("step 1 — an explicit targetId beats both worker_targets and default_target", async () => {
+  it("step 1 — an explicit targetId beats both worker_targets and model", async () => {
     const { fetchImpl, sent } = captureFetch({
       model: "m",
       choices: [{ message: { content: "k" } }],
     });
     const dispatcher = createTargetDispatcher({
       inference: stubInference(),
-      settings: { ...CHAIN, default_target: "fallback" },
+      settings: { ...CHAIN, model: "fallback" },
       fetchImpl,
       env: KEY,
       workerTargets: { coder: "vendor" },
@@ -480,11 +480,11 @@ describe("R10.8 — the resolution chain", () => {
     expect(sent[0]?.url).toContain("openrouter.ai");
   });
 
-  it("step 2 — worker_targets beats default_target", async () => {
+  it("step 2 — worker_targets beats model", async () => {
     const { fetchImpl } = captureFetch({ model: "m", content: [{ type: "text", text: "k" }] });
     const dispatcher = createTargetDispatcher({
       inference: stubInference(),
-      settings: { ...CHAIN, default_target: "fallback" },
+      settings: { ...CHAIN, model: "fallback" },
       fetchImpl,
       env: KEY,
       workerTargets: { coder: "vendor" },
@@ -494,9 +494,9 @@ describe("R10.8 — the resolution chain", () => {
     expect(result.route).toBe("worker");
   });
 
-  it("step 3 — default_target is used when the worker has no entry", async () => {
+  it("step 3 — model is used when the worker has no entry", async () => {
     // THE DEFECT THIS TASK EXISTS TO CLOSE: this dispatch used to go to the
-    // local model, ignoring `default_target` entirely.
+    // local model, ignoring `model` entirely.
     const inference = stubInference();
     const { fetchImpl, sent } = captureFetch({
       model: "m",
@@ -504,13 +504,13 @@ describe("R10.8 — the resolution chain", () => {
     });
     const dispatcher = createTargetDispatcher({
       inference,
-      settings: { ...CHAIN, default_target: "fallback" },
+      settings: { ...CHAIN, model: "fallback" },
       fetchImpl,
       env: KEY,
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
     expect(result.targetId).toBe("fallback");
-    expect(result.route).toBe("default_target");
+    expect(result.route).toBe("model");
     expect(inference.calls).toHaveLength(0);
     expect(JSON.parse(sent[0]?.body ?? "{}").model).toBe("openai/gpt-oss-120b");
   });
@@ -568,7 +568,7 @@ describe("R10.8 — the resolution chain", () => {
     expect(inference.calls).toHaveLength(0);
   });
 
-  it("reaches the harness default with NO local model and NO default_target", async () => {
+  it("reaches the harness default with NO local model and NO model", async () => {
     // The task's gate, stated directly: a project with neither must still get a
     // draft, and must get it from the harness's own upstream. The stub throws on
     // any local call, so this cannot pass by accidentally drafting locally.
@@ -595,7 +595,7 @@ describe("R10.8 — the resolution chain", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("FAILS CLOSED on an unknown default_target, naming what IS configured", async () => {
+  it("FAILS CLOSED on an unknown model, naming what IS configured", async () => {
     // The rule `worker_targets` has always had, now applied to step 3: never a
     // silent slide to the local model, which would send the work somewhere the
     // user did not choose while reporting success.
@@ -603,7 +603,7 @@ describe("R10.8 — the resolution chain", () => {
     const { fetchImpl, sent } = captureFetch({});
     const dispatcher = createTargetDispatcher({
       inference,
-      settings: { ...CHAIN, default_target: "ghost" },
+      settings: { ...CHAIN, model: "ghost" },
       fetchImpl,
       env: {},
     });
@@ -613,23 +613,23 @@ describe("R10.8 — the resolution chain", () => {
     // The error names the alternatives and the step that chose the id.
     await expect(
       dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
-    ).rejects.toThrow(/cheap.*fallback.*vendor.*inference\.default_target/s);
+    ).rejects.toThrow(/cheap.*fallback.*vendor.*inference\.model/s);
     expect(sent).toHaveLength(0);
     expect(inference.calls).toHaveLength(0);
   });
 
-  it("resolves a default_target that names a GATEWAY to that gateway's first target", async () => {
+  it("resolves a model that names a GATEWAY to that gateway's first target", async () => {
     // R9.23 behaviour, reached through the new step rather than reimplemented.
     const { fetchImpl } = captureFetch({ model: "m", choices: [{ message: { content: "k" } }] });
     const dispatcher = createTargetDispatcher({
       inference: stubInference(),
-      settings: { ...CHAIN, default_target: "openrouter" },
+      settings: { ...CHAIN, model: "openrouter" },
       fetchImpl,
       env: KEY,
     });
     const result = await dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" });
     expect(result.targetId).toBe("openrouter:openai/gpt-oss-20b:free");
-    expect(result.route).toBe("default_target");
+    expect(result.route).toBe("model");
   });
 
   it("uses THIS SESSION's model when the harness default declares none", async () => {
@@ -671,9 +671,7 @@ describe("R10.8 — the resolution chain", () => {
     });
     await expect(
       dispatcher.dispatch({ role: "drafter", prompt: "hi", worker: "coder" }),
-    ).rejects.toThrow(
-      /harness default upstream.*inference\.default_target.*proxy\.upstream_model/s,
-    );
+    ).rejects.toThrow(/harness default upstream.*inference\.model.*proxy\.upstream_model/s);
     expect(sent).toHaveLength(0);
   });
 
@@ -691,7 +689,7 @@ describe("R10.8 — the resolution chain", () => {
           { id: "baregw", provider: "openai", base_url: "https://api.openai.com/v1" },
         ],
         targets: [...(CHAIN.targets ?? []), { id: "bare", gateway: "baregw" }],
-        default_target: "bare",
+        model: "bare",
       },
       fetchImpl,
       env: {},
@@ -745,7 +743,7 @@ describe("R10.8 — the resolution chain", () => {
             models: ["qwen2.5-coder:7b"],
           },
         ],
-        default_target: "localgw:qwen2.5-coder:7b",
+        model: "localgw:qwen2.5-coder:7b",
       },
       fetchImpl,
       env: {},
@@ -755,7 +753,7 @@ describe("R10.8 — the resolution chain", () => {
       prompt: SECRET_PROMPT,
       worker: "coder",
     });
-    expect(result.route).toBe("default_target");
+    expect(result.route).toBe("model");
     expect(result.trust).toBe("local");
     expect(result.redactedCount).toBe(0);
     expect(sent).toHaveLength(0);

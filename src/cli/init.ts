@@ -11,7 +11,10 @@
  *   3. `.claude/skills/golem/<cmd>/SKILL.md` — namespaced `/golem/*` skills (§11).
  *   4. `.golem/settings.json`   — created with defaults when absent.
  *   5. PostToolUse CCR hook + Golem guidance (in the committed CLAUDE.md);
- *      status line + blocked-state hooks; WebFetch KB-cache hooks.
+ *      status line + blocked-state hooks; WebFetch KB-cache hooks;
+ *      `.gitignore`'s deny-by-default `.golem/` block (init-hooks.ts) —
+ *      everything under `.golem/` is machine-local except settings.json and
+ *      managed-files.json.
  *   6. `.vscode/settings.json` — `files.watcherExclude` for Golem's churny
  *      gitignored runtime dirs (telemetry/state/webcache/ccr/knowledge/notes/
  *      distill), so VS Code's Source Control icon doesn't flash on every write.
@@ -30,11 +33,20 @@ import { access, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { loadConfig, removeVersionStamp, writeSetting } from "../config/index.js";
-import { resolveCoderPrompt } from "../inference/coder-prompt.js";
-import { resolvePersonaLane } from "../inference/persona-lane.js";
-import { effectivePersonas, resolvePersonaPrompt } from "../inference/personas.js";
+import { defaultUserDir } from "../config/paths.js";
+import { createCredentialStore } from "../credentials/index.js";
 import type { CompressionLevel } from "../interfaces/index.js";
-import { withDefaultTarget } from "../providers/index.js";
+import {
+  createPortalClient,
+  discoverAuthorizationServer,
+  type PortalSettings,
+  portalTokenPresent,
+  portalTokenStore,
+  resolvePortalConfig,
+  syncTeamLayer,
+  type TeamBinding,
+  teamApiBaseUrl,
+} from "../portal/index.js";
 import type { ClaudeSettingsScope } from "./claude-settings-target.js";
 // `.claude/settings.json` — the env block, the loopback-CA trust and the MCP
 // permission rules, plus their uninit mirrors. MCP_SERVER_KEY lives there
@@ -46,18 +58,15 @@ import {
 } from "./init-claude-settings.js";
 import { InitError } from "./init-error.js";
 import { unwireHooks, wireHooks } from "./init-hooks.js";
-import {
-  type DesiredAgent,
-  installPersonaAgents,
-  personaAgentPath,
-  removePersonaAgents,
-} from "./init-personas.js";
+import { removePersonaAgents } from "./init-personas.js";
 import {
   installSkills,
   migrateNestedSkills,
   pruneRetiredSkills,
   removeSkills,
+  skillDirName,
 } from "./init-skills.js";
+import { teamInitStep } from "./init-team.js";
 import {
   ensureVscodeWatcherExclude,
   installVscodeExtension,
@@ -66,6 +75,8 @@ import {
 } from "./init-vscode.js";
 import { type JsonObject, objectEntry, readJsonObject, rel, writeJsonObject } from "./json-file.js";
 import { removeManagedState } from "./managed-files.js";
+import { removePersonaPreferenceRule } from "./persona-preference-rule.js";
+import { syncPersonaArtifacts } from "./persona-sync.js";
 import { defaultProjectPort } from "./proxy-daemon.js";
 // Decision 56: the env keys and the "is this wiring ours?" guard live in one
 // place, shared with `golem proxy unwire`/`wire`.
@@ -166,6 +177,23 @@ export interface InitOptions {
   readonly vscodeSourceDir?: string;
   /** External-state probe; tests inject a fake. */
   readonly probe?: InitProbe;
+  /**
+   * `project-team-binding` test/override seam: is a portal token on this
+   * machine? Defaults to a keychain probe that touches no network.
+   *
+   * Only ever consulted when this project's settings name a team — which is
+   * what makes Decision 64's "an unlinked project looks up no token" provable
+   * rather than merely intended: a test passes a spy and asserts zero calls.
+   */
+  readonly teamTokenPresent?: () => Promise<boolean>;
+  /**
+   * `project-team-binding` seam for `team-layer-fetch` / `team-skills-sync`.
+   * Absent (the default) means no sync is wired up yet and init says so.
+   *
+   * Whatever it throws is CLASSIFIED, never propagated: no entitlement outcome
+   * may fail an init.
+   */
+  readonly teamSyncLayer?: Parameters<typeof teamInitStep>[0]["syncTeamLayer"];
 }
 
 export type ActionKind =
@@ -191,6 +219,16 @@ export interface InitAction {
 export interface InitReport {
   readonly dryRun: boolean;
   readonly actions: readonly InitAction[];
+  /**
+   * Lines to print after the action list — things that are true but are not
+   * file changes, so they have no `path` and cannot be an {@link InitAction}.
+   *
+   * The team step is the first user (`project-team-binding`): "this project
+   * names a team but this machine is not signed in" is exactly the class of
+   * fact that must be said out loud while changing nothing on disk. Optional so
+   * `golem uninit`'s report is unchanged.
+   */
+  readonly notices?: readonly string[];
 }
 
 /** A conflict or precondition failure with a user-actionable message. */
@@ -272,7 +310,7 @@ export async function golemInitStatus(
   let skillsInstalled = true;
   for (const name of Object.keys(P0_SKILLS)) {
     try {
-      await access(path.join(projectDir, ".claude", "skills", `golem-${name}`, "SKILL.md"));
+      await access(path.join(projectDir, ".claude", "skills", skillDirName(name), "SKILL.md"));
     } catch {
       skillsInstalled = false;
       break;
@@ -289,91 +327,6 @@ export async function golemInitStatus(
     golemSettingsPresent,
     initialized: claudeSettingsWired && mcpRegistered && skillsInstalled && golemSettingsPresent,
   };
-}
-
-/**
- * R13.12 — step 3c: resolve `inference.default_coder` and install/remove the
- * `golem-coder` subagent accordingly.
- *
- * Wrapped rather than inlined so init's step list stays readable and so the
- * config read has one place to fail safely. A malformed `default_coder` must NOT
- * abort `golem init`: the whole point of init is to repair project wiring, and
- * refusing to wire the proxy because one optional setting is a typo would be the
- * cure being worse than the disease. It comes back as a `conflict` action, which
- * is how init already reports "this needs a human".
- */
-async function installPersonaAgentsStep(
-  projectDir: string,
-  dryRun: boolean,
-): Promise<InitAction[]> {
-  let settings: Awaited<ReturnType<typeof loadConfig>>["settings"];
-  try {
-    ({ settings } = await loadConfig({ projectDir }));
-  } catch (err) {
-    // Config itself is unreadable — nothing can be resolved, so report once at
-    // the directory. Init still wires everything else: refusing to repair a
-    // project because one optional section is malformed would be the cure being
-    // worse than the disease.
-    return [
-      {
-        kind: "conflict",
-        path: rel(projectDir, path.join(projectDir, ".claude", "agents")),
-        detail: `no agent definitions written — ${err instanceof Error ? err.message : String(err)}`,
-      },
-    ];
-  }
-
-  const personas = settings.inference.personas;
-  const registry = withDefaultTarget(settings);
-  const desired: DesiredAgent[] = [];
-  const problems: InitAction[] = [];
-
-  for (const persona of effectivePersonas(personas)) {
-    const config = personas[persona.id] ?? {};
-    try {
-      const lane = resolvePersonaLane({
-        settings: registry,
-        personas,
-        personaId: persona.id,
-        workerTargets: settings.inference.worker_targets,
-      });
-      // Only the AGENT lane produces a definition. A worker-lane persona is
-      // dispatched to by Golem itself; an unstaffed or `owner: user` one is not
-      // dispatched at all. Each of those must also REMOVE an existing file,
-      // which `installPersonaAgents` does by pruning everything not listed here.
-      if (lane.kind !== "agent") continue;
-
-      // R13.12's `inference.coder_prompt` still frames the coder. Both
-      // mechanisms that deliver a coder task — the `coder` MCP tool and this
-      // definition — must read the SAME prompt, which is the entire reason
-      // `coder-prompt.ts` exists. An explicit per-persona prompt wins over it.
-      const prompt =
-        persona.id === "coder" &&
-        config.prompt === undefined &&
-        config.prompt_file === undefined &&
-        settings.inference.coder_prompt !== undefined
-          ? resolveCoderPrompt(settings.inference.coder_prompt)
-          : (await resolvePersonaPrompt(persona.id, config, projectDir)).text;
-
-      desired.push({
-        id: persona.id,
-        model: lane.model,
-        prompt,
-        ...(persona.description === undefined ? {} : { description: persona.description }),
-        ...(persona.tools === undefined ? {} : { tools: persona.tools }),
-      });
-    } catch (err) {
-      // One malformed persona must not stop the ones configured correctly —
-      // the same discipline `workerTarget` applies to a typo'd worker key.
-      problems.push({
-        kind: "conflict",
-        path: rel(projectDir, personaAgentPath(projectDir, persona.id)),
-        detail: `not written — ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-  }
-
-  return [...(await installPersonaAgents(projectDir, dryRun, desired)), ...problems];
 }
 
 export async function golemInit(options: InitOptions): Promise<InitReport> {
@@ -484,7 +437,13 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   // Also REMOVES a stale definition when `default_coder` changes to a target or
   // is unset. An install-only step would leave a file naming a model the config
   // no longer selects, and nothing about that file would say so.
-  actions.push(...(await installPersonaAgentsStep(projectDir, dryRun)));
+  //
+  // `syncPersonaArtifacts` (persona-sync.ts) is the same resolution+write this
+  // step always did — extracted so `golem proxy`'s daemon can re-run it (on
+  // version-sync, and live via a settings watcher) WITHOUT loading this whole
+  // module, which also pulls in the credential store, the skills table, and
+  // team-init.
+  actions.push(...(await syncPersonaArtifacts(projectDir, dryRun)));
 
   // 4. .golem/settings.json (committed marker) + .golem/settings.local.json
   // (gitignored). The compression level and per-project proxy port are personal /
@@ -555,7 +514,64 @@ export async function golemInit(options: InitOptions): Promise<InitReport> {
   const vscodeAction = await installVscodeExtension(options, dryRun);
   if (vscodeAction !== null) actions.push(vscodeAction);
 
-  return { dryRun, actions };
+  // 9. The team step (`project-team-binding`). LAST, and it cannot fail: every
+  // outcome is a notice and `golem init` still succeeds. Settings are re-read
+  // here rather than reusing `existingGolem` so the step sees the same effective
+  // `team` section every other surface does — including `GOLEM_TEAM_ORG_ID`.
+  //
+  // On the unlinked path this reaches no network, no cache and no keychain,
+  // which is Decision 64's invariant. That is why the probe is injected: the
+  // default is only constructed as an arrow function, so an unlinked project
+  // never even builds a credential store.
+  const { settings: effective } = await loadConfig({ projectDir });
+  const team = await teamInitStep({
+    dryRun,
+    team: effective.team,
+    tokenPresent: options.teamTokenPresent ?? (() => portalTokenPresent(createCredentialStore())),
+    // `team-layer-fetch` fills the seam `project-team-binding` left. Passed as
+    // an arrow so nothing is constructed on the unlinked path — no portal
+    // config resolved, no credential store, no client — which is the structural
+    // half of Decision 64(c). `teamInitStep` only ever calls this for a linked
+    // project with a token present, and classifies whatever it throws.
+    syncTeamLayer:
+      options.teamSyncLayer ?? ((binding) => syncTeamLayerForInit(binding, effective.portal)),
+  });
+
+  return { dryRun, actions, notices: team.notices };
+}
+
+/**
+ * `golem init`'s team sync — `team-layer-fetch`.
+ *
+ * Built here rather than in `init-team.ts` because it needs the portal config
+ * and the credential store, and `init-team.ts` is deliberately I/O-free on the
+ * unlinked path. It is only ever reached for a linked project with a token
+ * present.
+ *
+ * The returned lines are what LANDED. Everything else — offline, lapsed, not a
+ * member — is reported by `teamInitStep` from the disposition, and none of it
+ * fails the init: `syncTeamLayer` does not throw, and Decision 64(f) puts that
+ * above every other consideration on this path.
+ */
+async function syncTeamLayerForInit(
+  binding: TeamBinding,
+  portal: PortalSettings,
+): Promise<readonly string[]> {
+  const config = resolvePortalConfig(portal);
+  const tokens = portalTokenStore(createCredentialStore());
+  const client = createPortalClient({
+    apiBaseUrl: teamApiBaseUrl(binding, config.apiBaseUrl),
+    clientId: config.clientId,
+    metadata: () => discoverAuthorizationServer(config.issuerUrl),
+    tokens,
+  });
+  const result = await syncTeamLayer({
+    binding,
+    userDir: defaultUserDir(),
+    client,
+    report: true,
+  });
+  return result.applied;
 }
 
 export interface UninitOptions {
@@ -609,6 +625,9 @@ export async function golemUninit(options: UninitOptions): Promise<InitReport> {
   // 3c. And Golem's generated subagent. Only that one basename: `.claude/agents/`
   // is a SHARED namespace, unlike `.claude/skills/golem/`.
   actions.push(...(await removePersonaAgents(projectDir, dryRun)));
+  // 3d. The sibling rule pointing at those definitions — same ledger discipline,
+  // removed only if unmodified since Golem wrote it.
+  actions.push(...(await removePersonaPreferenceRule(projectDir, dryRun)));
 
   // 4 / 5 / 5b. Every hook init installed: the PostToolUse CCR hook + the seeded
   // guidance rules, the status line and blocked-state event hooks, the WebFetch

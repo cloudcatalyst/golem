@@ -32,6 +32,7 @@ export const FAST_HOOK_EVENTS: readonly string[] = [
   "post-tool-use",
   "prompt-submit",
   "notification",
+  "question-answered",
 ];
 
 /**
@@ -133,18 +134,113 @@ async function runStatusJson(argv: readonly string[]): Promise<void> {
 `);
 }
 
-/** Mirrors the `statusline` action in program.ts. Must never throw or hang. */
+/**
+ * How long to wait for the session JSON before rendering without it. Generous for
+ * a local pipe written at spawn time, short enough that a stuck read cannot
+ * outlive the ~2s re-render tick that produced it.
+ */
+const STATUSLINE_STDIN_TIMEOUT_MS = 1_000;
+
+/**
+ * Read the session JSON from stdin, and NEVER wait forever for it.
+ *
+ * Claude Code spawns `golem statusline` on a ~2s re-render timer and writes the
+ * session JSON immediately — but it does not reliably close the pipe afterwards.
+ * The previous unbounded read waited on an `end` that never came: the promise
+ * never settled, the process never exited, and every tick leaked another one.
+ * Observed 2026-09-13 on this machine: **264** live `main.js statusline`
+ * processes, the oldest three days old, together holding 9.2 GB — enough to push
+ * process creation machine-wide to seconds per spawn, which then also starved the
+ * PostToolUse hook and the VS Code extension's `status --json` poll.
+ *
+ * Two independent guards, because either alone leaves a way to hang:
+ *
+ *  1. Resolve as soon as the buffer parses as a complete JSON value. In the
+ *     normal case this returns the instant the payload lands, so the common path
+ *     never depends on EOF *or* on the timer.
+ *  2. Otherwise resolve on `end`, on `error`, or when the timer expires —
+ *     whichever comes first — with whatever arrived.
+ *
+ * On settle stdin is detached AND released, so a still-open handle cannot keep the
+ * event loop alive after the line has been written.
+ *
+ * `stream` is injected so the guarantee is testable without spawning a process;
+ * production always passes `process.stdin`.
+ */
+/**
+ * `unknown[]` rather than a narrower `(chunk: Buffer)`: node types `on` as
+ * `(...args: any[]) => void`, and only a listener parameter at least as wide as
+ * `any` leaves `process.stdin` assignable to this interface at all.
+ */
+type StreamListener = (...args: unknown[]) => void;
+
+export interface SessionStdin {
+  isTTY?: boolean | undefined;
+  on(event: string, listener: StreamListener): unknown;
+  off(event: string, listener: StreamListener): unknown;
+  pause?(): unknown;
+  unref?(): unknown;
+  destroy?(): unknown;
+}
+
+export async function readSessionStdin(
+  stream: SessionStdin = process.stdin,
+  timeoutMs = STATUSLINE_STDIN_TIMEOUT_MS,
+): Promise<string> {
+  if (stream.isTTY === true) return "";
+  return await new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const text = (): string => Buffer.concat(chunks).toString("utf8");
+    const done = (value: string): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      stream.off("data", onData as StreamListener);
+      stream.off("end", onEnd as StreamListener);
+      stream.off("error", onError as StreamListener);
+      // `pause()` alone does NOT release the handle: on Windows an unclosed pipe
+      // keeps the event loop alive, so the line renders and the process still
+      // never exits — which is the leak, just one step later. Measured: with
+      // pause() only, the process was still alive 20s after writing its output.
+      // `collectGolemState` leaves no handles of its own, so releasing stdin is
+      // all that stands between a rendered line and a clean exit.
+      stream.pause?.();
+      stream.unref?.();
+      stream.destroy?.();
+      resolve(value);
+    };
+    const onData = (c: Buffer): void => {
+      chunks.push(c);
+      // Complete payload already in hand — don't wait on a pipe that may never close.
+      const soFar = text();
+      try {
+        JSON.parse(soFar);
+        done(soFar);
+      } catch {
+        /* partial JSON — keep reading until EOF or the timer */
+      }
+    };
+    const onEnd = (): void => done(text());
+    const onError = (): void => done("");
+    const timer = setTimeout(() => done(text()), timeoutMs);
+    stream.on("data", onData as StreamListener);
+    stream.on("end", onEnd as StreamListener);
+    stream.on("error", onError as StreamListener);
+  });
+}
+
+/** The only `statusline` implementation — there is no commander mirror. Must never throw or hang. */
 async function runStatusline(argv: readonly string[]): Promise<void> {
+  // Last-resort watchdog. Deliberately NEVER cleared: it is `unref`'d, so it
+  // cannot hold the process open by itself and dies with a healthy process that
+  // exits in its usual ~300ms. It only ever fires if something has wedged — which
+  // is precisely when we want it. Clearing it on the happy path (the obvious
+  // shape) would have disarmed the one guard that makes a repeat leak impossible.
+  setTimeout(() => process.exit(0), 5_000).unref();
   try {
     const forceColor = argv.slice(2).includes("--color");
-    const raw = process.stdin.isTTY
-      ? ""
-      : await new Promise<string>((resolve) => {
-          const chunks: Buffer[] = [];
-          process.stdin.on("data", (c: Buffer) => chunks.push(c));
-          process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-          process.stdin.on("error", () => resolve(""));
-        });
+    const raw = await readSessionStdin();
     const { collectGolemState, parseSessionInput, renderStatusLine } = await import(
       "./statusline.js"
     );
@@ -152,7 +248,25 @@ async function runStatusline(argv: readonly string[]): Promise<void> {
     const dir = session.cwd ?? process.cwd();
     const golem = await collectGolemState(dir);
     const color = forceColor || (process.stdout.isTTY === true && !process.env.NO_COLOR);
-    process.stdout.write(`${renderStatusLine(session, golem, { color })}\n`);
+    // The brand is painted from the Golem hex palette, so the line needs the
+    // terminal's colour DEPTH, not just a yes/no. Undetectable depth while
+    // colour is ON means `--color` was passed into something that is not a TTY
+    // (`detectColorLevel` returns 0 for a pipe before it looks at COLORTERM) —
+    // assume 24-bit there, because whatever reads a forced-colour line is a
+    // renderer, not a 1980s terminal.
+    const { detectColorLevel } = await import("../tui/ansi.js");
+    const detected = detectColorLevel();
+    const colorLevel = !color ? 0 : detected === 0 ? 3 : detected;
+    // `process.stdout.columns` is undefined on a pipe (the normal case — Claude
+    // Code captures this as text, not a TTY); `COLUMNS` covers a shell that
+    // exports it anyway. Neither known means the line never truncates.
+    const envColumns = Number(process.env.COLUMNS);
+    const columns =
+      process.stdout.columns ??
+      (Number.isFinite(envColumns) && envColumns > 0 ? envColumns : undefined);
+    process.stdout.write(
+      `${renderStatusLine(session, golem, { color, colorLevel, ...(columns !== undefined ? { columns } : {}) })}\n`,
+    );
   } catch {
     process.stdout.write("⬢ golem\n");
   }
@@ -253,6 +367,15 @@ async function runHook(argv: readonly string[]): Promise<void> {
       try {
         const { runNotificationHook } = await import("../hooks/session-hooks.js");
         process.exitCode = await runNotificationHook(stdio(), new Date().toISOString());
+      } catch {
+        process.exitCode = 0; // fail-safe
+      }
+      return;
+    }
+    case "question-answered": {
+      try {
+        const { runQuestionAnsweredHook } = await import("../hooks/session-hooks.js");
+        process.exitCode = await runQuestionAnsweredHook(stdio(), new Date().toISOString());
       } catch {
         process.exitCode = 0; // fail-safe
       }

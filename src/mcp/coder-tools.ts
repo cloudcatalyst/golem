@@ -154,7 +154,7 @@ export function registerCoderTool(
             .describe(
               "Which configured target to draft on; omit to use the configured " +
                 "route (`inference.worker_targets.coder`, then " +
-                "`inference.default_target`, then the session's own upstream). " +
+                "`inference.model`, then the session's own upstream). " +
                 `Available: ${selectable
                   .map((t) => `${t.id} (${t.provider}, trust=${t.trust})`)
                   .join("; ")}. Anything non-local is REDACTED before dispatch — ` +
@@ -170,7 +170,7 @@ export function registerCoderTool(
         'Delegate a task to Golem\'s "drafter" role instead of doing everything ' +
         "yourself — a first coding draft you then review and refine. Where it runs " +
         "is a ROUTING decision, not a property of this tool: `inference." +
-        "worker_targets.coder`, then `inference.default_target`, then the session's " +
+        "worker_targets.coder`, then `inference.model`, then the session's " +
         "own upstream (R10.8). It is the local tiered Ollama model only when a " +
         "target points there, so do NOT assume the work stays on this machine — " +
         "anything non-local is REDACTED before dispatch and restored in the reply, " +
@@ -479,15 +479,15 @@ export function registerCoderTool(
         // R10.8: also say WHY that target. A draft that went to the harness's
         // own upstream because nothing named a target reads identically to one
         // the user routed there deliberately, and only the first case means
-        // their `worker_targets`/`default_target` is not doing what they think.
+        // their `worker_targets`/`model` is not doing what they think.
         const whereNote =
           dispatched === null
             ? "locally"
             : `on target "${dispatched.targetId}" (trust=${dispatched.trust}` +
               (dispatched.route === "harness"
                 ? "; the harness default upstream — no target is configured for `coder`"
-                : dispatched.route === "default_target"
-                  ? "; via inference.default_target"
+                : dispatched.route === "model"
+                  ? "; via inference.model"
                   : dispatched.route === "worker"
                     ? "; via inference.worker_targets.coder"
                     : "") +

@@ -27,7 +27,12 @@ export {
   type ToolAttribution,
   windowStartMs,
 } from "./cost-benchmark.js";
-export { JsonlTelemetryStore, readTelemetryEvents, telemetryFilePath } from "./jsonl-store.js";
+export {
+  JsonlTelemetryStore,
+  readTelemetryEvents,
+  telemetryFilePath,
+  telemetryRollupPath,
+} from "./jsonl-store.js";
 export {
   acceptsImageInput,
   BUILTIN_MODEL_CATALOG,

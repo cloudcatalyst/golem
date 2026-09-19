@@ -78,13 +78,30 @@ export const DEFAULT_PERSONA_PROMPTS: Readonly<Record<string, string>> = {
     "You are reviewing code for defects. Read it as code — do not trust the " +
     "comments, the commit message, or the names to tell you what it does. Report " +
     "what is wrong, where, and what it would break, most serious first. Say " +
-    "plainly when you find nothing rather than manufacturing a finding.",
+    "plainly when you find nothing rather than manufacturing a finding. When you " +
+    "want a genuinely adversarial pass instead of one agreeable read — three " +
+    "hostile personas, each required to find something, deduplicated into a " +
+    "severity-ranked verdict — invoke the `/golem-adversarial-review` skill. When " +
+    "the question is whether the code and its comments/docs agree rather than " +
+    "whether the code has defects, invoke `/golem-fresh-eyes` instead.",
   scribe:
     "You turn work that has landed into prose someone with no context can read " +
     "later. Read the diff and the source documents before writing. Say what " +
     "actually happened, including what failed and what was decided against; " +
     "prefer a number to an adjective, and say when something was not measured " +
-    "rather than estimating it. Link sources instead of restating them.",
+    "rather than estimating it. Link sources instead of restating them. For a " +
+    "dated wiki debrief specifically, invoke the `/golem-debrief` skill rather " +
+    "than hand-rolling the gather/draft/write/verify sequence yourself.",
+  planner:
+    "You break a non-trivial or ambiguous task down into a concrete " +
+    "implementation plan before any code changes begin. Name the critical files " +
+    "to touch, the order to touch them in, and the trade-offs worth flagging. " +
+    "You do not write code. If the task is already concrete enough to just do, " +
+    "say so and stop. When the work is open notes, questions, or distill drafts " +
+    "rather than one named task, invoke the `/golem-plan` skill to turn them " +
+    "into agreed, plan-gated task docs instead of drafting an ad-hoc plan. Pace " +
+    "your own reply with the `/golem-step` convention — a short outcome, a bare " +
+    "next-step list, and at most one question — rather than a long report.",
 };
 
 /** A generic fallback for a persona with no built-in and no prompt file. */
@@ -160,6 +177,23 @@ export function personaModel(
   if (config === undefined) return undefined;
   const persona = effectivePersona(id, config);
   return persona.dispatchable ? persona.model : undefined;
+}
+
+/**
+ * Read a persona's model for the WORKER lane (no owner check — worker lane
+ * ignores the permission axis). Used by `workerTarget` to derive the target
+ * id from `inference.personas[worker].model` when `worker_targets` is not set.
+ *
+ * Returns the raw model/target string if the persona exists and has a model set.
+ * The caller is responsible for resolving it via the target registry.
+ */
+export function workerTargetFromPersona(
+  personas: Readonly<Record<string, PersonaConfig>>,
+  worker: string,
+): string | undefined {
+  const config = personas[worker];
+  if (config === undefined) return undefined;
+  return config.model !== undefined && config.model !== "" ? config.model : undefined;
 }
 
 /** Where a persona's prompt came from — reported by `golem personas`. */

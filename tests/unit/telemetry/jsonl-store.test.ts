@@ -3,7 +3,7 @@
  * corruption tolerance, per-project scoping, concurrent-append safety.
  */
 
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, stat, writeFile } from "node:fs/promises";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { TelemetryEvent } from "../../../src/telemetry/index.js";
 import {
@@ -14,6 +14,7 @@ import {
   recordToolCall,
   recordUsageEvent,
   telemetryFilePath,
+  telemetryRollupPath,
   telemetryStatsSource,
 } from "../../../src/telemetry/index.js";
 import { useTempDirs } from "../../helpers/tmp.js";
@@ -584,6 +585,148 @@ describe("recordToolCall + aggregateToolUsage (R4.3, §59)", () => {
     expect(Object.keys((await store.aggregateToolUsage("projA")).byTool)).toStrictEqual(["fetch"]);
     expect((await store.aggregateToolUsage("projA")).byTool.fetch?.calls).toBe(1);
     expect((await store.aggregateToolUsage()).byTool.fetch?.calls).toBe(2);
+    await store.close();
+  });
+});
+
+describe("aggregate() rollup cache + rotation", () => {
+  it("an incremental aggregate after an append matches a full re-parse of the same final content", async () => {
+    // Left dir: aggregate() is called between appends, so it actually
+    // exercises the incremental path (establish a rollup, then fold on top
+    // of it) rather than a cold full reparse every time.
+    const incrementalDir = await newTempDir();
+    const incrementalStore = new JsonlTelemetryStore(incrementalDir);
+    await incrementalStore.record(ev());
+    await incrementalStore.aggregate(); // establishes the rollup
+    await incrementalStore.record(ev({ ccrRefsStored: 2 }));
+    const incrementalStats = await incrementalStore.aggregate(); // incremental fold
+    await incrementalStore.close();
+
+    // Right dir: identical final content, but no rollup exists until this
+    // one aggregate() call — a pure cold full reparse.
+    const fullDir = await newTempDir();
+    const fullStore = new JsonlTelemetryStore(fullDir);
+    await fullStore.record(ev());
+    await fullStore.record(ev({ ccrRefsStored: 2 }));
+    const fullStats = await fullStore.aggregate();
+    await fullStore.close();
+
+    expect(incrementalStats).toStrictEqual(fullStats);
+  });
+
+  it("a stale/mismatched rollup (poisoned totals, size claiming more than the file has) triggers a full re-parse instead of trusting it", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev());
+    const before = await store.aggregate(); // establishes a real rollup entry
+    expect(before.requests).toBe(1);
+
+    // Poison the rollup as if another process had written a checkpoint against
+    // a LARGER file than actually exists — the growth-only check must reject
+    // this on the size comparison and refuse to trust `requests: 999`.
+    const rollupPath = telemetryRollupPath(dir);
+    const rollup = JSON.parse(await readFile(rollupPath, "utf8"));
+    for (const entry of Object.values(
+      rollup.entries as Record<
+        string,
+        { totals: { requests: number }; size: number; offset: number }
+      >,
+    )) {
+      entry.totals.requests = 999;
+      entry.size += 1_000_000;
+      entry.offset = entry.size;
+    }
+    await writeFile(rollupPath, JSON.stringify(rollup), "utf8");
+
+    const after = await store.aggregate();
+    expect(after.requests).toBe(1); // distrusted the poisoned rollup, re-derived the truth
+    await store.close();
+  });
+
+  it("a corrupt/unparseable rollup file doesn't throw — falls back to a full re-parse", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev());
+    await store.aggregate(); // establishes a real rollup entry
+
+    await writeFile(telemetryRollupPath(dir), "{ not valid json", "utf8");
+
+    const stats = await store.aggregate();
+    expect(stats.requests).toBe(1);
+    await store.close();
+  });
+
+  it("rotates past the size threshold, and aggregate() after rotation reads the new file correctly", async () => {
+    // Small threshold so a couple of normal events cross it without writing
+    // megabytes of fixtures — production always uses the 10MB default.
+    const store = new JsonlTelemetryStore(dir, { rotateThresholdBytes: 300 });
+    const file = telemetryFilePath(dir);
+    const rotatedFile = `${file}.1`;
+
+    await store.record(ev()); // ~196 bytes — under threshold, no rotation
+    await store.record(ev()); // current now ~392 bytes — crosses 300, rotates
+
+    const rotatedContent = await readFile(rotatedFile, "utf8");
+    expect(rotatedContent.trim().split("\n")).toHaveLength(2); // rotation actually happened
+    await expect(stat(file)).rejects.toThrow(); // current file was renamed away
+
+    await store.record(ev()); // 3rd event, into a fresh current file
+    expect((await stat(file)).size).toBeLessThan(300); // fresh/small again
+
+    // No rollup yet — a cold full reparse spanning BOTH generations.
+    const stats = await store.aggregate();
+    expect(stats.requests).toBe(3);
+
+    // One more append crosses the threshold again: rotation happens between
+    // this record() and the next aggregate() call, overwriting `.1` (the
+    // documented "current + 1 retained prior generation" ceiling) and
+    // removing the current file the previous rollup entry was checkpointed
+    // against.
+    await store.record(ev());
+    await expect(stat(file)).rejects.toThrow(); // current file doesn't exist right now
+
+    // aggregate() must detect that (a missing current file can never satisfy
+    // the trust check) via the same size/mtime comparison and fall back to a
+    // full reparse of the NEW current + `.1` — not crash, not return the
+    // stale 3-event total.
+    const afterRotation = await store.aggregate();
+    expect(afterRotation.requests).toBe(2); // events 1+2 fell off the retained window
+    await store.close();
+  });
+
+  it("a concurrent writer's raw appends between two aggregate() calls are folded in via the incremental path", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev());
+    const first = await store.aggregate(); // establishes the rollup
+    expect(first.requests).toBe(1);
+
+    // Simulate another process (another Golem session, the proxy) appending
+    // directly to the file — #writeChain only serializes writes made through
+    // THIS store instance, never across processes (module doc comment).
+    const file = telemetryFilePath(dir);
+    await appendFile(file, `${JSON.stringify(ev({ ccrRefsStored: 5 }))}\n`, "utf8");
+
+    const second = await store.aggregate();
+    expect(second.requests).toBe(2);
+    expect(second.ccrRefsStored).toBe(1 + 5);
+    await store.close();
+  });
+
+  it("the file shrinking between two aggregate() calls is distrusted (size went backward) and triggers a full re-parse, never stale or wrong data", async () => {
+    const store = new JsonlTelemetryStore(dir);
+    await store.record(ev());
+    await store.record(ev());
+    const first = await store.aggregate(); // rollup now checkpoints 2 events
+    expect(first.requests).toBe(2);
+
+    // Simulate an external rewrite/truncation that leaves the file SMALLER
+    // than the rollup's recorded watermark — the growth-only trust check
+    // must reject this specifically on the size-went-backward branch (not a
+    // missing or corrupt rollup, which the two tests above already cover).
+    const file = telemetryFilePath(dir);
+    await writeFile(file, `${JSON.stringify(ev({ ccrRefsStored: 9 }))}\n`, "utf8");
+
+    const second = await store.aggregate();
+    expect(second.requests).toBe(1);
+    expect(second.ccrRefsStored).toBe(9);
     await store.close();
   });
 });

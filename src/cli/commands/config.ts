@@ -6,7 +6,7 @@ import type { Command } from "commander";
 import { InvalidArgumentError } from "commander";
 import type { ControlSurface } from "../../config/control-surface.js";
 import { collectControlSurface } from "../../config/control-surface.js";
-import { findProjectDir, renderSweep, sweepSettingsFiles } from "../../config/index.js";
+import { findProjectDir, loadConfig, renderSweep, sweepSettingsFiles } from "../../config/index.js";
 import type { SettingsScope } from "../../config/write-setting.js";
 import { VERSION } from "../../index.js";
 import {
@@ -21,6 +21,54 @@ import {
   unsetConfig,
 } from "../config.js";
 import { InitError } from "../init.js";
+import { proxyStatus } from "../proxy-daemon.js";
+import { restartProxyDetached } from "./proxy.js";
+
+/**
+ * Keys whose live value the running daemon only reads at start-up — unlike
+ * `compression.*`/`brevity.*`, which R11.1's `reloadDials` re-reads per request.
+ * `inference.*` covers the whole persona/model bench in one prefix because every
+ * leaf under it feeds the same start-up-only dispatcher construction; the
+ * `proxy.*` entries are the individual upstream/target leaves for the same
+ * reason. `proxy.bypass_all` is deliberately excluded — it has its own
+ * live-apply path (`golem on`/`off`, see pipeline-switch.ts).
+ */
+function isModelAffectingKey(key: string): boolean {
+  if (key.startsWith("inference.")) return true;
+  return (
+    key === "proxy.model" ||
+    key === "proxy.upstream_model" ||
+    key === "proxy.upstream_provider" ||
+    key === "proxy.upstream_base_url" ||
+    key === "proxy.upstream_auth_scheme" ||
+    key === "proxy.upstream_reasoning_effort" ||
+    key === "proxy.targets" ||
+    key === "proxy.gateways"
+  );
+}
+
+/**
+ * After a model-affecting write, restart the daemon so it picks the change up —
+ * only when one is actually running the full pipeline. A stopped proxy stays
+ * stopped and a bypass shim stays bypassed; this never changes which of those
+ * three states the project is in, only refreshes it within "running".
+ */
+async function restartProxyIfApplicable(dir: string, key: string, restart: boolean): Promise<void> {
+  if (!restart || !isModelAffectingKey(key)) return;
+  try {
+    const { settings } = await loadConfig({ projectDir: dir });
+    const status = await proxyStatus(dir, settings.proxy.port);
+    if (!status.running || status.shim === true) return;
+    const result = await restartProxyDetached(dir);
+    process.stdout.write(
+      `golem proxy restarted (pid ${result.pid}) on http://localhost:${result.port} to pick up the change\n`,
+    );
+  } catch (err) {
+    process.stderr.write(
+      `golem config: setting saved, but the proxy restart failed — restart it yourself (\`golem proxy restart\`): ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
+}
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -119,11 +167,15 @@ export default function register(program: Command): void {
         "(the quoting-proof way to write a JSON object)",
     )
     .option("--json", "machine-readable output", false)
+    .option(
+      "--no-restart",
+      "don't restart the proxy for a model-affecting change (default: restart if one is running)",
+    )
     .action(
       async (
         key: string,
         value: string | undefined,
-        opts: { dir: string; scope: string; json: boolean; valueFile?: string },
+        opts: { dir: string; scope: string; json: boolean; valueFile?: string; restart: boolean },
       ) => {
         try {
           const scope = parseConfigScope(opts.scope);
@@ -132,6 +184,7 @@ export default function register(program: Command): void {
           process.stdout.write(
             opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigSet(result),
           );
+          await restartProxyIfApplicable(opts.dir, key, opts.restart);
         } catch (err) {
           _fail(err);
         }
@@ -145,17 +198,27 @@ export default function register(program: Command): void {
     .option("--dir <path>", "project directory", _DEFAULT_DIR)
     .option("--scope <scope>", "settings scope: local (default), project, or user", "local")
     .option("--json", "machine-readable output", false)
-    .action(async (key: string, opts: { dir: string; scope: string; json: boolean }) => {
-      try {
-        const scope = parseConfigScope(opts.scope);
-        const result = await unsetConfig(scope, key, { projectDir: opts.dir });
-        process.stdout.write(
-          opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigUnset(result),
-        );
-      } catch (err) {
-        _fail(err);
-      }
-    });
+    .option(
+      "--no-restart",
+      "don't restart the proxy for a model-affecting change (default: restart if one is running)",
+    )
+    .action(
+      async (
+        key: string,
+        opts: { dir: string; scope: string; json: boolean; restart: boolean },
+      ) => {
+        try {
+          const scope = parseConfigScope(opts.scope);
+          const result = await unsetConfig(scope, key, { projectDir: opts.dir });
+          process.stdout.write(
+            opts.json ? `${JSON.stringify(result, null, 2)}\n` : renderConfigUnset(result),
+          );
+          await restartProxyIfApplicable(opts.dir, key, opts.restart);
+        } catch (err) {
+          _fail(err);
+        }
+      },
+    );
 
   configCmd
     .command("migrate")

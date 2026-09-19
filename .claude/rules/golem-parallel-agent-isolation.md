@@ -24,9 +24,15 @@ because none of it is a file conflict.
    prevent by not sharing.
 3. **Never judge a worktree disposable by its commit count.** "Zero commits
    ahead" says nothing about a DIRTY TREE. Run `git -C <path> status --short`
-   and `git stash list` before removing one — uncommitted design work that
-   exists nowhere else looks exactly like an abandoned branch from the
-   outside. Commit it on its own branch rather than deciding for the author.
+   before removing one — uncommitted design work that exists nowhere else
+   looks exactly like an abandoned branch from the outside. Commit it on its
+   own branch rather than deciding for the author. (A stash is NOT at risk:
+   `refs/stash` lives in the common git dir, not the worktree, so
+   `worktree remove` cannot take one with it — verified 2026-09-07.)
+   Confirm the OWNING AGENT has finished too — not merely that it reported a
+   completed turn, because these agents are resumable. Removing the worktree
+   of one that is still verifying destroys the logs it is about to quote: no
+   committed work is lost, but the evidence for it is.
 4. **Shared append-only docs still conflict, and that is expected.** Resolve a
    log or an index by keeping BOTH sides. Never hand-resolve a GENERATED file
    — regenerate it (for the roadmap, `golem task index --write`).
@@ -36,3 +42,5 @@ PR's mergeability afterwards rather than assuming it still applies.
 
 See also the subagent-headroom rule — a child cannot park at a usage limit, so
 it must commit early on its own branch or its work dies with it.
+
+This rule is generated from Golem's own guidance registry (`src/hooks/guidance.ts`) and distributed by `golem init` / `golem guidance enable` — every Golem-managed project can receive this identical text. This repository, golem.run's own source, runs under the same unedited rule; Golem does not keep a separate house style for itself.

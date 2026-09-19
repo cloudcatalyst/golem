@@ -125,6 +125,56 @@ describe("createPortalClient", () => {
       ...extra,
     });
 
+  it("accepts the LIVE portal's identity payload, nulls and all", async () => {
+    // Captured from the real https://golem.run/api/v1/me on 2026-09-08, during
+    // the first end-to-end `golem team link`. Every field was correct and the
+    // response was still refused, because `auth.scopes` was an explicit `null`
+    // and `.optional()` admits `undefined` only. This fixture is the actual
+    // bytes rather than a guess at them (verification-notes §164).
+    const live = {
+      user: { id: "user_live", email: "someone@example.test" },
+      auth: { via: "oauth", scopes: null },
+      organizations: [
+        {
+          id: "org_live",
+          name: "Acme",
+          slug: "acme",
+          role: "admin",
+          entitled: true,
+          subscriptionStatus: "active",
+          seatCount: 3,
+        },
+      ],
+    };
+    const impl: FetchLike = async () =>
+      new Response(JSON.stringify(live), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const identity = await client(impl).me();
+
+    expect(identity.user.id).toBe("user_live");
+    // The null did not survive into the typed value — the boundary normalized it.
+    expect(identity.auth?.scopes).toBeUndefined();
+    expect(identity.organizations).toHaveLength(1);
+    expect(identity.organizations[0]?.entitled).toBe(true);
+    expect(identity.organizations[0]?.seatCount).toBe(3);
+  });
+
+  it("treats a null organizations list as no organizations, not as a broken payload", async () => {
+    // A caller that has to distinguish absent from null from empty will get it
+    // wrong eventually; all three mean "nothing to choose from".
+    const impl: FetchLike = async () =>
+      new Response(JSON.stringify({ user: { id: "u" }, organizations: null }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+
+    const identity = await client(impl).me();
+    expect(identity.organizations).toEqual([]);
+  });
+
   it("sends the stored access token as a Bearer credential", async () => {
     const { impl, apiCalls } = scriptedFetch([200]);
     const c = client(impl);

@@ -18,7 +18,7 @@ describe("the settings leaf", () => {
     // when a target or local model can serve it.
     expect(leafSchema("inference", "coder_enabled")).toBeUndefined();
     expect(leafSchema("inference", "local_coder_enabled")).toBeUndefined();
-    expect(allLeafPaths()).toContain("inference.default_target");
+    expect(allLeafPaths()).toContain("inference.model");
   });
 });
 

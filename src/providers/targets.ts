@@ -125,7 +125,7 @@ export interface TargetRegistrySettings {
   /** R9.23: renamed from `accounts`. */
   readonly gateways?: readonly GatewayEntry[];
   readonly targets?: readonly TargetEntry[];
-  readonly default_target?: string;
+  readonly model?: string;
 }
 
 /** Loopback hosts — the test for "this context never leaves the machine". */
@@ -160,6 +160,7 @@ export function defaultTrustFor(provider: UpstreamProvider, baseUrl: string): Ta
     return host !== undefined && LOOPBACK_HOSTS.has(host) ? "local" : "lan";
   }
   if (provider === "anthropic") return "vendor";
+  // NVIDIA NIM is a multi-vendor gateway (third-party aggregator)
   return "third-party";
 }
 
@@ -289,7 +290,7 @@ export function listTargets(settings: TargetRegistrySettings): readonly Resolved
  * entry in `src/config/migrations.ts`, applied by the loader — so this reads one
  * key and the rename is handled in exactly one place.
  *
- * R9.23: `default_target` may reference a gateway id (e.g. `"openrouter"`) rather
+ * R9.23: `model` may reference a gateway id (e.g. `"openrouter"`) rather
  * than a full compound target id (e.g. `"openrouter:qwen/qwen3-14b"`). It may
  * also be a bare model name (e.g. `"qwen3"`) which is resolved via
  * {@link resolveModel}. When the selector does not match any target id directly,
@@ -297,11 +298,11 @@ export function listTargets(settings: TargetRegistrySettings): readonly Resolved
  * backward compatibility for settings files that name a gateway.
  */
 export function resolveDefaultTargetId(settings: TargetRegistrySettings): string {
-  const raw = settings.default_target ?? defaultTargetId(settings.upstream_provider);
+  const raw = settings.model ?? defaultTargetId(settings.upstream_provider);
   // Try the raw value as a target id first (fast path for compound ids).
   // This does NOT call listTargets unconditionally to avoid an extra list pass
   // when no resolution is needed.
-  if (settings.default_target !== undefined && settings.gateways !== undefined) {
+  if (settings.model !== undefined && settings.gateways !== undefined) {
     const targets = listTargets(settings);
     if (!targets.some((t) => t.id === raw)) {
       // Raw value is not a target id — check if it's a gateway id

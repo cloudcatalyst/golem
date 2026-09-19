@@ -14,6 +14,7 @@ import {
   servedModelFor,
   servedModelPath,
   writeServedModel,
+  writeServedModelForTarget,
 } from "../../../src/proxy/served-model.js";
 import { rmTemp } from "../../helpers/tmp.js";
 
@@ -78,6 +79,35 @@ describe("served-model state", () => {
     await clearServedModel(dir);
     expect(await readServedModel(dir)).toBeNull();
     await expect(clearServedModel(dir)).resolves.toBeUndefined();
+  });
+
+  /**
+   * R9.2's per-target rows were written to disk but never read back: the
+   * destructure here dropped `targets` even though the schema parsed it, so
+   * `readServedModel(dir).targets` was always `undefined` for every caller —
+   * `golem status --json`'s per-target `last_served_model` and the statusline's
+   * chat/persona split (2026-09-17) both silently depended on data this never
+   * actually returned.
+   */
+  it("round-trips the per-target rows written by writeServedModelForTarget", async () => {
+    await writeServedModelForTarget(dir, "anthropic", {
+      model: "claude-opus-5[1m]",
+      servedAtIso: "2026-09-17T00:00:00.000Z",
+      accountId: null,
+    });
+    await writeServedModelForTarget(dir, "kimi:kimi-k3", {
+      model: "kimi-k3",
+      servedAtIso: "2026-09-17T00:05:00.000Z",
+      accountId: null,
+    });
+    const state = await readServedModel(dir);
+    expect(state?.targets).toEqual({
+      anthropic: { model: "claude-opus-5[1m]", servedAtIso: "2026-09-17T00:00:00.000Z" },
+      "kimi:kimi-k3": { model: "kimi-k3", servedAtIso: "2026-09-17T00:05:00.000Z" },
+    });
+    // servedModelFor must carry `targets` through too — it is a thin
+    // account-scoped wrapper over the same read.
+    expect((await servedModelFor(dir, null))?.targets).toEqual(state?.targets);
   });
 });
 

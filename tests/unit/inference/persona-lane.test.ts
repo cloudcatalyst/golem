@@ -73,7 +73,7 @@ describe("the two lanes", () => {
   });
 
   it("resolves a bare GATEWAY id to that gateway's first target", () => {
-    // Consistent with `default_target` (R9.23) — the same string must not mean
+    // Consistent with `model` (R9.23) — the same string must not mean
     // two different things in two adjacent settings.
     // The gateway's first target is the one `listTargets` synthesises from its
     // `models` array, not the separately-declared `cheap` — which is what

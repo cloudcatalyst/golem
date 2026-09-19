@@ -17,7 +17,7 @@ import {
 } from "../../../src/cli/statusline.js";
 import { writeSetting } from "../../../src/config/index.js";
 import { sessionStatePath, writeSessionState } from "../../../src/hooks/index.js";
-import { writeServedModel } from "../../../src/proxy/index.js";
+import { writeServedModel, writeServedModelForTarget } from "../../../src/proxy/index.js";
 import { openTelemetryStore } from "../../../src/telemetry/index.js";
 import { useTempDirs } from "../../helpers/tmp.js";
 
@@ -193,12 +193,13 @@ describe("renderStatusLine", () => {
     );
     // R9.4: named by ROLE, not by locality — after R9.3 the coder end can be
     // any target, so "local + upstream" described a constraint that is gone.
-    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b");
+    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ qwen2.5-coder:7b");
   });
 
-  it("flattens to ONE segment when both roles run the same model (R9.4)", () => {
-    // Printing the same id twice under two symbols tells the reader nothing and
-    // costs the width the rest of the line needs.
+  it("still shows a persona running the same model as chat", () => {
+    // The line is a roster, not just a divergence report: hiding `coder`
+    // because it happens to share chat's model would make it indistinguishable
+    // from `coder` not being staffed at all.
     const line = renderStatusLine(
       {},
       {
@@ -210,8 +211,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m])");
-    expect(line).not.toContain("✎");
+    expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ claude-opus-5[1m]");
   });
 
   it("shows a configured coder target even when Ollama is unreachable (R9.4)", () => {
@@ -228,7 +228,7 @@ describe("renderStatusLine", () => {
         proxyRunning: true,
       },
     );
-    expect(line).toContain("◆ anthropic (claude-opus-5[1m]) + ✎ openai/gpt-oss-20b:free");
+    expect(line).toContain("◆ anthropic (claude-opus-5[1m]) ✎ openai/gpt-oss-20b:free");
   });
 
   it("shows NO coder segment when coder_target resolves to nothing (R9.4)", () => {
@@ -368,7 +368,7 @@ describe("renderStatusLine", () => {
       },
     );
     expect(line).toContain("⬢ Golem →");
-    expect(line).toContain("→ ◆ anthropic + ✎ local");
+    expect(line).toContain("→ ◆ anthropic ✎ local");
   });
 
   it("appends the waiting/update badges after the destination", () => {
@@ -394,6 +394,109 @@ describe("renderStatusLine", () => {
       { color: true },
     );
     expect(line).toContain(String.fromCharCode(27));
+  });
+
+  /**
+   * The underline cue (R9.2 pollution fix, 2026-09-17): the chat segment's
+   * MODEL NAME never changes with traffic, but the underline marks whichever
+   * destination — chat or a persona — most recently answered, without the two
+   * segments' colour spans clobbering each other.
+   */
+  describe("active-segment underline", () => {
+    const ESC = String.fromCharCode(27);
+
+    it("underlines the chat segment when activeChat is set, and nothing else", () => {
+      const golem = {
+        compression: 1 as const,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        activeChat: true,
+        workers: [{ worker: "coder", model: "kimi-k3" }],
+      };
+      const line = renderStatusLine({}, golem, { color: true });
+      expect(line).toContain(`${ESC}[4m◆ anthropic (claude-opus-5[1m])${ESC}[24m`);
+      expect(line).not.toContain(`${ESC}[4m✎`);
+    });
+
+    it("underlines the matching persona segment when activeWorkers names it, leaving chat plain", () => {
+      const golem = {
+        compression: 1 as const,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        activeWorkers: ["coder"],
+        workers: [
+          { worker: "coder", model: "kimi-k3" },
+          { worker: "scribe", model: "claude-haiku-4-5" },
+        ],
+      };
+      const line = renderStatusLine({}, golem, { color: true });
+      expect(line).toContain(`${ESC}[4m✎ kimi-k3${ESC}[24m`);
+      expect(line).not.toContain(`${ESC}[4m✒`);
+      expect(line).not.toContain(`${ESC}[4m◆`);
+    });
+
+    it("underlines nothing when no segment is marked active", () => {
+      const golem = {
+        compression: 1 as const,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        workers: [{ worker: "coder", model: "kimi-k3" }],
+      };
+      const line = renderStatusLine({}, golem, { color: true });
+      expect(line).not.toContain(`${ESC}[4m`);
+    });
+
+    it("never emits the underline sequence with color off", () => {
+      const golem = {
+        compression: 1 as const,
+        upstreamLabel: "anthropic",
+        lastServedModel: "claude-opus-5[1m]",
+        activeChat: true,
+      };
+      expect(renderStatusLine({}, golem)).not.toContain(`${ESC}[4m`);
+    });
+  });
+
+  describe("persona-tail truncation (columns)", () => {
+    const golem = {
+      compression: 1 as const,
+      upstreamLabel: "anthropic",
+      lastServedModel: "claude-opus-5[1m]",
+      proxyRunning: true,
+      workers: [
+        { worker: "coder", model: "qwen2.5-coder:7b-a-fairly-long-tag" },
+        { worker: "reviewer", model: "claude-opus-5-with-a-long-context-window-suffix" },
+        { worker: "scribe", model: "claude-haiku-4-5-with-a-long-context-window-suffix" },
+      ],
+    };
+
+    it("never truncates when the width is unknown (no `columns` option)", () => {
+      const line = renderStatusLine({}, golem);
+      expect(line).not.toContain("…");
+      expect(line).toContain("claude-haiku-4-5-with-a-long-context-window-suffix");
+    });
+
+    it("shrinks ONLY the persona tail to fit a known width", () => {
+      const line = renderStatusLine({}, golem, { columns: 80 });
+      // The brand, arrow, and chat model are never sacrificed for the roster.
+      expect(line).toContain("⬢ Golem → ◆ anthropic (claude-opus-5[1m])");
+      expect(line).toContain("…");
+      expect(line.length).toBeLessThan(renderStatusLine({}, golem).length);
+    });
+
+    it("still shows an ellipsis rather than dropping the tail, even at an impossibly tight width", () => {
+      // A budget this far negative would floor to nothing at all; that would
+      // read as "no persona is staffed", which is a worse lie than overshooting
+      // the requested width by a column or two.
+      const line = renderStatusLine({}, golem, { columns: 10 });
+      expect(line).toContain("…");
+    });
+
+    it("leaves the line alone once it already fits", () => {
+      const line = renderStatusLine({}, golem, { columns: 1000 });
+      expect(line).toBe(renderStatusLine({}, golem));
+      expect(line).not.toContain("…");
+    });
   });
 });
 
@@ -451,7 +554,7 @@ describe("collectGolemState", () => {
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "inference.default_target", "kimi", { projectDir: dir });
+    await writeSetting("project", "inference.model", "kimi", { projectDir: dir });
     const state = await collectGolemState(dir, {
       localReachable: async () => ({ reachable: false }),
     });
@@ -475,7 +578,7 @@ describe("collectGolemState", () => {
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "inference.default_target", "kimi", { projectDir: dir });
+    await writeSetting("project", "inference.model", "kimi", { projectDir: dir });
     await writeServedModel(dir, {
       model: "kimi-k3-0724",
       servedAtIso: "2026-07-24T00:00:00.000Z",
@@ -512,7 +615,7 @@ describe("collectGolemState", () => {
       ],
       { projectDir: dir },
     );
-    await writeSetting("project", "inference.default_target", "work", { projectDir: dir });
+    await writeSetting("project", "inference.model", "work", { projectDir: dir });
     await writeServedModel(dir, {
       model: "kimi-k3-0724",
       servedAtIso: "2026-07-24T00:00:00.000Z",
@@ -523,6 +626,105 @@ describe("collectGolemState", () => {
     });
     expect(state.lastServedModel).toBeUndefined();
     expect(state.upstreamModel).toBe("gpt-5.2"); // falls back to the configured model
+  });
+
+  /**
+   * R9.2's top-level `served.model`/`servedAtIso` mean "most recently served,
+   * whichever target" — updated by a persona dispatch exactly like a chat
+   * request. Reported for the chat destination, that flickered the CLI's ◆
+   * segment to whatever model `coder` last used (reported 2026-09-17). The
+   * chat segment must stay pinned to the DEFAULT target's own row; "which one
+   * just answered" is `activeChat`/`activeWorkers` instead (the underline cue).
+   */
+  it("does not let a persona dispatch overwrite the chat model — the persona is marked active instead", async () => {
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          models: ["kimi-k3"],
+        },
+      ],
+      { projectDir: dir },
+    );
+    await writeSetting(
+      "project",
+      "inference.personas",
+      { coder: { model: "kimi" } },
+      {
+        projectDir: dir,
+      },
+    );
+    // Chat serves first, on the byte-faithful default target ("anthropic": no
+    // gateway/model configured for `inference.model`)...
+    await writeServedModelForTarget(dir, "anthropic", {
+      model: "claude-opus-5[1m]",
+      servedAtIso: "2026-09-17T00:00:00.000Z",
+      accountId: null,
+    });
+    // ...then `coder` dispatches, more recently, on its own resolved target.
+    await writeServedModelForTarget(dir, "kimi:kimi-k3", {
+      model: "kimi-k3",
+      servedAtIso: "2026-09-17T00:05:00.000Z",
+      accountId: null,
+    });
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
+    expect(state.lastServedModel).toBe("claude-opus-5[1m]");
+    expect(state.activeChat).toBeUndefined();
+    expect(state.activeWorkers).toEqual(["coder"]);
+  });
+
+  it("stages a worker-lane and an agent-lane persona together, in THIS layer's declared order", async () => {
+    // R14.2: `coder`'s model resolves to a registry target (Golem dispatches),
+    // `scribe` and the custom `writer` name bare model ids (the harness runs a
+    // subagent on them; Golem never dispatches them). All belong on the line.
+    //
+    // Order follows the MOST SPECIFIC layer's declared order for the keys it
+    // mentions (loader.ts `mergePerKey`, fixed 2026-09-17) — here that's
+    // project settings, which puts `scribe` before `coder`, the reverse of the
+    // schema default's `planner`/`coder`/`reviewer`/`scribe`. Keys an earlier
+    // layer declared but this one doesn't mention — `planner` and `reviewer`
+    // — keep their prior relative order, appended after this layer's own.
+    // Both are left unstaffed to show they still render as bare rows even so.
+    // `writer` is a genuinely new id and lands where this layer introduced it.
+    await writeSetting(
+      "project",
+      "proxy.gateways",
+      [
+        {
+          id: "kimi",
+          provider: "openai",
+          base_url: "https://api.moonshot.ai/v1",
+          models: ["kimi-k3"],
+        },
+      ],
+      { projectDir: dir },
+    );
+    await writeSetting(
+      "project",
+      "inference.personas",
+      {
+        scribe: { model: "claude-haiku-4-5" },
+        coder: { model: "kimi" },
+        writer: { model: "claude-opus-5" },
+      },
+      { projectDir: dir },
+    );
+    const state = await collectGolemState(dir, {
+      localReachable: async () => ({ reachable: false }),
+    });
+    expect(state.workers).toEqual([
+      { worker: "scribe", model: "claude-haiku-4-5" },
+      { worker: "coder", model: "kimi-k3", gateway: "kimi" },
+      { worker: "writer", model: "claude-opus-5" },
+      { worker: "planner" },
+      { worker: "reviewer" },
+    ]);
   });
 
   it("labels a translating provider set at the top level (no account)", async () => {
@@ -635,7 +837,12 @@ describe("collectGolemState", () => {
       // `inference.personas`, so a corrupt-state run still reports the shipped
       // bench. Unreachable local model and no configured target → no model, so
       // the line names no worker at all.
-      workers: [{ worker: "coder" }, { worker: "reviewer" }, { worker: "scribe" }],
+      workers: [
+        { worker: "planner" },
+        { worker: "coder" },
+        { worker: "reviewer" },
+        { worker: "scribe" },
+      ],
     });
   });
 });

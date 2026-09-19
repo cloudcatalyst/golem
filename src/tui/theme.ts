@@ -21,8 +21,14 @@ export interface Theme {
   readonly level: ColorLevel;
 }
 
-/** Violet, matching the pet's default. */
-const ACCENT = "#a78bfa";
+/**
+ * Violet, matching the pet's default — THE Golem colour.
+ *
+ * Exported because the control panel is no longer the only surface that paints
+ * in it: `golem statusline` brands with it too, and a second copy of the hex
+ * elsewhere in the tree is how two surfaces start drifting apart.
+ */
+export const ACCENT = "#a78bfa";
 
 /**
  * Build the theme for the effective `ui` settings.

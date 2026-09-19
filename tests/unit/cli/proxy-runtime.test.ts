@@ -121,7 +121,7 @@ describe("buildProxyFromSettings — resolved-upstream reporting", () => {
           ],
         },
         inference: {
-          default_target: "openrouter-laguna",
+          model: "openrouter-laguna",
         },
       },
     });

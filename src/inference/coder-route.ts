@@ -34,6 +34,7 @@
 
 import { listTargets, resolveTarget, type TargetRegistrySettings } from "../providers/index.js";
 import type { PersonaConfig } from "./personas.js";
+import { workerTargetFromPersona } from "./personas.js";
 import { workerTarget } from "./workers.js";
 
 /**
@@ -49,7 +50,11 @@ export const CODER_AGENT_NAME = "golem-coder";
 /** What `default_coder` (and `worker_targets`) resolved to. */
 export type CoderRoute =
   /** Golem dispatches to this registry target itself. */
-  | { readonly kind: "target"; readonly targetId: string; readonly via: "worker" | "default_coder" }
+  | {
+      readonly kind: "target";
+      readonly targetId: string;
+      readonly via: "worker" | "default_coder" | "persona_worker";
+    }
   /** The harness should run a subagent on this model; Golem cannot spawn one. */
   | { readonly kind: "harness"; readonly model: string }
   /** Nothing is configured — the work stays in the calling session (R13.11). */
@@ -65,7 +70,7 @@ export class CoderRouteError extends Error {
 
 export interface CoderRouteInput {
   readonly settings: TargetRegistrySettings;
-  /** `inference.worker_targets` — takes precedence, being the explicit low-level map. */
+  /** DEPRECATED: `inference.worker_targets` — kept for migration. Precedence over personas. */
   readonly workerTargets?: Readonly<Record<string, string>> | undefined;
   /** The `coder` persona's model (`inference.personas.coder.model`). */
   readonly defaultCoder?: string | undefined;
@@ -90,9 +95,20 @@ function looksLikeModelId(value: string): boolean {
  * cannot mean anything.
  */
 export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
-  const fromWorker = workerTarget(input.workerTargets, "coder", input.personas);
-  if (fromWorker !== undefined) {
-    return { kind: "target", targetId: fromWorker, via: "worker" };
+  // First check deprecated worker_targets (has precedence) - direct map lookup
+  const fromWorkerTargets = input.workerTargets?.coder;
+  if (fromWorkerTargets !== undefined && fromWorkerTargets !== "") {
+    return { kind: "target", targetId: fromWorkerTargets, via: "worker" };
+  }
+
+  // Then check personas[worker].model for worker lane
+  const fromPersonaWorker = workerTargetFromPersona(input.personas ?? {}, "coder");
+  if (fromPersonaWorker !== undefined) {
+    // Try to resolve as target
+    if (resolveTarget(input.settings, fromPersonaWorker).ok) {
+      return { kind: "target", targetId: fromPersonaWorker, via: "persona_worker" };
+    }
+    // Fall through to harness lane if not a target
   }
 
   const configured = input.defaultCoder?.trim();
@@ -104,10 +120,10 @@ export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
   }
 
   // A bare GATEWAY id resolves to that gateway's first target, matching what
-  // `resolveDefaultTargetId` does for `default_target` (R9.23). `resolveTarget`
+  // `resolveDefaultTargetId` does for `model` (R9.23). `resolveTarget`
   // itself does not do this — the rule lives in the default-target path — so it
   // is applied here rather than assumed, because `default_coder = "openrouter"`
-  // meaning something different from `default_target = "openrouter"` would be a
+  // meaning something different from `model = "openrouter"` would be a
   // gratuitous inconsistency between two adjacent settings.
   const viaGateway = listTargets(input.settings).find((t) => t.accountId === configured);
   if (viaGateway !== undefined) {
@@ -138,12 +154,30 @@ export function resolveCoderRoute(input: CoderRouteInput): CoderRoute {
  */
 export function coderRouteConflict(input: CoderRouteInput): string | undefined {
   const fromWorker = workerTarget(input.workerTargets, "coder", input.personas);
+  const fromPersonaWorker = workerTargetFromPersona(input.personas ?? {}, "coder");
   const configured = input.defaultCoder?.trim();
-  if (fromWorker === undefined || configured === undefined || configured === "") return undefined;
-  if (fromWorker === configured) return undefined;
-  return (
-    `inference.worker_targets.coder = "${fromWorker}" and inference.personas.coder.model = ` +
-    `"${configured}" name different destinations. worker_targets wins; unset it to use ` +
-    "the persona's model."
-  );
+
+  // worker_targets vs defaultCoder
+  if (fromWorker !== undefined && configured !== undefined && configured !== "") {
+    if (fromWorker !== configured) {
+      return (
+        `inference.worker_targets.coder = "${fromWorker}" and inference.personas.coder.model = ` +
+        `"${configured}" name different destinations. worker_targets wins; unset it to use ` +
+        "the persona's model."
+      );
+    }
+  }
+
+  // persona worker target vs defaultCoder (when defaultCoder is a target)
+  if (fromPersonaWorker !== undefined && configured !== undefined && configured !== "") {
+    if (resolveTarget(input.settings, configured).ok && fromPersonaWorker !== configured) {
+      return (
+        `inference.personas.coder.model = "${fromPersonaWorker}" (worker target) and ` +
+        `inference.personas.coder.model = "${configured}" (harness target) name different destinations. ` +
+        "Use separate personas for worker vs harness routing, or unset one."
+      );
+    }
+  }
+
+  return undefined;
 }

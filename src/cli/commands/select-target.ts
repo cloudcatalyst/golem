@@ -2,7 +2,7 @@
  * R10.24 — the one implementation of "switch which upstream serves this project",
  * shared by `golem gateway use` and `golem target use`.
  *
- * Both commands write the same single leaf (`inference.default_target`, via
+ * Both commands write the same single leaf (`inference.model`, via
  * {@link useGateway}) and both must apply it the same way: restart a running
  * proxy, or say plainly that a restart is needed. It lives here because the two
  * commands were about to hold two copies of that sequence, and a selector whose

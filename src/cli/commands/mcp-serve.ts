@@ -83,12 +83,12 @@ function resolveTargetCredential(
  * **Extracted from the `serveStdio` call literal so the wiring is testable**, and
  * that is not incidental: the bug this closes was invisible precisely because it
  * lived in an inline object. `settings.proxy` satisfies `TargetRegistrySettings`
- * structurally — it carries the DEPRECATED `proxy.default_target` leaf — so
+ * structurally — it carries the DEPRECATED `proxy.model` leaf — so
  * passing it where `withDefaultTarget(settings)` was meant type-checks perfectly
- * and silently discards the live `inference.default_target`. Nothing throws;
+ * and silently discards the live `inference.model`. Nothing throws;
  * every unrouted dispatch simply goes somewhere else and reports success. R9.23
  * moved the key and consolidated five call sites onto the helper; this one was
- * missed because the dispatcher did not read `default_target` at all until now.
+ * missed because the dispatcher did not read `model` at all until now.
  *
  * `overrides` exists for tests (a fake `fetch`, a stub credential resolver). It
  * is spread LAST but deliberately cannot reach `settings` or `workerTargets` —

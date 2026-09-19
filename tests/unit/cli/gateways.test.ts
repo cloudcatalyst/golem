@@ -122,7 +122,7 @@ describe("useGateway", () => {
   });
 
   /**
-   * R10.24 — `inference.default_target` is a TARGET selector, and a gateway that
+   * R10.24 — `inference.model` is a TARGET selector, and a gateway that
    * fronts several models collapses to one target when selected by gateway id. A
    * user with two OpenRouter models configured could therefore reach only the
    * first, and the VS Code picker could only ever offer the gateway. Selecting a
@@ -481,7 +481,7 @@ describe("removeGateway", () => {
     });
     expect(was_active).toBe(true);
     const { settings } = await loadConfig({ projectDir: dir });
-    expect(settings.inference.default_target).toBeUndefined();
+    expect(settings.inference.model).toBeUndefined();
     expect((await collectGateways(dir, {}, { store_backend: store })).active).toBe("anthropic");
   });
 });

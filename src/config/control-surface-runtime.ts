@@ -53,11 +53,11 @@ export async function runtimeControlGroup(shared: {
     advanced: false,
   };
 
-  // Accounts: the synthetic default (clears default_target) plus each registered
+  // Accounts: the synthetic default (clears model) plus each registered
   // gateway. Credentials are never read here — `useAccount` does the preflight.
   const registered = settings.proxy.gateways ?? [];
   const defaultId = settings.proxy.upstream_provider;
-  const accountEntry = provenance["inference.default_target"];
+  const accountEntry = provenance["inference.model"];
   const accountLocked = accountEntry?.layer === "env" ? ENV_LOCKED(accountEntry.source) : undefined;
   const accountControl: Control = {
     id: "runtime:account",
@@ -68,7 +68,7 @@ export async function runtimeControlGroup(shared: {
       "Switching runs a credential preflight and restarts a running proxy. Credentials live " +
       "in the OS store — add gateways with `golem gateway add` / `golem gateway login`.",
     kind: "enum",
-    value: settings.inference.default_target ?? defaultId,
+    value: settings.inference.model ?? defaultId,
     options: [
       { value: defaultId, label: `${defaultId} (default upstream config)` },
       ...registered.map((g) => ({ value: g.id, label: `${g.id} (${g.provider})` })),
@@ -157,7 +157,7 @@ export async function applyRuntime(
     case "account": {
       const { settings } = await loadConfig(shared);
       const raw = typeof value === "string" ? value : String(value);
-      // The synthetic default id and "none" both clear `inference.default_target`.
+      // The synthetic default id and "none" both clear `inference.model`.
       const target =
         raw === "none" || raw === "" || raw === settings.proxy.upstream_provider ? null : raw;
       const result = await switchAccount(shared.projectDir, target, options);

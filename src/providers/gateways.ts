@@ -12,7 +12,7 @@
  *   identity (id, provider, base_url, models, auth_scheme). The credential comes
  *   from a per-gateway env var {@link perGatewayEnvVar}; the legacy single
  *   account uses `GOLEM_UPSTREAM_API_KEY`.
- * - **Fail-closed / no silent cross-account fallback.** A `default_target` that
+ * - **Fail-closed / no silent cross-account fallback.** A `model` that
  *   names an unknown id does NOT silently use a different gateway — it falls back
  *   to the user's own top-level (legacy) config and reports a warning. A missing
  *   credential is surfaced downstream (the request 401s), never swapped for
@@ -22,7 +22,12 @@
 import { resolveAuthScheme, type UpstreamAuthScheme, type UpstreamProvider } from "./index.js";
 // Direct import, not the barrel: the barrel re-exports this module, and
 // importing ourselves through it would be a circular dependency.
-import { listTargets, resolveDefaultTargetId, type TargetRegistrySettings } from "./targets.js";
+import {
+  listTargets,
+  resolveDefaultTargetId,
+  type TargetEntry,
+  type TargetRegistrySettings,
+} from "./targets.js";
 
 /** A non-secret gateway entry (from `proxy.gateways`). */
 export interface GatewayEntry {
@@ -70,7 +75,7 @@ export interface ResolveResult {
 
 /**
  * Resolve the active upstream from the registry + selection. The selector
- * (`inference.default_target`, renamed from `active_account` in R9.1)
+ * (`inference.model`, renamed from `active_account` in R9.1)
  * unset -> the legacy top-level config. Set + found -> that gateway (secret from
  * its per-gateway env var). Set + NOT found -> legacy config + a warning (never a
  * different gateway — ADR-0003 fail-closed).
@@ -105,7 +110,7 @@ export function resolveActiveUpstream(
     return {
       resolved: legacyResolved,
       warning:
-        `inference.default_target "${input.activeAccount}" is in neither proxy.gateways nor ` +
+        `inference.model "${input.activeAccount}" is in neither proxy.gateways nor ` +
         "proxy.targets — using the top-level upstream config instead (no silent switch).",
     };
   }
@@ -147,14 +152,14 @@ export interface UpstreamDisplaySettings {
   /** R9.23: renamed from `accounts`. */
   readonly gateways?: readonly GatewayEntry[];
   /** R9.6: the selector, renamed from `active_account` in R9.1. */
-  readonly default_target?: string;
+  readonly model?: string;
   /**
    * R9.6: ids the target registry knows. The selector may legitimately name a
    * TARGET rather than a gateway, in which case the gateway layer must stand
    * aside silently — routing owns it. Without this the gateway layer would warn
    * about a perfectly valid target id.
    */
-  readonly targets?: readonly { readonly id: string }[];
+  readonly targets?: readonly TargetEntry[];
 }
 
 /**
@@ -168,7 +173,7 @@ export interface UpstreamDisplaySettings {
  */
 export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): UpstreamDisplay {
   // R9.23: the selector may name a compound TARGET id (e.g.
-  // `openrouter:deepseek/...`), which is how `inference.default_target` is
+  // `openrouter:deepseek/...`), which is how `inference.model` is
   // normally set. Routing resolves it through the target registry
   // (`resolveDefaultTargetId`), so display must too — treating it as a gateway
   // id falls back to the legacy config and reports the wrong upstream. A bare
@@ -179,7 +184,8 @@ export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): Upstr
     ...(settings.upstream_model !== undefined ? { upstream_model: settings.upstream_model } : {}),
     upstream_auth_scheme: settings.upstream_auth_scheme,
     ...(settings.gateways !== undefined ? { gateways: settings.gateways } : {}),
-    ...(settings.default_target !== undefined ? { default_target: settings.default_target } : {}),
+    ...(settings.targets !== undefined ? { targets: settings.targets } : {}),
+    ...(settings.model !== undefined ? { model: settings.model } : {}),
   };
   const targetId = resolveDefaultTargetId(registrySettings);
   const target = listTargets(registrySettings).find((t) => t.id === targetId);
@@ -201,7 +207,7 @@ export function resolveUpstreamDisplay(settings: UpstreamDisplaySettings): Upstr
         auth_scheme: resolveAuthScheme(settings.upstream_provider, settings.upstream_auth_scheme),
       },
       ...(settings.gateways !== undefined ? { gateways: settings.gateways } : {}),
-      ...(settings.default_target !== undefined ? { activeAccount: settings.default_target } : {}),
+      ...(settings.model !== undefined ? { activeAccount: settings.model } : {}),
       ...(settings.targets !== undefined
         ? { knownTargetIds: settings.targets.map((t) => t.id) }
         : {}),

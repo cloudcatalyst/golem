@@ -40,9 +40,36 @@ import {
 } from "./managed-files.js";
 import { P0_SKILLS } from "./skills.js";
 
-/** The directory one skill lives in: `golem-<cmd>`, directly under .claude/skills. */
+/**
+ * Skills that install WITHOUT the `golem-` prefix.
+ *
+ * An allowlist, never a widened glob. `ourSkillDirs` is what makes install,
+ * refresh, prune and uninstall agree on which directories are Golem's; matching
+ * anything broader than `golem-*` would hand Golem authority over directories a
+ * user or a team created, and `.claude/skills/` is shared with both.
+ *
+ * `vibe` is here because it is the USER's own style guide rather than a Golem
+ * feature they invoke, and `/golem-vibe` read wrong for that (USER, 2026-09-13).
+ */
+export const UNPREFIXED_SKILLS: ReadonlySet<string> = new Set(["vibe"]);
+
+/** The directory one skill lives in: `golem-<cmd>`, or the bare name if allowlisted. */
 export function skillDirName(command: string): string {
-  return `golem-${command}`;
+  return UNPREFIXED_SKILLS.has(command) ? command : `golem-${command}`;
+}
+
+/** How the skill is typed by the user — `/vibe`, `/golem-ship`. */
+export function skillDisplayName(command: string): string {
+  return `/${skillDirName(command)}`;
+}
+
+/** The command a managed skill directory belongs to, or null if it is not ours. */
+function commandFromDir(dirName: string): string | null {
+  if (UNPREFIXED_SKILLS.has(dirName)) return dirName;
+  if (dirName.startsWith("golem-") && !isTeamSkillDir(dirName)) {
+    return dirName.slice("golem-".length);
+  }
+  return null;
 }
 
 /**
@@ -58,7 +85,7 @@ async function ourSkillDirs(projectDir: string): Promise<string[]> {
   const skillsRoot = path.join(projectDir, ".claude", "skills");
   try {
     return (await readdir(skillsRoot, { withFileTypes: true }))
-      .filter((e) => e.isDirectory() && e.name.startsWith("golem-") && !isTeamSkillDir(e.name))
+      .filter((e) => e.isDirectory() && commandFromDir(e.name) !== null)
       .map((e) => e.name)
       .sort();
   } catch {
@@ -96,7 +123,7 @@ export async function installSkills(projectDir: string, dryRun: boolean): Promis
       actions.push({
         kind: "conflict",
         path: rel(projectDir, skillPath),
-        detail: ownedDetail(`/golem-${name} skill`),
+        detail: ownedDetail(`${skillDisplayName(name)} skill`),
       });
       continue;
     }
@@ -105,8 +132,8 @@ export async function installSkills(projectDir: string, dryRun: boolean): Promis
       path: rel(projectDir, skillPath),
       detail:
         disposition === "absent"
-          ? `/golem-${name} skill`
-          : `/golem-${name} skill — refreshed (unmodified since Golem wrote it)`,
+          ? `${skillDisplayName(name)} skill`
+          : `${skillDisplayName(name)} skill — refreshed (unmodified since Golem wrote it)`,
     });
     if (!dryRun) {
       await mkdir(path.dirname(skillPath), { recursive: true });
@@ -203,8 +230,8 @@ export async function pruneRetiredSkills(
   const actions: InitAction[] = [];
   const skillsRoot = path.join(projectDir, ".claude", "skills");
   for (const dirName of await ourSkillDirs(projectDir)) {
-    const command = dirName.slice("golem-".length);
-    if (command in P0_SKILLS) continue;
+    const command = commandFromDir(dirName);
+    if (command === null || command in P0_SKILLS) continue;
     const skillPath = path.join(skillsRoot, dirName, "SKILL.md");
     let onDisk: string;
     try {
@@ -216,14 +243,14 @@ export async function pruneRetiredSkills(
       actions.push({
         kind: "conflict",
         path: rel(projectDir, skillPath),
-        detail: ownedDetail(`retired /golem-${command} skill`),
+        detail: ownedDetail(`retired ${skillDisplayName(command)} skill`),
       });
       continue;
     }
     actions.push({
       kind: "remove",
       path: rel(projectDir, skillPath),
-      detail: `/golem-${command} skill — retired, and unmodified since Golem wrote it`,
+      detail: `${skillDisplayName(command)} skill — retired, and unmodified since Golem wrote it`,
     });
     if (!dryRun) {
       await rm(path.join(skillsRoot, dirName), { recursive: true, force: true });

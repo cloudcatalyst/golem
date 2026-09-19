@@ -31,3 +31,5 @@ So the decision moves to the one part the parent *does* control:
 A missing or stale rate-limit reading makes the gate **blind**: it warns once
 and lets a re-issued spawn through rather than assuming headroom. Treat that
 warning as the signal to check Claude Code's own limit indicator yourself.
+
+This rule is generated from Golem's own guidance registry (`src/hooks/guidance.ts`) and distributed by `golem init` / `golem guidance enable` — every Golem-managed project can receive this identical text. This repository, golem.run's own source, runs under the same unedited rule; Golem does not keep a separate house style for itself.

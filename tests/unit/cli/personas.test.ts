@@ -27,7 +27,12 @@ describe("collectPersonas", () => {
   it("reports the shipped bench as unstaffed on an untouched project", async () => {
     await writeSettings("settings.json", {});
     const report = await collectPersonas(projectDir, {});
-    expect(report.rows.map((r) => r.persona.id)).toEqual(["coder", "reviewer", "scribe"]);
+    expect(report.rows.map((r) => r.persona.id)).toEqual([
+      "coder",
+      "planner",
+      "reviewer",
+      "scribe",
+    ]);
     expect(report.rows.every((r) => !r.persona.staffed)).toBe(true);
   });
 
@@ -108,7 +113,7 @@ describe("ejectPersonaPrompt", () => {
   it("refuses an undeclared persona and names the ones that exist", async () => {
     await writeSettings("settings.json", {});
     await expect(ejectPersonaPrompt(projectDir, "nobody", {})).rejects.toThrow(
-      /no persona "nobody".*coder, reviewer, scribe/s,
+      /no persona "nobody".*coder, planner, reviewer, scribe/s,
     );
   });
 });

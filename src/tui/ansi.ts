@@ -20,6 +20,14 @@ export const CSI = `${ESC}[`;
 export const RESET = `${CSI}0m`;
 export const BOLD = `${CSI}1m`;
 export const DIM = `${CSI}2m`;
+/**
+ * Underline on/off as their OWN pair (`4m`/`24m`), not `RESET` — a status-line
+ * segment is already wrapped in a colour span, and `RESET` (`0m`) would clear
+ * that colour for everything after the underlined text, not just the
+ * underline.
+ */
+export const UNDERLINE_ON = `${CSI}4m`;
+export const UNDERLINE_OFF = `${CSI}24m`;
 export const CLEAR_TO_END = `${CSI}0J`;
 export const CLEAR_LINE = `${CSI}2K`;
 export const HIDE_CURSOR = `${CSI}?25l`;
@@ -127,4 +135,14 @@ export function paint(
   const colour = hex !== undefined ? fg(hex, level) : "";
   const prefix = `${opts.bold === true ? BOLD : ""}${colour}`;
   return prefix === "" ? text : `${prefix}${text}${RESET}`;
+}
+
+/**
+ * Underline `text` when `enabled`, or return it untouched. Uses the ON/OFF pair
+ * rather than `RESET`, so it can be nested inside an outer colour span (e.g. the
+ * destination's `cyan(...)` wrapper) without clearing that colour partway
+ * through the line.
+ */
+export function underline(text: string, enabled: boolean): string {
+  return enabled ? `${UNDERLINE_ON}${text}${UNDERLINE_OFF}` : text;
 }

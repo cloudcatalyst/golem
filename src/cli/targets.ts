@@ -79,7 +79,7 @@ export interface TargetRow {
 
 export interface TargetsReport {
   /** The id serving requests that name no target. */
-  readonly default_target: string;
+  readonly model: string;
   /** True when the resolved default names an id that is not in the registry (misconfig). */
   readonly default_unknown: boolean;
   readonly targets: readonly TargetRow[];
@@ -118,8 +118,8 @@ export async function collectTargets(
   const { settings } = await loadConfig({ projectDir, env });
   const proxy = settings.proxy;
   const targets = listTargets(proxy);
-  // R9.23: default_target moved to inference, but proxy may still carry it
-  // via the migration table (proxy.active_account → proxy.default_target).
+  // R9.23: model moved to inference; `withDefaultTarget` folds it onto the
+  // proxy settings so resolveDefaultTargetId sees it.
   const defaultId = resolveDefaultTargetId(withDefaultTarget(settings));
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
 
@@ -175,7 +175,7 @@ export async function collectTargets(
   );
 
   return {
-    default_target: defaultId,
+    model: defaultId,
     default_unknown: !targets.some((t) => t.id === defaultId),
     targets: rows,
   };
@@ -365,12 +365,12 @@ export function renderTargets(report: TargetsReport): string {
   lines.push("");
   if (report.default_unknown) {
     lines.push(
-      `default target: ${report.default_target} — WARNING: that id is in neither ` +
+      `default target: ${report.model} — WARNING: that id is in neither ` +
         "proxy.targets nor proxy.gateways. Requests naming no target fail closed rather " +
         "than silently using a different one.",
     );
   } else {
-    lines.push(`default target: ${report.default_target}`);
+    lines.push(`default target: ${report.model}`);
   }
   lines.push(`trust levels: ${TARGET_TRUST_LEVELS.join(" | ")} (stored now, enforced in R9.3)`);
   return `${lines.join("\n")}\n`;

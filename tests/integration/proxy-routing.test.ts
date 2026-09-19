@@ -75,7 +75,7 @@ function settings(): TargetRegistrySettings & { map_reasoning_to_thinking: boole
       { id: "alpha", gateway: "alpha", model: "claude-alpha" },
       { id: "beta", gateway: "beta", model: "claude-beta" },
     ],
-    default_target: "alpha",
+    model: "alpha",
   };
 }
 
@@ -137,7 +137,7 @@ describe("multi-target proxy routing (R9.2)", () => {
     expect(JSON.parse(beta.seen[0]?.body ?? "{}").model).toBe("claude-opus-5");
   });
 
-  it("falls back to default_target when nothing selects one", async () => {
+  it("falls back to model when nothing selects one", async () => {
     const { base } = await startProxy();
     await post(base, { model: "claude-opus-5", messages: [] });
     expect(alpha.seen).toHaveLength(1);

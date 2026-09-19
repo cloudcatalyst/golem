@@ -24,6 +24,7 @@
  * fail-safe, so a state-tracking hook can never disrupt a session.
  */
 
+import { captureOnPrompt } from "../vibe/hook.js";
 import { type HookIo, readAll } from "./hook-io.js";
 import {
   type BlockDetails,
@@ -168,11 +169,42 @@ export async function runNotificationHook(io: HookIo, nowIso: string): Promise<n
 }
 
 /** UserPromptSubmit handler: the human responded → clear the blocked flag. */
+/**
+ * PostToolUse on `AskUserQuestion` — the human answered, so clear the block.
+ *
+ * Without this the "waiting" indicator sticks. `UserPromptSubmit` was the only
+ * thing that cleared the flag, and answering a question is NOT a prompt submit:
+ * the flag stayed set from the moment Claude asked until the human's next real
+ * message, or until {@link BLOCKED_STALE_MS} (10 minutes) let `resolveBlock`
+ * downgrade it to `abandoned`. For the whole of a long turn the line claimed to
+ * be waiting on someone who had already answered.
+ *
+ * A tool RESULT is the honest signal: `AskUserQuestion` only produces one once
+ * the human has chosen. Deliberately does NOT call `captureOnPrompt` — that is
+ * rate-limited to once per human message on purpose, and an answered question is
+ * not a message.
+ */
+export async function runQuestionAnsweredHook(io: HookIo, nowIso: string): Promise<number> {
+  try {
+    const p = parsePayload(await readAll(io.stdin));
+    await markUnblocked(p.cwd ?? process.cwd(), nowIso, p.session_id);
+  } catch {
+    // fail-safe: a hook must never break the turn it observes
+  }
+  return 0;
+}
+
 export async function runUserPromptSubmitHook(io: HookIo, nowIso: string): Promise<number> {
   try {
     const p = parsePayload(await readAll(io.stdin));
     const dir = p.cwd ?? process.cwd();
     await markUnblocked(dir, nowIso, p.session_id);
+    // The human has stopped typing, so they have probably stopped editing —
+    // which is when their out-of-band corrections to agent-written files become
+    // visible. This is why capture needs no file watcher, and it is naturally
+    // rate-limited to once per human message. Swallows its own failures and
+    // no-ops outside a Golem project.
+    await captureOnPrompt(dir, nowIso);
   } catch {
     // fail-safe
   }

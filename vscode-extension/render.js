@@ -610,6 +610,10 @@ const ROLE_MARKS = {
   chat: "◆",
   /** The model `coder` drafts on. */
   coder: "✎",
+  /** The model `reviewer` reads on. */
+  reviewer: "◎",
+  /** The model `scribe` writes on. */
+  scribe: "✒",
   /** Fallback for a worker with no glyph of its own yet. */
   worker: "✦",
 };
@@ -645,37 +649,35 @@ function workerModels(model) {
  * The one-liner destination, naming the two models that actually matter now
  * that either end can be any target (R9.1–R9.4):
  *
- *   `◆ openrouter (deepseek/deepseek-v4-flash) + ✎ ollama (qwen2.5-coder:7b)`
+ *   `◆ openrouter (deepseek/deepseek-v4-flash) ✎ ollama (qwen2.5-coder:7b)`
  *
- * R11.6 — every model segment wears `<gateway> (<model>)`, and `+` joins them:
- * they are the same kind of thing, where `·` separates different kinds (models ·
- * dials · brevity). `MODEL_JOIN` in `src/cli/statusline.ts` is the other half of
- * this string; `statusline-parity.test.ts` demands they match.
+ * R11.6 — every model segment wears `<gateway> (<model>)`. `+` joins personas
+ * WITHIN the list — they are the same kind of thing — but chat joins that list
+ * with a plain space, not `+`: chat is the destination, and the persona list
+ * beside it is a roster, not a continuation of a "+" chain starting at the
+ * arrow. `MODEL_JOIN` in `src/cli/statusline.ts` is the other half of this
+ * string; `statusline-parity.test.ts` demands they match.
  *
- * **Flattened to one segment when both are the same model** — printing the same
- * id twice under two symbols tells the reader nothing and costs width the rest
- * of the line needs. The old shape (`local (…) + anthropic (…)`) hard-coded the
- * assumption this work removed: that drafting is local and only the upstream is
- * a real choice. Shown in every state (including passthrough/off): it is the
- * configured destination traffic goes to.
+ * **Every staffed persona is shown, even one running the same model as chat** —
+ * the line is a roster, not just a divergence report; hiding `reviewer` because
+ * it happens to share chat's model would make it indistinguishable from
+ * `reviewer` not being staffed at all. Shown in every state (including
+ * passthrough/off): it is the configured destination traffic goes to.
  */
 function destinationLabel(model) {
   // R6.2: use the vendor/model-name display label (e.g. `moonshotai (kimi-k3)`)
   // built in buildModel; it already incorporates the last-served or configured
   // model and matches the CLI's `golem status` output.
   const chatSeg = `${ROLE_MARKS.chat} ${model.upstreamDisplay || model.upstreamLabel || "upstream"}`;
-  // Compare the raw ids, not the vendor-formatted labels, so `anthropic (x)`
-  // and `x` still match.
-  const chatModel = model.lastServedModel || model.model || model.defaultModel;
-  const diverging = workerModels(model)
-    .filter((w) => w.model && w.model !== chatModel)
+  const workers = workerModels(model)
+    .filter((w) => w.model)
     .map((w) => {
       const mark = ROLE_MARKS[w.worker] || ROLE_MARKS.worker;
       return `${mark} ${w.gateway ? `${w.gateway} (${w.model})` : w.model}`;
     });
   // R10.24: the chat destination LEADS, as it does in the CLI. It used to trail
   // the workers, so the arrow pointed at the drafting model.
-  return [chatSeg, ...diverging].join(MODEL_JOIN);
+  return workers.length === 0 ? chatSeg : `${chatSeg} ${workers.join(MODEL_JOIN)}`;
 }
 
 function esc(s) {

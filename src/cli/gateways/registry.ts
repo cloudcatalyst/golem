@@ -64,7 +64,7 @@ export interface GatewayRow {
   /**
    * True for the synthetic DEFAULT account — the top-level upstream config the
    * proxy falls back to when no named account is active. It is not a
-   * `proxy.gateways` entry; selecting it just clears `inference.default_target`.
+   * `proxy.gateways` entry; selecting it just clears `inference.model`.
    */
   readonly is_default?: boolean;
 }
@@ -85,7 +85,7 @@ export interface GatewaysReport {
    */
   readonly active_target: string | null;
   /**
-   * True when `inference.default_target` names an id that is neither a known
+   * True when `inference.model` names an id that is neither a known
    * gateway nor a known target (misconfig).
    */
   readonly active_unknown: boolean;
@@ -96,7 +96,7 @@ export interface GatewaysReport {
  * The id of the synthetic DEFAULT account — the top-level upstream config used
  * when no named account is active. It is simply the top-level provider name
  * (e.g. `anthropic`), so the cleared state reads as a real destination rather
- * than "(none)". Selecting it clears `inference.default_target`.
+ * than "(none)". Selecting it clears `inference.model`.
  */
 export function defaultGatewayId(provider: string): string {
   return provider;
@@ -123,7 +123,7 @@ export async function collectGateways(
   opts: { readonly store_backend?: CredentialStore } = {},
 ): Promise<GatewaysReport> {
   const { settings } = await loadConfig({ projectDir, env });
-  const selected = settings.inference.default_target ?? null;
+  const selected = settings.inference.model ?? null;
   const gateways = settings.proxy.gateways ?? [];
   const defaultId = defaultGatewayId(settings.proxy.upstream_provider);
   const store = opts.store_backend ?? createCredentialStore({ userDir: defaultUserDir() });
@@ -232,7 +232,7 @@ export function renderGateways(report: GatewaysReport): string {
   lines.push("");
   if (report.active_unknown) {
     lines.push(
-      "active: (default) — WARNING: inference.default_target names an id not in proxy.gateways; " +
+      "active: (default) — WARNING: inference.model names an id not in proxy.gateways; " +
         "the proxy falls back to the top-level config (no silent switch to another gateway).",
     );
   } else {

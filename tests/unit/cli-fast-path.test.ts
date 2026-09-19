@@ -20,7 +20,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { FAST_HOOK_EVENTS, fastPathFor } from "../../src/cli/fast-path.js";
+import { FAST_HOOK_EVENTS, fastPathFor, readSessionStdin } from "../../src/cli/fast-path.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const source = (rel: string) => readFile(path.join(repoRoot, rel), "utf8");
@@ -141,5 +141,100 @@ describe("the fast path's safety boundary", () => {
       .map((m) => m[2])
       .filter((s): s is string => s !== undefined);
     expect(statics).toEqual([]);
+  });
+});
+
+/**
+ * `golem statusline` must never outlive the tick that spawned it.
+ *
+ * Claude Code re-renders the status line on a ~2s timer and does NOT reliably
+ * close the pipe it writes the session JSON to. The original read awaited an
+ * `end` that never came, so the promise never settled and the process never
+ * exited. Observed 2026-09-13: 264 live `main.js statusline` processes, the
+ * oldest three days old, together holding 9.2 GB — which pushed process creation
+ * machine-wide to seconds per spawn and starved the PostToolUse hook and the
+ * extension's `status --json` poll along with it.
+ *
+ * Both halves are guarded, because either alone still leaks:
+ *  - the read must SETTLE without EOF, and
+ *  - the stream must be RELEASED, or an open handle keeps the event loop alive
+ *    and the process lingers anyway, having already printed its line.
+ */
+describe("readSessionStdin", () => {
+  /** A pipe that is written to and deliberately never ended — the leak's shape. */
+  const openPipe = () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    let released = false;
+    const stream = {
+      isTTY: false,
+      on(event: string, fn: (...args: unknown[]) => void) {
+        listeners.set(event, fn);
+        return stream;
+      },
+      off(event: string) {
+        listeners.delete(event);
+        return stream;
+      },
+      pause() {
+        return stream;
+      },
+      destroy() {
+        released = true;
+        return stream;
+      },
+    };
+    return {
+      stream,
+      write: (text: string) => listeners.get("data")?.(Buffer.from(text)),
+      end: () => listeners.get("end")?.(),
+      get released() {
+        return released;
+      },
+      get listenerCount() {
+        return listeners.size;
+      },
+    };
+  };
+
+  // A timeout long enough that resolving *via the timer* would fail the test.
+  const NEVER = 60_000;
+
+  it("resolves as soon as the payload parses, without waiting for EOF", async () => {
+    const pipe = openPipe();
+    const read = readSessionStdin(pipe.stream, NEVER);
+    pipe.write(JSON.stringify({ session_id: "s", cwd: "/x" }));
+    expect(JSON.parse(await read)).toMatchObject({ session_id: "s" });
+  });
+
+  it("releases the stream so an unclosed pipe cannot hold the event loop", async () => {
+    const pipe = openPipe();
+    const read = readSessionStdin(pipe.stream, NEVER);
+    pipe.write(JSON.stringify({ cwd: "/x" }));
+    await read;
+    // pause() alone left the real process alive 20s after it had printed its line.
+    expect(pipe.released, "stdin must be destroyed, not merely paused").toBe(true);
+    expect(pipe.listenerCount, "listeners must be detached").toBe(0);
+  });
+
+  it("gives up on a pipe that never delivers anything", async () => {
+    const pipe = openPipe();
+    expect(await readSessionStdin(pipe.stream, 10)).toBe("");
+    expect(pipe.released).toBe(true);
+  });
+
+  it("still assembles a payload split across chunks", async () => {
+    const pipe = openPipe();
+    const read = readSessionStdin(pipe.stream, NEVER);
+    pipe.write('{"session_id":"s",');
+    pipe.write('"cwd":"/x"}');
+    expect(JSON.parse(await read)).toMatchObject({ session_id: "s", cwd: "/x" });
+  });
+
+  it("falls back to EOF when the payload never parses", async () => {
+    const pipe = openPipe();
+    const read = readSessionStdin(pipe.stream, NEVER);
+    pipe.write("not json");
+    pipe.end();
+    expect(await read).toBe("not json");
   });
 });

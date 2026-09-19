@@ -43,7 +43,7 @@ export default function register(program: Command): void {
     });
 
   // R10.24 — the missing verb. Every piece of per-target routing existed
-  // (R9.1/R9.2 resolve targets, `inference.default_target` selects one) except a
+  // (R9.1/R9.2 resolve targets, `inference.model` selects one) except a
   // way to SET it: `gateway use` rejected target ids, so a gateway fronting two
   // models could only ever serve whichever one it listed first. This is the
   // command the VS Code model picker drives.

@@ -20,7 +20,7 @@
  * is bounded and never throws, so `status` works offline.
  */
 
-import { loadConfig, type SettingsScope } from "../config/index.js";
+import { loadConfig, type SettingsScope, writeSetting } from "../config/index.js";
 import {
   chatModelFor,
   createProbeRunner,
@@ -195,15 +195,32 @@ export async function setLocalCoderEnabled(
   scope: SettingsScope,
   opts: { readonly projectDir: string },
 ): Promise<ConfigWriteResult> {
-  // R9.23: coder_enabled removed — coder is always available. Enable means
-  // clear the worker target (falls through to default_target); disable means
-  // set a target that will never resolve.
+  // R14.3: worker_targets retired — use personas.coder.model instead.
+  // Enable means clear the model (falls through to model); disable means
+  // set a model that will never resolve.
+  const { settings } = await loadConfig({ projectDir: opts.projectDir });
+  const personas = { ...settings.inference.personas };
+  const coderPersona = { ...(personas.coder ?? {}) };
   if (enabled) {
-    return setConfig(scope, "inference.worker_targets", "{}", { projectDir: opts.projectDir });
+    coderPersona.model = "";
+  } else {
+    coderPersona.model = "__disabled__";
   }
-  return setConfig(scope, "inference.worker_targets", '{"coder":"__disabled__"}', {
+  personas.coder = coderPersona;
+  const filePath = await writeSetting(scope, "inference.personas", personas, {
     projectDir: opts.projectDir,
   });
+  return {
+    key: "inference.personas",
+    value: personas,
+    scope: scope,
+    file: filePath,
+    effective: {
+      key: "inference.personas",
+      value: personas,
+      layer: scope as string,
+    },
+  };
 }
 
 export interface LocalUrlResult {

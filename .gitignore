@@ -11,31 +11,26 @@ npm-debug.log*
 # Coverage
 coverage/
 
-# Golem local state (repo root + any nested .golem/, e.g. under vscode-extension/)
-**/.golem/state/
-**/.golem/telemetry/
-**/.golem/knowledge/
-.golem/settings.local.json
-.golem/proxy.pid
-.golem/state/
-.golem/telemetry/
-.golem/webcache/
-.golem/ccr/
-.golem/knowledge/
-.golem/notes/
-.golem/distill/
-.golem/tasks/
-.golem/compact/
-# R13.2: redacted local conversation transcripts (ADR-0007 §6). Never
-# tracked — this is prompt content, gitignore coverage is verified by a test,
-# not assumed.
-.golem/conversations/
-# R9.12: the loopback CA + leaf, and the CA's PRIVATE KEY. Machine-local by
-# nature (the cert is issued for this machine's 127.0.0.1 and regenerated on
-# demand), and a committed CA key would be trusted by every clone.
-.golem/loopback/
-# R9.8: the detached daemon's log.
-.golem/proxy.log
+# Golem local state (repo root + any nested .golem/, e.g. under vscode-extension/):
+# deny-by-default. Everything under a .golem/ is machine-local (proxy pid/log,
+# the loopback CA + PRIVATE KEY (R9.12), redacted conversation transcripts
+# (R13.2, ADR-0007 §6), caches, telemetry, task/note/distill state,
+# settings.local.json) UNLESS explicitly allowlisted below. A directory can't
+# be un-ignored with `!` once matched, so this ignores .golem's *contents*
+# (`.golem/*`) rather than the directory itself, which keeps the allowlisted
+# entries below re-includable.
+#
+# This is the inverse of listing every subdirectory individually: a new
+# .golem/<whatever>/ this project starts writing is safe (ignored) by default,
+# rather than silently tracked until someone remembers to add it here.
+#
+# .golem/personas/ (ejected or hand-authored persona prompts) is allowlisted:
+# persona prompts are ordinary project content, not per-clone-only, so
+# they're trackable by git like anything else.
+**/.golem/*
+!.golem/settings.json
+!.golem/managed-files.json
+!.golem/personas
 
 # Claude Code personal settings
 .claude/settings.local.json

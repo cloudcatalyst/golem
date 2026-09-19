@@ -15,6 +15,7 @@
  * site keeps importing from here.
  */
 
+import type { TeamCacheStatus } from "../portal/team-layer.js";
 // Type-only imports (erased at runtime, so they cost nothing on the statusline
 // path). The narrow specifiers match the ones ./status-collect.ts imports for
 // value, where the barrel's `undici` cost is what rules it out.
@@ -229,14 +230,15 @@ export interface StatusReport {
    * `worker_targets` entry, and `route` says which step of the resolution chain
    * produced `target`. Before R10.8 an absent row meant "uses local tiered
    * inference"; it no longer can, because an unrouted worker now resolves
-   * through `inference.default_target` to the harness's own upstream.
+   * through `inference.model` to the harness's own upstream.
    */
   readonly workers?: readonly {
     readonly worker: string;
     readonly target: string;
     /**
      * Which step chose `target`: an explicit `worker_targets` entry (`worker`),
-     * `inference.default_target`, or the harness default upstream (`harness`).
+     * `inference.personas[worker].model` (`persona_worker`), `inference.model`,
+     * or the harness default upstream (`harness`).
      */
     readonly route?: string;
     /** The target's model. Absent when the target does not resolve. */
@@ -294,6 +296,17 @@ export interface StatusReport {
     /** A local pairing window is OPEN — short-lived, and worth seeing. */
     readonly pairing_open: boolean;
   };
+  /**
+   * `team-layer-fetch` / Decision 63(c) — the cached team layers on this
+   * machine, **one row each**, with their own ages.
+   *
+   * Per team and never aggregated: with several caches a single age is a number
+   * that describes none of them, and 63(d) guarantees the set outlives the
+   * links that made it (`golem team unlink` deliberately keeps a cache, because
+   * another project on this machine may still be using it). Absent when the
+   * machine holds none, so a solo install's status says nothing about teams.
+   */
+  readonly teams?: readonly TeamCacheStatus[];
   readonly limits?: {
     readonly five_hour_utilization: number;
     readonly seven_day_utilization?: number;

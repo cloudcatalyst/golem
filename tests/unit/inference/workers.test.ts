@@ -9,6 +9,9 @@
  * `KNOWN_WORKERS` literal to `inference.personas`. These tests exist to prove
  * the honesty property survived that move — the roster is open now, so a typo'd
  * key is easier to write and matters more.
+ *
+ * R14.3 retired `worker_targets` — worker lane now reads `personas[worker].model`
+ * directly. Tests updated to reflect this.
  */
 
 import { describe, expect, it } from "vitest";
@@ -20,9 +23,9 @@ import {
   workerTarget,
 } from "../../../src/inference/workers.js";
 
-/** A project that declares the shipped bench. */
+/** A project that declares the shipped bench with worker models. */
 const bench: Readonly<Record<string, PersonaConfig>> = {
-  coder: { discipline: "code" },
+  coder: { discipline: "code", model: "openrouter-qwen3" },
   reviewer: { discipline: "review" },
   scribe: { discipline: "write" },
 };
@@ -56,29 +59,22 @@ describe("isKnownWorker", () => {
 });
 
 describe("workerTarget", () => {
-  it("resolves a declared worker's target", () => {
-    expect(workerTarget({ coder: "openrouter-qwen3" }, "coder", bench)).toBe("openrouter-qwen3");
+  it("resolves a declared worker's target from personas", () => {
+    expect(workerTarget(undefined, "coder", bench)).toBe("openrouter-qwen3");
   });
 
-  it("is undefined when unset, empty, or the map is absent", () => {
-    expect(workerTarget(undefined, "coder", bench)).toBeUndefined();
-    expect(workerTarget({}, "coder", bench)).toBeUndefined();
-    expect(workerTarget({ coder: "" }, "coder", bench)).toBeUndefined();
+  it("is undefined when persona has no model", () => {
+    expect(workerTarget(undefined, "reviewer", bench)).toBeUndefined();
+    expect(workerTarget(undefined, "scribe", bench)).toBeUndefined();
   });
 
-  it("ignores a key naming an undeclared persona rather than throwing", () => {
-    // A config typo must not stop the worker that IS configured correctly from
-    // working. (An unknown TARGET is different — that fails closed at dispatch,
-    // because it would send work somewhere the user did not choose.)
-    expect(workerTarget({ writer: "x" }, "writer", bench)).toBeUndefined();
-    expect(workerTarget({ writer: "x", coder: "cheap" }, "coder", bench)).toBe("cheap");
+  it("is undefined when worker is not declared", () => {
+    expect(workerTarget(undefined, "writer", bench)).toBeUndefined();
   });
 
   it("routes a persona the project added itself", () => {
-    const withMigrator = { ...bench, migrator: { discipline: "code" } };
-    expect(workerTarget({ migrator: "openrouter-qwen3" }, "migrator", withMigrator)).toBe(
-      "openrouter-qwen3",
-    );
+    const withMigrator = { ...bench, migrator: { discipline: "code", model: "openrouter-qwen3" } };
+    expect(workerTarget(undefined, "migrator", withMigrator)).toBe("openrouter-qwen3");
   });
 });
 

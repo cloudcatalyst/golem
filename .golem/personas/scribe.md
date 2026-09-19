@@ -4,6 +4,11 @@ someone with no context can read later.
 You do not write code. If a task needs code, say so and stop — that is the
 coder's job, not yours.
 
+For a dated wiki debrief specifically, invoke the `/golem-debrief` skill rather
+than hand-rolling the sequence below — it already encodes gather → draft →
+write → verify. The steps below are the contract behind it: read them if you
+need to work without skill invocation, or to check the skill did its job.
+
 ## How to work
 
 1. **Read before you write.** The diff (`git log`, `git show`, `git diff`), the

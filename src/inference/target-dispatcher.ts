@@ -16,13 +16,13 @@
  * ## R10.8 — local inference is a destination, not a default
  *
  * Until R10.8 a dispatch that named no target went to the local tiered service,
- * and `inference.default_target` — the setting whose entire job is to name the
+ * and `inference.model` — the setting whose entire job is to name the
  * default — was never consulted. So the local model was not *chosen*; it was
  * what happened when nothing else was. The chain is now, in order:
  *
  * 1. an explicit `targetId` on the call,
  * 2. `inference.worker_targets[worker]`,
- * 3. `inference.default_target`,
+ * 3. `inference.model`,
  * 4. the harness's own default upstream (the synthetic target over
  *    `proxy.upstream_*`), which always exists.
  *
@@ -104,6 +104,7 @@ import {
   upstreamChatCompletionsPath,
 } from "../providers/index.js";
 import type { PersonaConfig } from "./personas.js";
+import { workerTargetFromPersona } from "./personas.js";
 import { workerTarget } from "./workers.js";
 
 /** Hosts for which `trust: "local"` is believable — context never leaves the machine. */
@@ -175,7 +176,7 @@ export interface DispatchRequest {
   /**
    * R9.4 — which tool worker is dispatching (`coder`, and more to come). Selects
    * the `inference.worker_targets` entry that applies when no `targetId` is
-   * given. Omitted, or no entry for it → `inference.default_target`, then the
+   * given. Omitted, or no entry for it → `inference.model`, then the
    * harness's own default upstream.
    */
   readonly worker?: string | undefined;
@@ -191,10 +192,12 @@ export interface DispatchRequest {
 export type DispatchRoute =
   /** An explicit `targetId` on the call. */
   | "explicit"
-  /** This worker's `inference.worker_targets` entry. */
+  /** This worker's `inference.worker_targets` entry (DEPRECATED). */
   | "worker"
-  /** `inference.default_target`. */
-  | "default_target"
+  /** `inference.personas[worker].model` resolved as a target. */
+  | "persona_worker"
+  /** `inference.model`. */
+  | "model"
   /** Nothing named a target — the synthetic default over `proxy.upstream_*`. */
   | "harness";
 
@@ -205,8 +208,10 @@ export function describeRoute(route: DispatchRoute, worker?: string | undefined)
       return "target named by the caller";
     case "worker":
       return `inference.worker_targets.${worker ?? "?"}`;
-    case "default_target":
-      return "inference.default_target";
+    case "persona_worker":
+      return `inference.personas.${worker ?? "?"}.model`;
+    case "model":
+      return "inference.model";
     case "harness":
       return "the harness default upstream (proxy.upstream_*) — nothing named a target";
   }
@@ -431,7 +436,7 @@ export interface TargetDispatcherOptions {
   /**
    * R9.4 — `inference.worker_targets`: worker name → target id. The dispatch's
    * {@link DispatchRequest.worker} picks the entry. A worker with no entry falls
-   * through to `inference.default_target` and then to the harness default
+   * through to `inference.model` and then to the harness default
    * (R10.8) — never a silent fall back to the local model, which would send the
    * work somewhere the user did not choose while reporting success.
    *
@@ -665,13 +670,13 @@ function sessionUpstreamProvider(settings: TargetRegistrySettings): string {
  * to *predict* a dispatch (`golem status`) asks the same code the dispatch asks.
  *
  * Step 3 and step 4 both come out of {@link resolveDefaultTargetId}, which
- * already encodes both (`settings.default_target ?? defaultTargetId(provider)`,
+ * already encodes both (`settings.model ?? defaultTargetId(provider)`,
  * plus the bare-gateway-id resolution R9.23 added). Re-deriving the id here
  * would be a second copy of a rule that must not drift; the ROUTE is a separate
  * observation about which half of that expression applied.
  *
  * Note this returns an id, not a target — resolution stays fail-closed at
- * {@link resolveTarget}, so a `default_target` naming nothing raises there with
+ * {@link resolveTarget}, so a `model` naming nothing raises there with
  * the list of what does exist.
  */
 export function selectTarget(
@@ -681,16 +686,23 @@ export function selectTarget(
   if (request.targetId !== undefined && request.targetId !== "") {
     return { id: request.targetId, route: "explicit" };
   }
+  // First check deprecated worker_targets, then personas[worker].model
   const fromWorker =
     request.worker !== undefined
       ? workerTarget(options.workerTargets, request.worker, options.personas)
       : undefined;
   if (fromWorker !== undefined) return { id: fromWorker, route: "worker" };
 
-  const configured = options.settings.default_target;
+  const fromPersonaWorker =
+    request.worker !== undefined
+      ? workerTargetFromPersona(options.personas ?? {}, request.worker)
+      : undefined;
+  if (fromPersonaWorker !== undefined) return { id: fromPersonaWorker, route: "persona_worker" };
+
+  const configured = options.settings.model;
   return {
     id: resolveDefaultTargetId(options.settings),
-    route: configured !== undefined && configured !== "" ? "default_target" : "harness",
+    route: configured !== undefined && configured !== "" ? "model" : "harness",
   };
 }
 
@@ -730,7 +742,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
 
       // Fail closed: an unknown id is an error naming what exists, never a
       // fallback to another target or to the local model. This now guards
-      // `inference.default_target` too — a typo there raises, exactly as a typo
+      // `inference.model` too — a typo there raises, exactly as a typo
       // in `worker_targets` always has, rather than quietly drafting locally and
       // reporting success.
       const lookup = resolveTarget(options.settings, named);
@@ -798,7 +810,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
           route === "harness"
             ? `no target is configured for this draft, so it fell through to the harness ` +
                 `default upstream ("${target.id}") — which declares no model, and this session's ` +
-                "own model is not known yet. Name a destination with `inference.default_target` " +
+                "own model is not known yet. Name a destination with `inference.model` " +
                 "or `inference.worker_targets`, or set `proxy.upstream_model`."
             : `target "${target.id}" declares no model, so there is nothing to ask. ` +
                 "Give it one with `golem target add --model <id>`.",
@@ -907,7 +919,7 @@ export function createTargetDispatcher(options: TargetDispatcherOptions): Target
               "draft on your behalf there. Do this work yourself. To delegate it instead, name a " +
               "destination with `inference.worker_targets" +
               `${request.worker === undefined ? "" : `.${request.worker}`}\` or ` +
-              "`inference.default_target`, or store a key for this upstream with " +
+              "`inference.model`, or store a key for this upstream with " +
               "`golem gateway login anthropic`.",
           );
         }

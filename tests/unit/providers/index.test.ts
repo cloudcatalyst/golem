@@ -92,11 +92,26 @@ describe("translating providers (case b)", () => {
     expect(upstreamAssumesCaching("gemini")).toBe(false);
   });
 
+  it("treats nvidia-nim as NON-caching (OpenAI-compatible, genuinely non-caching)", () => {
+    expect(upstreamAssumesCaching("nvidia-nim")).toBe(false);
+  });
+
   it("classifies gemini as translating, gemini-schema, and no header auth (query-param key)", () => {
     expect(isTranslatingProvider("gemini")).toBe(true);
     expect(isGeminiProvider("gemini")).toBe(true);
     expect(isGeminiProvider("openai")).toBe(false);
     expect(defaultAuthScheme("gemini")).toBe("inherit");
+  });
+
+  it("classifies nvidia-nim as translating, OpenAI-compatible, bearer auth, preserves vendor prefix", () => {
+    expect(isTranslatingProvider("nvidia-nim")).toBe(true);
+    expect(isGeminiProvider("nvidia-nim")).toBe(false);
+    expect(defaultAuthScheme("nvidia-nim")).toBe("bearer");
+    expect(resolveAuthScheme("nvidia-nim", "inherit")).toBe("bearer");
+    expect(preservesVendorPrefix("nvidia-nim")).toBe(true);
+    expect(upstreamRequestUrl("nvidia-nim", "https://integrate.api.nvidia.com/v1")).toBe(
+      "https://integrate.api.nvidia.com/v1/chat/completions",
+    );
   });
 
   it("derives the chat-completions path from the base URL, preserving any prefix", () => {

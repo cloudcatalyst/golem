@@ -207,8 +207,8 @@ describe("target registry -- trust defaults", () => {
 });
 
 describe("target registry -- the default selector", () => {
-  it("reads default_target — resolves a gateway id to the first target from that gateway (R9.23)", () => {
-    expect(resolveDefaultTargetId({ ...SIX_GATEWAYS, default_target: "openrouter-laguna" })).toBe(
+  it("reads model — resolves a gateway id to the first target from that gateway (R9.23)", () => {
+    expect(resolveDefaultTargetId({ ...SIX_GATEWAYS, model: "openrouter-laguna" })).toBe(
       "openrouter-laguna:poolside/laguna-s-2.1:free",
     );
   });
@@ -311,7 +311,7 @@ describe("target registry -- startup warnings", () => {
   it("warns for EVERY misconfigured target, not just the default one", () => {
     const warnings = targetWarnings({
       ...BASE,
-      default_target: "anthropic",
+      model: "anthropic",
       gateways: [
         { id: "a", provider: "openrouter", base_url: "https://openrouter.ai/api/v1" },
         { id: "b", provider: "openai", base_url: "https://api.openai.com/v1" },

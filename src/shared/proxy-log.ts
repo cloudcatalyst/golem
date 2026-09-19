@@ -2,7 +2,7 @@
  * R11.7 — the proxy's log line, with a timestamp on it.
  *
  * `.golem/proxy.log` held 11,655 lines of
- * `golem proxy: routed to "anthropic" — inference.default_target` and nothing
+ * `golem proxy: routed to "anthropic" — inference.model` and nothing
  * to place any of them in time. Diagnosing a live "Connection lost
  * mid-response" therefore could not use it at all: the evidence came from the
  * client's transcript and the process table instead. A log whose entries cannot

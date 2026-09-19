@@ -74,6 +74,7 @@ export {
 export {
   classifyNotification,
   runNotificationHook,
+  runQuestionAnsweredHook,
   runUserPromptSubmitHook,
 } from "./session-hooks.js";
 export type {
@@ -103,16 +104,21 @@ export {
   writeSessionState,
 } from "./session-state.js";
 export {
+  ASK_USER_QUESTION_MATCHER,
   addEventHook,
   GOLEM_DEFAULT_MODE,
+  GOLEM_FALLBACK_MODEL,
   NOTIFICATION_COMMAND,
   PROMPT_SUBMIT_COMMAND,
+  QUESTION_ANSWERED_COMMAND,
   removeDefaultMode,
   removeEventHook,
+  removeFallbackModel,
   removeStatusLine,
   STATUS_LINE_COMMAND,
   STATUS_LINE_REFRESH_INTERVAL_SEC,
   writeDefaultMode,
+  writeFallbackModel,
   writeStatusLine,
 } from "./settings-extras.js";
 export type { HookSettingsOptions, MatcherHookSpec } from "./settings-writer.js";

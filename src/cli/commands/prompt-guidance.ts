@@ -16,6 +16,7 @@ import {
   removeGuidanceRule,
   writeGuidanceRule,
 } from "../../hooks/index.js";
+import { VERSION } from "../../index.js";
 import {
   createProbeRunner,
   detectCapability,
@@ -38,6 +39,7 @@ import { InitError } from "../init.js";
 import { proxyStatus, startDetached } from "../proxy-daemon.js";
 import { readProxyDesired } from "../proxy-state.js";
 import { proxyBaseUrl, readWiringState } from "../proxy-wiring.js";
+import { syncProjectVersion } from "../version-sync.js";
 
 const _DEFAULT_DIR = findProjectDir(process.cwd()) ?? process.cwd();
 
@@ -356,6 +358,12 @@ export default function register(program: Command): void {
         // If it's not, restart it.
         const wiring = await readWiringState(cwd, proxyBaseUrl(port));
         if (wiring.owner !== "golem") return;
+        // Resync Claude Code's own wiring (hooks/statusLine/permissions) with
+        // whatever `golem` version is running THIS session, independent of
+        // whether the daemon below needs (re)starting — see version-sync.ts.
+        // A long-lived daemon can outlive several `npm i -g golem-run`
+        // upgrades; this is the path that still catches drift every session.
+        await syncProjectVersion({ projectDir: cwd, version: VERSION, proxyPort: port });
         if ((await proxyStatus(cwd, port)).running) return;
         // R10.12 / Decision 56: honour the recorded intent. A project left in
         // `bypass` is still WIRED, so restarting it as the full pipeline would

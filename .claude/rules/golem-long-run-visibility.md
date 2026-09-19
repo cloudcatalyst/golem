@@ -21,3 +21,5 @@ looking idle — the user cannot tell the difference between working and hung.
 While a `golem verify` run is in flight, `golem statusline` shows it live —
 the status line re-runs on a 2s timer, so it ticks even when the session is
 idle. That is the only surface that does.
+
+This rule is generated from Golem's own guidance registry (`src/hooks/guidance.ts`) and distributed by `golem init` / `golem guidance enable` — every Golem-managed project can receive this identical text. This repository, golem.run's own source, runs under the same unedited rule; Golem does not keep a separate house style for itself.

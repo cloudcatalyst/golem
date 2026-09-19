@@ -26,23 +26,46 @@ import { PortalAuthError } from "./errors.js";
 import { refreshTokens } from "./exchange.js";
 import { isExpired, type PortalTokenSet, type PortalTokenStore } from "./tokens.js";
 
+/**
+ * Accept `null` from the wire wherever an absent field is acceptable, and
+ * normalize it to `undefined` so nothing downstream has to know the difference.
+ *
+ * `.optional()` alone does NOT do this: in zod it admits `undefined` and
+ * rejects `null`. A JSON API that serialises "no value" as an explicit `null`
+ * therefore fails a schema that looks permissive — which is exactly what
+ * happened on the first live `golem team link`. The portal answered `200` with
+ * every field correct except `auth.scopes: null`, and the whole response was
+ * refused as "an unexpected shape" (verification-notes §164).
+ *
+ * This is the boundary being liberal in what it accepts while the inside stays
+ * strict: `PortalIdentity` keeps its `T | undefined` fields, so no consumer
+ * changes and no `null` leaks past this line.
+ */
+export const wireOptional = <T extends z.ZodTypeAny>(schema: T) =>
+  schema.nullish().transform((value) => value ?? undefined);
+
 /** `GET /api/v1/me` — the first call any client makes. */
 const identitySchema = z.object({
-  user: z.object({ id: z.string(), email: z.string().optional() }),
-  auth: z.object({ via: z.string().optional(), scopes: z.array(z.string()).optional() }).optional(),
+  user: z.object({ id: z.string(), email: wireOptional(z.string()) }),
+  auth: wireOptional(
+    z.object({ via: wireOptional(z.string()), scopes: wireOptional(z.array(z.string())) }),
+  ),
+  // Absent, null, or a list — all mean "no organizations to choose from", and
+  // the caller gets an array either way rather than three cases to handle.
   organizations: z
     .array(
       z.object({
         id: z.string(),
         name: z.string(),
-        slug: z.string().optional(),
-        role: z.string().optional(),
-        entitled: z.boolean().optional(),
-        subscriptionStatus: z.string().optional(),
-        seatCount: z.number().optional(),
+        slug: wireOptional(z.string()),
+        role: wireOptional(z.string()),
+        entitled: wireOptional(z.boolean()),
+        subscriptionStatus: wireOptional(z.string()),
+        seatCount: wireOptional(z.number()),
       }),
     )
-    .default([]),
+    .nullish()
+    .transform((value) => value ?? []),
 });
 
 export type PortalIdentity = z.infer<typeof identitySchema>;

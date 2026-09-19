@@ -18,7 +18,11 @@ import { runHostGateHook } from "./host-gate.js";
 import { runPermissionRequestHook } from "./permission-request.js";
 import { type PostToolUseOptions, runPostToolUseHook } from "./post-tool-use.js";
 import { runPreToolUseHook } from "./pre-tool-use.js";
-import { runNotificationHook, runUserPromptSubmitHook } from "./session-hooks.js";
+import {
+  runNotificationHook,
+  runQuestionAnsweredHook,
+  runUserPromptSubmitHook,
+} from "./session-hooks.js";
 import { runWebFetchPost, runWebFetchPre, type WebFetchHookOptions } from "./web-fetch.js";
 
 const stdio = () => ({ stdin: process.stdin, stdout: process.stdout, stderr: process.stderr });
@@ -60,6 +64,17 @@ export function buildHookCommand(options: HookCommandOptions = {}): Command {
     .action(async () => {
       try {
         process.exitCode = await runUserPromptSubmitHook(stdio(), new Date().toISOString());
+      } catch {
+        process.exitCode = 0; // fail-safe
+      }
+    });
+
+  hook
+    .command("question-answered")
+    .description("PostToolUse(AskUserQuestion) handler: clear the blocked flag once answered")
+    .action(async () => {
+      try {
+        process.exitCode = await runQuestionAnsweredHook(stdio(), new Date().toISOString());
       } catch {
         process.exitCode = 0; // fail-safe
       }

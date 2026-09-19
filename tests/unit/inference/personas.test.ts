@@ -126,8 +126,14 @@ describe("resolvePersonaPrompt precedence", () => {
   });
 
   it("ships a built-in for every persona on the starter bench", () => {
-    for (const id of ["coder", "reviewer", "scribe"]) {
+    for (const id of ["planner", "coder", "reviewer", "scribe"]) {
       expect(DEFAULT_PERSONA_PROMPTS[id], `no built-in prompt for "${id}"`).toBeTruthy();
     }
+  });
+
+  it("resolves planner to its built-in rather than falling through to generic", async () => {
+    const r = await resolvePersonaPrompt("planner", {}, projectDir);
+    expect(r.source).toBe("built-in");
+    expect(r.text).toBe(DEFAULT_PERSONA_PROMPTS.planner);
   });
 });

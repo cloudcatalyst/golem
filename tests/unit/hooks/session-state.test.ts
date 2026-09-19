@@ -12,6 +12,7 @@ import {
   markUnblocked,
   readSessionState,
   runNotificationHook,
+  runQuestionAnsweredHook,
   runUserPromptSubmitHook,
   sessionStatePath,
 } from "../../../src/hooks/index.js";
@@ -131,8 +132,24 @@ describe("Notification / UserPromptSubmit hooks", () => {
     expect((await readSessionState(dir))?.blocked).toBe(false);
   });
 
+  it("an answered AskUserQuestion clears the blocked-state", async () => {
+    // Without this the "waiting" indicator sticks: UserPromptSubmit was the only
+    // thing that cleared the flag, and answering a question is not submitting a
+    // prompt, so the line claimed to be waiting on someone who had answered —
+    // until the human's next message or the 10-minute staleness window.
+    await markBlocked(dir, "Claude is waiting on your input", "2026-07-04T00:00:00Z");
+    const { io: hookIo, out } = io(
+      JSON.stringify({ cwd: dir, tool_name: "AskUserQuestion", session_id: "s11" }),
+    );
+    const code = await runQuestionAnsweredHook(hookIo, "2026-07-04T00:00:30Z");
+    expect(code).toBe(0);
+    expect(out).toHaveLength(0); // no stdout — the hook must not alter the turn
+    expect((await readSessionState(dir))?.blocked).toBe(false);
+  });
+
   it("hooks never throw on malformed stdin (exit 0)", async () => {
     const { io: hookIo } = io("{not json");
     expect(await runNotificationHook(hookIo, "t")).toBe(0);
+    expect(await runQuestionAnsweredHook(hookIo, "t")).toBe(0);
   });
 });

@@ -57,6 +57,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { CcrStore, estimateTokens, LocalDirBlobStore } from "../compression/index.js";
 import { resolveWorktreeRoot } from "../shared/git-worktree.js";
+import { captureAfterWrite } from "../vibe/hook.js";
 import { type HookIo, readAll } from "./hook-io.js";
 import { buildDigest, buildReadSkeleton } from "./post-tool-use/digest.js";
 import { servedFetchLabel } from "./post-tool-use/served-fetch-label.js";
@@ -216,6 +217,18 @@ export async function runPostToolUseHook(
     );
     return 0;
   }
+
+  // Vibe capture: record the style of what the agent just wrote, having first
+  // swept that one file for a human correction made since the last write. It
+  // runs here, before every early return below, so a tool whose output needs no
+  // CCR swap is still observed. Swallows its own failures, no-ops outside a
+  // Golem project, and never writes to this hook's stdout.
+  await captureAfterWrite(
+    payload.tool_name,
+    payload.tool_input,
+    options.projectDir ?? payload.cwd ?? process.cwd(),
+    new Date().toISOString(),
+  );
 
   const slot = findTextSlot(payload.tool_response);
 

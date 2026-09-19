@@ -2,8 +2,8 @@
 title: Persona Registry
 type: concept
 tags: [r14, r14-1, inference, configuration, personas, bench, dispatch, agent-definition]
-sources: ["src/config/schema.ts", "src/config/loader.ts", "src/inference/personas.ts", "src/config/migrations.ts", "src/cli/personas.ts", "docs/decisions/ADR-0003-credential-storage-and-account-routing.md"]
-updated: 2026-08-30
+sources: ["src/config/schema.ts", "src/config/loader.ts", "src/inference/personas.ts", "src/config/migrations.ts", "src/cli/personas.ts", "src/cli/init-hooks.ts", "docs/decisions/ADR-0003-credential-storage-and-account-routing.md"]
+updated: 2026-09-17
 created: 2026-08-30
 ---
 
@@ -84,17 +84,45 @@ This distinction is why `personaModel(personas, id)` returns `undefined` for a p
 
 ## The starter bench
 
-R14.1 ships three personas, all **unstaffed** by default, so an unconfigured repo is unchanged:
+R14.1 ships four personas, all **unstaffed** by default, so an unconfigured repo is unchanged:
 
 - **`coder`** (`discipline: code`) — a self-contained coding task, done on its own context and returned for review.
 - **`reviewer`** (`discipline: review`) — reads code as code and reports defects, without the authoring session's assumptions.
 - **`scribe`** (`discipline: write`) — turns landed work into prose: wiki debriefs, task documents, docs.
+- **`planner`** (`discipline: plan`) — breaks a non-trivial or ambiguous task down into a concrete implementation plan before code changes begin.
 
 Staff them by setting `inference.personas.<id>.model` to a model id or target id.
 
-Staffing goes **per role**, not per hierarchy: there is no `manager` persona (the session is the only thing that can spawn a subagent) and no `planner` (planning is a skill surface; R9.11 says skills orchestrate).
+Staffing goes **per role**, not per hierarchy: there is no `manager` persona (only the interactive session can spawn a subagent, so a dispatching persona is a fiction).
+
+`inference.personas` keys are user-defined, not an enum — a project may define custom personas beyond the shipped four. This repo's own `.golem/settings.local.json` (personal, gitignored) staffs the shipped personas onto specific models (`claude-opus-5` for `planner` and `reviewer`, `claude-sonnet-5` for `coder`, `claude-haiku-4-5` for `scribe`), exactly like any other project layer overrides a default. `DEFAULT_PERSONA_PROMPTS` carries built-in prompts keyed by persona id for all four, inherited when a persona is staffed without an explicit `prompt` override.
 
 Prompts are versioned with the shipped bench: `DEFAULT_PERSONA_PROMPTS` in `src/inference/personas.ts` supplies built-in prompts for each, which can be overridden per layer by `prompt` (inline) or `prompt_file`. Users can eject and edit with `golem personas eject <id>`.
+
+### Ejected files are now project-tracked
+
+`golem personas eject <id>` writes to `<project>/.golem/settings.json`'s
+sibling `.golem/personas/<id>.md`. This file is **tracked by git by default**
+as ordinary project content (reviewed 2026-09-17), shared with every contributor
+once committed, like any other source file. The standard `git add`/`.gitignore`
+workflow decides whether to commit it — a project prompt that should be shared
+goes in, a personal one stays out via `.git/info/exclude` if a contributor
+prefers uncommitted tweaks.
+
+This changed from the earlier per-clone-only model (gitignored wholesale). That
+change means: a project's refined prompt for a persona now ships as `.golem/personas/<id>.md`
+in the conventional location, no extra configuration required.
+
+A **team-wide** prompt override does not go through eject at all — it goes
+through the same channel as any other team-origin setting ([[Team Layer]]):
+the org sets `inference.personas.<id>.prompt` (inline string) in its portal
+settings, which lands at the `team` origin and merges per-field like every
+other `inference.personas` key (`MERGE_PER_KEY_LEAVES`, above). The committed
+project layer (`<project>/.golem/settings.json`) sits above `team` in normal
+precedence, so a project's own `inference.personas.<id>.prompt` wins over the
+team default without needing `!important` — the ordinary case, not a special
+one. No code change was needed for this: the persona leaf already merges
+across every origin the same way.
 
 ## Retirement: `inference.default_coder` → `personas.coder.model`
 
@@ -116,6 +144,12 @@ That message names the file, the key, and the exact replacement syntax.
 - **Generating agent definitions** (`.claude/agents/golem-<id>.md`) — R14.3.
 - **A task naming a `discipline`** — R14.4. Note it is advisory and free-form: a discipline nobody staffs changes nothing, with no warning, by design.
 
+## The sibling rule: prefer the bench over `fork`
+
+`golem init` generates `.claude/rules/golem-prefer-persona-agents.md` alongside the agent definitions, listing each currently dispatchable persona with its model and `discipline` field (from the persona's own definition in `inference.personas`). The rule points to these personas first before the built-in `fork` subagent type, which carries no persona identity and thus no routing, prompt, or tool allowlist.
+
+See `src/cli/persona-preference-rule.ts` for the generation logic and full rationale.
+
 ## Related
 
-[[Configuration Surfaces]] · [[Spawn Headroom Gate]] · [[Architecture]]
+[[Configuration Surfaces]] · [[Spawn Headroom Gate]] · [[Team Layer]] · [[Architecture]]

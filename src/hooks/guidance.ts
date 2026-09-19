@@ -16,7 +16,12 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { InitAction } from "../cli/init.js";
-import { classifyManaged, ownedDetail, rememberManaged } from "../cli/managed-files.js";
+import {
+  classifyManaged,
+  forgetManaged,
+  ownedDetail,
+  rememberManaged,
+} from "../cli/managed-files.js";
 
 /** Committed project scope vs gitignored personal scope for a rule file. */
 export type GuidanceScope = "project" | "user";
@@ -27,6 +32,31 @@ export const PERSONAL_RULES_GITIGNORE = ".claude/rules/golem-*.local.md";
 /** Managed-file banner (HTML comment: stripped from context, visible in-editor). */
 const MANAGED_BANNER = (name: string) =>
   `<!-- Managed by Golem — remove with \`golem guidance disable ${name}\` -->`;
+
+/**
+ * Appended to every rule's VISIBLE body — not the banner above, which is an
+ * HTML comment Claude Code strips before the model ever sees it (that is why
+ * the banner alone cannot carry this).
+ *
+ * User request 2026-09-16: make it clear, in the guidelines themselves, that
+ * Golem *distributes* them and that this project runs under the identical
+ * text. Before this, that fact lived in exactly one place — a hand-written
+ * sentence in CLAUDE.md's Multi-agent section, about `parallel-agent-isolation`
+ * specifically — so the other ten rules said nothing about being shared, and a
+ * rule read on its own (which is how Claude Code loads it: one file, no
+ * surrounding CLAUDE.md context) gave no hint that it wasn't local house style.
+ *
+ * True by construction, not just asserted: `guidanceRuleBody` is the ONE
+ * function every seeded `.claude/rules/golem-*.md` in every Golem-managed
+ * project is rendered from, this repository's own copies included — there is
+ * no second, hand-authored version for golem.run's own source.
+ */
+const DISTRIBUTION_NOTE =
+  "This rule is generated from Golem's own guidance registry " +
+  "(`src/hooks/guidance.ts`) and distributed by `golem init` / `golem guidance " +
+  "enable` — every Golem-managed project can receive this identical text. This " +
+  "repository, golem.run's own source, runs under the same unedited rule; Golem " +
+  "does not keep a separate house style for itself.";
 
 const CCR_REFS = [
   "## Golem: oversized tool outputs → CCR refs",
@@ -258,9 +288,15 @@ const PARALLEL_AGENT_ISOLATION = [
   "   prevent by not sharing.",
   '3. **Never judge a worktree disposable by its commit count.** "Zero commits',
   '   ahead" says nothing about a DIRTY TREE. Run `git -C <path> status --short`',
-  "   and `git stash list` before removing one — uncommitted design work that",
-  "   exists nowhere else looks exactly like an abandoned branch from the",
-  "   outside. Commit it on its own branch rather than deciding for the author.",
+  "   before removing one — uncommitted design work that exists nowhere else",
+  "   looks exactly like an abandoned branch from the outside. Commit it on its",
+  "   own branch rather than deciding for the author. (A stash is NOT at risk:",
+  "   `refs/stash` lives in the common git dir, not the worktree, so",
+  "   `worktree remove` cannot take one with it — verified 2026-09-07.)",
+  "   Confirm the OWNING AGENT has finished too — not merely that it reported a",
+  "   completed turn, because these agents are resumable. Removing the worktree",
+  "   of one that is still verifying destroys the logs it is about to quote: no",
+  "   committed work is lost, but the evidence for it is.",
   "4. **Shared append-only docs still conflict, and that is expected.** Resolve a",
   "   log or an index by keeping BOTH sides. Never hand-resolve a GENERATED file",
   "   — regenerate it (for the roadmap, `golem task index --write`).",
@@ -271,6 +307,33 @@ const PARALLEL_AGENT_ISOLATION = [
   "See also the subagent-headroom rule — a child cannot park at a usage limit, so",
   "it must commit early on its own branch or its work dies with it.",
 ].join("\n");
+const VIBE = [
+  "## Golem: the user's personal vibe (coding style + writing voice)",
+  "",
+  "This human has a PERSONAL style guide under `~/.golem/vibe/` — separate from",
+  "this project's conventions and from any team standard. It is readable only",
+  "from a Golem-initialised project, and it applies to work you author: code, the",
+  "comments in it, commit messages, docs, and review prose.",
+  "",
+  "1. **Consult it on coding, writing and review turns** — `golem vibe show`",
+  "   prints the brief, which is capped so it stays cheap. That brief is the",
+  "   whole always-on cost; treat it as the default reading.",
+  "2. **Open the detail only when it decides something.** `guidelines/<topic>.md`",
+  "   and `snippets/<lang>/<id>.md` sit under `~/.golem/vibe/` and are read on",
+  '   demand, one at a time. Reading them "for background" is exactly the bloat',
+  "   the split exists to prevent.",
+  "3. **The project outranks the person.** Where this repo's committed",
+  "   conventions (CLAUDE.md, linter config, the surrounding file) disagree with",
+  "   the personal guide, follow the project and SAY so. Never reformat existing",
+  "   code to match a personal preference, and never edit project config to.",
+  "4. **Noticed something durable?** A style choice the user made explicitly —",
+  "   especially a correction to something you wrote — is worth capturing. Ask",
+  "   once, at a natural pause, and only for a pattern you have seen more than",
+  "   once. `/vibe quiz` is the place that writes it down.",
+  "",
+  "Seed it from code that already reads right: `golem vibe seed <path>`.",
+].join("\n");
+
 export const GUIDANCE_FEATURES: readonly GuidanceFeature[] = [
   {
     name: "ccr-refs",
@@ -328,6 +391,13 @@ export const GUIDANCE_FEATURES: readonly GuidanceFeature[] = [
     snippet: SUBAGENT_HEADROOM,
   },
   {
+    name: "vibe",
+    summary:
+      "Consult the user's personal style guide (~/.golem/vibe/) when writing code, prose or review",
+    seededByDefault: true,
+    snippet: VIBE,
+  },
+  {
     name: "parallel-agent-isolation",
     summary:
       "Give every parallel agent its own git worktree — shared HEAD and shared node_modules collide",
@@ -352,9 +422,9 @@ export function guidanceRulePath(projectDir: string, name: string, scope: Guidan
   return path.join(projectDir, RULES_SUBDIR, `golem-${name}${suffix}`);
 }
 
-/** The full rule-file body (managed banner + the feature snippet). */
+/** The full rule-file body (managed banner + the feature snippet + the distribution note). */
 export function guidanceRuleBody(feature: GuidanceFeature): string {
-  return `${MANAGED_BANNER(feature.name)}\n\n${feature.snippet}\n`;
+  return `${MANAGED_BANNER(feature.name)}\n\n${feature.snippet}\n\n${DISTRIBUTION_NOTE}\n`;
 }
 
 /**
@@ -459,7 +529,16 @@ export async function removeGuidanceRule(
     const file = guidanceRulePath(projectDir, name, s);
     try {
       await readFile(file, "utf8");
-      if (!dryRun) await rm(file, { force: true });
+      if (!dryRun) {
+        await rm(file, { force: true });
+        // Forget the provenance record too, or `.golem/managed-files.json`
+        // accumulates hashes for files that no longer exist — one per rule
+        // anybody ever disabled. Harmless to `classifyManaged`, which treats a
+        // record with no file as absent, but it is a lie in a file whose whole
+        // job is saying what Golem wrote. Matches `pruneRetiredSkills`, which
+        // has always forgotten alongside its `rm`.
+        await forgetManaged(projectDir, file);
+      }
       removed.push(rel(projectDir, file));
     } catch {
       // not present in this scope
@@ -475,42 +554,103 @@ export async function removeGuidanceRule(
   return { kind: "remove", path: removed.join(", "), detail: `removed guidance: ${name}` };
 }
 
-// --- seed-once sentinel (so disabling a default sticks across re-inits) ---
+// --- seed-once record (so disabling a default sticks across re-inits) ---
 
 function guidanceStatePath(projectDir: string): string {
   return path.join(projectDir, ".golem", "state", "guidance.json");
 }
 
-async function alreadySeeded(projectDir: string): Promise<boolean> {
+/**
+ * What the seed record holds.
+ *
+ * `features` is the whole point, and the reason this is no longer a bare
+ * boolean: it names the defaults this project has already been OFFERED. "The
+ * user disabled this" and "this did not exist when the project was initialised"
+ * are different facts, and a lone `seeded: true` collapses them — both read as
+ * "sentinel set, rule file absent". That collapse meant every guidance rule
+ * shipped after a project's first init silently never reached it, while the
+ * author's fresh test project got it and looked fine
+ * (`guidance-new-default-never-seeds`, found 2026-09-13 by the `vibe` rule).
+ *
+ * `features: null` marks the OLD format, which needs the migration below.
+ */
+interface GuidanceState {
+  readonly seeded: boolean;
+  readonly features: readonly string[] | null;
+}
+
+async function readGuidanceState(projectDir: string): Promise<GuidanceState> {
   try {
     const j = JSON.parse(await readFile(guidanceStatePath(projectDir), "utf8")) as {
       seeded?: unknown;
+      features?: unknown;
     };
-    return j.seeded === true;
+    const features =
+      Array.isArray(j.features) && j.features.every((f) => typeof f === "string")
+        ? (j.features as string[])
+        : null;
+    return { seeded: j.seeded === true, features };
   } catch {
-    return false;
+    return { seeded: false, features: null };
   }
 }
 
 /**
- * Seed the default guidance rule files, ONCE. On first init this writes the
- * `seededByDefault` features and records a sentinel; on later inits it is a
- * no-op, so a user's `golem guidance disable` of a default is never undone.
+ * Which defaults this project has already been offered.
+ *
+ * Three cases, and the third is the migration:
+ *
+ * - never seeded → none, so everything is offered now
+ * - new-format record → exactly what it says
+ * - OLD-format record (`features` absent) → the names are not recoverable, so
+ *   infer them from the rules currently on disk. That re-offers a rule somebody
+ *   had genuinely disabled, ONCE. It is the wrong answer for that user and the
+ *   right one for everybody who has simply never been given the newer rules, and
+ *   the second group is far larger — a missing rule is silent, whereas a
+ *   re-offered one is visible in the init output and one `golem guidance
+ *   disable` away.
+ */
+async function offeredFeatures(
+  projectDir: string,
+  state: GuidanceState,
+  defaults: readonly GuidanceFeature[],
+): Promise<{ offered: Set<string>; migrated: boolean }> {
+  if (!state.seeded) return { offered: new Set(), migrated: false };
+  if (state.features !== null) return { offered: new Set(state.features), migrated: false };
+
+  const offered = new Set<string>();
+  for (const f of defaults) {
+    if (await guidanceRuleExists(projectDir, f.name, "project")) offered.add(f.name);
+  }
+  return { offered, migrated: true };
+}
+
+/**
+ * Seed the default guidance rule files — each of them once, ever.
+ *
+ * "Once" is per FEATURE, not per project. A default the project has already been
+ * offered and no longer has on disk was turned off deliberately, and is left
+ * alone. A default it has never been offered — because it did not exist last
+ * time — is seeded now, which is the whole fix: otherwise a rule reaches new
+ * projects and silently never reaches established ones.
+ *
+ * A rule that is still PRESENT is refreshed when unmodified (R9.5), so shipping
+ * better wording still works.
  */
 export async function seedDefaultGuidance(
   projectDir: string,
   dryRun = false,
 ): Promise<InitAction[]> {
-  const seeded = await alreadySeeded(projectDir);
+  const state = await readGuidanceState(projectDir);
+  const defaults = GUIDANCE_FEATURES.filter((g) => g.seededByDefault);
+  const { offered, migrated } = await offeredFeatures(projectDir, state, defaults);
+
   const actions: InitAction[] = [];
-  for (const f of GUIDANCE_FEATURES.filter((g) => g.seededByDefault)) {
-    // R9.5: the sentinel keeps its real job — a rule the user turned off with
-    // `golem guidance disable` (i.e. deleted) is NOT re-created on a later init.
-    // But "don't undo the user's choice" and "never refresh the text" used to be
-    // the same mechanism, and only the first was ever intended. So once seeded,
-    // a rule that is still PRESENT is refreshed (when unmodified) and one that is
-    // ABSENT is left absent.
-    if (seeded && !(await guidanceRuleExists(projectDir, f.name, "project"))) {
+  let newlyOffered = 0;
+  for (const f of defaults) {
+    // Offered before and absent now = the user ran `golem guidance disable`.
+    // Never offered and absent = they have simply never seen it.
+    if (offered.has(f.name) && !(await guidanceRuleExists(projectDir, f.name, "project"))) {
       actions.push({
         kind: "skip",
         path: rel(projectDir, guidanceRulePath(projectDir, f.name, "project")),
@@ -518,12 +658,32 @@ export async function seedDefaultGuidance(
       });
       continue;
     }
+    if (!offered.has(f.name)) newlyOffered += 1;
     actions.push(await writeGuidanceRule(projectDir, f, "project", dryRun));
   }
+
+  if (migrated) {
+    actions.push({
+      kind: "modify",
+      path: rel(projectDir, guidanceStatePath(projectDir)),
+      detail:
+        `guidance record upgraded — it now tracks WHICH defaults were offered, ` +
+        `so a newly shipped rule reaches this project` +
+        (newlyOffered > 0 ? ` (${newlyOffered} seeded now)` : ""),
+    });
+  }
+
   if (!dryRun) {
+    // Everything offered before, plus every default just walked — including the
+    // ones left disabled, because they HAVE been offered and must not be
+    // re-offered on the next init.
+    const record: GuidanceState = {
+      seeded: true,
+      features: [...new Set([...offered, ...defaults.map((f) => f.name)])].sort(),
+    };
     const state = guidanceStatePath(projectDir);
     await mkdir(path.dirname(state), { recursive: true });
-    await writeFile(state, `${JSON.stringify({ seeded: true }, null, 2)}\n`, "utf8");
+    await writeFile(state, `${JSON.stringify(record, null, 2)}\n`, "utf8");
   }
   return actions;
 }

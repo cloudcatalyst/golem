@@ -87,8 +87,10 @@ export type LayerName = "default" | "user" | "team" | "project" | "local" | "env
  * declarations) walks it reversed. Adding an origin means adding it here and
  * nowhere else.
  *
- * `team` is declared but not yet populated by any fetch: `team-settings-layer`
- * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills. It
+ * `team` is declared but not yet populated by any fetch: `team-layer-fetch`
+ * fills it, and {@link LoadConfigOptions.teamLayer} is the slot it fills
+ * (`team-settings-layer` was the original owner and is retired — Decision
+ * 62(c) — so do not go looking for it). It
  * sits above `user` in the normal band because a team is shared across many
  * projects, so a repo specialising a company default is the expected case
  * rather than a violation (ADR-0008 §The origins).
@@ -124,6 +126,16 @@ export const ORIGIN_ORDER: readonly LayerName[] = [
  * convenience with no security weight, and a team with slow SSO has a real
  * reason to raise it.
  *
+ * The whole `team.*` section (`project-team-binding`) is denied for the same
+ * circularity, one level closer in: those keys say WHICH organization this
+ * project belongs to and WHETHER the team layer applies at all. A team origin
+ * able to write `team.org_id` could rebind the project to another organization
+ * — which is a takeover, not a setting — and one able to write `team.sync` or
+ * `team.skills` could switch itself back on for a member who had deliberately
+ * turned it off. A layer must not be the thing that decides it is allowed to be
+ * a layer, so the binding is only ever writable by a LOCAL file, `golem team
+ * link`, or `GOLEM_TEAM_*` on the machine itself.
+ *
  * Compiled in, never fetched: a list the remote can edit is not a floor. A
  * denied key is DROPPED with a loud warning, never sanitised in silence.
  * CLAUDE.md governs — importance is a dial, and no dial value disables
@@ -134,6 +146,10 @@ export const REMOTE_DENIED_SETTINGS: ReadonlySet<string> = new Set([
   "portal.url",
   "portal.issuer",
   "portal.client_id",
+  "team.org_id",
+  "team.portal_url",
+  "team.sync",
+  "team.skills",
 ]);
 
 /** The `"!important"` declaration list, top-level and sibling to the sections. */
@@ -184,9 +200,10 @@ export interface LoadConfigOptions {
    * The `team` origin's already-resolved payload, same shape as a settings file
    * (sections plus an optional `"!important"` list).
    *
-   * The SLOT, not the fetch: `team-settings-layer` owns retrieving this from
-   * the portal and caching it to `~/.golem/team.json`. Nothing in this module
-   * reaches the network. Supplying it marks the origin REMOTE, so
+   * The SLOT, not the fetch: `team-layer-fetch` owns retrieving this from the
+   * portal and caching it per org to `~/.golem/teams/<org_id>.json` (Decision
+   * 63). Nothing in this module reaches the network. Supplying it marks the
+   * origin REMOTE, so
    * {@link REMOTE_DENIED_SETTINGS} applies to it.
    */
   readonly teamLayer?: {
@@ -368,6 +385,19 @@ const MERGE_PER_KEY_LEAVES: ReadonlySet<string> = new Set(["inference.personas"]
  * Provenance is recorded per `<leaf>.<id>.<field>` so `golem personas` can say
  * which layer supplied each field, not merely which layer last touched the
  * bench.
+ *
+ * KEY ORDER follows this layer's declared order for the keys it mentions, with
+ * keys only an earlier layer declared appended after in their prior relative
+ * order. The result is REBUILT rather than reassigned into a copy of
+ * `previous`, because JS fixes an object key's position at first insertion —
+ * writing `merged["coder"] = …` to an object that already has a `coder` key
+ * updates the value in place without moving it. A naive `{ ...previous }`
+ * then `merged[id] = value` per incoming key therefore lets the SCHEMA
+ * DEFAULT's key order win forever: restaffing `coder`/`reviewer`/`scribe` in
+ * `settings.local.json`, in any order, always rendered in the default's fixed
+ * order, because those three keys already existed before this layer's loop
+ * ever ran. Found 2026-09-17 when a user reordered `inference.personas` and
+ * the status line's persona list did not follow.
  */
 function mergePerKey(
   previous: unknown,
@@ -378,14 +408,15 @@ function mergePerKey(
   sourceFile: string | undefined,
   band: Band,
 ): Record<string, unknown> {
-  const merged: Record<string, unknown> = isPlainObject(previous) ? { ...previous } : {};
+  const prior: Record<string, unknown> = isPlainObject(previous) ? previous : {};
+  const merged: Record<string, unknown> = {};
   for (const [id, value] of Object.entries(incoming)) {
     if (!isPlainObject(value)) {
       merged[id] = value;
       continue;
     }
-    const prior = merged[id];
-    merged[id] = isPlainObject(prior) ? { ...prior, ...value } : { ...value };
+    const priorValue = prior[id];
+    merged[id] = isPlainObject(priorValue) ? { ...priorValue, ...value } : { ...value };
     for (const field of Object.keys(value)) {
       provenance[`${dotted}.${id}.${field}`] = {
         layer,
@@ -393,6 +424,12 @@ function mergePerKey(
         ...(band === "important" && { important: true as const }),
       };
     }
+  }
+  // Keys only an EARLIER layer declared: this layer said nothing about them,
+  // so there is no new order to prefer — keep their prior relative order,
+  // after everything this layer's own order just placed.
+  for (const [id, value] of Object.entries(prior)) {
+    if (!(id in merged)) merged[id] = value;
   }
   return merged;
 }
@@ -527,6 +564,11 @@ function applyObjectLayer(
       // R9.6: the key the value lands on, and the key the FILE named — the same
       // thing except for a renamed setting, where provenance must report the
       // name actually present in the file rather than implying the new one.
+      // `targetSection` differs from `sectionName` for a CROSS-SECTION
+      // migration (R9.23: `proxy.active_account` → `inference.model`) — every
+      // lookup and write below this point must follow the migration's `to`
+      // section, not the section the file actually named the key under.
+      let targetSection = sectionName;
       let targetKey = key;
       let fromKey: string | undefined;
 
@@ -548,21 +590,31 @@ function applyObjectLayer(
         }
         // The replacement set in the SAME layer wins; the old key is reported
         // and dropped. Across layers, normal precedence applies untouched.
-        const [, liveKey] = splitDotted(migration.to);
-        if (liveKey !== undefined && Object.hasOwn(sectionValue, liveKey)) {
+        // The shadow check reads the TARGET section's raw object — for a
+        // same-section rename that is `sectionValue` itself, but a
+        // cross-section rename must look at `raw[toSection]`, not the section
+        // the retired key was declared under.
+        const [toSection, liveKey] = splitDotted(migration.to);
+        const toSectionValue = toSection === sectionName ? sectionValue : raw[toSection];
+        if (
+          liveKey !== undefined &&
+          isPlainObject(toSectionValue) &&
+          Object.hasOwn(toSectionValue, liveKey)
+        ) {
           warnings.push(migrationShadowedWarning(migration, label));
           continue;
         }
         // Exactly one warning per migrated key — never also "unknown setting".
         warnings.push(migrationWarning(migration, label));
+        targetSection = toSection;
         targetKey = liveKey ?? key;
         fromKey = dotted;
-        leaf = leafSchema(sectionName, targetKey);
+        leaf = leafSchema(targetSection, targetKey);
         if (leaf === undefined) continue; // guarded by assertLeafRename's test
         // Checked again on the RESOLVED key: a rename must not be a way for a
         // remote to reach a denied leaf under its old, undenied spelling.
-        if (remote && REMOTE_DENIED_SETTINGS.has(`${sectionName}.${targetKey}`)) {
-          warnings.push(remoteRefusalWarning(label, `${sectionName}.${targetKey}`));
+        if (remote && REMOTE_DENIED_SETTINGS.has(`${targetSection}.${targetKey}`)) {
+          warnings.push(remoteRefusalWarning(label, `${targetSection}.${targetKey}`));
           continue;
         }
       }
@@ -578,7 +630,7 @@ function applyObjectLayer(
           ...(sourceFile !== undefined && { source: sourceFile }),
         });
       }
-      const section = tree[sectionName];
+      const section = tree[targetSection];
       if (section !== undefined) {
         section[targetKey] = MERGE_PER_KEY_LEAVES.has(dotted)
           ? mergePerKey(
@@ -591,7 +643,7 @@ function applyObjectLayer(
               band,
             )
           : parsed.data;
-        provenance[`${sectionName}.${targetKey}`] = {
+        provenance[`${targetSection}.${targetKey}`] = {
           layer,
           ...(sourceFile !== undefined && { source: sourceFile }),
           ...(fromKey !== undefined && { key: fromKey }),

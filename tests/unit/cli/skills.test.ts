@@ -144,6 +144,7 @@ describe("P0 skill registry", () => {
       "fresh-eyes",
       "checkpoint",
       "first-pancake",
+      "adversarial-review",
     ]) {
       expect(P0_SKILLS[name], `missing skill: ${name}`).toBeDefined();
     }
@@ -194,6 +195,26 @@ describe("P0 skill registry", () => {
     expect(skill).toContain("REFACTOR");
     // Review-first: it sorts and proposes, it does not edit on its own.
     expect(skill.toLowerCase()).toContain("writes nothing");
+  });
+
+  it("adversarial-review forces all three hostile personas to find something", () => {
+    const skill = P0_SKILLS["adversarial-review"];
+    if (skill === undefined) throw new Error("expected an adversarial-review skill");
+    expect(skill).toContain("The Saboteur");
+    expect(skill).toContain("The New Hire");
+    expect(skill).toContain("The Security Auditor");
+    expect(skill).toContain("MUST surface at least one finding");
+    // Severity promotion on convergence, and the three-way verdict.
+    expect(skill).toContain("CRITICAL");
+    expect(skill).toContain("WARNING");
+    expect(skill).toContain("NOTE");
+    expect(skill).toContain("BLOCK");
+    expect(skill).toContain("CONCERNS");
+    expect(skill).toContain("CLEAN");
+    expect(skill.toLowerCase()).toContain("promoted one severity level");
+    // Reads the whole file, not just the diff, and never edits on its own.
+    expect(skill.toLowerCase()).toContain("writes nothing");
+    expect(skill).toContain("src/interfaces/");
   });
 
   it("every skill has a description and an invocationMode", () => {

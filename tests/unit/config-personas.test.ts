@@ -32,9 +32,10 @@ beforeEach(async () => {
 });
 
 describe("the starter bench", () => {
-  it("ships coder, reviewer and scribe", () => {
+  it("ships planner, coder, reviewer and scribe", () => {
     expect(Object.keys(DEFAULT_SETTINGS.inference.personas).sort()).toEqual([
       "coder",
+      "planner",
       "reviewer",
       "scribe",
     ]);
@@ -48,10 +49,13 @@ describe("the starter bench", () => {
     }
   });
 
-  it("staffs the phases, not the hierarchy — no manager, no planner", () => {
+  it("staffs the phases, not the hierarchy — no manager", () => {
+    // There is no `manager`: the interactive session is the only thing that
+    // can spawn a subagent, so a persona whose job is to dispatch is a
+    // fiction. `planner` IS on the bench (R14.x) — planning is a phase like
+    // any other, not a hierarchy role.
     const ids = Object.keys(DEFAULT_SETTINGS.inference.personas);
     expect(ids).not.toContain("manager");
-    expect(ids).not.toContain("planner");
     expect(ids).not.toContain("architect");
   });
 
@@ -76,6 +80,36 @@ describe("per-persona-id merging", () => {
     expect(ids).toContain("auditor"); // the user's — survives
     expect(ids).toContain("migrator"); // the project's
     expect(ids).toContain("coder"); // and the shipped bench beneath both
+  });
+
+  it("follows the most specific layer's declared order for keys it mentions", async () => {
+    // Fixed 2026-09-17: a naive `{ ...previous }` then per-key reassignment
+    // let the SCHEMA DEFAULT's order (coder, reviewer, scribe) win forever,
+    // because JS fixes a key's position at first insertion — reassigning an
+    // EXISTING key updates its value without moving it. A user who reordered
+    // `inference.personas` in settings.local.json saw no change on any
+    // consumer that reads key order (`golem statusline`'s persona list).
+    await writeJson(localFile(), {
+      inference: {
+        personas: {
+          planner: { discipline: "plan" },
+          scribe: { discipline: "write" },
+          coder: { discipline: "code" },
+        },
+      },
+    });
+
+    const { settings } = await loadConfig({ projectDir, userDir, env: {} });
+    // `planner`, `scribe`, `coder` in the order THIS layer wrote them —
+    // reversing coder-before-scribe from the schema default. `reviewer`
+    // wasn't mentioned by this layer at all, so it keeps its prior relative
+    // order (last, since it was last in the default) and lands after.
+    expect(Object.keys(settings.inference.personas)).toEqual([
+      "planner",
+      "scribe",
+      "coder",
+      "reviewer",
+    ]);
   });
 
   it("merges per FIELD within one persona, so a local override keeps the rest", async () => {

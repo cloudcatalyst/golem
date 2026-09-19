@@ -48,6 +48,7 @@ export interface DesiredAgent {
   readonly model: string;
   readonly prompt: string;
   readonly description?: string | undefined;
+  readonly discipline?: string | undefined;
   readonly tools?: readonly string[] | undefined;
 }
 

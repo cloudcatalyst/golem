@@ -1,17 +1,17 @@
 /**
- * Presentation metadata for the settings schema — the layer that lets a UI
+ * Presentation metadata for the settings schema - the layer that lets a UI
  * render Golem's config without hard-coding a label for every key.
  *
  * [schema.ts]{@link ./schema.ts} owns *validation* ({@link SETTINGS_LEAVES}: one
- * zod schema per leaf) and carries rich prose in its doc comments — but comments
+ * zod schema per leaf) and carries rich prose in its doc comments - but comments
  * are invisible at runtime, so every UI would otherwise re-type them. This module
  * adds the runtime-introspectable half:
  *
- * - {@link SETTING_META} — label / summary / detail / grouping hints, keyed by the
+ * - {@link SETTING_META} - label / summary / detail / grouping hints, keyed by the
  *   same dotted `section.key` paths. It is `satisfies`-checked against a mapped
  *   type over {@link SETTINGS_LEAVES}, so adding a leaf without describing it is a
  *   COMPILE error and the two tables cannot drift.
- * - {@link deriveKind} — the widget kind, DERIVED from the leaf's zod schema
+ * - {@link deriveKind} - the widget kind, DERIVED from the leaf's zod schema
  *   (boolean → toggle, enum → picker, `.url()` → url, …) so a type change can't
  *   leave a stale widget behind. `SettingMeta.kind` overrides it only where zod
  *   can't express the intent (a hex colour is just a string).
@@ -41,7 +41,7 @@ export type LeafPath = LeafPathsOf<typeof SETTINGS_LEAVES>;
 
 /**
  * How a UI should render a leaf. `opaque` means "show the value, don't offer to
- * edit it here" — structured values (the account registry) that a dedicated
+ * edit it here" - structured values (the account registry) that a dedicated
  * command owns.
  */
 export type SettingKind =
@@ -55,9 +55,9 @@ export type SettingKind =
   | "opaque";
 
 /**
- * Strip the wrappers that don't change how a value is edited — `.optional()`,
+ * Strip the wrappers that don't change how a value is edited - `.optional()`,
  * `.default()`, and `.transform()` (ZodEffects, e.g. slider.level's legacy
- * remap) — down to the schema that describes the value itself.
+ * remap) - down to the schema that describes the value itself.
  */
 export function unwrapSchema(schema: z.ZodTypeAny): z.ZodTypeAny {
   let current = schema;
@@ -135,7 +135,7 @@ export interface SettingMeta {
   readonly summary: string;
   /** Longer help text for a detail pane / tooltip. */
   readonly detail?: string;
-  /** Hide behind "show advanced" — correct-by-default keys nobody should need. */
+  /** Hide behind "show advanced" - correct-by-default keys nobody should need. */
   readonly advanced?: boolean;
   /** Loud warning to show before and after changing this (e.g. redaction off). */
   readonly danger?: string;
@@ -153,17 +153,17 @@ export interface SettingMeta {
 
 /**
  * One entry per settings leaf. Prose here is condensed from schema.ts's doc
- * comments — that file stays the authority on *why* a default is what it is.
+ * comments - that file stays the authority on *why* a default is what it is.
  */
 export const SETTING_META = {
   // --- proxy ----------------------------------------------------------------
   "proxy.bypass_all": {
     label: "Bypass everything (no redaction)",
-    summary: "Forward every request byte-faithfully — redaction included in what is skipped",
+    summary: "Forward every request byte-faithfully - redaction included in what is skipped",
     detail:
       "R11.1 / ADR-0004: the explicit home for what slider level 0 used to mean. It is a " +
       "setting of its own, not a compression value, because compression and redaction are " +
-      "different guarantees — `compression off` still redacts. Never the default; a tool " +
+      "different guarantees - `compression off` still redacts. Never the default; a tool " +
       "call cannot set it (R8.33), only the CLI or this panel.",
     danger:
       "This disables REDACTION: secrets and PII reach the upstream unredacted. If you want " +
@@ -195,7 +195,7 @@ export const SETTING_META = {
     summary: "How the credential is presented (inherit / x-api-key / api-key / bearer)",
     detail:
       "`inherit` forwards the client's own auth unchanged. The credential itself is " +
-      "never a setting — use `golem gateway login`.",
+      "never a setting - use `golem gateway login`.",
     advanced: true,
     restart: "proxy",
   },
@@ -208,7 +208,7 @@ export const SETTING_META = {
   "proxy.upstream_reasoning_effort": {
     label: "Reasoning effort",
     summary: "Depth for a reasoning upstream (sent as OpenAI reasoning_effort)",
-    detail: "Leave unset for non-reasoning backends — some reject the field.",
+    detail: "Leave unset for non-reasoning backends - some reject the field.",
     advanced: true,
     restart: "proxy",
   },
@@ -218,15 +218,15 @@ export const SETTING_META = {
     advanced: true,
     restart: "proxy",
   },
-  "proxy.default_target": {
+  "proxy.model": {
     label: "Default target (deprecated)",
-    summary: "Moved to inference.default_target",
-    detail: "R9.23: use inference.default_target instead",
+    summary: "Moved to inference.model",
+    detail: "R9.23: use inference.model instead",
     restart: "proxy",
   },
   "proxy.gateways": {
     label: "Gateway registry",
-    summary: "Non-secret upstream connection config — managed by `golem gateway`",
+    summary: "Non-secret upstream connection config - managed by `golem gateway`",
     detail:
       "Credentials live in the OS credential store, never here. Add and remove entries " +
       "with `golem gateway add` / `golem gateway remove`.",
@@ -234,22 +234,23 @@ export const SETTING_META = {
   },
   "proxy.targets": {
     label: "Target registry",
-    summary: "Every model Golem can reach, local or upstream — managed by `golem target`",
+    summary: "Every model Golem can reach, local or upstream - managed by `golem target`",
     detail:
       "A target is non-secret: it names a model id and a gateway reference. Several targets " +
       "may share one gateway. Inert until R9.2/R9.3 route on it. Entries in the gateway " +
       "registry already appear in `golem target list`.",
     kind: "opaque",
   },
-  "inference.default_target": {
+  "inference.model": {
     label: "Default target",
     summary: "Which target serves a request that names none",
     detail:
-      "Supersedes the retired `proxy.active_account`, which an existing settings file may " +
-      "still name — R9.6's migration table reads it and says so. An unknown id fails closed. " +
-      "R10.8: also step 3 of the `coder` dispatch chain (explicit target → worker_targets → " +
-      "this → the harness's own upstream). Unset means the harness upstream; a local model " +
-      "is reached by naming a target that points at it, never by leaving this blank.",
+      "Supersedes the retired `proxy.active_account` and `proxy.default_target`, which an " +
+      "existing settings file may still name - the migration table reads them and says so. " +
+      "An unknown id fails closed. R10.8: also step 3 of the `coder` dispatch chain (explicit " +
+      "target → worker_targets → this → the harness's own upstream). Unset means the harness " +
+      "upstream; a local model is reached by naming a target that points at it, never by " +
+      "leaving this blank.",
     advanced: true,
     restart: "proxy",
   },
@@ -259,7 +260,7 @@ export const SETTING_META = {
     detail:
       "R13.12. Used as the `system` field of a `coder` dispatch AND as the body of the " +
       "generated subagent definition, so one edit reaches both. Unset uses Golem's default " +
-      "(`src/inference/coder-prompt.ts`). Keep it SHORT — the same text frames a " +
+      "(`src/inference/coder-prompt.ts`). Keep it SHORT - the same text frames a " +
       "qwen2.5-coder:7b local drafter and a frontier model, and a long preamble is the " +
       "reliable way to make the small one fail. Not a skill, deliberately: a skill's body " +
       "loads into the invoking session's context, and this has to reach the drafter.",
@@ -278,11 +279,21 @@ export const SETTING_META = {
     advanced: true,
     restart: "proxy",
   },
+  "proxy.idle_timeout_ms": {
+    label: "Idle timeout",
+    summary: "Exit the proxy after this many ms with no requests (0 = never, default)",
+    detail:
+      "Unset means never - today's behaviour is preserved by default so nobody's " +
+      "long-running setup changes under them. When set, a project proxy that has " +
+      "served no requests for this duration exits on its own.",
+    advanced: true,
+    restart: "proxy",
+  },
 
   // --- inference ------------------------------------------------------------
   "inference.ollama_base_url": {
     label: "Local model endpoint",
-    summary: "Ollama base URL — localhost or a LAN machine",
+    summary: "Ollama base URL - localhost or a LAN machine",
     detail: "`golem local url <url>` sets this after probing that it answers.",
     restart: "mcp",
   },
@@ -295,25 +306,25 @@ export const SETTING_META = {
     advanced: true,
   },
   "inference.worker_targets": {
-    label: "Worker targets",
-    summary: "Which target each tool worker (coder, …) drafts on by default",
+    label: "Worker targets (DEPRECATED)",
+    summary: "DEPRECATED - use inference.personas[worker].model instead. Kept for migration",
     detail:
-      "Keyed by worker name. R10.8: a worker with no entry falls through to " +
-      "`inference.default_target` and then to the harness's own upstream — no longer to the " +
-      "local model. A non-local target is redacted at its trust floor on every dispatch, and " +
-      "an unknown target id fails closed. See `golem target list`.",
+      "R14.3: worker lane now reads personas[worker].model directly. Each worker_targets entry " +
+      "becomes a persona with the same model/target id. This key is ignored when personas has " +
+      "the same worker. Migration warning shown on load.",
     kind: "opaque",
+    advanced: true,
     restart: "mcp",
   },
   "inference.personas": {
     label: "Personas",
-    summary: "The bench — a named worker per discipline, each on the model that suits it",
+    summary: "The bench - a named worker per discipline, each on the model that suits it",
     detail:
       "R14.1. Keyed by persona id, which is also the generated agent basename " +
       "(`golem-<id>.md`). Merged per persona id and then per field, unlike every other " +
       "setting, so a project bench does not erase the user's and `settings.local.json` can " +
       "restaff one persona without restating the rest. A persona with no `model` is " +
-      "UNSTAFFED: it declines, generates nothing, and spawns nothing — which is how the " +
+      "UNSTAFFED: it declines, generates nothing, and spawns nothing - which is how the " +
       "three shipped by default (coder, reviewer, scribe) leave an unconfigured repo " +
       "behaving exactly as before. A persona holds no credential: it names a model or a " +
       "target, and the gateway behind that target holds the key. See `golem personas`.",
@@ -322,7 +333,7 @@ export const SETTING_META = {
   },
   "inference.local_editor_enabled": {
     label: "Local editor mode",
-    summary: 'Offer `coder`\'s `mode: "edit"` — a validated local rewrite of one small file',
+    summary: 'Offer `coder`\'s `mode: "edit"` - a validated local rewrite of one small file',
     detail:
       "Off by default because the mode's schema costs ~313 tokens on EVERY request (§110), " +
       "while the saving only lands when it is used. Golem validates every edit (syntax must " +
@@ -345,12 +356,12 @@ export const SETTING_META = {
     label: "Headroom semantic sidecar",
     summary: "Run the semantic-compression sidecar at level ≥2 (opt-in)",
     detail:
-      "Requires `uv` + `headroom-ai` on the machine — off by default to keep Python out " +
+      "Requires `uv` + `headroom-ai` on the machine - off by default to keep Python out " +
       "of the core install. Fails open if the sidecar can't start.",
   },
   "compression.force_semantic_on_caching": {
     label: "Force semantic stage on caching upstreams",
-    summary: "Research only — bypass the Decision-31 gate",
+    summary: "Research only - bypass the Decision-31 gate",
     detail:
       "No effect unless the Headroom sidecar is on and compression is ≥2. Risks the " +
       "cached-prefix cost cliff; only for A/B measurement.",
@@ -361,7 +372,7 @@ export const SETTING_META = {
     summary: "off (redaction only) · 1 lossless · 2 balanced · 3 aggressive",
     detail:
       "R11.1: the input-side dial, set directly (ADR-0004 retired the slider). No level " +
-      "disables redaction — full bypass is a separate setting, `proxy.bypass_all`, " +
+      "disables redaction - full bypass is a separate setting, `proxy.bypass_all`, " +
       "surfaced loudly and never the default.",
     restart: "proxy",
   },
@@ -385,7 +396,7 @@ export const SETTING_META = {
     summary: "off · lite · full · ultra",
     detail:
       "Decision 52: the output-side dial. Appends a fixed brevity directive to the system " +
-      "prompt so the model answers more tersely — it shortens replies, it does not " +
+      "prompt so the model answers more tersely - it shortens replies, it does not " +
       "compress the request. Saves output tokens (never cached, ~5× input) and costs a " +
       "little input. Ships off: measure with `golem stats --brevity` before trusting it, " +
       "since it can go net-negative on already-terse work. Code, commands and errors are " +
@@ -414,7 +425,7 @@ export const SETTING_META = {
     summary: "Changed files the session-start sync embeds before it defers to `golem index`",
     detail:
       "Re-embedding is minutes of GPU time (measured: ~10 minutes for 114 files with bge-m3), " +
-      "and a branch switch rewrites mtimes wholesale — so past this many changes the automatic " +
+      "and a branch switch rewrites mtimes wholesale - so past this many changes the automatic " +
       "sync stops rather than starting a long job nobody asked for, and says how to run it. " +
       "0 removes the cap.",
     advanced: true,
@@ -429,7 +440,7 @@ export const SETTING_META = {
     label: "Answer locally from the wiki",
     summary: "Let the proxy answer retrieval-shaped questions without calling the model",
     detail:
-      "Extractive prose quoted from the wiki/spec/docs — never generated. Single-turn, " +
+      "Extractive prose quoted from the wiki/spec/docs - never generated. Single-turn, " +
       "confidence-gated, always labelled 'verify independently'. Declines rather than guess, " +
       "so coverage tracks how current the wiki is.",
     restart: "proxy",
@@ -473,7 +484,7 @@ export const SETTING_META = {
   "knowledge.lsp_servers": {
     label: "Language server rows",
     summary: "Extra servers by file extension, layered over the built-in TypeScript row",
-    detail: "How gopls or rust-analyzer are added — config, not a Golem release.",
+    detail: "How gopls or rust-analyzer are added - config, not a Golem release.",
     advanced: true,
     restart: "mcp",
   },
@@ -497,7 +508,7 @@ export const SETTING_META = {
     label: "MEMORY-scope federation",
     summary: "Federated memory search via the heavy Headroom [memory] sidecar (opt-in)",
     detail:
-      "Pulls sentence-transformers and transitively torch — much heavier than the base " +
+      "Pulls sentence-transformers and transitively torch - much heavier than the base " +
       "sidecar. Without it, search stays KNOWLEDGE-only.",
     advanced: true,
   },
@@ -532,7 +543,7 @@ export const SETTING_META = {
     label: "Write surface reachable from your network",
     summary: "Bind the write surface to every interface rather than loopback",
     detail:
-      "Off by default. Unlike the read-only dashboard, this surface can ACT — so it is bounded by two independent claims rather than by the bind: a client certificate this project's device CA issued, and a live unlock window opened by your passcode. Neither can be obtained over the network; enrolment is local-only, forever. Turning this on does not grant anything to an unpaired device.",
+      "Off by default. Unlike the read-only dashboard, this surface can ACT - so it is bounded by two independent claims rather than by the bind: a client certificate this project's device CA issued, and a live unlock window opened by your passcode. Neither can be obtained over the network; enrolment is local-only, forever. Turning this on does not grant anything to an unpaired device.",
     danger:
       "Makes a surface that can act on your machine reachable from your network. It still requires a paired device AND your passcode.",
     advanced: true,
@@ -543,7 +554,7 @@ export const SETTING_META = {
     detail:
       "Off by default. A message you send from your phone waits for that conversation's NEXT request and is then delivered as a clearly-marked block from you, exactly once. In an agentic loop that is seconds; in an idle session it is never, and the queue says so rather than pretending it was sent. Every tool call the message leads to is gated exactly as if you had typed it here.",
     danger:
-      "Text authored elsewhere enters a session running on this machine. It is attributed and shown locally before it lands, and it is still only a request — but it is a request the model will act on.",
+      "Text authored elsewhere enters a session running on this machine. It is attributed and shown locally before it lands, and it is still only a request - but it is a request the model will act on.",
     advanced: true,
   },
   "security.unlock_window_minutes": {
@@ -580,7 +591,7 @@ export const SETTING_META = {
     label: "Dashboard reachable from your network",
     summary: "Bind every interface so a phone on the same Wi-Fi can read the dashboard",
     detail:
-      "Off by default, and the dashboard binds loopback. On, the read-only companion view is reachable from any device on the same network: open the printed http://<lan-ip>:<port>/ on a phone and Add to Home Screen. There is no write route and every method but GET/HEAD is refused, so nothing on the network can steer or answer the agent — but the project path, the tool call being waited on, and your savings figures become readable by anything on that LAN. `golem dashboard --lan` does the same for one run.",
+      "Off by default, and the dashboard binds loopback. On, the read-only companion view is reachable from any device on the same network: open the printed http://<lan-ip>:<port>/ on a phone and Add to Home Screen. There is no write route and every method but GET/HEAD is refused, so nothing on the network can steer or answer the agent - but the project path, the tool call being waited on, and your savings figures become readable by anything on that LAN. `golem dashboard --lan` does the same for one run.",
     danger:
       "Exposes the project path, the pending tool call and its argument, and telemetry to every device on your network.",
     advanced: true,
@@ -611,7 +622,7 @@ export const SETTING_META = {
     label: "Model catalog URL",
     summary: "models.dev-shaped price/context catalog `golem models refresh` fetches",
     detail:
-      "Nothing fetches it implicitly — a cost report never makes a network call. Golem's " +
+      "Nothing fetches it implicitly - a cost report never makes a network call. Golem's " +
       "own built-in prices always win, so a wrong third-party figure cannot reach a cost claim.",
     advanced: true,
   },
@@ -624,7 +635,7 @@ export const SETTING_META = {
   "models.context_warn_fraction": {
     label: "Context warning threshold",
     summary: "Fraction of the model's context window at which `golem stats --context` warns",
-    detail: "Only fires when the catalog knows the window — an unknown limit warns not at all.",
+    detail: "Only fires when the catalog knows the window - an unknown limit warns not at all.",
   },
 
   // --- snooze ---------------------------------------------------------------
@@ -632,14 +643,14 @@ export const SETTING_META = {
     label: "Enforce the usage-limit park",
     summary: "Deny tool calls until the session parks at the limit (Decision 45)",
     detail:
-      "Off is ADVISORY — one nudge per window that the agent can work past. Only ever " +
+      "Off is ADVISORY - one nudge per window that the agent can work past. Only ever " +
       "fires on a fresh rate-limit reading; a stale feed just warns.",
   },
   "snooze.spawn_gate": {
     label: "Gate subagent spawns on headroom",
     summary: "Refuse to start a subagent the session window cannot pay for",
     detail:
-      "The park is a tool-call gate and a subagent never reaches it — a child hits the limit " +
+      "The park is a tool-call gate and a subagent never reaches it - a child hits the limit " +
       "on a model request and dies before it can propose a call to deny, losing uncommitted " +
       "work. The spawn is the one part of that the parent sees as a tool call, so the refusal " +
       "goes there, with the numbers it measured. A missing or stale reading warns once rather " +
@@ -661,7 +672,7 @@ export const SETTING_META = {
       "Where `golem init` writes Claude Code's wiring: local (gitignored) or project (committed)",
     detail:
       "Covers the env block, the mcp__golem__* permission, every hook, the status line and the " +
-      "default mode. Local is the default — the wiring is machine-specific (per-project port, " +
+      "default mode. Local is the default - the wiring is machine-specific (per-project port, " +
       "absolute CA path, `golem` on PATH) and settings.local.json outranks settings.json anyway. " +
       "Readers always check both files; re-run `golem init` after changing this and the wiring " +
       "MOVES to the other file.",
@@ -673,7 +684,7 @@ export const SETTING_META = {
     label: "Load plugins",
     summary: "Master switch for third-party in-process plugins (ADR-0005)",
     detail:
-      "Off stops every plugin loading without editing the list — reach for it when a plugin is " +
+      "Off stops every plugin loading without editing the list - reach for it when a plugin is " +
       "suspected. A plugin runs inside Golem's process, so inside the redaction path, and there " +
       "is NO sandbox: loading one is as dangerous as importing a dependency you installed " +
       "yourself. Read ADR-0005 first.",
@@ -681,7 +692,7 @@ export const SETTING_META = {
   },
   "plugins.load": {
     label: "Plugins to load",
-    summary: "Specifiers to load, in order — a bare npm name from this project, or a local path",
+    summary: "Specifiers to load, in order - a bare npm name from this project, or a local path",
     detail:
       "Nothing is discovered: Golem never scans node_modules, follows no naming convention, and " +
       "downloads nothing. Empty by default, which is why a fresh install runs no third-party " +
@@ -694,7 +705,7 @@ export const SETTING_META = {
   // --- portal ---------------------------------------------------------------
   "portal.url": {
     label: "Portal URL",
-    summary: "The hosted portal's address — empty means no portal, which is the default",
+    summary: "The hosted portal's address - empty means no portal, which is the default",
     detail:
       "`/api/v1/...` hangs off this. Golem is local-first: with no portal configured every " +
       "team command says so and nothing else changes. GOLEM_PORTAL_URL sets it, which is the " +
@@ -709,13 +720,13 @@ export const SETTING_META = {
       "Endpoints are always discovered from `<issuer>/.well-known/oauth-authorization-server` " +
       "(RFC 8414) rather than hardcoded; this only says where to look. It exists because the " +
       "portal's API is on its own domain while its authorization server is Clerk's Frontend " +
-      "API — https://clerk.<domain>, or https://<slug>.clerk.accounts.dev in development. " +
+      "API - https://clerk.<domain>, or https://<slug>.clerk.accounts.dev in development. " +
       "Empty means 'same as the portal URL'.",
     advanced: true,
   },
   "portal.client_id": {
     label: "OAuth client id",
-    summary: "The public client id this harness presents — an identifier, not a secret",
+    summary: "The public client id this harness presents - an identifier, not a secret",
     detail:
       "The OAuth application is registered `public: true`, so there is no client secret " +
       "anywhere: the harness ships as source and could not keep one. PKCE stands in for it. " +
@@ -731,6 +742,47 @@ export const SETTING_META = {
       "that an abandoned sign-in does not leave a loopback port listening all afternoon. On " +
       "expiry the listener closes and nothing is stored.",
     advanced: true,
+  },
+
+  // --- team -----------------------------------------------------------------
+  "team.org_id": {
+    label: "Team organization",
+    summary: "Which team this project belongs to - empty is the free tier, and the default",
+    detail:
+      "A public organization identifier, which is why it lives in the committed project " +
+      "settings file: a colleague who clones the repo is pointed at the right team before " +
+      "they have run anything. No credential follows it - tokens stay per person, per " +
+      "machine, in the OS keychain. While this is empty Golem performs no portal I/O, reads " +
+      "no team cache and looks up no token, which is the free tier being an invariant rather " +
+      "than a promise. Set it with `golem team link`, remove it with `golem team unlink`.",
+  },
+  "team.portal_url": {
+    label: "Team portal URL",
+    summary: "The portal this team lives on, when it is not the one the portal URL names",
+    detail:
+      "Empty means 'use the portal URL', which is the normal case. It exists because the team " +
+      "binding is committed while the portal URL need not be, so a repo can carry the address " +
+      "of its team's portal without every clone configuring one by hand. This is the API base " +
+      "only; the authorization server is still discovered from the issuer setting.",
+    advanced: true,
+  },
+  "team.sync": {
+    label: "Apply team settings",
+    summary: "Whether a linked project applies its team's settings layer",
+    detail:
+      "Inert while there is no team organization set. Turning it off keeps the link recorded " +
+      "while stopping the organization's configuration being applied on this machine - an " +
+      "escape hatch, not a normal state. A team origin can never set this key: a layer must " +
+      "not be the thing that decides it is allowed to be a layer.",
+  },
+  "team.skills": {
+    label: "Sync team skills",
+    summary: "Whether a linked project syncs its team's skills into .claude/skills/golem-team",
+    detail:
+      "Separate from applying team settings because configuration and instructions are " +
+      "different kinds of thing to accept from an organization, and a member may reasonably " +
+      "want one without the other. The directory is managed: a skill the team removes is " +
+      "removed locally, and `golem team unlink` deletes the whole directory.",
   },
 } as const satisfies { readonly [P in LeafPath]: SettingMeta };
 
@@ -769,7 +821,7 @@ export const SECTION_META = {
   },
   brevity: {
     title: "Brevity",
-    summary: "The output-side dial — how tersely the model replies",
+    summary: "The output-side dial - how tersely the model replies",
     order: 35,
   },
   proxy: { title: "Proxy & upstream", summary: "Port, upstream, and timeouts", order: 40 },
@@ -782,7 +834,7 @@ export const SECTION_META = {
   snooze: { title: "Usage limits", summary: "Parking behaviour at the session limit", order: 60 },
   models: {
     title: "Model catalog",
-    summary: "Per-model price and context limits (R8.8) — cached, never fetched implicitly",
+    summary: "Per-model price and context limits (R8.8) - cached, never fetched implicitly",
     order: 65,
   },
   ui: { title: "Appearance", summary: "How this panel looks", order: 70 },
@@ -793,13 +845,18 @@ export const SECTION_META = {
   },
   plugins: {
     title: "Plugins",
-    summary: "Third-party in-process seams — no sandbox, nothing discovered (ADR-0005)",
+    summary: "Third-party in-process seams - no sandbox, nothing discovered (ADR-0005)",
     order: 80,
   },
   portal: {
     title: "Team portal",
-    summary: "Where the hosted portal is and which OAuth client to present — no credential here",
+    summary: "Where the hosted portal is and which OAuth client to present - no credential here",
     order: 85,
+  },
+  team: {
+    title: "Team binding",
+    summary: "Which team THIS project belongs to - empty is the free tier, and the default",
+    order: 86,
   },
 } as const satisfies { readonly [S in SectionName]: SectionMeta };
 

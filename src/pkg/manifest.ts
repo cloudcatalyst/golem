@@ -232,7 +232,7 @@ export const PKG_MANIFESTS: readonly PkgManifest[] = [
     detect: { kind: "command", command: "ollama" },
     install:
       "https://ollama.com/download — or point Golem at a LAN box with `golem local url <url>`.",
-    enabledBy: "inference.default_target",
+    enabledBy: "inference.model",
     adapter: "src/inference/",
     degrade:
       "Local drafting/judging is unavailable; every request goes upstream. `golem devices` reports it.",

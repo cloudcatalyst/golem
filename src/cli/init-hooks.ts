@@ -1,13 +1,15 @@
 /**
  * The Claude Code hooks half of `golem init` / `golem uninit`.
  *
- * Everything init wires into Claude Code's event surface, plus the two
- * `.gitignore` lines that keep personal instruction files out of git:
+ * Everything init wires into Claude Code's event surface, plus the
+ * `.gitignore` entries that keep personal/machine-local files out of git:
  *   * the PostToolUse CCR hook and the seeded Golem guidance rules;
  *   * the status line, the default permission mode and the blocked-state
  *     Notification / UserPromptSubmit / PreToolUse event hooks;
  *   * the WebFetch KB-cache pre/post matcher hooks and the SessionStart
- *     proxy auto-start hook.
+ *     proxy auto-start hook;
+ *   * `.gitignore`: the personal instructions file + personal rules pattern,
+ *     and the deny-by-default `.golem/` block (GOLEM_DIR_GITIGNORE_BLOCK).
  *
  * `wireHooks` and `unwireHooks` are exact inverses and must be changed
  * together — add a hook to one without the other and `golem uninit` leaves it
@@ -20,6 +22,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  ASK_USER_QUESTION_MATCHER,
   addEventHook,
   addMatcherHook,
   addPostToolUseHook,
@@ -27,9 +30,11 @@ import {
   NOTIFICATION_COMMAND,
   PERSONAL_RULES_GITIGNORE,
   PROMPT_SUBMIT_COMMAND,
+  QUESTION_ANSWERED_COMMAND,
   removeAllGuidanceRules,
   removeDefaultMode,
   removeEventHook,
+  removeFallbackModel,
   removeMatcherHook,
   removePostToolUseHook,
   removeStatusLine,
@@ -41,6 +46,7 @@ import {
   WEB_FETCH_PRE_COMMAND,
   WEB_FETCH_PRE_TIMEOUT_SECONDS,
   writeDefaultMode,
+  writeFallbackModel,
   writeStatusLine,
 } from "../hooks/index.js";
 import {
@@ -82,6 +88,30 @@ const PERMISSION_REQUEST_HOOK_COMMAND = "golem hook permission-request";
 const PERSONAL_INSTRUCTIONS_FILENAME = "CLAUDE.local.md";
 
 /**
+ * Deny-by-default `.gitignore` block for a project's `.golem/`: everything
+ * under it (settings.local.json, the proxy pid/log, the loopback CA + PRIVATE
+ * KEY, redacted conversation transcripts, caches, telemetry, task/note/distill
+ * state) is machine-local UNLESS explicitly allowlisted. A directory can't be
+ * un-ignored with `!` once matched, so this ignores `.golem`'s *contents*
+ * (`.golem/*`) rather than the directory itself, keeping the allowlisted
+ * entries re-includable. `.golem/personas/` (ejected or hand-authored persona
+ * prompts) is one of those allowlisted exceptions, alongside
+ * `settings.json`/`managed-files.json` — persona prompts are ordinary project
+ * content, not per-clone-only, so they're trackable by git like anything
+ * else; the normal `git add`/`.gitignore` workflow decides what actually gets
+ * committed, rather than a blanket rule deciding it structurally. A
+ * contributor who wants a personal, uncommitted prompt tweak can still
+ * gitignore their own copy manually. Mirrors this repo's own `.gitignore`,
+ * reviewed 2026-09-17.
+ */
+const GOLEM_DIR_GITIGNORE_BLOCK: readonly string[] = [
+  "**/.golem/*",
+  "!.golem/settings.json",
+  "!.golem/managed-files.json",
+  "!.golem/personas",
+];
+
+/**
  * Idempotently ensure `entry` is in the project's `.gitignore`. Golem uses it to
  * keep the conventional personal `CLAUDE.local.md` out of version control (even
  * though Golem's own guidance now lives in the committed CLAUDE.md). Creates
@@ -115,6 +145,45 @@ async function ensureGitignored(
 }
 
 /**
+ * Idempotently ensure a multi-line block is present in `.gitignore`, as a
+ * unit — the negation lines only make sense together with their `*` line, so
+ * this checks for (and inserts) the whole block rather than one line at a
+ * time. A no-op if the anchor (first) line is already present anywhere in the
+ * file, so a hand-edited variant of the block is left alone rather than
+ * duplicated.
+ */
+async function ensureGitignoreBlock(
+  projectDir: string,
+  block: readonly string[],
+  dryRun: boolean,
+): Promise<InitAction> {
+  const file = path.join(projectDir, ".gitignore");
+  let existing = "";
+  try {
+    existing = await readFile(file, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  const lines = existing.split(/\r?\n/).map((l) => l.trim());
+  const anchor = block[0];
+  if (anchor === undefined) {
+    throw new Error("ensureGitignoreBlock: block must not be empty");
+  }
+  if (lines.includes(anchor)) {
+    return { kind: "skip", path: ".gitignore", detail: `${anchor} already ignored` };
+  }
+  if (!dryRun) {
+    const sep = existing === "" || existing.endsWith("\n") ? "" : "\n";
+    await writeFile(file, `${existing}${sep}${block.join("\n")}\n`, "utf8");
+  }
+  return {
+    kind: existing === "" ? "create" : "modify",
+    path: ".gitignore",
+    detail: `ignore ${anchor} (+${block.length - 1} more line(s))`,
+  };
+}
+
+/**
  * Init steps 5, 6, 6b and 6c: every hook init installs, in report order.
  *
  * Everything lands in the `.claude` settings file `claude.settings_scope` names
@@ -141,10 +210,15 @@ export async function wireHooks(
   // instructions file out of version control.
   actions.push(await ensureGitignored(projectDir, PERSONAL_INSTRUCTIONS_FILENAME, dryRun));
   actions.push(await ensureGitignored(projectDir, PERSONAL_RULES_GITIGNORE, dryRun));
+  // Deny-by-default .golem/ block — see GOLEM_DIR_GITIGNORE_BLOCK.
+  actions.push(await ensureGitignoreBlock(projectDir, GOLEM_DIR_GITIGNORE_BLOCK, dryRun));
 
-  // 6. Status line (21c) + blocked-state event hooks (21b).
+  // 6. Status line (21c) + blocked-state event hooks (21b). `fallbackModel`
+  // is the cheap first-line mitigation for a persona subagent pinned to a
+  // model this account may lack — see GOLEM_FALLBACK_MODEL.
   actions.push(await writeStatusLine(options));
   actions.push(await writeDefaultMode(options));
+  actions.push(await writeFallbackModel(options));
   actions.push(await addEventHook(options, "Notification", NOTIFICATION_COMMAND));
   actions.push(await addEventHook(options, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND));
   // PreToolUse: the snooze document-and-hold nudge + autonomy gate (inert at the
@@ -153,6 +227,18 @@ export async function wireHooks(
   // PermissionRequest: the same gate, one event earlier, where a decision can
   // actually resolve the request instead of deferring it (R12.12).
   actions.push(await addEventHook(options, "PermissionRequest", PERMISSION_REQUEST_HOOK_COMMAND));
+  // PostToolUse on AskUserQuestion: the answer clears the blocked flag.
+  // UserPromptSubmit alone left it stuck for the rest of the turn, because
+  // answering a question is not submitting a prompt.
+  actions.push(
+    await addMatcherHook(options, {
+      event: "PostToolUse",
+      matcher: ASK_USER_QUESTION_MATCHER,
+      command: QUESTION_ANSWERED_COMMAND,
+      async: false,
+      timeoutSeconds: 10,
+    }),
+  );
 
   // 6b. WebFetch KB cache: query the KB before fetching (blocking pre-gate), and
   // capture every fetch into the KB (non-blocking post-capture) — §44.
@@ -206,9 +292,13 @@ export async function wireHooks(
 
 /**
  * Uninit steps 4 (hooks half), 5 and 5b — the exact inverse of
- * {@link wireHooks}. The `.gitignore` lines are deliberately NOT taken back:
- * they name files Golem never wrote, and un-ignoring a personal instructions
- * file would push it towards a commit.
+ * {@link wireHooks}. The `.gitignore` entries are deliberately NOT taken back:
+ * the personal-file lines name files Golem never wrote (un-ignoring a personal
+ * instructions file would push it towards a commit), and the `.golem/` block
+ * guards a directory `golem uninit` deliberately leaves in place (it is user
+ * data) — removing its gitignore coverage while the directory itself stays
+ * would be the one outcome nobody wants, machine-local files suddenly eligible
+ * for `git add`.
  */
 export async function unwireHooks(projectDir: string, dryRun: boolean): Promise<InitAction[]> {
   const actions: InitAction[] = [];
@@ -231,8 +321,9 @@ export async function unwireHooks(projectDir: string, dryRun: boolean): Promise<
 
 /**
  * Uninit steps 4 (hooks half), 5 and 5b against ONE settings file: the
- * PostToolUse CCR hook, the status line, the default mode, the blocked-state
- * event hooks, the WebFetch KB-cache pair and the SessionStart auto-start.
+ * PostToolUse CCR hook, the status line, the default mode, the fallback model,
+ * the blocked-state event hooks, the WebFetch KB-cache pair and the
+ * SessionStart auto-start.
  *
  * Split out because it is needed twice — once per scope by {@link unwireHooks},
  * and once against the non-target scope by {@link wireHooks}, which is what makes
@@ -243,12 +334,14 @@ async function removeHookSettings(options: HookSettingsOptions): Promise<InitAct
     await removePostToolUseHook(options),
     await removeStatusLine(options),
     await removeDefaultMode(options),
+    await removeFallbackModel(options),
     await removeEventHook(options, "Notification", NOTIFICATION_COMMAND),
     await removeEventHook(options, "UserPromptSubmit", PROMPT_SUBMIT_COMMAND),
     await removeEventHook(options, "PreToolUse", PRE_TOOL_USE_HOOK_COMMAND),
     await removeEventHook(options, "PermissionRequest", PERMISSION_REQUEST_HOOK_COMMAND),
     await removeMatcherHook(options, "PreToolUse", WEB_FETCH_PRE_COMMAND),
     await removeMatcherHook(options, "PostToolUse", WEB_FETCH_POST_COMMAND),
+    await removeMatcherHook(options, "PostToolUse", QUESTION_ANSWERED_COMMAND),
     await removeMatcherHook(options, "SessionStart", SESSION_START_COMMAND),
   ];
 }

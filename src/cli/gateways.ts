@@ -6,7 +6,7 @@
  * - **No secret is ever printed or stored as a setting.** `list` reports only
  *   WHERE each gateway's credential resolves from (the OS store, or an opted-in
  *   plaintext file) and whether it resolves at all — never its value; switching
- *   writes only the non-secret `inference.default_target` selector. Stored
+ *   writes only the non-secret `inference.model` selector. Stored
  *   credentials live in the OS credential store (Decision 46), never in
  *   settings, `.golem/` state, or an environment variable (Decision 47).
  * - **Fail-closed.** `use <id>` refuses an id that is not in `proxy.gateways`,
@@ -56,7 +56,7 @@ export {
 
 /**
  * Switch the active account. `id: null`, `"none"` (handled by the caller), or
- * the synthetic default id (the top-level provider) all clear `inference.default_target`
+ * the synthetic default id (the top-level provider) all clear `inference.model`
  * and revert to the top-level config. Any other id must be in `proxy.gateways`
  * (fail-closed — an unknown id is rejected). Records an audit line.
  *
@@ -79,12 +79,12 @@ export async function useGateway(
   const env = opts.env ?? process.env;
   const { settings } = await loadConfig({ projectDir, env });
 
-  // Resolve the target: null / the default id both mean "clear inference.default_target
+  // Resolve the target: null / the default id both mean "clear inference.model
   // and revert to the top-level config". Any other id must be a known gateway OR
   // a known TARGET.
   //
   // R10.24 — targets were rejected here, and the setting this writes is
-  // `inference.default_target`, a TARGET selector. A gateway that fronts several
+  // `inference.model`, a TARGET selector. A gateway that fronts several
   // models (OpenRouter with a qwen and a deepseek entry) collapses to ONE target
   // when selected by gateway id — whichever model the gateway lists first — so a
   // user with two models configured could reach exactly one of them, and the VS
@@ -139,7 +139,7 @@ export async function useGateway(
 
   // A single-leaf write: `undefined` deletes the key (revert to the default),
   // a string sets it. writeSetting validates against the schema.
-  await writeSetting("local", "inference.default_target", target ?? undefined, { projectDir });
+  await writeSetting("local", "inference.model", target ?? undefined, { projectDir });
   // Drop the last-served-model snapshot: it describes the account we just left,
   // and leaving it would make `status`/statusline/the extension report the
   // PREVIOUS model as the current one until the new upstream serves a request.
@@ -255,7 +255,7 @@ export async function addGateway(
 /**
  * Remove an account from `proxy.gateways` (local scope — see {@link addGateway}
  * for why local, not project). Fail-closed on an unknown id; if the removed
- * gateway was active, clears `inference.default_target` back to the default rather than
+ * gateway was active, clears `inference.model` back to the default rather than
  * leaving a dangling reference. Audit-logged.
  *
  * **Logs the account out first.** De-registering an account used to leave its
@@ -308,9 +308,9 @@ export async function removeGateway(
   const remaining = gateways.filter((g) => g.id !== id);
   await writeSetting("local", "proxy.gateways", remaining, { projectDir });
 
-  const wasActive = inf.default_target === id;
+  const wasActive = inf.model === id;
   if (wasActive) {
-    await writeSetting("local", "inference.default_target", undefined, { projectDir });
+    await writeSetting("local", "inference.model", undefined, { projectDir });
   }
   await appendAudit(projectDir, { action: "remove", account: id }, nowIso);
   return { account: id, was_active: wasActive, credential_removed: credentialRemoved };

@@ -19,3 +19,5 @@ derived cache over it. Skim `WIKI.md`'s Index once per session before searching.
 
 Redaction-before-storage still applies, and contradictions are surfaced to the
 human, never auto-resolved.
+
+This rule is generated from Golem's own guidance registry (`src/hooks/guidance.ts`) and distributed by `golem init` / `golem guidance enable` — every Golem-managed project can receive this identical text. This repository, golem.run's own source, runs under the same unedited rule; Golem does not keep a separate house style for itself.

@@ -188,22 +188,22 @@ describe("collectLocalModel", () => {
 describe("setLocalCoderEnabled", () => {
   it("writes the setting and it is readable back through the loader", async () => {
     await setLocalCoderEnabled(false, "project", { projectDir: dir });
-    const settings = (await loadConfig({ projectDir: dir, userDir: dir }))
-      .settings as unknown as Record<string, unknown>;
+    const settings = (await loadConfig({ projectDir: dir, userDir: dir })).settings;
     // R9.23: coder_enabled removed — the old leaf is gone entirely.
-    expect(settings.inference__coder_enabled).toBeUndefined();
+    // R14.3: writes to personas.coder.model
+    expect(settings.inference.personas.coder?.model).toBe("__disabled__");
     await setLocalCoderEnabled(true, "project", { projectDir: dir });
-    const settings2 = (await loadConfig({ projectDir: dir, userDir: dir }))
-      .settings as unknown as Record<string, unknown>;
-    expect(settings2.inference__coder_enabled).toBeUndefined();
+    const settings2 = (await loadConfig({ projectDir: dir, userDir: dir })).settings;
+    expect(settings2.inference.personas.coder?.model).toBe("");
   });
 
   it("honours the requested scope", async () => {
     await setLocalCoderEnabled(false, "local", { projectDir: dir });
     const raw = JSON.parse(
       await readFile(path.join(dir, ".golem", "settings.local.json"), "utf8"),
-    ) as { inference?: { coder_enabled?: boolean; worker_targets?: Record<string, unknown> } };
-    expect(raw.inference?.worker_targets?.coder).toBe("__disabled__");
+    ) as { inference?: { personas?: { coder?: { model?: string } } } };
+    // R9.23/R14.3: writes to personas.coder.model
+    expect(raw.inference?.personas?.coder?.model).toBe("__disabled__");
   });
 });
 

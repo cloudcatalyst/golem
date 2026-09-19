@@ -69,8 +69,8 @@ describe("config engine", () => {
 
   describe("getConfig", () => {
     it("returns the effective value and layer", async () => {
-      await writeSetting("project", "inference.default_target", "gpt-4o", { projectDir });
-      const report = await getConfig("inference.default_target", opts());
+      await writeSetting("project", "inference.model", "gpt-4o", { projectDir });
+      const report = await getConfig("inference.model", opts());
       expect(report.value).toBe("gpt-4o");
       expect(report.layer).toBe("project");
     });
@@ -82,8 +82,8 @@ describe("config engine", () => {
 
   describe("parseConfigValue", () => {
     it("parses booleans flexibly", () => {
-      expect(parseConfigValue("inference.default_target", "gpt-4o")).toBe("gpt-4o");
-      expect(parseConfigValue("inference.default_target", "sonnet")).toBe("sonnet");
+      expect(parseConfigValue("inference.model", "gpt-4o")).toBe("gpt-4o");
+      expect(parseConfigValue("inference.model", "sonnet")).toBe("sonnet");
     });
 
     it("parses numbers", () => {
@@ -102,7 +102,7 @@ describe("config engine", () => {
     });
 
     it("rejects invalid booleans", () => {
-      expect(parseConfigValue("inference.default_target", "maybe")).toBe("maybe");
+      expect(parseConfigValue("inference.model", "maybe")).toBe("maybe");
     });
 
     // R9.9 — object-valued leaves were unreachable from the CLI: the raw string

@@ -279,7 +279,7 @@ test("statusBarText — shows the vendor/model destination built by buildModel (
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ local · 🗜 aggressive · ✂ off",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ local · 🗜 aggressive · ✂ off",
   );
   // No model known → no parenthetical (plain Anthropic passthrough).
   assert.equal(
@@ -304,7 +304,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬢ Golem → ◆ anthropic + ✎ local · 🗜 1 · ✂ off",
+    "⬢ Golem → ◆ anthropic ✎ local · 🗜 1 · ✂ off",
   );
   // Proxy off still folds in the local segment — `coder` works in any state.
   assert.equal(
@@ -314,7 +314,7 @@ test("statusBarText — local segment appears whenever the local model is active
       upstreamDisplay: "anthropic",
       localModelActive: true,
     }),
-    "⬡ Golem off → ◆ anthropic + ✎ local",
+    "⬡ Golem off → ◆ anthropic ✎ local",
   );
 });
 
@@ -327,7 +327,7 @@ test("statusBarText names each backend with its own model id, verbatim", () => {
       localModelActive: true,
       coderModel: "qwen2.5-coder:7b",
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen2.5-coder:7b · 🗜 1 · ✂ off",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ qwen2.5-coder:7b · 🗜 1 · ✂ off",
   );
 });
 
@@ -341,7 +341,7 @@ test("statusBarText gives a worker the same <gateway> (<model>) shape as the cha
         { worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash", gateway: "openrouter" },
       ],
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ openrouter (qwen/qwen3.7-flash) · 🗜 1 · ✂ off",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ openrouter (qwen/qwen3.7-flash) · 🗜 1 · ✂ off",
   );
 });
 
@@ -355,7 +355,7 @@ test("statusBarText leaves a gateway-less worker as a bare id (older CLI)", () =
       upstreamDisplay: "anthropic (claude-opus-5[1m])",
       workers: [{ worker: "coder", target: "qwen", model: "qwen/qwen3.7-flash" }],
     }),
-    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) + ✎ qwen/qwen3.7-flash · 🗜 1 · ✂ off",
+    "⬢ Golem → ◆ anthropic (claude-opus-5[1m]) ✎ qwen/qwen3.7-flash · 🗜 1 · ✂ off",
   );
 });
 

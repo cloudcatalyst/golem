@@ -8,7 +8,7 @@
  * running-but-unwired proxy, R9.4's status line naming a model that could never
  * run): a silent no-op is worse than an error.
  *
- * The one prior rename (R9.1's `proxy.active_account` → `proxy.default_target`)
+ * The one prior rename (R9.1's `proxy.active_account` → `proxy.model`)
  * was handled by a bespoke read-time fallback inside `resolveDefaultTargetId`.
  * It worked and was unreusable — the next rename would hand-roll the same idea
  * somewhere else, or forget to. This table is that idea, once.
@@ -41,8 +41,18 @@ export interface SettingMigration {
 export const SETTING_MIGRATIONS: readonly SettingMigration[] = [
   {
     from: "proxy.active_account",
-    to: "proxy.default_target",
+    to: "inference.model",
     since: "R9.1",
+  },
+  {
+    from: "proxy.default_target",
+    to: "inference.model",
+    since: "R9.23",
+  },
+  {
+    from: "inference.default_target",
+    to: "inference.model",
+    since: "R9.23",
   },
   {
     // R9.23: renamed `accounts` to `gateways` — the new key carries a `models`
@@ -85,6 +95,12 @@ export const RETIRED_SETTINGS: readonly RetiredSetting[] = [
       'inference.personas.coder.model (e.g. { "personas": { "coder": { "model": "…" } } })',
     since: "R14.1",
   },
+  {
+    path: "inference.worker_targets",
+    replacement:
+      'inference.personas[worker].model (e.g. { "personas": { "coder": { "model": "target-id" } } })',
+    since: "R14.3",
+  },
 ];
 
 /** The retirement record for a dotted path, or undefined if it is not retired. */
@@ -121,18 +137,27 @@ function splitLeaf(dotted: string): readonly [string, string | undefined] {
  */
 export function assertLeafRename(m: SettingMigration): string | undefined {
   if (sectionOf(m.from) !== sectionOf(m.to)) {
-    // A pre-authorised exemption for ONE cross-section rename. Cross-section
+    // Pre-authorised exemptions for cross-section renames. Cross-section
     // renames break env-var mapping (GOLEM_PROXY_* → GOLEM_INFERENCE_*), which
-    // is why they are refused in general; this pair was reviewed and accepted
-    // because the old env var is retired too.
+    // is why they are refused in general; these pairs were reviewed and
+    // accepted because the old env var is retired too.
     //
-    // Note it does not currently fire: SETTING_MIGRATIONS routes
-    // `proxy.active_account` to `proxy.default_target` (same section), and
-    // `proxy.default_target` is the deprecated leaf that resolves onward to
-    // `inference.default_target`. The exemption is kept so that collapsing
-    // those two hops into one direct migration stays a one-line table change
-    // rather than a guard change — but it is dead against today's table.
-    if (m.from === "proxy.active_account" && m.to === "inference.default_target") {
+    // Both route the oldest on-disk spellings directly onto today's live leaf,
+    // `inference.model`, collapsing the intermediate hops
+    // (`proxy.active_account` → `proxy.default_target` (R9.1) →
+    // `inference.default_target` (R9.23) → `inference.model`) into one
+    // migration each, rather than restating every historical rename.
+    if (m.from === "proxy.active_account" && m.to === "inference.model") {
+      return undefined;
+    }
+    if (m.from === "proxy.default_target" && m.to === "inference.model") {
+      return undefined;
+    }
+    // R14.3: worker_targets → personas is a structural change (map → record with
+    // different value shape). The old key is kept as a deprecated leaf with a
+    // warning; no automatic migration is performed. User manually migrates each
+    // entry: worker_targets."coder" = "target" → personas.coder.model = "target".
+    if (m.from === "inference.worker_targets" && m.to === "inference.personas") {
       return undefined;
     }
     return (

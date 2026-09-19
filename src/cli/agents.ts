@@ -111,6 +111,20 @@ compression and telemetry all still apply — you are not outside the pipeline.
 
 ${toolsNote}
 
+## Match the human's own style
+
+You are writing code and prose that a specific person has to read and maintain, so
+run \`golem vibe show\` before you author anything substantial. It prints their
+personal style brief — formatting, naming, comment density and voice — and it is
+capped, so reading it is cheap. The detail behind it (\`guidelines/\`, \`snippets/\`)
+sits under \`~/.golem/vibe/\` and is read ONE PAGE AT A TIME, only when it settles an
+actual question; reading it wholesale is the context bloat the split exists to stop.
+
+The guide is PERSONAL and it loses to the project. Where this repo's committed
+conventions — its linter config, its CLAUDE.md, the file you are editing — disagree
+with it, follow the repo and say that you did. Never reformat existing code to match
+a personal preference. An empty or missing guide is normal: carry on without one.
+
 Report what you changed and why. Do not commit, push, or open a PR unless the task
 explicitly asked for it — the session that delegated to you is reviewing your work,
 and \`golem task done\` will refuse to close until it has (R14.6).

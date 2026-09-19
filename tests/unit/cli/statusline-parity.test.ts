@@ -57,24 +57,62 @@ describe("status-line parity: CLI vs VS Code status bar (R10.24)", () => {
   it("renders a running, wired proxy identically", () => {
     const { cli, bar } = pair({ running: true, wired: true });
     expect(cli).toBe(
-      "⬢ Golem → ◆ openrouter (deepseek/deepseek-v4-flash) + ✎ ollama (qwen2.5-coder:7b) · 🗜 lossless · ✂ full",
+      "⬢ Golem → ◆ openrouter (deepseek/deepseek-v4-flash) ✎ ollama (qwen2.5-coder:7b) · 🗜 lossless · ✂ full",
     );
     expect(bar).toBe(cli);
   });
 
-  it("gives every model segment ONE format, and joins them with + (R11.6)", () => {
+  it("gives every model segment ONE format (R11.6)", () => {
     const { cli, bar } = pair({ running: true, wired: true });
     for (const line of [cli, bar]) {
       // Same shape for the chat model and for a worker: `<gateway> (<model>)`.
       expect(line).toContain("◆ openrouter (deepseek/deepseek-v4-flash)");
       expect(line).toContain("✎ ollama (qwen2.5-coder:7b)");
-      // `+` joins models (same kind); `·` separates kinds (models · dials).
-      expect(line).toContain("(deepseek/deepseek-v4-flash) + ✎");
+      // Chat joins the persona list with a plain space, not `+` — the list
+      // beside chat is a roster, not a continuation of a "+" chain starting at
+      // the arrow. `·` still separates a different KIND (models · dials).
+      expect(line).toContain("(deepseek/deepseek-v4-flash) ✎");
+      expect(line).not.toContain("(deepseek/deepseek-v4-flash) + ✎");
       expect(line).toContain("(qwen2.5-coder:7b) · 🗜");
       // The worker's model id is never left bare beside a gateway it has.
       expect(line).not.toContain("✎ ollama qwen2.5-coder:7b");
     }
     expect(bar).toBe(cli);
+  });
+
+  it("joins MULTIPLE personas with + within the list, after the space from chat", () => {
+    const cli: GolemState = {
+      compression: 1 as const,
+      upstreamLabel: "openrouter",
+      upstreamModel: "deepseek/deepseek-v4-flash",
+      brevity: "full",
+      proxyRunning: true,
+      proxyInPath: true,
+      workers: [
+        { worker: "coder", model: "qwen2.5-coder:7b", gateway: "ollama" },
+        { worker: "reviewer", model: "claude-opus-5" },
+        { worker: "scribe", model: "claude-haiku-4-5" },
+      ],
+    };
+    const bar = render.statusBarText({
+      proxyReachable: true,
+      proxyInPath: true,
+      compression: "1",
+      compressionName: "lossless",
+      brevity: "full",
+      upstreamDisplay: "openrouter (deepseek/deepseek-v4-flash)",
+      lastServedModel: "deepseek/deepseek-v4-flash",
+      workers: [
+        { worker: "coder", target: "x", model: "qwen2.5-coder:7b", gateway: "ollama" },
+        { worker: "reviewer", target: "y", model: "claude-opus-5" },
+        { worker: "scribe", target: "z", model: "claude-haiku-4-5" },
+      ],
+    });
+    const line = renderStatusLine({}, cli);
+    expect(line).toContain(
+      "◆ openrouter (deepseek/deepseek-v4-flash) ✎ ollama (qwen2.5-coder:7b) + ◎ claude-opus-5 + ✒ claude-haiku-4-5",
+    );
+    expect(bar).toBe(line);
   });
 
   it("falls back to the bare model id for a worker with no known gateway", () => {
@@ -99,7 +137,7 @@ describe("status-line parity: CLI vs VS Code status bar (R10.24)", () => {
     });
     const line = renderStatusLine({}, cli);
     // An older CLI sends no gateway; inventing one would be worse than omitting.
-    expect(line).toContain("+ ✎ qwen2.5-coder:7b");
+    expect(line).toContain("✎ qwen2.5-coder:7b");
     expect(line).not.toContain("✎  (");
     expect(bar).toBe(line);
   });

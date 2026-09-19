@@ -1,17 +1,41 @@
 ---
 task: project-team-binding
 title: "A team-connected project names its team in its committed config — and a team that cannot be reached never stops the proxy"
-state: queued
+state: done
 owner: agent
 size: M
 discipline: code
 design: "The portal repo's `docs/team-config.md` §4b is authoritative for the key shape and the failure table; `docs/api-contract.md` §2–§4 for the wire. Both read on 2026-09-04 and summarised in `docs/plan/verification-notes.md` §149 — read §149 first, then the portal docs for detail. ADR-0003 is why the credential does not live in the file."
-gate: "Four behaviours, each a test: (1) no `team.org_id` → zero portal I/O and no nag beyond one mention; (2) `team.org_id` present with no token → `golem init` still SUCCEEDS, names `golem team link`, and needs no network; (3) `403 not_a_member` / `402 subscription_required` → the team the project names is reported, local config is used, and NOTHING fails; (4) `golem team unlink` removes both the key and `.claude/skills/golem-team/`."
+gate: "Four behaviours, each a test: (1) no `team.org_id` → zero portal I/O and no nag beyond one mention; (2) `team.org_id` present with no token → `golem init` still SUCCEEDS, names `golem team link`, and needs no network; (3) `403 not_a_member` / `402 subscription_required` → the team the project names is reported, local config is used, and NOTHING fails; (4) `golem team unlink` removes both the key and `.claude/skills/golem-team/`, and LEAVES `~/.golem/teams/<org_id>.json` in place — asserted with a second project on the same machine still linked to that team, which must keep working offline. PLUS the Decision 64 invariant, as its own named test: a project with NO `team.org_id` performs zero portal I/O, reads no cache, looks up no token and nags at most once; and `402`/`403` DROPS team policy (falls back to local) rather than serving the cache, which is reserved for unreachable."
 depends_on: [team-portal-auth]
 touches: [src/config/schema.ts, src/cli/, docs/wiki/]
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-07T06:14:19.649Z
 ---
+
+## Decision 64 — the free/team boundary this task must hold
+
+**Golem is free and COMPLETE for a solo user.** The team layer is the paid tier:
+it ADDS org-wide config, synced skills and shared standards, and never unlocks
+something a solo user was denied. Read `docs/wiki/concepts/Free and Team Tiers.md`
+before starting; spec Decision 64 is authoritative.
+
+Three rules bind this task specifically:
+
+1. **No link, no team code path.** A project whose committed config has no
+   `team.org_id` must perform ZERO portal I/O, read no cache, look up no token,
+   and nag at most once. **This is an invariant with its own test** — not a
+   default, and not something covered incidentally by another assertion. It is
+   what makes "free for solo users" checkable rather than aspirational.
+2. **"Cannot reach" and "not entitled" are DIFFERENT STATES.** Unreachable
+   (timeout, DNS, offline) → use the cache and report its age. `402
+   subscription_required` / `403 not_a_member` → do NOT use the cache; fall back
+   to local config and say why. Treating a 402 like a timeout hands out a free
+   team layer; treating a timeout like a 402 punishes an offline developer for
+   the network.
+3. **Nothing here may break anything.** No entitlement outcome may stop the proxy
+   starting, fail `golem init`, or fail a build. Every one degrades to local
+   config, out loud.
 
 > **Rewritten 2026-09-04** after reading the portal repo. The first draft
 > required a membership mismatch to REFUSE. That is wrong for a local-first
@@ -62,6 +86,12 @@ token is a credential in a repository waiting to happen.
 `unlink` removes the key **and** the managed `.claude/skills/golem-team/`
 directory. A team that no longer applies must not leave its instructions behind.
 
+It does **not** touch `~/.golem/teams/<org_id>.json`. The cache is machine scope
+and the link is project scope, so another project on this machine may still be
+linked to that team, and deleting the file would take its offline policy away —
+a silent downgrade to user defaults, which is the one outcome §The failure rule
+forbids. An unreferenced cache is stale at worst, and its timestamp says so.
+
 ## What `golem init` does
 
 | state | behaviour |
@@ -82,7 +112,7 @@ never nags.
 |---|---|
 | `403 not_a_member` | Name the team the project points at, use local config, do not fail |
 | `402 subscription_required` | Same, with the reason named |
-| portal unreachable | Use the cached `~/.golem/team.json`, say how old it is |
+| portal unreachable | Use the cached `~/.golem/teams/<org_id>.json`, say how old it is |
 | token expired | Refresh silently; on failure fall back to cache and prompt at the next interactive command |
 
 **Degrade, but never silently.** The hazard this design is avoiding is someone
@@ -94,10 +124,14 @@ says something out loud; none of them stops the tool.
 - The OAuth flow itself → `team-portal-auth`.
 - Where a team value sits in the precedence ladder → SHIPPED by
   `settings-cascade-importance` (ADR-0008); the origin exists and is ranked.
-- Fetching the payload and caching it to `~/.golem/team.json` →
+- Fetching the payload and caching it to `~/.golem/teams/<org_id>.json` →
   `team-layer-fetch`. (This used to point at `team-settings-layer`, which was
   closed as superseded on 2026-09-06.)
 - Syncing the skills themselves → `team-skills-sync`. This task only writes and
   removes the key, and calls whatever those tasks expose.
 - Anything about billing, membership or connectors. Those are browser flows in
   the portal, deliberately (`docs/api-contract.md` §6).
+
+## Outcome
+
+shipped
